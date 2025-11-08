@@ -1,1 +1,1 @@
-# xyzz.eventosapp
+# EventosApp
