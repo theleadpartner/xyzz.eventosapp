@@ -1,0 +1,187 @@
+<!doctype html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <title>{{evento_nombre}} - Ticket</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* Reset básico compatible con email */
+    body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img { -ms-interpolation-mode:bicubic; border:0; outline:none; text-decoration:none; display:block; }
+    body { margin:0; padding:0; width:100% !important; height:100% !important; background:#f6f8fb; }
+
+    /* Contenedor principal */
+    .container { width:100%; max-width:640px; margin:0 auto; }
+    .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; }
+    .inner { padding:22px; }
+    .muted { color:#6b7280; font-size:13px; }
+
+    /* Tipografía */
+    h1 { margin:0; font-size:22px; line-height:1.25; color:#111827; }
+    h2 { margin:0 0 8px 0; font-size:17px; line-height:1.3; color:#111827; }
+    p  { margin:6px 0; color:#1f2937; }
+
+    /* Franja título/fecha */
+    .banner { background:#111827; color:#ffffff; }
+    .banner .inner { padding:16px 22px; }
+    .banner h1 { color:#ffffff; font-size:20px; }
+    .banner .meta { color:#cbd5e1; font-size:13px; }
+
+    /* Layout columnas: QR a la izquierda, info a la derecha */
+    .col { vertical-align:top; }
+    .left  { width:42%; }
+    .right { width:58%; }
+
+    /* Caja QR / ID */
+    .qr-card { border:1px solid #e5e7eb; border-radius:10px; padding:12px; background:#ffffff; }
+    .qr-img { width:220px; max-width:100%; height:auto; }
+    .ticket-id { font-family:monospace; font-size:14px; background:#f3f4f6; padding:6px 8px; border-radius:8px; display:inline-block; margin-top:8px; color:#111827; }
+
+    /* Bloques key/val */
+    .kvs { border:1px dashed #e5e7eb; border-radius:10px; padding:12px; background:#fafafa; }
+    .kv  { margin:5px 0; }
+    .kv b{ color:#111827; margin-right:6px; }
+
+    /* Botones */
+    .btn { display:inline-block; padding:10px 14px; border-radius:10px; font-weight:600; text-decoration:none; }
+    .btn-primary { background:#2563eb; color:#ffffff !important; }
+    .btn-dark    { background:#111827; color:#ffffff !important; }
+    .btn-gray    { background:#e5e7eb; color:#111827 !important; }
+    .actions a { margin-right:8px; margin-bottom:8px; }
+
+    /* Sección mensaje organizador */
+    .note { border-left:4px solid #2563eb; background:#eef2ff; padding:10px 12px; border-radius:8px; }
+
+    /* Responsive */
+    @media screen and (max-width:600px){
+      .inner { padding:16px !important; }
+      .stack { display:block !important; width:100% !important; }
+      .left, .right { width:100% !important; }
+      .stack-center { text-align:center !important; }
+      .actions a { display:block !important; margin-right:0 !important; }
+      .btn { width:100% !important; text-align:center !important; }
+    }
+  </style>
+  <meta name="color-scheme" content="light only">
+  <meta name="supported-color-schemes" content="light only">
+</head>
+<body>
+
+  <!-- Wrapper -->
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="container">
+          <tr>
+            <td>
+              <!-- Tarjeta -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="card">
+
+                <!-- Header imagen (igual que la actual) -->
+                <tr>
+                  <td>
+                    <img src="{{header_img}}" alt="Encabezado del evento" width="640" style="width:100%; height:auto;">
+                  </td>
+                </tr>
+
+                <!-- Franja título / fecha / hora -->
+                <tr class="banner">
+                  <td class="inner">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td class="col" style="padding-right:8px;">
+                          <h1>{{evento_nombre}}</h1>
+                        </td>
+                        <td class="col" align="right" style="text-align:right;">
+                          <div class="meta"><b>Fecha:</b> {{fecha_evento}}</div>
+                          <div class="meta"><b>Hora:</b> {{hora_evento}}</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- Cuerpo -->
+                <tr>
+                  <td class="inner">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <!-- Col izquierda: QR + ID + PDF -->
+                        <td class="col left stack stack-center" style="padding-right:14px;">
+                          <div class="qr-card">
+                            <img class="qr-img" src="{{qr_url}}" alt="QR del ticket">
+                            <div class="ticket-id">ID: {{ticket_id}}</div>
+                            <p class="muted" style="margin-top:8px;">Presenta este código en el acceso.</p>
+                            <p style="margin-top:8px;">
+                              <a class="btn btn-gray" href="{{pdf_url}}" target="_blank" rel="noopener">Descargar PDF</a>
+                            </p>
+                            <p class="muted" style="margin-top:8px;">
+                              Adjuntamos el PDF del ticket y el archivo ICS para tu calendario.
+                            </p>
+                          </div>
+                        </td>
+
+                        <!-- Separador Outlook -->
+                        <!--[if mso]><td width="12"></td><![endif]-->
+
+                        <!-- Col derecha: detalles + asistente + acciones -->
+                        <td class="col right stack">
+                          <h2>Detalles del evento</h2>
+                          <div class="kvs">
+                            <div class="kv"><b>Organizador:</b><span>{{organizador}}</span></div>
+                            <div class="kv"><b>Lugar:</b><span>{{lugar_evento}}</span></div>
+                          </div>
+
+                          <h2 style="margin-top:14px;">Tu ticket</h2>
+                          <div class="kvs">
+                            <div class="kv"><b>Nombre:</b><span>{{asistente_nombre}}</span></div>
+                            <div class="kv"><b>Correo:</b><span>{{asistente_email}}</span></div>
+                            <div class="kv"><b>Contacto:</b><span>{{asistente_tel}}</span></div>
+                            <!--<div class="kv"><b>Localidad:</b><span>{{asistente_localidad}}</span></div>-->
+                          </div>
+
+                          <!-- Mensaje opcional del organizador -->
+                          {{mensaje_extra_block}}
+
+                          <!-- Acciones -->
+                          <div class="actions" style="margin-top:12px;">
+                            <a class="btn btn-primary" href="{{wallet_android_url}}" target="_blank" rel="noopener">Añadir a Google Wallet</a>
+                            <a class="btn btn-dark" href="{{wallet_apple_url}}" target="_blank" rel="noopener">Añadir a Apple Wallet</a>
+                            <a class="btn btn-gray" href="{{ics_url}}" target="_blank" rel="noopener">Añadir al Calendario (ICS)</a>
+                          </div>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td class="stack" colspan="2" style="display:none; mso-hide:all;"></td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Nota inferior -->
+              <p class="muted" style="text-align:center; margin:12px 0 0;">Si no esperabas este correo, puedes ignorarlo.</p>
+
+              <!-- Footer -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+                <tr>
+                  <td align="center" style="font-size:12px; color:#9ca3af;">
+                    <a href="https://eventosapp.com" target="_blank" rel="noopener" style="text-decoration:none; color:#9ca3af;">
+                      <img src="https://eventosapp.com/wp-content/uploads/2025/06/cropped-eventosapp_logo_color.png" alt="EventosApp" width="90" style="width:90px; height:auto; margin:0 auto;">
+                    </a>
+                    <div style="margin-top:6px;">Enviado con EventosApp</div>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

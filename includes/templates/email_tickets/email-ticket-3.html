@@ -1,0 +1,196 @@
+<!doctype html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <title>{{evento_nombre}} - Ticket</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* Reset básico compatible email */
+    body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img { -ms-interpolation-mode:bicubic; border:0; outline:none; text-decoration:none; display:block; }
+    body { margin:0; padding:0; width:100% !important; height:100% !important; background:#f6f8fb; }
+
+    /* Contenedor */
+    .container { width:100%; max-width:640px; margin:0 auto; }
+    .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; }
+    .inner { padding:18px; }
+    .muted { color:#6b7280; font-size:13px; }
+
+    /* Tipografía (el color de h1/h2 lo fuerza el inyectado desde PHP si elegiste color) */
+    h1 { margin:0; font-size:22px; line-height:1.25; color:#111827; }
+    h2 { margin:0 0 8px 0; font-size:17px; line-height:1.3; color:#111827; }
+    p  { margin:6px 0; color:#1f2937; }
+
+    /* Title box (cuadrado) */
+    .titlebox { border-top:1px solid #e5e7eb; border-bottom:1px solid #e5e7eb; background:#fafafa; }
+    .titlebox .inner { padding:16px 18px; text-align:center; }
+
+    /* Tiles (cuadrados) */
+    .tile { border:1px solid #e5e7eb; border-radius:10px; background:#ffffff; }
+    .tile .inner { padding:16px; }
+    .tile-spacer { height:12px; }
+
+    /* Listas key/val */
+    .kvs { border:1px dashed #e5e7eb; border-radius:10px; padding:12px; background:#fafafa; }
+    .kv { margin:5px 0; }
+    .kv b { color:#111827; margin-right:6px; }
+
+    /* QR / ID */
+    .qr-img { width:220px; max-width:100%; height:auto; }
+    .ticket-id { font-family:monospace; font-size:14px; background:#f3f4f6; padding:6px 8px; border-radius:8px; display:inline-block; margin-top:8px; color:#111827; }
+
+    /* Botones */
+    .btn { display:inline-block; padding:10px 14px; border-radius:10px; font-weight:600; text-decoration:none; }
+    .btn-primary { background:#2563eb; color:#ffffff !important; }
+    .btn-dark    { background:#111827; color:#ffffff !important; }
+    .btn-gray    { background:#e5e7eb; color:#111827 !important; }
+    .actions a { margin-right:8px; margin-bottom:8px; }
+
+    /* Responsive */
+    @media screen and (max-width:600px){
+      .inner { padding:14px !important; }
+      .stack { display:block !important; width:100% !important; }
+      .actions a { display:block !important; margin-right:0 !important; }
+      .btn { width:100% !important; text-align:center !important; }
+      .tile-spacer { height:10px !important; }
+    }
+  </style>
+  <meta name="color-scheme" content="light only">
+  <meta name="supported-color-schemes" content="light only">
+</head>
+<body>
+
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="container">
+          <tr>
+            <td>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="card">
+
+                <!-- Header imagen (se mantiene) -->
+                <tr>
+                  <td>
+                    <img src="{{header_img}}" alt="Encabezado del evento" width="640" style="width:100%; height:auto;">
+                  </td>
+                </tr>
+
+                <!-- Caja de título centrado -->
+                <tr class="titlebox">
+                  <td class="inner">
+                    <h1>{{evento_nombre}}</h1>
+                  </td>
+                </tr>
+
+                <!-- Grid de tiles: fila 1 -->
+                <tr>
+                  <td class="inner" style="padding-bottom:0;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <!-- Tile: Detalles del evento -->
+                        <td class="stack" width="50%" style="padding-right:8px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="tile">
+                            <tr><td class="inner">
+                              <h2>Detalles del evento</h2>
+                              <div class="kvs">
+                                <div class="kv"><b>Organizador:</b><span>{{organizador}}</span></div>
+                                <div class="kv"><b>Fecha:</b><span>{{fecha_evento}}</span></div>
+                                <div class="kv"><b>Hora:</b><span>{{hora_evento}}</span></div>
+                                <div class="kv"><b>Lugar:</b><span>{{lugar_evento}}</span></div>
+                              </div>
+                            </td></tr>
+                          </table>
+                        </td>
+
+                        <!-- Tile: Tu ticket -->
+                        <td class="stack" width="50%" style="padding-left:8px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="tile">
+                            <tr><td class="inner">
+                              <h2>Tu ticket</h2>
+                              <div class="kvs">
+                                <div class="kv"><b>Nombre:</b><span>{{asistente_nombre}}</span></div>
+                                <div class="kv"><b>Correo:</b><span>{{asistente_email}}</span></div>
+                                <div class="kv"><b>Contacto:</b><span>{{asistente_tel}}</span></div>
+                                <!--<div class="kv"><b>Localidad:</b><span>{{asistente_localidad}}</span></div>-->
+                                <div class="kv"><b>ID:</b><span>{{ticket_id}}</span></div>
+                              </div>
+                            </td></tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr><td class="tile-spacer">&nbsp;</td></tr>
+
+                <!-- Grid de tiles: fila 2 -->
+                <tr>
+                  <td class="inner" style="padding-top:0;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <!-- Tile: QR -->
+                        <td class="stack" width="50%" style="padding-right:8px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="tile">
+                            <tr><td class="inner" align="center">
+                              <img class="qr-img" src="{{qr_url}}" alt="QR del ticket">
+                              <div class="ticket-id">ID: {{ticket_id}}</div>
+                              <p class="muted" style="margin-top:8px;">Presenta este código en el acceso.</p>
+                              <p style="margin-top:8px;">
+                                <a class="btn btn-gray" href="{{pdf_url}}" target="_blank" rel="noopener">Descargar PDF</a>
+                              </p>
+                              <p class="muted" style="margin-top:8px;">
+                                Adjuntamos el PDF del ticket y el archivo ICS para tu calendario.
+                              </p>
+                            </td></tr>
+                          </table>
+                        </td>
+
+                        <!-- Tile: Acciones + Mensaje del organizador -->
+                        <td class="stack" width="50%" style="padding-left:8px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="tile">
+                            <tr><td class="inner">
+                              <!-- Acciones -->
+                              <div class="actions" style="margin-bottom:12px;">
+                                <a class="btn btn-primary" href="{{wallet_android_url}}" target="_blank" rel="noopener">Añadir a Google Wallet</a>
+                                <a class="btn btn-dark" href="{{wallet_apple_url}}" target="_blank" rel="noopener">Añadir a Apple Wallet</a>
+                                <a class="btn btn-gray" href="{{ics_url}}" target="_blank" rel="noopener">Añadir al Calendario (ICS)</a>
+                              </div>
+
+                              <!-- Mensaje opcional (se inyecta como bloque completo) -->
+                              {{mensaje_extra_block}}
+                            </td></tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+              </table>
+
+              <!-- Nota inferior -->
+              <p class="muted" style="text-align:center; margin:12px 0 0;">Si no esperabas este correo, puedes ignorarlo.</p>
+
+              <!-- Footer -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px;">
+                <tr>
+                  <td align="center" style="font-size:12px; color:#9ca3af;">
+                    <a href="https://eventosapp.com" target="_blank" rel="noopener" style="text-decoration:none; color:#9ca3af;">
+                      <img src="https://eventosapp.com/wp-content/uploads/2025/06/cropped-eventosapp_logo_color.png" alt="EventosApp" width="90" style="width:90px; height:auto; margin:0 auto;">
+                    </a>
+                    <div style="margin-top:6px;">Enviado con EventosApp</div>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

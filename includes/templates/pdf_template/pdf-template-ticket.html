@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Ticket PDF</title>
+  <style>
+    body { font-family: Arial, sans-serif; color: #223; margin: 28px;}
+    .titulo { font-size: 1.7em; font-weight: bold; color: #216db2; margin-bottom: 18px; }
+    .info { margin-bottom: 7px; }
+    .seccion { margin-bottom: 18px; }
+    .qr { margin-top: 14px; }
+    .label {font-weight: bold;}
+    .value {color:#222;}
+  </style>
+</head>
+<body>
+  <div class="titulo">{{evento_nombre}}</div>
+  <div class="info"><span class="label">Organizador:</span> <span class="value">{{organizador}}</span></div>
+  <div class="info"><span class="label">Fecha del evento:</span> <span class="value">{{fecha_evento}}</span></div>
+  <div class="info"><span class="label">Lugar:</span> <span class="value">{{lugar_evento}}</span></div>
+  <div class="seccion"></div>
+  <div class="info"><span class="label">Nombre del Asistente:</span> <span class="value">{{asistente_nombre}}</span></div>
+  <div class="info"><span class="label">Correo del Asistente:</span> <span class="value">{{asistente_email}}</span></div>
+  <div class="info"><span class="label">Localidad:</span> <span class="value">{{localidad}}</span></div>
+  <div class="info"><span class="label">ID Ticket:</span> <span class="value">{{ticket_id}}</span></div>
+  <div class="qr"><img src="{{qr_img}}" width="140"></div>
+</body>
+</html>
