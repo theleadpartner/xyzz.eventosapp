@@ -294,8 +294,17 @@ function eventosapp_render_metabox_networking($post){
             <?php endif; ?>
         </div>
 
-        <div class="evnet-help" style="margin-top:12px">
-            <strong>Nota:</strong> La página se crea/actualiza automáticamente al guardar el evento.
+        <div style="margin-top:12px; padding-top:12px; border-top:1px solid #e2e8f0;">
+            <button type="button" 
+                    class="button button-secondary" 
+                    id="evnetEnsureNow"
+                    style="width:100%">
+                <span class="dashicons dashicons-admin-page" style="margin-top:3px"></span>
+                Crear/Asegurar landing ahora
+            </button>
+            <div class="evnet-help" style="margin-top:8px">
+                <strong>Nota:</strong> La página se crea/actualiza automáticamente al guardar el evento. Usa este botón para crear la landing de inmediato sin guardar.
+            </div>
         </div>
     </div>
 
@@ -326,10 +335,120 @@ function eventosapp_render_metabox_networking($post){
                 alert('No se pudo copiar. Selecciona y copia manualmente.');
             });
         });
+
+        // Crear/Asegurar landing ahora (AJAX)
+        $('#evnetEnsureNow').on('click', function(e){
+            e.preventDefault();
+            
+            var $btn = $(this);
+            var originalText = $btn.html();
+            var eventId = <?php echo (int) $event_id; ?>;
+            var slug = $('input[name="eventosapp_networking_slug"]').val() || '';
+            
+            // Deshabilitar botón y mostrar estado de carga
+            $btn.prop('disabled', true).html('<span class="dashicons dashicons-update-alt" style="animation:rotation 1s infinite linear"></span> Procesando...');
+            
+            // Hacer petición AJAX
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'eventosapp_networking_ensure_now',
+                    event_id: eventId,
+                    slug: slug,
+                    _wpnonce: '<?php echo esc_js( wp_create_nonce('eventosapp_networking_ensure_now') ); ?>'
+                },
+                success: function(response){
+                    if (response && response.success) {
+                        // Actualizar URL en el preview
+                        $('#evnetUrlPreview').text(response.data.url);
+                        
+                        // Mostrar mensaje de éxito
+                        alert('¡Landing creada exitosamente!\n\nURL: ' + response.data.url);
+                        
+                        // Recargar página para actualizar el metabox
+                        location.reload();
+                    } else {
+                        var errorMsg = response.data && response.data.message ? response.data.message : 'No se pudo crear la landing.';
+                        alert('Error: ' + errorMsg);
+                    }
+                },
+                error: function(){
+                    alert('Error de conexión. Por favor, intenta nuevamente.');
+                },
+                complete: function(){
+                    // Restaurar botón
+                    $btn.prop('disabled', false).html(originalText);
+                }
+            });
+        });
     })(jQuery);
     </script>
+    <style>
+        @keyframes rotation {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(359deg); }
+        }
+    </style>
     <?php
 }
+
+/* ============================================================
+ *  AJAX: Crear/Asegurar landing desde el metabox (creación manual)
+ * ============================================================ */
+
+add_action('wp_ajax_eventosapp_networking_ensure_now', function(){
+    // Verificar permisos
+    if ( ! current_user_can('edit_posts') ) {
+        wp_send_json_error(['message' => 'No tienes permisos para realizar esta acción.'], 403);
+    }
+    
+    // Verificar nonce
+    $nonce_check = check_ajax_referer('eventosapp_networking_ensure_now', '_wpnonce', false);
+    if ( ! $nonce_check ) {
+        wp_send_json_error(['message' => 'Error de seguridad. Recarga la página e intenta nuevamente.'], 403);
+    }
+
+    // Obtener y validar event_id
+    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+        wp_send_json_error(['message' => 'ID de evento inválido.'], 400);
+    }
+
+    // Obtener y guardar slug si se proporcionó
+    $slug = isset($_POST['slug']) ? sanitize_title( wp_unslash($_POST['slug']) ) : '';
+    if ( $slug ) {
+        update_post_meta($event_id, '_eventosapp_networking_slug', $slug);
+    }
+
+    // Crear/asegurar la página
+    $page_id = eventosapp_networking_ensure_child_page($event_id);
+    
+    // Verificar si hubo error de slug duplicado
+    $error = get_post_meta($event_id, '_eventosapp_networking_slug_error', true);
+    if ( $error === 'duplicate' ) {
+        wp_send_json_error([
+            'message' => 'Ya existe otra página con este slug. Por favor, cambia el slug e intenta nuevamente.'
+        ], 400);
+    }
+    
+    if ( ! $page_id ) {
+        wp_send_json_error([
+            'message' => 'No se pudo crear la página de networking. Verifica los permisos y la configuración.'
+        ], 500);
+    }
+
+    // Obtener URL de la página creada
+    $url = get_permalink($page_id);
+    update_post_meta($event_id, '_eventosapp_networking_url', $url);
+
+    // Respuesta exitosa
+    wp_send_json_success([
+        'page_id' => $page_id,
+        'url' => $url,
+        'message' => 'Página de networking creada exitosamente.'
+    ]);
+});
 
 /* ============================================================
  *  Guardar slug desde el metabox
