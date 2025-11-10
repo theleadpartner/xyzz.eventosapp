@@ -41,6 +41,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-networkin
 require_once plugin_dir_path(__FILE__) . 'includes/public/eventosapp-pkpass-endpoint.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-notificaciones-evento.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-auto-register.php';
+require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-auto-networking.php';  // <-- NUEVO: Auto-creación páginas networking
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-event-checklist.php'; // <-- NUEVO
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-batch-refresh.php';   // <-- NUEVO: batch refresh tickets por evento
 
