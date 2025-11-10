@@ -65,8 +65,8 @@ function eventosapp_render_badge_metabox($post) {
         $order_fields[$i] = get_post_meta($post->ID, "eventosapp_field_order_{$i}", true) ?: 'none';
     }
 
-    $width          = (int) (get_post_meta($post->ID, 'eventosapp_badge_width', true) ?: 200);
-    $height         = (int) (get_post_meta($post->ID, 'eventosapp_badge_height', true) ?: 100);
+	$width          = (int) (get_post_meta($post->ID, 'eventosapp_badge_width', true) ?: 374);
+    $height         = (int) (get_post_meta($post->ID, 'eventosapp_badge_height', true) ?: 208);
     $size_large     = (int) (get_post_meta($post->ID, 'eventosapp_badge_size_large', true) ?: 24);
     $size_medium    = (int) (get_post_meta($post->ID, 'eventosapp_badge_size_medium', true) ?: 18);
     $size_small     = (int) (get_post_meta($post->ID, 'eventosapp_badge_size_small', true) ?: 14);
@@ -77,7 +77,7 @@ function eventosapp_render_badge_metabox($post) {
     $sep_horizontal = (int) (get_post_meta($post->ID, 'eventosapp_badge_sep_horizontal', true) ?: 4);
     $qr_size        = (int) (get_post_meta($post->ID, 'eventosapp_badge_qr_size', true) ?: 72);
     $border_width   = get_post_meta($post->ID, 'eventosapp_badge_border_width', true);
-    if ($border_width === '' || $border_width === null) $border_width = 1;
+    if ($border_width === '' || $border_width === null) $border_width = 0;
     $border_width   = (int) $border_width;
 
     // Campo para vista previa con el ID público del ticket (tk...)
