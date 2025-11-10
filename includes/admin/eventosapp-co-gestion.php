@@ -70,6 +70,76 @@ if ( ! function_exists('eventosapp_get_staff_release_ts') ) {
   }
 }
 
+// ---------- FUNCIÓN CRÍTICA: Determina si un usuario puede gestionar un evento ----------
+if ( ! function_exists('eventosapp_user_can_manage_event') ) {
+  /**
+   * NUEVA: Verifica si un usuario puede gestionar/ver un evento específico
+   * 
+   * Retorna true si el usuario cumple alguna de estas condiciones:
+   * 1. Es administrador (manage_options)
+   * 2. Es el autor del evento (post_author)
+   * 3. Es co-gestor temporal (_evapp_temp_authors) y no ha expirado
+   * 4. Es staff asignado (_evapp_event_staff_assigned) y no ha expirado
+   * 
+   * @param int $event_id ID del evento
+   * @param int|null $user_id ID del usuario (null = usuario actual)
+   * @return bool
+   */
+  function eventosapp_user_can_manage_event($event_id, $user_id = null){
+    $event_id = (int)$event_id;
+    if (!$event_id) return false;
+
+    // Determinar usuario
+    if ($user_id === null) {
+      $user_id = get_current_user_id();
+    }
+    $user_id = (int)$user_id;
+    if (!$user_id) return false;
+
+    // 1. Administradores siempre pueden
+    if (user_can($user_id, 'manage_options')) {
+      return true;
+    }
+
+    // 2. Autor del evento puede
+    $event = get_post($event_id);
+    if ($event && (int)$event->post_author === $user_id) {
+      return true;
+    }
+
+    $now = time();
+
+    // 3. Co-gestores temporales (no expirados)
+    $temp_authors = get_post_meta($event_id, '_evapp_temp_authors', true);
+    if (is_array($temp_authors)) {
+      foreach ($temp_authors as $row) {
+        if (!is_array($row)) continue;
+        if (empty($row['user_id'])) continue;
+        if ((int)$row['user_id'] !== $user_id) continue;
+        
+        // Verificar expiración
+        $until = isset($row['until']) ? (int)$row['until'] : 0;
+        if ($until === 0 || $until >= $now) {
+          return true; // Co-gestor válido (sin expiración o no ha expirado)
+        }
+      }
+    }
+
+    // 4. Staff asignado (no expirado)
+    $staff_assigned = get_post_meta($event_id, '_evapp_event_staff_assigned', true);
+    if (is_array($staff_assigned) && isset($staff_assigned[$user_id])) {
+      $staff_data = $staff_assigned[$user_id];
+      $until = isset($staff_data['until']) ? (int)$staff_data['until'] : 0;
+      if ($until === 0 || $until >= $now) {
+        return true; // Staff válido (sin expiración o no ha expirado)
+      }
+    }
+
+    // No cumple ninguna condición
+    return false;
+  }
+}
+
 // ---------- MODIFICADO: Funciones de staff multi-evento ----------
 
 if ( ! function_exists('eventosapp_get_all_staff_users') ) {
