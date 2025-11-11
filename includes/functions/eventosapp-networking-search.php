@@ -441,7 +441,17 @@ function eventosapp_find_today_events_by_attendee($cedula, $apellido) {
     // Fecha actual en formato Y-m-d
     $today = current_time('Y-m-d');
     
-    // Buscar todos los tickets que coincidan con la cédula y apellido
+    // PASO 1: Obtener todos los eventos que están activos HOY
+    $today_events = eventosapp_get_all_events_today($today);
+    
+    if (empty($today_events)) {
+        return [];
+    }
+    
+    // PASO 2: Buscar tickets del usuario en esos eventos específicos
+    $evento_ids = array_map('intval', $today_events);
+    $placeholders = implode(',', array_fill(0, count($evento_ids), '%d'));
+    
     $query = $wpdb->prepare("
         SELECT DISTINCT p.ID as ticket_id, 
                pm_evento.meta_value as evento_id
@@ -452,7 +462,8 @@ function eventosapp_find_today_events_by_attendee($cedula, $apellido) {
             AND pm_evento.meta_key = '_eventosapp_ticket_evento_id'
         WHERE p.post_type = 'eventosapp_ticket'
         AND p.post_status = 'publish'
-    ");
+        AND pm_evento.meta_value IN ($placeholders)
+    ", $evento_ids);
 
     $tickets = $wpdb->get_results($query, ARRAY_A);
 
@@ -494,14 +505,11 @@ function eventosapp_find_today_events_by_attendee($cedula, $apellido) {
             $ticket_cedula === trim($cedula) && 
             strcasecmp($ticket_apellido, trim($apellido)) === 0
         ) {
-            // Verificar que el evento sea de hoy
-            if (eventosapp_is_event_today($evento_id, $today)) {
-                $event_data = eventosapp_get_event_networking_data($evento_id, $today);
-                
-                if ($event_data) {
-                    $matching_events[] = $event_data;
-                    $processed_events[] = $evento_id;
-                }
+            $event_data = eventosapp_get_event_networking_data($evento_id, $today);
+            
+            if ($event_data) {
+                $matching_events[] = $event_data;
+                $processed_events[] = $evento_id;
             }
         }
     }
@@ -510,33 +518,111 @@ function eventosapp_find_today_events_by_attendee($cedula, $apellido) {
 }
 
 /**
+ * Obtiene todos los eventos que están activos en la fecha especificada
+ * Considera los 3 tipos de fecha: única, consecutiva y no consecutiva
+ * 
+ * @param string $date Fecha en formato Y-m-d
+ * @return array Array de IDs de eventos activos
+ */
+function eventosapp_get_all_events_today($date) {
+    global $wpdb;
+    
+    // Obtener todos los eventos publicados
+    $eventos = $wpdb->get_results("
+        SELECT ID 
+        FROM {$wpdb->posts} 
+        WHERE post_type = 'eventosapp_event' 
+        AND post_status = 'publish'
+    ", ARRAY_A);
+    
+    if (empty($eventos)) {
+        return [];
+    }
+    
+    $today_events = [];
+    $date_ts = strtotime($date);
+    
+    foreach ($eventos as $evento) {
+        $event_id = (int) $evento['ID'];
+        
+        if (eventosapp_is_event_today($event_id, $date, $date_ts)) {
+            $today_events[] = $event_id;
+        }
+    }
+    
+    return $today_events;
+}
+
+/**
  * Verifica si un evento se está ejecutando en la fecha especificada
+ * Soporta los 3 tipos de fecha: única, consecutiva y no consecutiva
  * 
  * @param int $event_id ID del evento
  * @param string $date Fecha en formato Y-m-d
+ * @param int $date_ts (Opcional) Timestamp de la fecha para optimización
  * @return bool
  */
-function eventosapp_is_event_today($event_id, $date) {
-    // Obtener fechas del evento
-    $fecha_inicio = get_post_meta($event_id, '_eventosapp_fecha_inicio', true);
-    $fecha_fin = get_post_meta($event_id, '_eventosapp_fecha_fin', true);
-
-    if (empty($fecha_inicio)) {
-        return false;
+function eventosapp_is_event_today($event_id, $date, $date_ts = null) {
+    if ($date_ts === null) {
+        $date_ts = strtotime($date);
     }
-
-    // Si no hay fecha fin, usar la fecha inicio
-    if (empty($fecha_fin)) {
-        $fecha_fin = $fecha_inicio;
+    
+    // Obtener el tipo de fecha del evento
+    $tipo_fecha = get_post_meta($event_id, '_eventosapp_tipo_fecha', true);
+    
+    if (empty($tipo_fecha)) {
+        $tipo_fecha = 'unica'; // Default
     }
-
-    // Convertir a timestamps para comparación
-    $date_ts = strtotime($date);
-    $inicio_ts = strtotime($fecha_inicio);
-    $fin_ts = strtotime($fecha_fin);
-
-    // Verificar si la fecha está dentro del rango del evento
-    return ($date_ts >= $inicio_ts && $date_ts <= $fin_ts);
+    
+    switch ($tipo_fecha) {
+        case 'unica':
+            // Evento de fecha única
+            $fecha_unica = get_post_meta($event_id, '_eventosapp_fecha_unica', true);
+            if (empty($fecha_unica)) {
+                return false;
+            }
+            $fecha_unica_ts = strtotime($fecha_unica);
+            return ($date_ts === $fecha_unica_ts);
+            
+        case 'consecutiva':
+            // Evento con fecha de inicio y fin consecutivas
+            $fecha_inicio = get_post_meta($event_id, '_eventosapp_fecha_inicio', true);
+            $fecha_fin = get_post_meta($event_id, '_eventosapp_fecha_fin', true);
+            
+            if (empty($fecha_inicio)) {
+                return false;
+            }
+            
+            // Si no hay fecha fin, usar la fecha inicio
+            if (empty($fecha_fin)) {
+                $fecha_fin = $fecha_inicio;
+            }
+            
+            $inicio_ts = strtotime($fecha_inicio);
+            $fin_ts = strtotime($fecha_fin);
+            
+            // Verificar si la fecha está dentro del rango
+            return ($date_ts >= $inicio_ts && $date_ts <= $fin_ts);
+            
+        case 'noconsecutiva':
+            // Evento con fechas no consecutivas (array de fechas)
+            $fechas_noco = get_post_meta($event_id, '_eventosapp_fechas_noco', true);
+            
+            if (!is_array($fechas_noco) || empty($fechas_noco)) {
+                return false;
+            }
+            
+            // Verificar si la fecha actual está en el array
+            foreach ($fechas_noco as $fecha_noco) {
+                if (strtotime($fecha_noco) === $date_ts) {
+                    return true;
+                }
+            }
+            return false;
+            
+        default:
+            return false;
+    }
 }
 
 /**
