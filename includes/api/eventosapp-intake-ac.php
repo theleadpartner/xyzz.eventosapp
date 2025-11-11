@@ -404,24 +404,87 @@ if ($existing) {
   // Indexar para búsquedas
   if (function_exists('eventosapp_ticket_build_search_blob')) eventosapp_ticket_build_search_blob($post_id);
 
-  // --- Marcar origen y enviar correo (webhook) ---
+  // --- Marcar origen ---
   update_post_meta($post_id, '_eventosapp_ticket_origin', 'webhook');
 
-  $email_result = ['email_sent' => false, 'email_msg' => ''];
-  if ( function_exists('eventosapp_send_ticket_email_now') ) {
+  // --- EVALUAR CONDICIONALES Y ENVIAR CORREO SI CORRESPONDE ---
+  $email_result = ['email_sent' => false, 'email_msg' => '', 'conditional_matched' => false];
+  
+  $should_send_email = true; // Por defecto SÍ enviar
+  $email_template = null;
+  $conditional_result = null;
+  
+  // Evaluar condicionales si la función existe
+  if (function_exists('eventosapp_evaluate_webhook_conditionals')) {
+    $conditional_result = eventosapp_evaluate_webhook_conditionals($post_id, $evento_id);
+    
+    if (is_array($conditional_result)) {
+      $should_send_email = !empty($conditional_result['send_email']);
+      $email_template = $conditional_result['template'] ?? null;
+      
+      // Log de qué regla se aplicó (para debugging)
+      if (isset($conditional_result['matched_rule']) && is_array($conditional_result['matched_rule'])) {
+        update_post_meta($post_id, '_eventosapp_webhook_conditional_matched', $conditional_result['matched_rule']);
+        $email_result['conditional_matched'] = true;
+      }
+    }
+  }
+  
+  // Enviar correo si corresponde
+  if ($should_send_email && function_exists('eventosapp_send_ticket_email_now')) {
+    // Si hay una plantilla específica de la condicional, temporalmente cambiar la plantilla del evento
+    $original_template = null;
+    if ($email_template) {
+      $original_template = get_post_meta($evento_id, '_eventosapp_email_tpl', true);
+      update_post_meta($evento_id, '_eventosapp_email_tpl', $email_template);
+    }
+    
+    // Enviar el correo
     list($sent, $msg) = eventosapp_send_ticket_email_now($post_id, [
       'source'    => 'webhook',  // idempotente en reintentos
       'recipient' => $email,
       // 'force' => true, // descomenta si quieres ignorar idempotencia globalmente
     ]);
+    
+    // Restaurar plantilla original si fue modificada
+    if ($email_template && $original_template !== null) {
+      if ($original_template === '' || $original_template === false) {
+        delete_post_meta($evento_id, '_eventosapp_email_tpl');
+      } else {
+        update_post_meta($evento_id, '_eventosapp_email_tpl', $original_template);
+      }
+    }
+    
     // Trazas de auditoría
     update_post_meta($post_id, '_eventosapp_ticket_email_webhook_result', $sent ? 'sent' : 'failed');
     update_post_meta($post_id, '_eventosapp_ticket_email_webhook_msg', $msg);
-    $email_result = ['email_sent' => (bool) $sent, 'email_msg' => $msg];
+    if ($email_template) {
+      update_post_meta($post_id, '_eventosapp_ticket_email_webhook_template', $email_template);
+    }
+    
+    $email_result = [
+      'email_sent' => (bool) $sent, 
+      'email_msg' => $msg,
+      'conditional_matched' => $email_result['conditional_matched'],
+      'template_used' => $email_template ?: 'default'
+    ];
 
-    error_log('[EventosApp] webhook CREATE mail ticket '.$post_id.' -> '.($sent ? 'SENT' : 'FAILED').' | '.$msg);
-  } else {
-    $email_result = ['email_sent' => false, 'email_msg' => 'eventosapp_send_ticket_email_now() no disponible'];
+    error_log('[EventosApp] webhook CREATE mail ticket '.$post_id.' -> '.($sent ? 'SENT' : 'FAILED').' | '.$msg.($email_template ? ' | Template: '.$email_template : ''));
+  } elseif (!$should_send_email) {
+    // Si no se envió correo por una condicional, registrarlo
+    update_post_meta($post_id, '_eventosapp_webhook_email_skipped', [
+      'reason' => 'conditional_rule',
+      'matched_rule' => $conditional_result['matched_rule'] ?? null,
+      'at' => current_time('mysql')
+    ]);
+    $email_result = [
+      'email_sent' => false, 
+      'email_msg' => 'Correo no enviado por regla condicional',
+      'conditional_matched' => true
+    ];
+    error_log('[EventosApp] webhook CREATE ticket '.$post_id.' -> email SKIPPED by conditional rule');
+  } elseif (!function_exists('eventosapp_send_ticket_email_now')) {
+    $email_result = ['email_sent' => false, 'email_msg' => 'eventosapp_send_ticket_email_now() no disponible', 'conditional_matched' => false];
     error_log('[EventosApp] webhook CREATE ticket '.$post_id.' -> email helper NO disponible');
   }
 
@@ -520,4 +583,3 @@ if ( ! function_exists('eventosapp_update_ticket_from_payload') ) {
     }
   }
 }
-
