@@ -48,14 +48,14 @@ if ( ! function_exists('eventosapp_networking_ensure_parent') ) {
     }
 }
 
-/** Slug por defecto del evento (prefijo "networking" + nombre con guiones) */
+/** Slug por defecto del evento (nombre del evento con guiones) */
 if ( ! function_exists('eventosapp_networking_default_slug_for_event') ) {
     function eventosapp_networking_default_slug_for_event($event_id) {
         $title = get_the_title($event_id);
         $base_slug = sanitize_title($title ?: "evento-$event_id");
         
-        // Agregar prefijo "networking-" 
-        return 'networking-' . $base_slug;
+        // Retornar solo el slug base sin prefijo
+        return $base_slug;
     }
 }
 
@@ -255,7 +255,7 @@ function eventosapp_render_metabox_networking($post){
                    name="eventosapp_networking_slug" 
                    class="evnet-input" 
                    value="<?php echo esc_attr($slug); ?>"
-                   placeholder="networking-nombre-evento">
+                   placeholder="nombre-evento">
             <div class="evnet-help">
                 Puedes editar el slug para personalizar la URL. Usa solo letras, números y guiones.
             </div>
@@ -312,7 +312,7 @@ function eventosapp_render_metabox_networking($post){
     (function($){
         // Preview en tiempo real del slug
         $('input[name="eventosapp_networking_slug"]').on('input', function(){
-            var slug = $(this).val().trim() || 'networking-evento';
+            var slug = $(this).val().trim() || 'evento';
             var base = '<?php echo esc_js(home_url('/' . eventosapp_networking_parent_slug() . '/')); ?>';
             $('#evnetUrlPreview').text(base + slug + '/');
         });
