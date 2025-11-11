@@ -41,21 +41,25 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<path d="M3 13l3 3 5-6M12 13l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>';
 
-				
-				case 'checklist': // checklist
-    return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
-      <path d="M8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-      <path d="M5 5l2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-    </svg>';
+			case 'checklist': // checklist
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+					<path d="M8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<path d="M5 5l2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+				</svg>';
 
-				
 			case 'ticket': // edición de tickets (ticket)
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M5 9V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
 					<rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
 				</svg>';
-				
+
+			case 'trophy': // NUEVO: Ranking Networking
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M4 5h16v2a5 5 0 0 1-5 5h-6a5 5 0 0 1-5-5V5Z" fill="none" stroke="currentColor" stroke-width="2"/>
+					<path d="M9 12v2a3 3 0 0 0 6 0v-2M8 21h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+				</svg>';
+
 			default:
 				return '';
 		}
@@ -206,21 +210,21 @@ add_shortcode('eventosapp_dashboard', function(){
 		eventosapp_print_dashboard_css();
 		if ( $msg ) echo $msg;
 
-		// Barra "Evento activo" — sin tocar (mantiene su enlace de Cambiar evento)
+		// Barra "Evento activo"
 		if (function_exists('eventosapp_active_event_bar')) {
 			eventosapp_active_event_bar();
 		}
 
 		// URLs desde Configuración
-		$url_metrics      = function_exists('eventosapp_get_metrics_url')      ? eventosapp_get_metrics_url()      : '#';
-		$url_search       = function_exists('eventosapp_get_search_url')       ? eventosapp_get_search_url()       : '#';
-		$url_register     = function_exists('eventosapp_get_register_url')     ? eventosapp_get_register_url()     : '#';
-		$url_qr           = function_exists('eventosapp_get_qr_url')           ? eventosapp_get_qr_url()           : '#';
-		$url_edit         = function_exists('eventosapp_get_edit_url')         ? eventosapp_get_edit_url()         : '#';
-		$url_qr_localidad = function_exists('eventosapp_get_qr_localidad_url') ? eventosapp_get_qr_localidad_url() : '#';
-		$url_qr_sesion    = function_exists('eventosapp_get_qr_sesion_url')    ? eventosapp_get_qr_sesion_url()    : '#';
-		$url_checklist   = function_exists('eventosapp_get_checklist_url')    ? eventosapp_get_checklist_url()    : '#';
-
+		$url_metrics       = function_exists('eventosapp_get_metrics_url')               ? eventosapp_get_metrics_url()               : '#';
+		$url_search        = function_exists('eventosapp_get_search_url')                ? eventosapp_get_search_url()                : '#';
+		$url_register      = function_exists('eventosapp_get_register_url')              ? eventosapp_get_register_url()              : '#';
+		$url_qr            = function_exists('eventosapp_get_qr_url')                    ? eventosapp_get_qr_url()                    : '#';
+		$url_edit          = function_exists('eventosapp_get_edit_url')                  ? eventosapp_get_edit_url()                  : '#';
+		$url_qr_localidad  = function_exists('eventosapp_get_qr_localidad_url')          ? eventosapp_get_qr_localidad_url()          : '#';
+		$url_qr_sesion     = function_exists('eventosapp_get_qr_sesion_url')             ? eventosapp_get_qr_sesion_url()             : '#';
+		$url_checklist     = function_exists('eventosapp_get_checklist_url')             ? eventosapp_get_checklist_url()             : '#';
+		$url_net_ranking   = function_exists('eventosapp_get_networking_ranking_url')    ? eventosapp_get_networking_ranking_url()    : '#'; // NUEVO
 
 		?>
 		<div class="evapp-grid" role="navigation" aria-label="Panel de acciones del evento">
@@ -274,11 +278,18 @@ add_shortcode('eventosapp_dashboard', function(){
 			<?php endif; ?>
 			
 			<?php if (eventosapp_role_can('checklist')): ?>
-  <a class="evapp-card" href="<?php echo esc_url($url_checklist); ?>" aria-label="Checklist de Evento">
-    <?php echo eventosapp_dashboard_icon('checklist'); ?>
-    <span class="evapp-title">Checklist de Evento</span>
-  </a>
-<?php endif; ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_checklist); ?>" aria-label="Checklist de Evento">
+					<?php echo eventosapp_dashboard_icon('checklist'); ?>
+					<span class="evapp-title">Checklist de Evento</span>
+				</a>
+			<?php endif; ?>
+
+			<?php if (eventosapp_role_can('networking_ranking')): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_net_ranking); ?>" aria-label="Ranking Networking">
+					<?php echo eventosapp_dashboard_icon('trophy'); ?>
+					<span class="evapp-title">Ranking Networking</span>
+				</a>
+			<?php endif; ?>
 
 		</div>
 		<?php
