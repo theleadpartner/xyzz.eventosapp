@@ -22,17 +22,19 @@ function eventosapp_get_pages_config() {
     $cfg = get_option('eventosapp_pages', []);
     if (!is_array($cfg)) $cfg = [];
     return wp_parse_args($cfg, [
-        'dashboard_page_id'    => 0,
-        'front_search_page_id' => 0,
-        'register_page_id'     => 0,
-        'qr_page_id'           => 0,
-        'metrics_page_id'      => 0,
-        'edit_page_id'         => 0,
-        'qr_localidad_page_id' => 0,
-        'qr_sesion_page_id'    => 0,
-        'checklist_page_id'    => 0, // NUEVO
+        'dashboard_page_id'        => 0,
+        'front_search_page_id'     => 0,
+        'register_page_id'         => 0,
+        'qr_page_id'               => 0,
+        'metrics_page_id'          => 0,
+        'edit_page_id'             => 0,
+        'qr_localidad_page_id'     => 0,
+        'qr_sesion_page_id'        => 0,
+        'checklist_page_id'        => 0, // NUEVO
+        'networking_ranking_page_id' => 0, // NUEVO: Ranking Networking
     ]);
 }
+
 
 function eventosapp_get_checklist_url() {
     return eventosapp_get_configured_page_url('checklist_page_id', '#');
@@ -74,6 +76,11 @@ function eventosapp_get_qr_localidad_url() {
 function eventosapp_get_qr_sesion_url() {
     return eventosapp_get_configured_page_url('qr_sesion_page_id', '#');
 }
+
+function eventosapp_get_networking_ranking_url() {
+    return eventosapp_get_configured_page_url('networking_ranking_page_id', '#');
+}
+
 
 // ===== Admin UI =====
 add_action('admin_menu', function(){
@@ -188,6 +195,17 @@ add_action('admin_init', function(){
     ['key'=>'checklist_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_event_checklist]</code>']
 );
 
+	// NUEVO: Página de Ranking Networking
+add_settings_field(
+    'networking_ranking_page_id',
+    'Página de Ranking Networking',
+    'eventosapp_render_pages_field',
+    'eventosapp_configuracion',
+    'eventosapp_pages_section',
+    ['key'=>'networking_ranking_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_networking_ranking]</code>']
+);
+
+
 
 
 
@@ -205,12 +223,14 @@ function eventosapp_sanitize_pages_option($input){
         'qr_localidad_page_id',
         'qr_sesion_page_id',
         'checklist_page_id', // NUEVO
+        'networking_ranking_page_id', // NUEVO
     ];
     foreach ($keys as $k) {
         $out[$k] = isset($input[$k]) ? absint($input[$k]) : 0;
     }
     return $out;
 }
+
 
 
 function eventosapp_render_pages_field($args){
@@ -259,6 +279,8 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_qr_localidad]</code> — Validador de Localidad (solo lectura).</li>
             <li><code>[eventosapp_qr_sesion]</code> — Control de acceso por sesión.</li> <!-- NUEVO -->
 			<li><code>[eventosapp_event_checklist]</code> — Checklist del evento (para coordinador).</li>
+			<li><code>[eventosapp_networking_ranking]</code> — Ranking Networking (Top lectores y leídos del día).</li>
+
 
         </ul>
     </div>
@@ -271,19 +293,20 @@ function eventosapp_render_configuracion_page(){ ?>
 if ( ! function_exists('eventosapp_dashboard_features') ) {
 function eventosapp_dashboard_features() {
     return [
-        'dashboard'     => 'Ver Dashboard',
-        'metrics'       => 'Métricas',
-        'search'        => 'Check-In Manual & Escarapela',
-        'register'      => 'Registro Manual de Asistentes',
-        'qr'            => 'Check-In con QR',
-        'edit'          => 'Edición de Tickets',
-        'qr_localidad'  => 'Validador de Localidad',
-        'qr_sesion'     => 'Control por Sesión',
-        'checklist'     => 'Checklist de Evento', // NUEVO
+        'dashboard'          => 'Ver Dashboard',
+        'metrics'            => 'Métricas',
+        'search'             => 'Check-In Manual & Escarapela',
+        'register'           => 'Registro Manual de Asistentes',
+        'qr'                 => 'Check-In con QR',
+        'edit'               => 'Edición de Tickets',
+        'qr_localidad'       => 'Validador de Localidad',
+        'qr_sesion'          => 'Control por Sesión',
+        'checklist'          => 'Checklist de Evento', // NUEVO
+        'networking_ranking' => 'Ranking Networking',  // NUEVO
     ];
 }
-
 }
+
 
 // 2) Roles disponibles (editable roles)
 if ( ! function_exists('eventosapp_get_all_roles') ) {
@@ -320,7 +343,7 @@ function eventosapp_default_dashboard_visibility() {
         }
     }
 
-    // Staff: como lo tenías (ejemplo conservador)
+    // Staff (ejemplo conservador)
     if (isset($defaults['staff'])) {
         $defaults['staff']['dashboard']     = 1;
         $defaults['staff']['search']        = 1;
@@ -328,27 +351,30 @@ function eventosapp_default_dashboard_visibility() {
         $defaults['staff']['qr_localidad']  = 1;
         $defaults['staff']['qr_sesion']     = 1;
         // checklist: OFF por defecto para staff
+        // networking_ranking: OFF por defecto para staff (ajústalo si lo deseas ON)
     }
 
-    // Logístico: como lo tenías
+    // Logístico
     if (isset($defaults['logistico'])) {
         $defaults['logistico']['dashboard']     = 1;
         $defaults['logistico']['qr']            = 1;
         $defaults['logistico']['qr_localidad']  = 1;
         $defaults['logistico']['qr_sesion']     = 1;
-        // checklist: OFF por defecto para logístico
+        // checklist: OFF
+        // networking_ranking: OFF (ajústalo si lo deseas)
     }
 
-    // Coordinador: dashboard + checklist ON
+    // Coordinador: dashboard + checklist ON (y activamos ranking por utilidad operativa)
     if (isset($defaults['coordinador'])) {
-        $defaults['coordinador']['dashboard'] = 1;
-        $defaults['coordinador']['checklist'] = 1;
+        $defaults['coordinador']['dashboard']          = 1;
+        $defaults['coordinador']['checklist']          = 1;
+        $defaults['coordinador']['networking_ranking'] = 1;
     }
 
     return $defaults;
 }
-
 }
+
 
 // 4) Obtener/merge opción guardada con defaults
 if ( ! function_exists('eventosapp_get_dashboard_visibility') ) {
@@ -487,18 +513,20 @@ add_action('admin_init', function() {
 if ( ! function_exists('eventosapp_feature_page_map') ) {
 function eventosapp_feature_page_map() {
     return [
-        'dashboard'    => 'dashboard_page_id',
-        'metrics'      => 'metrics_page_id',
-        'search'       => 'front_search_page_id',
-        'register'     => 'register_page_id',
-        'qr'           => 'qr_page_id',
-        'edit'         => 'edit_page_id',
-        'qr_localidad' => 'qr_localidad_page_id',
-        'qr_sesion'    => 'qr_sesion_page_id',
-        'checklist'    => 'checklist_page_id', // NUEVO
+        'dashboard'          => 'dashboard_page_id',
+        'metrics'            => 'metrics_page_id',
+        'search'             => 'front_search_page_id',
+        'register'           => 'register_page_id',
+        'qr'                 => 'qr_page_id',
+        'edit'               => 'edit_page_id',
+        'qr_localidad'       => 'qr_localidad_page_id',
+        'qr_sesion'          => 'qr_sesion_page_id',
+        'checklist'          => 'checklist_page_id', // NUEVO
+        'networking_ranking' => 'networking_ranking_page_id', // NUEVO
     ];
 }
 }
+
 
 // =====================================================
 // Redirección con mensaje al dashboard
