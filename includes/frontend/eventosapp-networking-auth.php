@@ -405,3 +405,273 @@ function eventosapp_net2_log_cb(){
 
     wp_send_json_success($result);
 }
+
+/* ======================================================================
+ * RANKING NETWORKING (Top lectores / Top leídos del día)
+ * =====================================================================*/
+
+/**
+ * Permite sobre-escribir el nombre de la tabla de logs desde un filtro externo
+ * sin tocar el core.
+ */
+function eventosapp_net2_logs_table_name(){
+    global $wpdb;
+    $default = $wpdb->prefix . 'eventosapp_net2_logs';
+    /**
+     * Filtro: eventosapp_net2_logs_table
+     * Permite retornar otro nombre de tabla si tu esquema difiere.
+     */
+    return apply_filters('eventosapp_net2_logs_table', $default);
+}
+
+/**
+ * Resuelve nombre completo del asistente (ticket -> meta).
+ */
+function eventosapp_ticket_full_name($ticket_id){
+    $first = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
+    $last  = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
+    $name  = trim( sprintf('%s %s', (string)$first, (string)$last) );
+    return $name ?: ('Ticket #'.(int)$ticket_id);
+}
+
+/**
+ * Top lectores (quienes MÁS han leído contactos) del día actual (timezone WP).
+ * Devuelve array: [['ticket_id'=>int,'count'=>int], ...]
+ */
+function eventosapp_net2_get_top_readers_today($event_id, $limit = 10){
+    global $wpdb;
+    $table = eventosapp_net2_logs_table_name();
+    $event_id = (int) $event_id;
+    $limit = (int) $limit;
+
+    // Filtramos por fecha actual (según la zona horaria de la DB; si tus timestamps están en UTC, adapta aquí)
+    $sql = "
+        SELECT reader_ticket_id AS ticket_id, COUNT(*) AS cnt
+        FROM {$table}
+        WHERE event_id = %d
+          AND DATE(created_at) = CURDATE()
+        GROUP BY reader_ticket_id
+        ORDER BY cnt DESC, reader_ticket_id ASC
+        LIMIT %d
+    ";
+    $rows = $wpdb->get_results( $wpdb->prepare($sql, $event_id, $limit), ARRAY_A );
+
+    $out = [];
+    foreach ((array)$rows as $r){
+        $out[] = [
+            'ticket_id' => (int)$r['ticket_id'],
+            'count'     => (int)$r['cnt'],
+        ];
+    }
+    return $out;
+}
+
+/**
+ * Top leídos (contactos que MÁS han sido leídos) del día actual.
+ * Usa COALESCE(read_ticket_id, target_ticket_id) por compatibilidad.
+ */
+function eventosapp_net2_get_top_read_targets_today($event_id, $limit = 10){
+    global $wpdb;
+    $table = eventosapp_net2_logs_table_name();
+    $event_id = (int) $event_id;
+    $limit = (int) $limit;
+
+    $sql = "
+        SELECT COALESCE(read_ticket_id, target_ticket_id) AS ticket_id, COUNT(*) AS cnt
+        FROM {$table}
+        WHERE event_id = %d
+          AND DATE(created_at) = CURDATE()
+        GROUP BY COALESCE(read_ticket_id, target_ticket_id)
+        ORDER BY cnt DESC, ticket_id ASC
+        LIMIT %d
+    ";
+    $rows = $wpdb->get_results( $wpdb->prepare($sql, $event_id, $limit), ARRAY_A );
+
+    $out = [];
+    foreach ((array)$rows as $r){
+        $out[] = [
+            'ticket_id' => (int)$r['ticket_id'],
+            'count'     => (int)$r['cnt'],
+        ];
+    }
+    return $out;
+}
+
+/**
+ * AJAX: obtener ranking del día (solo autenticados y con permisos).
+ */
+add_action('wp_ajax_eventosapp_net2_ranking_today', function(){
+    if ( ! is_user_logged_in() ) {
+        wp_send_json_error(['error'=>'No autenticado.']);
+    }
+    // Protección por feature/página
+    if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('networking_ranking') ) {
+        wp_send_json_error(['error'=>'Sin permisos.']);
+    }
+    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
+    if ( ! $event_id ) {
+        // Si no llega, tratamos de usar el evento activo
+        if ( function_exists('eventosapp_get_active_event') ) {
+            $event_id = (int) eventosapp_get_active_event();
+        }
+    }
+    if ( ! $event_id ) {
+        wp_send_json_error(['error'=>'No hay evento activo.']);
+    }
+
+    $readers = eventosapp_net2_get_top_readers_today($event_id, 10);
+    $targets = eventosapp_net2_get_top_read_targets_today($event_id, 10);
+
+    // Enriquecer con nombres
+    foreach ($readers as &$r){
+        $r['name'] = eventosapp_ticket_full_name($r['ticket_id']);
+    }
+    foreach ($targets as &$t){
+        $t['name'] = eventosapp_ticket_full_name($t['ticket_id']);
+    }
+
+    wp_send_json_success([
+        'event_id' => $event_id,
+        'readers'  => $readers,
+        'targets'  => $targets,
+        'date'     => date_i18n('l, d \d\e F \d\e Y'),
+    ]);
+});
+
+/**
+ * Shortcode: [eventosapp_networking_ranking]
+ * Requiere estar logueado y tener permiso/feature 'networking_ranking'.
+ * Muestra: título evento, fecha actual, botón actualizar y dos rankings (Top lectores / Top leídos).
+ */
+add_shortcode('eventosapp_networking_ranking', function(){
+    if ( ! function_exists('eventosapp_require_feature') ) {
+        return '<div style="color:#b33">Módulo base no disponible.</div>';
+    }
+    // Protegemos la feature
+    eventosapp_require_feature('networking_ranking');
+
+    // Event ID: usamos el evento activo
+    $event_id = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
+    if ( ! $event_id ) {
+        return '<div style="color:#b33">No hay evento activo.</div>';
+    }
+
+    $event_title = get_the_title($event_id) ?: 'Evento';
+    $today_label = date_i18n('l, d \d\e F \d\e Y');
+
+    ob_start(); ?>
+    <style>
+      .evapp-rank-wrap{ max-width:1100px; margin:0 auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+      .evapp-rank-head{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; margin:0 0 16px; }
+      .evapp-rank-title{ font-weight:800; font-size:1.1rem; letter-spacing:.2px; }
+      .evapp-rank-date{ color:#5a6475; font-weight:600; }
+      .evapp-rank-btn{ background:#2563eb; color:#fff; border:0; border-radius:12px; padding:.6rem 1rem; font-weight:800; cursor:pointer; }
+      .evapp-rank-grid{ display:grid; grid-template-columns:1fr; gap:18px; margin-top:6px; }
+      @media(min-width:960px){ .evapp-rank-grid{ grid-template-columns:1fr 1fr; } }
+
+      .evapp-panel{ background:#0b1020; color:#eaf1ff; border-radius:16px; padding:16px; box-shadow:0 8px 24px rgba(0,0,0,.15); }
+      .evapp-panel h3{ margin:0 0 10px; font-size:1rem; letter-spacing:.2px; }
+
+      .evapp-podium{ display:grid; gap:10px; }
+      .evapp-item{ display:flex; align-items:center; gap:12px; background:#0a0f1d; border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:10px 12px; }
+      .evapp-rank{ display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; background:#1f2a44; font-weight:900; }
+      .evapp-name{ font-weight:800; }
+      .evapp-count{ margin-left:auto; font-weight:900; color:#7CFF8D; }
+
+      /* Jerarquía de tamaños */
+      .tier-1  .evapp-item:nth-child(1){ transform:scale(1.12); border-width:2px; border-color:#ffd25a; }
+      .tier-2  .evapp-item:nth-child(n+2):nth-child(-n+5){ transform:scale(1.06); }
+      /* Del 6 al 10 normal (sin transform) */
+
+      .evapp-empty{ color:#b2bed6; font-size:.95rem; }
+    </style>
+
+    <div class="evapp-rank-wrap" data-event="<?php echo esc_attr($event_id); ?>">
+      <div class="evapp-rank-head">
+        <div>
+          <div class="evapp-rank-title">Ranking Networking — <strong><?php echo esc_html($event_title); ?></strong></div>
+          <div class="evapp-rank-date" id="evappRankDate"><?php echo esc_html($today_label); ?></div>
+        </div>
+        <div>
+          <button type="button" class="evapp-rank-btn" id="evappRankRefresh">Actualizar</button>
+        </div>
+      </div>
+
+      <div class="evapp-rank-grid">
+        <div class="evapp-panel">
+          <h3>Top 10 — Usuarios que más han <strong>leído contactos</strong> (hoy)</h3>
+          <div id="evappReaders" class="evapp-podium"></div>
+        </div>
+        <div class="evapp-panel">
+          <h3>Top 10 — Contactos que más han sido <strong>leídos</strong> (hoy)</h3>
+          <div id="evappTargets" class="evapp-podium"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    (function(){
+      const root   = document.querySelector('.evapp-rank-wrap');
+      const eventId= parseInt(root?.dataset.event || '0', 10) || 0;
+      const ajaxURL= "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
+      const readersBox = document.getElementById('evappReaders');
+      const targetsBox = document.getElementById('evappTargets');
+      const dateBox    = document.getElementById('evappRankDate');
+      const btnRefresh = document.getElementById('evappRankRefresh');
+
+      function renderList(container, rows){
+        container.innerHTML = '';
+        if (!rows || !rows.length){
+          container.innerHTML = '<div class="evapp-empty">Sin datos por ahora.</div>';
+          return;
+        }
+        // Tiers: 1 (primero), 2-5, 6-10
+        container.classList.remove('tier-1', 'tier-2');
+        if (rows.length >= 1) container.classList.add('tier-1');
+        if (rows.length >= 2) container.classList.add('tier-2');
+
+        rows.forEach((r, i)=>{
+          const item = document.createElement('div');
+          item.className = 'evapp-item';
+          item.innerHTML = `
+            <span class="evapp-rank">${i+1}</span>
+            <span class="evapp-name">${(r.name||'—')}</span>
+            <span class="evapp-count">${(r.count||0)}</span>
+          `;
+          container.appendChild(item);
+        });
+      }
+
+      async function loadData(){
+        const fd = new FormData();
+        fd.append('action', 'eventosapp_net2_ranking_today');
+        fd.append('event_id', String(eventId||0));
+        try{
+          const res = await fetch(ajaxURL, {method:'POST', body:fd, credentials:'same-origin'});
+          const j = await res.json();
+          if (!j || !j.success){
+            const msg = (j && j.data && j.data.error) ? j.data.error : 'No se pudo cargar el ranking.';
+            readersBox.innerHTML = '<div class="evapp-empty">'+msg+'</div>';
+            targetsBox.innerHTML = '<div class="evapp-empty">'+msg+'</div>';
+            return;
+          }
+          const d = j.data || {};
+          renderList(readersBox, d.readers || []);
+          renderList(targetsBox, d.targets || []);
+          if (d.date) dateBox.textContent = d.date;
+        }catch(e){
+          readersBox.innerHTML = '<div class="evapp-empty">Error de red.</div>';
+          targetsBox.innerHTML = '<div class="evapp-empty">Error de red.</div>';
+        }
+      }
+
+      btnRefresh?.addEventListener('click', loadData);
+      loadData();
+      // Autorefresco cada 30s
+      setInterval(loadData, 30000);
+    })();
+    </script>
+    <?php
+    return ob_get_clean();
+});
+
