@@ -246,18 +246,24 @@ add_shortcode('eventosapp_networking_search', function($atts) {
                         required
                         autocomplete="off"
                     >
+                    <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
+                        Escribe tal cual como está en tu inscripción.
+                    </small>
                 </div>
                 
                 <div class="evapp-netsearch-field">
-                    <label for="evappNetSearchApellido">Apellido</label>
+                    <label for="evappNetSearchApellido">Apellidos</label>
                     <input 
                         type="text" 
                         id="evappNetSearchApellido" 
                         class="evapp-netsearch-input" 
-                        placeholder="Ej: Pérez"
+                        placeholder="Ej: Pérez García"
                         required
                         autocomplete="off"
                     >
+                    <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
+                        Escribe tal cual como están en tu inscripción.
+                    </small>
                 </div>
 
                 <button type="submit" class="evapp-netsearch-btn" id="evappNetSearchBtn">
@@ -268,9 +274,7 @@ add_shortcode('eventosapp_networking_search', function($atts) {
                     Buscar mis eventos
                 </button>
 
-                <div class="evapp-netsearch-message info" style="display:none;" id="evappNetSearchMsg">
-                    Ingresa tus datos tal como fueron registrados en el ticket.
-                </div>
+                <div class="evapp-netsearch-message" style="display:none;" id="evappNetSearchMsg"></div>
             </form>
 
             <div class="evapp-netsearch-results" id="evappNetSearchResults">
