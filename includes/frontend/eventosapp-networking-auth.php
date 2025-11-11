@@ -77,13 +77,19 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
           <div class="evapp-net-field">
             <label>Cédula</label>
             <input type="text" id="evappIdentCC" class="evapp-net-input" placeholder="Ej: 1020304050">
+            <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
+              Escribe tal cual como está en tu inscripción.
+            </small>
           </div>
           <div class="evapp-net-field">
-            <label>Apellido</label>
-            <input type="text" id="evappIdentLast" class="evapp-net-input" placeholder="Ej: Pérez">
+            <label>Apellidos</label>
+            <input type="text" id="evappIdentLast" class="evapp-net-input" placeholder="Ej: Pérez García">
+            <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
+              Escribe tal cual como están en tu inscripción.
+            </small>
           </div>
           <button type="button" id="evappIdentBtn" class="evapp-net-btn">Confirmar identidad</button>
-          <div id="evappIdentMsg" class="evapp-net-help">Ingresa los datos tal como fueron registrados.</div>
+          <div id="evappIdentMsg" class="evapp-net-help" style="margin-top:12px;text-align:center;">Para iniciar a escanear un QR debes autenticarte.</div>
         </div>
 
         <!-- Paso 2: Scanner -->
@@ -164,7 +170,7 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
       btnIdent.addEventListener('click', ()=>{
         const ccVal   = (cc.value || '').trim();
         const lastVal = (last.value || '').trim();
-        if (!ccVal || !lastVal) { setIdentMsg('Completa cédula y apellido.'); return; }
+        if (!ccVal || !lastVal) { setIdentMsg('Completa cédula y apellidos.'); return; }
 
         const fd = new FormData();
         fd.append('action',   'eventosapp_net2_identify');
@@ -1352,4 +1358,3 @@ if ( ! function_exists('eventosapp_net2_admin_resend_digest') ) {
 if ( ! has_action('admin_post_eventosapp_net2_resend_digest', 'eventosapp_net2_admin_resend_digest') ) {
     add_action('admin_post_eventosapp_net2_resend_digest', 'eventosapp_net2_admin_resend_digest');
 }
-
