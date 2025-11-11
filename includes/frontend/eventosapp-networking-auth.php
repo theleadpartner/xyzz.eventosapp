@@ -949,248 +949,320 @@ if ( ! function_exists('eventosapp_net2_record_interaction') ) {
 }
 
 
-/* ===================  DIGEST Y MÉTRICAS (SIN CAMBIOS FUNCIONALES) =================== */
+/* ===================  DIGEST Y MÉTRICAS (PROTEGIDAS CONTRA DUPLICADOS) =================== */
 
-function eventosapp_net2_get_event_last_day($event_id){
-    if ( function_exists('eventosapp_get_event_days') ) {
-        $days = (array) eventosapp_get_event_days($event_id);
-        if ($days){
-            sort($days);
-            return end($days);
+if ( ! function_exists('eventosapp_net2_get_event_last_day') ) {
+    function eventosapp_net2_get_event_last_day($event_id){
+        if ( function_exists('eventosapp_get_event_days') ) {
+            $days = (array) eventosapp_get_event_days($event_id);
+            if ($days){
+                sort($days);
+                return end($days);
+            }
+        }
+        $tipo = get_post_meta($event_id, '_eventosapp_tipo_fecha', true);
+        if ($tipo === 'unica') {
+            $f = get_post_meta($event_id, '_eventosapp_fecha_unica', true);
+            return $f ? $f : gmdate('Y-m-d');
+        }
+        if ($tipo === 'consecutiva') {
+            $fin = get_post_meta($event_id, '_eventosapp_fecha_fin', true);
+            return $fin ? $fin : gmdate('Y-m-d');
+        }
+        return gmdate('Y-m-d');
+    }
+}
+
+if ( ! function_exists('eventosapp_net2_event_timezone') ) {
+    function eventosapp_net2_event_timezone($event_id){
+        $tz = get_post_meta($event_id, '_eventosapp_zona_horaria', true);
+        if (!$tz) {
+            $tz = wp_timezone_string();
+            if (!$tz || $tz === 'UTC') {
+                $offset = get_option('gmt_offset');
+                $tz = $offset ? timezone_name_from_abbr('', $offset * 3600, 0) ?: 'UTC' : 'UTC';
+            }
+        }
+        return $tz;
+    }
+}
+
+if ( ! function_exists('eventosapp_net2_maybe_schedule_event_digest') ) {
+    function eventosapp_net2_maybe_schedule_event_digest($event_id){
+        $flag = get_post_meta($event_id, '_eventosapp_net_digest_cron_scheduled', true);
+        if ($flag) return;
+
+        $last_day = eventosapp_net2_get_event_last_day($event_id);
+        $tz = eventosapp_net2_event_timezone($event_id);
+        try {
+            $dt = new DateTime($last_day . ' 09:00:00', new DateTimeZone($tz));
+            $dt->modify('+1 day');
+        } catch(Exception $e){
+            $dt = new DateTime('now', wp_timezone());
+            $dt->modify('+1 day');
+        }
+        $ts = $dt->getTimestamp();
+
+        if ( ! wp_next_scheduled('eventosapp_net2_digest_event', [$event_id]) ) {
+            wp_schedule_single_event($ts, 'eventosapp_net2_digest_event', [$event_id]);
+            update_post_meta($event_id, '_eventosapp_net_digest_cron_scheduled', 1);
         }
     }
-    $tipo = get_post_meta($event_id, '_eventosapp_tipo_fecha', true);
-    if ($tipo === 'unica') {
-        $f = get_post_meta($event_id, '_eventosapp_fecha_unica', true);
-        return $f ? $f : gmdate('Y-m-d');
-    }
-    if ($tipo === 'consecutiva') {
-        $fin = get_post_meta($event_id, '_eventosapp_fecha_fin', true);
-        return $fin ? $fin : gmdate('Y-m-d');
-    }
-    return gmdate('Y-m-d');
 }
 
-function eventosapp_net2_event_timezone($event_id){
-    $tz = get_post_meta($event_id, '_eventosapp_zona_horaria', true);
-    if (!$tz) {
-        $tz = wp_timezone_string();
-        if (!$tz || $tz === 'UTC') {
-            $offset = get_option('gmt_offset');
-            $tz = $offset ? timezone_name_from_abbr('', $offset * 3600, 0) ?: 'UTC' : 'UTC';
+if ( ! function_exists('eventosapp_net2_run_event_digest') ) {
+    function eventosapp_net2_run_event_digest($event_id){
+        global $wpdb;
+        if ( ! function_exists('eventosapp_net2_table_name_internal') ) return;
+        $table = eventosapp_net2_table_name_internal();
+
+        if ( ! $wpdb->get_var( $wpdb->prepare("SELECT 1 FROM {$table} WHERE event_id=%d LIMIT 1", $event_id) ) ) {
+            return;
         }
-    }
-    return $tz;
-}
 
-function eventosapp_net2_maybe_schedule_event_digest($event_id){
-    $flag = get_post_meta($event_id, '_eventosapp_net_digest_cron_scheduled', true);
-    if ($flag) return;
+        $ids = $wpdb->get_col( $wpdb->prepare(
+            "SELECT DISTINCT reader_ticket_id FROM {$table} WHERE event_id=%d", $event_id
+        ) );
+        $ids2= $wpdb->get_col( $wpdb->prepare(
+            "SELECT DISTINCT read_ticket_id   FROM {$table} WHERE event_id=%d", $event_id
+        ) );
+        $all_ticket_ids = array_unique( array_map('intval', array_merge($ids ?: [], $ids2 ?: [])) );
 
-    $last_day = eventosapp_net2_get_event_last_day($event_id);
-    $tz = eventosapp_net2_event_timezone($event_id);
-    try {
-        $dt = new DateTime($last_day . ' 09:00:00', new DateTimeZone($tz));
-        $dt->modify('+1 day');
-    } catch(Exception $e){
-        $dt = new DateTime('now', wp_timezone());
-        $dt->modify('+1 day');
-    }
-    $ts = $dt->getTimestamp();
-
-    if ( ! wp_next_scheduled('eventosapp_net2_digest_event', [$event_id]) ) {
-        wp_schedule_single_event($ts, 'eventosapp_net2_digest_event', [$event_id]);
-        update_post_meta($event_id, '_eventosapp_net_digest_cron_scheduled', 1);
+        foreach ($all_ticket_ids as $ticket_id) {
+            if ( function_exists('eventosapp_net2_send_digest_for_ticket') ) {
+                eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id);
+            }
+        }
+        update_post_meta($event_id, '_eventosapp_net_digest_done', 1);
     }
 }
-add_action('eventosapp_net2_digest_event', 'eventosapp_net2_run_event_digest');
 
-function eventosapp_net2_run_event_digest($event_id){
-    global $wpdb;
-    $table = eventosapp_net2_table_name_internal();
-    if ( ! $wpdb->get_var( $wpdb->prepare("SELECT 1 FROM {$table} WHERE event_id=%d LIMIT 1", $event_id) ) ) {
-        return;
+/* Vinculamos el hook sólo si aquí definimos la función o si no estaba ya agregado */
+if ( function_exists('eventosapp_net2_run_event_digest') ) {
+    if ( ! has_action('eventosapp_net2_digest_event', 'eventosapp_net2_run_event_digest') ) {
+        add_action('eventosapp_net2_digest_event', 'eventosapp_net2_run_event_digest');
     }
-
-    $ids = $wpdb->get_col( $wpdb->prepare(
-        "SELECT DISTINCT reader_ticket_id FROM {$table} WHERE event_id=%d", $event_id
-    ) );
-    $ids2= $wpdb->get_col( $wpdb->prepare(
-        "SELECT DISTINCT read_ticket_id   FROM {$table} WHERE event_id=%d", $event_id
-    ) );
-    $all_ticket_ids = array_unique( array_map('intval', array_merge($ids ?: [], $ids2 ?: [])) );
-
-    foreach ($all_ticket_ids as $ticket_id) {
-        eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id);
-    }
-    update_post_meta($event_id, '_eventosapp_net_digest_done', 1);
 }
 
-function eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id = 0, $args = []) {
-    global $wpdb;
+if ( ! function_exists('eventosapp_net2_send_digest_for_ticket') ) {
+    function eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id = 0, $args = []) {
+        global $wpdb;
 
-    $ticket_id = (int) $ticket_id;
-    if (!$ticket_id) return false;
+        $ticket_id = (int) $ticket_id;
+        if (!$ticket_id) return false;
 
-    $args = wp_parse_args($args, [
-        'force'     => false,
-        'mark_sent' => true,
-    ]);
+        $args = wp_parse_args($args, [
+            'force'     => false,
+            'mark_sent' => true,
+        ]);
 
-    if (!$args['force']) {
-        $already = get_post_meta($ticket_id, '_eventosapp_net_digest_sent', true);
-        if ($already) return false;
+        if (!$args['force']) {
+            $already = get_post_meta($ticket_id, '_eventosapp_net_digest_sent', true);
+            if ($already) return false;
+        }
+
+        if (!$event_id) {
+            $event_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+        }
+        if (!$event_id) return false;
+
+        if ( ! function_exists('eventosapp_net2_table_name_internal') ) return false;
+        $table = eventosapp_net2_table_name_internal();
+
+        $outgoing = $wpdb->get_col( $wpdb->prepare(
+            "SELECT read_ticket_id FROM {$table} WHERE event_id=%d AND reader_ticket_id=%d",
+            $event_id, $ticket_id
+        ) );
+        $incoming = $wpdb->get_col( $wpdb->prepare(
+            "SELECT reader_ticket_id FROM {$table} WHERE event_id=%d AND read_ticket_id=%d",
+            $event_id, $ticket_id
+        ) );
+
+        if ( empty($outgoing) && empty($incoming) ) {
+            return false;
+        }
+
+        $email_to = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
+        if (!$email_to) $email_to = get_post_meta($ticket_id, '_eventosapp_asistente_correo', true);
+        if (!$email_to) return false;
+
+        $evento_nombre = get_the_title($event_id);
+        $as_first = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
+        $as_last  = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
+        $as_name  = trim($as_first.' '.$as_last);
+
+        $contact = function($tid){
+            $first = get_post_meta($tid, '_eventosapp_asistente_nombre', true);
+            $last  = get_post_meta($tid, '_eventosapp_asistente_apellido', true);
+            $comp  = get_post_meta($tid, '_eventosapp_asistente_empresa', true);
+            $role  = get_post_meta($tid, '_eventosapp_asistente_cargo', true);
+            $email = get_post_meta($tid, '_eventosapp_asistente_email', true);
+            if (!$email) $email = get_post_meta($tid, '_eventosapp_asistente_correo', true);
+            $phone = get_post_meta($tid, '_eventosapp_asistente_tel', true);
+            if (!$phone) $phone = get_post_meta($tid, '_eventosapp_asistente_telefono', true);
+            if (!$phone) $phone = get_post_meta($tid, '_eventosapp_asistente_cel', true);
+            if (!$phone) $phone = get_post_meta($tid, '_eventosapp_asistente_celular', true);
+
+            return [
+                'full_name'   => trim($first.' '.$last),
+                'designation' => $role,
+                'company'     => $comp,
+                'email'       => $email,
+                'phone'       => $phone,
+            ];
+        };
+
+        $build_table = function($title, $ids) use ($contact){
+            if (!$ids) return '';
+            $ids = array_unique(array_map('intval', $ids));
+
+            $th = 'padding:10px 12px;border-bottom:1px solid #e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:13px;color:#111827';
+            $td = 'padding:10px 12px;border-bottom:1px solid #f1f5f9;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:13px;color:#111827';
+
+            $html  = '<h3 style="margin:16px 0 8px">'.esc_html($title).'</h3>';
+            $html .= '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:720px;border:1px solid #e5e7eb">';
+            $html .= '<thead><tr style="background:#f8fafc;text-align:left">';
+            $html .= '<th style="'.$th.'">Nombre + Apellidos</th>';
+            $html .= '<th style="'.$th.'">Cargo</th>';
+            $html .= '<th style="'.$th.'">Empresa</th>';
+            $html .= '<th style="'.$th.'">Teléfono</th>';
+            $html .= '<th style="'.$th.'">Correo</th>';
+            $html .= '</tr></thead><tbody>';
+
+            foreach ($ids as $tid){
+                $p = $contact($tid);
+                $name  = esc_html($p['full_name'] ?: '(Sin nombre)');
+                $role  = esc_html($p['designation'] ?: '');
+                $comp  = esc_html($p['company'] ?: '');
+                $phone = esc_html($p['phone'] ?: '');
+                $mail  = $p['email'] ? '<a href="mailto:'.esc_attr($p['email']).'">'.esc_html($p['email']).'</a>' : '';
+
+                $html .= '<tr>';
+                $html .= '<td style="'.$td.'">'.$name.'</td>';
+                $html .= '<td style="'.$td.'">'.$role.'</td>';
+                $html .= '<td style="'.$td.'">'.$comp.'</td>';
+                $html .= '<td style="'.$td.'">'.$phone.'</td>';
+                $html .= '<td style="'.$td.'">'.$mail.'</td>';
+                $html .= '</tr>';
+            }
+            $html .= '</tbody></table>';
+            return $html;
+        };
+
+        $body  = '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827">';
+        $body .= '<p>Hola <b>'.esc_html($as_name).'</b>,</p>';
+        $body .= '<p>¡Gracias por participar en el networking de <b>'.esc_html($evento_nombre).'</b>! Aquí tienes el resumen de tus nuevas conexiones:</p>';
+        $body .= $build_table('Personas que tú escaneaste', $outgoing);
+        $body .= $build_table('Personas que te escanearon', $incoming);
+        $body .= '<p style="margin-top:16px;color:#6b7280">Este mensaje se envía automáticamente 24 h después del evento a quienes usaron el networking de doble autenticación.</p>';
+        $body .= '</div>';
+
+        $content_type_cb = function(){ return 'text/html'; };
+        add_filter('wp_mail_content_type', $content_type_cb);
+        $sent = wp_mail($email_to, 'Tus nuevas conexiones – ' . $evento_nombre, $body);
+        remove_filter('wp_mail_content_type', $content_type_cb);
+
+        if ($sent && $args['mark_sent']) {
+            update_post_meta($ticket_id, '_eventosapp_net_digest_sent', 1);
+        }
+        return $sent;
     }
+}
 
-    if (!$event_id) {
-        $event_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
-    }
-    if (!$event_id) return false;
-
-    $table = eventosapp_net2_table_name_internal();
-
-    $outgoing = $wpdb->get_col( $wpdb->prepare(
-        "SELECT read_ticket_id FROM {$table} WHERE event_id=%d AND reader_ticket_id=%d",
-        $event_id, $ticket_id
-    ) );
-    $incoming = $wpdb->get_col( $wpdb->prepare(
-        "SELECT reader_ticket_id FROM {$table} WHERE event_id=%d AND read_ticket_id=%d",
-        $event_id, $ticket_id
-    ) );
-
-    if ( empty($outgoing) && empty($incoming) ) {
-        return false;
-    }
-
-    $email_to = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
-    if (!$email_to) $email_to = get_post_meta($ticket_id, '_eventosapp_asistente_correo', true);
-    if (!$email_to) return false;
-
-    $evento_nombre = get_the_title($event_id);
-    $as_first = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
-    $as_last  = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
-    $as_name  = trim($as_first.' '.$as_last);
-
-    $contact = function($tid){
-        $first = get_post_meta($tid, '_eventosapp_asistente_nombre', true);
-        $last  = get_post_meta($tid, '_eventosapp_asistente_apellido', true);
-        $comp  = get_post_meta($tid, '_eventosapp_asistente_empresa', true);
-        $role  = get_post_meta($tid, '_eventosapp_asistente_cargo', true);
-        $email = get_post_meta($tid, '_eventosapp_asistente_email', true);
-        if (!$email) $email = get_post_meta($tid, '_eventosapp_asistente_correo', true);
-        $phone = get_post_meta($tid, '_eventosapp_asistente_tel', true);
-        if (!$phone) $phone = get_post_meta($tid, '_eventosapp_asistente_telefono', true);
-        if (!$phone) $phone = get_post_meta($tid, '_eventosapp_asistente_cel', true);
-        if (!$phone) $phone = get_post_meta($tid, '_eventosapp_asistente_celular', true);
-
-        return [
-            'full_name'   => trim($first.' '.$last),
-            'designation' => $role,
-            'company'     => $comp,
-            'email'       => $email,
-            'phone'       => $phone,
+if ( ! function_exists('eventosapp_net2_metrics_by_localidad') ) {
+    function eventosapp_net2_metrics_by_localidad($event_id){
+        global $wpdb;
+        if ( ! function_exists('eventosapp_net2_table_name_internal') ) return [
+            'outgoing' => [], 'incoming' => []
         ];
-    };
+        $table = eventosapp_net2_table_name_internal();
+        $out = [
+            'outgoing' => [],
+            'incoming' => [],
+        ];
+        $rows1 = $wpdb->get_results( $wpdb->prepare(
+            "SELECT COALESCE(reader_localidad,'') AS loc, COUNT(*) c FROM {$table} WHERE event_id=%d GROUP BY reader_localidad",
+            $event_id
+        ), ARRAY_A );
+        foreach ((array)$rows1 as $r){ $out['outgoing'][$r['loc']] = (int)$r['c']; }
 
-    $build_table = function($title, $ids) use ($contact){
-        if (!$ids) return '';
-        $ids = array_unique(array_map('intval', $ids));
+        $rows2 = $wpdb->get_results( $wpdb->prepare(
+            "SELECT COALESCE(read_localidad,'') AS loc, COUNT(*) c FROM {$table} WHERE event_id=%d GROUP BY read_localidad",
+            $event_id
+        ), ARRAY_A );
+        foreach ((array)$rows2 as $r){ $out['incoming'][$r['loc']] = (int)$r['c']; }
 
-        $th = 'padding:10px 12px;border-bottom:1px solid #e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:13px;color:#111827';
-        $td = 'padding:10px 12px;border-bottom:1px solid #f1f5f9;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:13px;color:#111827';
+        return $out;
+    }
+}
 
-        $html  = '<h3 style="margin:16px 0 8px">'.esc_html($title).'</h3>';
-        $html .= '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:720px;border:1px solid #e5e7eb">';
-        $html .= '<thead><tr style="background:#f8fafc;text-align:left">';
-        $html .= '<th style="'.$th.'">Nombre + Apellidos</th>';
-        $html .= '<th style="'.$th.'">Cargo</th>';
-        $html .= '<th style="'.$th.'">Empresa</th>';
-        $html .= '<th style="'.$th.'">Teléfono</th>';
-        $html .= '<th style="'.$th.'">Correo</th>';
-        $html .= '</tr></thead><tbody>';
+/* ---------- Handlers admin_post (nombrados y protegidos) ---------- */
 
-        foreach ($ids as $tid){
-            $p = $contact($tid);
-            $name  = esc_html($p['full_name'] ?: '(Sin nombre)');
-            $role  = esc_html($p['designation'] ?: '');
-            $comp  = esc_html($p['company'] ?: '');
-            $phone = esc_html($p['phone'] ?: '');
-            $mail  = $p['email'] ? '<a href="mailto:'.esc_attr($p['email']).'">'.esc_html($p['email']).'</a>' : '';
-
-            $html .= '<tr>';
-            $html .= '<td style="'.$td.'">'.$name.'</td>';
-            $html .= '<td style="'.$td.'">'.$role.'</td>';
-            $html .= '<td style="'.$td.'">'.$comp.'</td>';
-            $html .= '<td style="'.$td.'">'.$phone.'</td>';
-            $html .= '<td style="'.$td.'">'.$mail.'</td>';
-            $html .= '</tr>';
+if ( ! function_exists('eventosapp_send_networking_digest_handler') ) {
+    function eventosapp_send_networking_digest_handler(){
+        if ( ! current_user_can('edit_posts') ) {
+            wp_die('No autorizado', 403);
         }
-        $html .= '</tbody></table>';
-        return $html;
-    };
+        check_admin_referer('eventosapp_send_networking_digest');
 
-    $body  = '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827">';
-    $body .= '<p>Hola <b>'.esc_html($as_name).'</b>,</p>';
-    $body .= '<p>¡Gracias por participar en el networking de <b>'.esc_html($evento_nombre).'</b>! Aquí tienes el resumen de tus nuevas conexiones:</p>';
-    $body .= $build_table('Personas que tú escaneaste', $outgoing);
-    $body .= $build_table('Personas que te escanearon', $incoming);
-    $body .= '<p style="margin-top:16px;color:#6b7280">Este mensaje se envía automáticamente 24 h después del evento a quienes usaron el networking de doble autenticación.</p>';
-    $body .= '</div>';
+        $ticket_id = isset($_GET['post_id']) ? absint($_GET['post_id']) : 0;
+        if (!$ticket_id) wp_die('Falta post_id');
 
-    $content_type_cb = function(){ return 'text/html'; };
-    add_filter('wp_mail_content_type', $content_type_cb);
-    $sent = wp_mail($email_to, 'Tus nuevas conexiones – ' . $evento_nombre, $body);
-    remove_filter('wp_mail_content_type', $content_type_cb);
+        $event_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+        if (!$event_id) wp_die('El ticket no pertenece a un evento');
 
-    if ($sent && $args['mark_sent']) {
-        update_post_meta($ticket_id, '_eventosapp_net_digest_sent', 1);
+        if ( function_exists('eventosapp_net2_send_digest_for_ticket') ) {
+            $ok = eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id);
+        } else {
+            $ok = false;
+        }
+
+        $redirect = admin_url('post.php?post='.$ticket_id.'&action=edit');
+        $redirect = add_query_arg(['netdigest' => $ok ? 'ok' : 'skip'], $redirect);
+        wp_safe_redirect($redirect);
+        exit;
     }
-    return $sent;
+}
+if ( ! has_action('admin_post_eventosapp_send_networking_digest', 'eventosapp_send_networking_digest_handler') ) {
+    add_action('admin_post_eventosapp_send_networking_digest', 'eventosapp_send_networking_digest_handler');
 }
 
-function eventosapp_net2_metrics_by_localidad($event_id){
-    global $wpdb;
-    $table = eventosapp_net2_table_name_internal();
-    $out = [
-        'outgoing' => [],
-        'incoming' => [],
-    ];
-    $rows1 = $wpdb->get_results( $wpdb->prepare(
-        "SELECT COALESCE(reader_localidad,'') AS loc, COUNT(*) c FROM {$table} WHERE event_id=%d GROUP BY reader_localidad",
-        $event_id
-    ), ARRAY_A );
-    foreach ($rows1 as $r){ $out['outgoing'][$r['loc']] = (int)$r['c']; }
+if ( ! function_exists('eventosapp_net2_admin_resend_digest') ) {
+    function eventosapp_net2_admin_resend_digest(){
+        if ( ! current_user_can('edit_posts') ) wp_die('Unauthorized');
 
-    $rows2 = $wpdb->get_results( $wpdb->prepare(
-        "SELECT COALESCE(read_localidad,'') AS loc, COUNT(*) c FROM {$table} WHERE event_id=%d GROUP BY read_localidad",
-        $event_id
-    ), ARRAY_A );
-    foreach ($rows2 as $r){ $out['incoming'][$r['loc']] = (int)$r['c']; }
+        $nonce = isset($_GET['_wpnonce']) ? $_GET['_wpnonce'] : '';
+        if ( ! wp_verify_nonce($nonce, 'eventosapp_net2_resend_digest') ) wp_die('Bad nonce');
 
-    return $out;
+        $ticket_id = isset($_GET['post_id']) ? absint($_GET['post_id']) : 0;
+        if (!$ticket_id) wp_die('Missing ticket');
+
+        $event_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+
+        $ok = false;
+        if ( function_exists('eventosapp_net2_send_digest_for_ticket') ) {
+            $ok = eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id, [
+                'force'     => true,
+                'mark_sent' => false,
+            ]);
+        }
+
+        $url = add_query_arg([
+            'post'                => $ticket_id,
+            'action'              => 'edit',
+            'evapp_netdigest'     => $ok ? 1 : 0,
+            'evapp_netdigest_msg' => $ok ? 'Resumen enviado (manual) sin afectar el envío programado.' : 'No se envió. Verifica si existen interacciones.',
+        ], admin_url('post.php'));
+
+        wp_safe_redirect($url);
+        exit;
+    }
+}
+if ( ! has_action('admin_post_eventosapp_net2_resend_digest', 'eventosapp_net2_admin_resend_digest') ) {
+    add_action('admin_post_eventosapp_net2_resend_digest', 'eventosapp_net2_admin_resend_digest');
 }
 
-add_action('admin_post_eventosapp_send_networking_digest', function(){
-    if ( ! current_user_can('edit_posts') ) {
-        wp_die('No autorizado', 403);
-    }
-    check_admin_referer('eventosapp_send_networking_digest');
 
-    $ticket_id = isset($_GET['post_id']) ? absint($_GET['post_id']) : 0;
-    if (!$ticket_id) wp_die('Falta post_id');
-
-    $event_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
-    if (!$event_id) wp_die('El ticket no pertenece a un evento');
-
-    $ok = eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id);
-
-    $redirect = admin_url('post.php?post='.$ticket_id.'&action=edit');
-    $redirect = add_query_arg(['netdigest' => $ok ? 'ok' : 'skip'], $redirect);
-    wp_safe_redirect($redirect);
-    exit;
-});
-
-add_action('admin_post_eventosapp_net2_resend_digest', 'eventosapp_net2_admin_resend_digest');
 function eventosapp_net2_admin_resend_digest(){
     if ( ! current_user_can('edit_posts') ) wp_die('Unauthorized');
 
