@@ -489,19 +489,24 @@ function eventosapp_ticket_full_name($ticket_id){
 }
 
 /**
- * Top lectores (quienes MÁS han leído contactos) del día actual (timezone DB/WP).
+ * Top lectores (quienes MÁS han leído contactos) del EVENTO COMPLETO.
+ * Cuenta lecturas ÚNICAS por par lector → leído dentro del evento.
+ * Si un lector escanea varias veces al mismo contacto durante el evento,
+ * contará UNA sola vez.
  */
 function eventosapp_net2_get_top_readers_today($event_id, $limit = 10){
     global $wpdb;
-    $table = eventosapp_net2_table_name();
+    $table    = eventosapp_net2_table_name();
     $event_id = (int) $event_id;
     $limit    = (int) $limit;
 
+    // Clave: quitar filtro por día y contar DISTINCT read_ticket_id
     $sql = "
-        SELECT reader_ticket_id AS ticket_id, COUNT(*) AS cnt
+        SELECT
+            reader_ticket_id AS ticket_id,
+            COUNT(DISTINCT read_ticket_id) AS cnt
         FROM {$table}
         WHERE event_id = %d
-          AND DATE(created_at) = CURDATE()
         GROUP BY reader_ticket_id
         ORDER BY cnt DESC, reader_ticket_id ASC
         LIMIT %d
@@ -518,20 +523,26 @@ function eventosapp_net2_get_top_readers_today($event_id, $limit = 10){
     return $out;
 }
 
+
 /**
- * Top leídos (contactos que MÁS han sido leídos) del día actual.
+ * Top leídos (contactos que MÁS han sido leídos) del EVENTO COMPLETO.
+ * Cuenta lectores ÚNICOS por objetivo dentro del evento.
+ * Si el mismo lector vuelve a escanear al mismo objetivo en otro día del evento,
+ * contará UNA sola vez.
  */
 function eventosapp_net2_get_top_read_targets_today($event_id, $limit = 10){
     global $wpdb;
-    $table = eventosapp_net2_table_name();
+    $table    = eventosapp_net2_table_name();
     $event_id = (int) $event_id;
     $limit    = (int) $limit;
 
+    // Clave: quitar filtro por día y contar DISTINCT reader_ticket_id
     $sql = "
-        SELECT read_ticket_id AS ticket_id, COUNT(*) AS cnt
+        SELECT
+            read_ticket_id AS ticket_id,
+            COUNT(DISTINCT reader_ticket_id) AS cnt
         FROM {$table}
         WHERE event_id = %d
-          AND DATE(created_at) = CURDATE()
         GROUP BY read_ticket_id
         ORDER BY cnt DESC, ticket_id ASC
         LIMIT %d
@@ -548,45 +559,43 @@ function eventosapp_net2_get_top_read_targets_today($event_id, $limit = 10){
     return $out;
 }
 
+
 /**
- * AJAX: obtener ranking del día (solo autenticados y con permisos).
+ * AJAX: obtener ranking del EVENTO COMPLETO (solo autenticados y con permisos).
+ * Mantiene el mismo hook/action para no romper el frontend existente.
  */
 add_action('wp_ajax_eventosapp_net2_ranking_today', function(){
     if ( ! is_user_logged_in() ) {
         wp_send_json_error(['error'=>'No autenticado.']);
     }
-    // Protección por feature/página
     if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('networking_ranking') ) {
         wp_send_json_error(['error'=>'Sin permisos.']);
     }
+
     $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
-    if ( ! $event_id ) {
-        if ( function_exists('eventosapp_get_active_event') ) {
-            $event_id = (int) eventosapp_get_active_event();
-        }
+    if ( ! $event_id && function_exists('eventosapp_get_active_event') ) {
+        $event_id = (int) eventosapp_get_active_event();
     }
     if ( ! $event_id ) {
         wp_send_json_error(['error'=>'No hay evento activo.']);
     }
 
+    // Ya devuelven ÚNICOS por evento completo
     $readers = eventosapp_net2_get_top_readers_today($event_id, 10);
     $targets = eventosapp_net2_get_top_read_targets_today($event_id, 10);
 
-    // Enriquecer con nombres
-    foreach ($readers as &$r){
-        $r['name'] = eventosapp_ticket_full_name($r['ticket_id']);
-    }
-    foreach ($targets as &$t){
-        $t['name'] = eventosapp_ticket_full_name($t['ticket_id']);
-    }
+    foreach ($readers as &$r){ $r['name'] = eventosapp_ticket_full_name($r['ticket_id']); }
+    foreach ($targets as &$t){ $t['name'] = eventosapp_ticket_full_name($t['ticket_id']); }
 
     wp_send_json_success([
         'event_id' => $event_id,
         'readers'  => $readers,
         'targets'  => $targets,
-        'date'     => date_i18n('l, d \d\e F \d\e Y'),
+        // En lugar de una fecha del día, enviamos una etiqueta clara para el frontend
+        'date'     => 'Acumulado del evento (lecturas únicas)',
     ]);
 });
+
 
 /**
  * Shortcode: [eventosapp_networking_ranking]
@@ -649,11 +658,11 @@ add_shortcode('eventosapp_networking_ranking', function(){
 
       <div class="evapp-rank-grid">
         <div class="evapp-panel">
-          <h3>Top 10 — Usuarios que más han <strong>leído contactos</strong> (hoy)</h3>
+          <h3>Top 10 — Usuarios que más han <strong>leído contactos</strong> (evento)</h3>
           <div id="evappReaders" class="evapp-podium"></div>
         </div>
         <div class="evapp-panel">
-          <h3>Top 10 — Contactos que más han sido <strong>leídos</strong> (hoy)</h3>
+          <h3>Top 10 — Contactos que más han sido <strong>leídos</strong> (evento)</h3>
           <div id="evappTargets" class="evapp-podium"></div>
         </div>
       </div>
