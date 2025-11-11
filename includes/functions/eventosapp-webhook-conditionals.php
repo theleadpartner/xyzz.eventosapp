@@ -94,6 +94,14 @@ function eventosapp_get_ticket_field_value($ticket_id, $field_key) {
     // Si es un campo extra (formato: extra_nombredelcampo)
     if (strpos($field_key, 'extra_') === 0) {
         $extra_key = substr($field_key, 6); // Quitar 'extra_'
+        
+        // Formato usado por eventosapp-intake-ac.php: meta individual por campo
+        $value = get_post_meta($ticket_id, '_eventosapp_extra_' . $extra_key, true);
+        if ($value !== '' && $value !== false) {
+            return (string) $value;
+        }
+        
+        // Fallback: formato alternativo de array (por si se usó el otro sistema)
         $extras = get_post_meta($ticket_id, '_eventosapp_ticket_extras', true);
         if (is_array($extras) && isset($extras[$extra_key])) {
             return (string) $extras[$extra_key];
