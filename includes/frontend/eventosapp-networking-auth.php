@@ -466,11 +466,17 @@ function eventosapp_net2_log_cb(){
 /**
  * NOMBRE REAL de la tabla de networking (doble autenticación).
  * Se usa tanto para registrar interacciones como para el ranking.
+ * 
+ * Se protege con function_exists() para evitar colisiones con 
+ * includes/functions/eventosapp-networking.php.
  */
-function eventosapp_net2_table_name(){
-    global $wpdb;
-    return $wpdb->prefix . 'eventosapp_networking';
+if ( ! function_exists('eventosapp_net2_table_name') ) {
+    function eventosapp_net2_table_name(){
+        global $wpdb;
+        return $wpdb->prefix . 'eventosapp_networking';
+    }
 }
+
 
 /**
  * Resuelve nombre completo del asistente (ticket -> meta).
