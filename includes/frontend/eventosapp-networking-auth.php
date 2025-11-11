@@ -598,9 +598,40 @@ add_action('wp_ajax_eventosapp_net2_ranking_today', function(){
 
 
 /**
+ * Helper seguro: URL de la landing de networking del evento.
+ * Usa la función del admin si está disponible; si no, construye un fallback.
+ */
+if ( ! function_exists('eventosapp_net2_get_landing_url') ) {
+    function eventosapp_net2_get_landing_url($event_id){
+        $event_id = (int) $event_id;
+        if ( $event_id <= 0 ) return home_url( '/' );
+
+        // Si está cargado el helper del admin, úsalo.
+        if ( function_exists('eventosapp_networking_build_url') ) {
+            return eventosapp_networking_build_url($event_id);
+        }
+
+        // Fallback: reconstruir la URL a partir del slug guardado o el default.
+        $slug = get_post_meta($event_id, '_eventosapp_networking_slug', true);
+        if ( ! $slug ) {
+            $title = get_the_title($event_id);
+            $slug  = sanitize_title( $title ?: "evento-$event_id" );
+        } else {
+            $slug = sanitize_title( $slug );
+        }
+
+        // Por convención, la landing cuelga de /networking/{slug}/
+        $parent = 'networking';
+        return home_url( '/' . $parent . '/' . $slug . '/' );
+    }
+}
+
+/** 
  * Shortcode: [eventosapp_networking_ranking]
  * Requiere estar logueado y tener permiso/feature 'networking_ranking'.
- * Muestra: título evento, fecha actual, botón actualizar y dos rankings (Top lectores / Top leídos).
+ * Muestra: título evento, etiqueta de acumulado, botón actualizar,
+ *          campo de Landing (URL) con botón "Copiar" y "Abrir",
+ *          y dos rankings (Top lectores / Top leídos).
  */
 add_shortcode('eventosapp_networking_ranking', function(){
     if ( ! function_exists('eventosapp_require_feature') ) {
@@ -615,16 +646,33 @@ add_shortcode('eventosapp_networking_ranking', function(){
         return '<div style="color:#b33">No hay evento activo.</div>';
     }
 
-    $event_title = get_the_title($event_id) ?: 'Evento';
-    $today_label = date_i18n('l, d \d\e F \d\e Y');
+    $event_title  = get_the_title($event_id) ?: 'Evento';
+    $accum_label  = 'Acumulado del evento (lecturas únicas)';
+    $landing_url  = eventosapp_net2_get_landing_url($event_id);
 
     ob_start(); ?>
     <style>
       .evapp-rank-wrap{ max-width:1100px; margin:0 auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-      .evapp-rank-head{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; margin:0 0 16px; }
+      .evapp-rank-head{ display:grid; grid-template-columns:1fr; gap:12px; margin:0 0 16px; }
+      @media(min-width:960px){ .evapp-rank-head{ grid-template-columns:1fr 1fr; align-items:flex-end; } }
+
       .evapp-rank-title{ font-weight:800; font-size:1.1rem; letter-spacing:.2px; }
       .evapp-rank-date{ color:#5a6475; font-weight:600; }
+
+      .evapp-head-actions{ display:grid; grid-template-columns:1fr auto; gap:8px; align-items:end; }
       .evapp-rank-btn{ background:#2563eb; color:#fff; border:0; border-radius:12px; padding:.6rem 1rem; font-weight:800; cursor:pointer; }
+
+      /* Campo Landing */
+      .evapp-landing{ display:grid; gap:6px; }
+      .evapp-landing-label{ font-weight:700; font-size:.95rem; color:#1e293b; }
+      .evapp-landing-row{ display:grid; grid-template-columns:1fr auto auto; gap:8px; }
+      .evapp-landing-input{ width:100%; padding:.55rem .7rem; border:1px solid #cbd5e1; border-radius:10px; font-size:.9rem; background:#fff; color:#0f172a; }
+      .evapp-landing-btn{ display:inline-flex; align-items:center; justify-content:center; gap:.45rem; padding:.55rem .75rem; border:0; border-radius:10px; font-weight:800; cursor:pointer; }
+      .evapp-landing-copy{ background:#0ea5e9; color:#fff; }
+      .evapp-landing-copy:hover{ filter:brightness(.98); }
+      .evapp-landing-open{ background:#64748b; color:#fff; text-decoration:none; }
+      .evapp-landing-open:hover{ filter:brightness(.98); }
+
       .evapp-rank-grid{ display:grid; grid-template-columns:1fr; gap:18px; margin-top:6px; }
       @media(min-width:960px){ .evapp-rank-grid{ grid-template-columns:1fr 1fr; } }
 
@@ -649,9 +697,26 @@ add_shortcode('eventosapp_networking_ranking', function(){
       <div class="evapp-rank-head">
         <div>
           <div class="evapp-rank-title">Ranking Networking — <strong><?php echo esc_html($event_title); ?></strong></div>
-          <div class="evapp-rank-date" id="evappRankDate"><?php echo esc_html($today_label); ?></div>
+          <div class="evapp-rank-date" id="evappRankDate"><?php echo esc_html($accum_label); ?></div>
         </div>
-        <div>
+
+        <div class="evapp-head-actions">
+          <div class="evapp-landing">
+            <label class="evapp-landing-label">Landing del networking (evento)</label>
+            <div class="evapp-landing-row">
+              <input id="evappLandingInput" type="text" class="evapp-landing-input" readonly value="<?php echo esc_attr($landing_url); ?>">
+              <button id="evappLandingCopy" type="button" class="evapp-landing-btn evapp-landing-copy" title="Copiar al portapapeles">
+                <!-- icono copy -->
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>
+                Copiar
+              </button>
+              <a class="evapp-landing-btn evapp-landing-open" href="<?php echo esc_url($landing_url); ?>" target="_blank" rel="noopener">
+                <!-- icono external -->
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6.364 1.5a.5.5 0 0 0 0 1H12V8a.5.5 0 0 0 1 0V1a1 1 0 0 0-1-1H6.364z"/><path d="M15 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1H13v3.5a.5.5 0 0 0 1 0V.5z"/><path d="M1.5 3A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10A1.5 1.5 0 0 0 13 14.5V7a.5.5 0 0 0-1 0v7.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10A.5.5 0 0 1 1.5 4H9a.5.5 0 0 0 0-1H1.5z"/></svg>
+                Abrir
+              </a>
+            </div>
+          </div>
           <button type="button" class="evapp-rank-btn" id="evappRankRefresh">Actualizar</button>
         </div>
       </div>
@@ -670,13 +735,29 @@ add_shortcode('eventosapp_networking_ranking', function(){
 
     <script>
     (function(){
-      const root   = document.querySelector('.evapp-rank-wrap');
-      const eventId= parseInt(root?.dataset.event || '0', 10) || 0;
-      const ajaxURL= "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
+      const root    = document.querySelector('.evapp-rank-wrap');
+      const eventId = parseInt(root?.dataset.event || '0', 10) || 0;
+      const ajaxURL = "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
+
       const readersBox = document.getElementById('evappReaders');
       const targetsBox = document.getElementById('evappTargets');
       const dateBox    = document.getElementById('evappRankDate');
       const btnRefresh = document.getElementById('evappRankRefresh');
+
+      // Copiar landing
+      const inputLanding = document.getElementById('evappLandingInput');
+      const btnCopy      = document.getElementById('evappLandingCopy');
+      btnCopy?.addEventListener('click', async ()=>{
+        try{
+          await navigator.clipboard.writeText(inputLanding.value.trim());
+          const old = btnCopy.innerHTML;
+          btnCopy.innerHTML = '¡Copiado!';
+          btnCopy.style.backgroundColor = '#059669';
+          setTimeout(()=>{ btnCopy.innerHTML = old; btnCopy.style.backgroundColor = ''; }, 1600);
+        }catch(e){
+          alert('No se pudo copiar. Selecciona y copia manualmente.');
+        }
+      });
 
       function renderList(container, rows){
         container.innerHTML = '';
@@ -731,6 +812,7 @@ add_shortcode('eventosapp_networking_ranking', function(){
     <?php
     return ob_get_clean();
 });
+
 
 /* ======================================================================
  * =========  BLOQUE DE FUNCIONES DEL MÓDULO DE NETWORKING  =============
