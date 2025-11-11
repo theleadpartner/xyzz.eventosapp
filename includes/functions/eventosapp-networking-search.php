@@ -448,24 +448,30 @@ function eventosapp_find_today_events_by_attendee($cedula, $apellido) {
         return [];
     }
     
-    // PASO 2: Buscar tickets del usuario en esos eventos específicos
-    $evento_ids = array_map('intval', $today_events);
-    $placeholders = implode(',', array_fill(0, count($evento_ids), '%d'));
+    // PASO 2: Buscar tickets por cédula y apellido (usando las metas directas)
+    // Preparar valores para búsqueda
+    $cedula_limpia = trim($cedula);
+    $apellido_limpio = trim($apellido);
     
-    $query = $wpdb->prepare("
-        SELECT DISTINCT p.ID as ticket_id, 
-               pm_evento.meta_value as evento_id
+    // Buscar todos los tickets que coincidan con la cédula
+    $query_cedula = $wpdb->prepare("
+        SELECT DISTINCT p.ID as ticket_id,
+               pm_evento.meta_value as evento_id,
+               pm_cc.meta_value as cc,
+               pm_apellido.meta_value as apellido
         FROM {$wpdb->posts} p
-        INNER JOIN {$wpdb->postmeta} pm_campos ON p.ID = pm_campos.post_id 
-            AND pm_campos.meta_key = '_eventosapp_campos_adicionales'
+        INNER JOIN {$wpdb->postmeta} pm_cc ON p.ID = pm_cc.post_id 
+            AND pm_cc.meta_key = '_eventosapp_asistente_cc'
+            AND pm_cc.meta_value = %s
+        INNER JOIN {$wpdb->postmeta} pm_apellido ON p.ID = pm_apellido.post_id 
+            AND pm_apellido.meta_key = '_eventosapp_asistente_apellido'
         INNER JOIN {$wpdb->postmeta} pm_evento ON p.ID = pm_evento.post_id 
             AND pm_evento.meta_key = '_eventosapp_ticket_evento_id'
         WHERE p.post_type = 'eventosapp_ticket'
         AND p.post_status = 'publish'
-        AND pm_evento.meta_value IN ($placeholders)
-    ", $evento_ids);
+    ", $cedula_limpia);
 
-    $tickets = $wpdb->get_results($query, ARRAY_A);
+    $tickets = $wpdb->get_results($query_cedula, ARRAY_A);
 
     if (empty($tickets)) {
         return [];
@@ -477,33 +483,23 @@ function eventosapp_find_today_events_by_attendee($cedula, $apellido) {
     foreach ($tickets as $ticket) {
         $ticket_id = (int) $ticket['ticket_id'];
         $evento_id = (int) $ticket['evento_id'];
+        $ticket_cc = trim($ticket['cc']);
+        $ticket_apellido = trim($ticket['apellido']);
+
+        // Verificar que el evento esté en la lista de eventos de hoy
+        if (!in_array($evento_id, $today_events)) {
+            continue;
+        }
 
         // Evitar procesar el mismo evento múltiples veces
         if (in_array($evento_id, $processed_events)) {
             continue;
         }
 
-        // Obtener campos adicionales del ticket
-        $campos = get_post_meta($ticket_id, '_eventosapp_campos_adicionales', true);
-        
-        if (!is_array($campos)) {
-            continue;
-        }
-
-        // Verificar cédula
-        $ticket_cedula = isset($campos['documento_de_identificacion']) 
-            ? trim($campos['documento_de_identificacion']) 
-            : '';
-        
-        // Verificar apellido
-        $ticket_apellido = isset($campos['apellidos']) 
-            ? trim($campos['apellidos']) 
-            : '';
-
-        // Comparar (case insensitive para apellido)
+        // Comparar cédula exacta y apellido case-insensitive
         if (
-            $ticket_cedula === trim($cedula) && 
-            strcasecmp($ticket_apellido, trim($apellido)) === 0
+            $ticket_cc === $cedula_limpia && 
+            strcasecmp($ticket_apellido, $apellido_limpio) === 0
         ) {
             $event_data = eventosapp_get_event_networking_data($evento_id, $today);
             
