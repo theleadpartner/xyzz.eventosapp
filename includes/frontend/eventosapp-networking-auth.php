@@ -736,223 +736,218 @@ add_shortcode('eventosapp_networking_ranking', function(){
  * - Envío de resumen post-evento (cron + manual)
  */
 
-function eventosapp_net2_table_name_internal(){
-    global $wpdb;
-    return $wpdb->prefix . 'eventosapp_networking';
-}
-
-function eventosapp_net2_maybe_create_table(){
-    global $wpdb;
-    $table = eventosapp_net2_table_name_internal();
-
-    $exists = $wpdb->get_var( $wpdb->prepare(
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
-        DB_NAME, $table
-    ) );
-    if ($exists) return;
-
-    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-    $charset_collate = $wpdb->get_charset_collate();
-
-    $sql = "CREATE TABLE {$table} (
-        id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        event_id BIGINT(20) UNSIGNED NOT NULL,
-        reader_ticket_id BIGINT(20) UNSIGNED NOT NULL,
-        read_ticket_id   BIGINT(20) UNSIGNED NOT NULL,
-        reader_localidad VARCHAR(100) DEFAULT NULL,
-        read_localidad   VARCHAR(100) DEFAULT NULL,
-        ip  VARCHAR(45)  DEFAULT NULL,
-        ua  VARCHAR(255) DEFAULT NULL,
-        PRIMARY KEY (id),
-        KEY event_id (event_id),
-        KEY reader_ticket_id (reader_ticket_id),
-        KEY read_ticket_id (read_ticket_id),
-        KEY event_reader_read (event_id, reader_ticket_id, read_ticket_id)
-    ) {$charset_collate};";
-
-    dbDelta($sql);
-}
-add_action('init', 'eventosapp_net2_maybe_create_table');
-
-/**
- * Buscar ticket por CC + Apellido dentro de un evento
- */
-function eventosapp_net2_get_ticket_by_cc_last_event($event_id, $cc, $last){
-    global $wpdb;
-    if (!$event_id || !$cc || !$last) return 0;
-
-    $ids = $wpdb->get_col( $wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
-        '_eventosapp_asistente_cc', $cc
-    ) );
-    if (!$ids) return 0;
-
-    $low_last = mb_strtolower($last, 'UTF-8');
-    $found_id = 0;
-
-    foreach ($ids as $cand){
-        $cand = (int) $cand;
-        if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) !== (int) $event_id) continue;
-        $db_last = (string) get_post_meta($cand, '_eventosapp_asistente_apellido', true);
-        if ( mb_strtolower($db_last, 'UTF-8') === $low_last ){
-            $found_id = $cand; break;
-        }
+if ( ! function_exists('eventosapp_net2_table_name_internal') ) {
+    function eventosapp_net2_table_name_internal(){
+        global $wpdb;
+        return $wpdb->prefix . 'eventosapp_networking';
     }
-    if ($found_id) return $found_id;
-
-    $norm = function($s){
-        $s = strtolower( trim($s) );
-        $s = iconv('UTF-8','ASCII//TRANSLIT', $s);
-        $s = preg_replace('/\s+/', '', $s);
-        return $s;
-    };
-    $needle = $norm($last);
-
-    foreach ($ids as $cand){
-        $cand = (int) $cand;
-        if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) !== (int) $event_id) continue;
-        $db_last = (string) get_post_meta($cand, '_eventosapp_asistente_apellido', true);
-        if ( strpos($norm($db_last), $needle) !== false ){
-            return $cand;
-        }
-    }
-    return 0;
 }
 
-function eventosapp_net2_normalize_scanned($raw){
-    $s = trim( (string)$raw );
-    if (strpos($s, '/') !== false) {
-        $parts = explode('/', $s);
-        $s = end($parts);
+if ( ! function_exists('eventosapp_net2_maybe_create_table') ) {
+    function eventosapp_net2_maybe_create_table(){
+        global $wpdb;
+        $table = eventosapp_net2_table_name_internal();
+
+        $exists = $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+            DB_NAME, $table
+        ) );
+        if ($exists) return;
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        $charset_collate = $wpdb->get_charset_collate();
+
+        $sql = "CREATE TABLE {$table} (
+            id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            event_id BIGINT(20) UNSIGNED NOT NULL,
+            reader_ticket_id BIGINT(20) UNSIGNED NOT NULL,
+            read_ticket_id   BIGINT(20) UNSIGNED NOT NULL,
+            reader_localidad VARCHAR(100) DEFAULT NULL,
+            read_localidad   VARCHAR(100) DEFAULT NULL,
+            ip  VARCHAR(45)  DEFAULT NULL,
+            ua  VARCHAR(255) DEFAULT NULL,
+            PRIMARY KEY (id),
+            KEY event_id (event_id),
+            KEY reader_ticket_id (reader_ticket_id),
+            KEY read_ticket_id (read_ticket_id),
+            KEY event_reader_read (event_id, reader_ticket_id, read_ticket_id)
+        ) {$charset_collate};";
+
+        dbDelta($sql);
     }
-    $s = preg_replace('/\.(png|jpg|jpeg|pdf)$/i','', $s);
-    $s = preg_replace('/-tn$/i','', $s);
-    $s = ltrim($s, '#');
-    return $s;
+    add_action('init', 'eventosapp_net2_maybe_create_table');
 }
 
-function eventosapp_net2_find_ticket_by_scanned($event_id, $scanned){
-    global $wpdb;
-    $scanned = eventosapp_net2_normalize_scanned($scanned);
-    if (!$scanned || !$event_id) return 0;
+if ( ! function_exists('eventosapp_net2_get_ticket_by_cc_last_event') ) {
+    function eventosapp_net2_get_ticket_by_cc_last_event($event_id, $cc, $last){
+        global $wpdb;
+        if (!$event_id || !$cc || !$last) return 0;
 
-    $ids = $wpdb->get_col( $wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
-        'eventosapp_ticketID', $scanned
-    ) );
-    if ($ids) {
+        $ids = $wpdb->get_col( $wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
+            '_eventosapp_asistente_cc', $cc
+        ) );
+        if (!$ids) return 0;
+
+        $low_last = mb_strtolower($last, 'UTF-8');
         foreach ($ids as $cand){
-            if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id){
-                return (int)$cand;
+            $cand = (int) $cand;
+            if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) !== (int) $event_id) continue;
+            $db_last = (string) get_post_meta($cand, '_eventosapp_asistente_apellido', true);
+            if ( mb_strtolower($db_last, 'UTF-8') === $low_last ) return $cand;
+        }
+
+        // Búsqueda normalizada
+        $norm = function($s){
+            $s = strtolower(trim($s));
+            $s = iconv('UTF-8','ASCII//TRANSLIT', $s);
+            $s = preg_replace('/\s+/', '', $s);
+            return $s;
+        };
+        $needle = $norm($last);
+        foreach ($ids as $cand){
+            $cand = (int) $cand;
+            if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) !== (int) $event_id) continue;
+            $db_last = (string) get_post_meta($cand, '_eventosapp_asistente_apellido', true);
+            if ( strpos($norm($db_last), $needle) !== false ) return $cand;
+        }
+        return 0;
+    }
+}
+
+if ( ! function_exists('eventosapp_net2_normalize_scanned') ) {
+    function eventosapp_net2_normalize_scanned($raw){
+        $s = trim((string)$raw);
+        if (strpos($s, '/') !== false) $s = basename($s);
+        $s = preg_replace('/\.(png|jpg|jpeg|pdf)$/i','', $s);
+        $s = preg_replace('/-tn$/i','', $s);
+        $s = ltrim($s, '#');
+        return $s;
+    }
+}
+
+if ( ! function_exists('eventosapp_net2_find_ticket_by_scanned') ) {
+    function eventosapp_net2_find_ticket_by_scanned($event_id, $scanned){
+        global $wpdb;
+        $scanned = eventosapp_net2_normalize_scanned($scanned);
+        if (!$scanned || !$event_id) return 0;
+
+        $ids = $wpdb->get_col( $wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
+            'eventosapp_ticketID', $scanned
+        ) );
+        if ($ids) {
+            foreach ($ids as $cand){
+                if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id)
+                    return (int)$cand;
             }
         }
-    }
 
-    $allow_preprinted = ( get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr_networking', true) === '1' );
-    if ($allow_preprinted) {
-        $num = preg_replace('/\D+/', '', $scanned);
-        if ($num !== '') {
-            $ids2 = $wpdb->get_col( $wpdb->prepare(
-                "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
-                'eventosapp_ticket_preprintedID', $num
-            ) );
-            if ($ids2) {
-                foreach ($ids2 as $cand){
-                    if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id){
-                        return (int)$cand;
+        // QR preimpresos
+        $allow_preprinted = ( get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr_networking', true) === '1' );
+        if ($allow_preprinted) {
+            $num = preg_replace('/\D+/', '', $scanned);
+            if ($num !== '') {
+                $ids2 = $wpdb->get_col( $wpdb->prepare(
+                    "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
+                    'eventosapp_ticket_preprintedID', $num
+                ) );
+                if ($ids2) {
+                    foreach ($ids2 as $cand){
+                        if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id)
+                            return (int)$cand;
                     }
                 }
             }
         }
+        return 0;
     }
-
-    return 0;
 }
 
-function eventosapp_net2_contact_payload($ticket_id){
-    $first = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
-    $last  = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
-    $comp  = get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true);
-    $role  = get_post_meta($ticket_id, '_eventosapp_asistente_cargo', true);
-    $loc   = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
+if ( ! function_exists('eventosapp_net2_contact_payload') ) {
+    function eventosapp_net2_contact_payload($ticket_id){
+        $first = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
+        $last  = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
+        $comp  = get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true);
+        $role  = get_post_meta($ticket_id, '_eventosapp_asistente_cargo', true);
+        $loc   = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
 
-    $email = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
-    if (!$email) $email = get_post_meta($ticket_id, '_eventosapp_asistente_correo', true);
+        $email = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
+        if (!$email) $email = get_post_meta($ticket_id, '_eventosapp_asistente_correo', true);
 
-    $phone = get_post_meta($ticket_id, '_eventosapp_asistente_telefono', true);
-    if (!$phone) $phone = get_post_meta($ticket_id, '_eventosapp_asistente_celular', true);
-    if (!$phone) $phone = get_post_meta($ticket_id, '_eventosapp_asistente_movil', true);
-    if (!$phone) $phone = get_post_meta($ticket_id, '_eventosapp_asistente_phone', true);
+        $phone = get_post_meta($ticket_id, '_eventosapp_asistente_telefono', true);
+        if (!$phone) $phone = get_post_meta($ticket_id, '_eventosapp_asistente_celular', true);
+        if (!$phone) $phone = get_post_meta($ticket_id, '_eventosapp_asistente_movil', true);
+        if (!$phone) $phone = get_post_meta($ticket_id, '_eventosapp_asistente_phone', true);
 
-    return [
-        'ticket_id'   => (int)$ticket_id,
-        'first_name'  => $first,
-        'last_name'   => $last,
-        'full_name'   => trim($first.' '.$last),
-        'company'     => $comp,
-        'designation' => $role,
-        'localidad'   => $loc,
-        'email'       => $email,
-        'phone'       => $phone,
-    ];
+        return [
+            'ticket_id'   => (int)$ticket_id,
+            'first_name'  => $first,
+            'last_name'   => $last,
+            'full_name'   => trim($first.' '.$last),
+            'company'     => $comp,
+            'designation' => $role,
+            'localidad'   => $loc,
+            'email'       => $email,
+            'phone'       => $phone,
+        ];
+    }
 }
 
-/**
- * Registro de interacción en tabla oficial de networking
- */
-function eventosapp_net2_record_interaction($event_id, $reader_ticket_id, $scanned, $ctx = []){
-    global $wpdb;
-    eventosapp_net2_maybe_create_table();
+if ( ! function_exists('eventosapp_net2_record_interaction') ) {
+    function eventosapp_net2_record_interaction($event_id, $reader_ticket_id, $scanned, $ctx = []){
+        global $wpdb;
+        eventosapp_net2_maybe_create_table();
 
-    $reader_ticket_id = (int) $reader_ticket_id;
-    $read_ticket_id   = eventosapp_net2_find_ticket_by_scanned($event_id, $scanned);
+        $reader_ticket_id = (int) $reader_ticket_id;
+        $read_ticket_id   = eventosapp_net2_find_ticket_by_scanned($event_id, $scanned);
+        if ( ! $read_ticket_id ) {
+            return new WP_Error('not_found', 'No se encontró el asistente para ese QR en este evento.');
+        }
 
-    if ( ! $read_ticket_id ) {
-        return new WP_Error('not_found', 'No se encontró el asistente para ese QR en este evento.');
+        $ev_read = (int) get_post_meta($read_ticket_id, '_eventosapp_ticket_evento_id', true);
+        if ($ev_read !== (int) $event_id) {
+            return new WP_Error('invalid_event', 'El ticket leído no pertenece a este evento.');
+        }
+        if ($read_ticket_id === $reader_ticket_id) {
+            return new WP_Error('self_scan', 'No puedes escanear tu propio QR.');
+        }
+
+        $table = eventosapp_net2_table_name_internal();
+        $recent = $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM {$table}
+             WHERE event_id=%d AND reader_ticket_id=%d AND read_ticket_id=%d
+               AND created_at > (NOW() - INTERVAL 10 SECOND)
+             LIMIT 1",
+            $event_id, $reader_ticket_id, $read_ticket_id
+        ) );
+
+        $reader_loc = get_post_meta($reader_ticket_id, '_eventosapp_asistente_localidad', true);
+        $read_loc   = get_post_meta($read_ticket_id,   '_eventosapp_asistente_localidad', true);
+
+        if ( ! $recent ) {
+            $wpdb->insert($table, [
+                'event_id'         => (int)$event_id,
+                'reader_ticket_id' => (int)$reader_ticket_id,
+                'read_ticket_id'   => (int)$read_ticket_id,
+                'reader_localidad' => $reader_loc,
+                'read_localidad'   => $read_loc,
+                'ip'               => isset($ctx['ip']) ? substr($ctx['ip'], 0, 45) : null,
+                'ua'               => isset($ctx['ua']) ? substr($ctx['ua'], 0, 255) : null,
+            ], ['%d','%d','%d','%s','%s','%s','%s']);
+        }
+
+        update_post_meta($reader_ticket_id, '_eventosapp_networking_used', 1);
+        update_post_meta($read_ticket_id,   '_eventosapp_networking_used', 1);
+
+        if ( function_exists('eventosapp_net2_maybe_schedule_event_digest') )
+            eventosapp_net2_maybe_schedule_event_digest($event_id);
+
+        return eventosapp_net2_contact_payload($read_ticket_id);
     }
-
-    $ev_read = (int) get_post_meta($read_ticket_id, '_eventosapp_ticket_evento_id', true);
-    if ($ev_read !== (int) $event_id) {
-        return new WP_Error('invalid_event', 'El ticket leído no pertenece a este evento.');
-    }
-    if ($read_ticket_id === $reader_ticket_id) {
-        return new WP_Error('self_scan', 'No puedes escanear tu propio QR.');
-    }
-
-    $table = eventosapp_net2_table_name_internal();
-
-    // Dedupe breve (10s)
-    $recent = $wpdb->get_var( $wpdb->prepare(
-        "SELECT id FROM {$table}
-         WHERE event_id=%d AND reader_ticket_id=%d AND read_ticket_id=%d
-           AND created_at > (NOW() - INTERVAL 10 SECOND)
-         LIMIT 1",
-        $event_id, $reader_ticket_id, $read_ticket_id
-    ) );
-
-    $reader_loc = get_post_meta($reader_ticket_id, '_eventosapp_asistente_localidad', true);
-    $read_loc   = get_post_meta($read_ticket_id,   '_eventosapp_asistente_localidad', true);
-
-    if ( ! $recent ) {
-        $wpdb->insert($table, [
-            'event_id'         => (int)$event_id,
-            'reader_ticket_id' => (int)$reader_ticket_id,
-            'read_ticket_id'   => (int)$read_ticket_id,
-            'reader_localidad' => $reader_loc,
-            'read_localidad'   => $read_loc,
-            'ip'               => isset($ctx['ip']) ? substr($ctx['ip'], 0, 45) : null,
-            'ua'               => isset($ctx['ua']) ? substr($ctx['ua'], 0, 255) : null,
-        ], ['%d','%d','%d','%s','%s','%s','%s']);
-    }
-
-    update_post_meta($reader_ticket_id, '_eventosapp_networking_used', 1);
-    update_post_meta($read_ticket_id,   '_eventosapp_networking_used', 1);
-
-    eventosapp_net2_maybe_schedule_event_digest($event_id);
-
-    return eventosapp_net2_contact_payload($read_ticket_id);
 }
+
 
 /* ===================  DIGEST Y MÉTRICAS (SIN CAMBIOS FUNCIONALES) =================== */
 
