@@ -1262,30 +1262,3 @@ if ( ! has_action('admin_post_eventosapp_net2_resend_digest', 'eventosapp_net2_a
     add_action('admin_post_eventosapp_net2_resend_digest', 'eventosapp_net2_admin_resend_digest');
 }
 
-
-function eventosapp_net2_admin_resend_digest(){
-    if ( ! current_user_can('edit_posts') ) wp_die('Unauthorized');
-
-    $nonce = isset($_GET['_wpnonce']) ? $_GET['_wpnonce'] : '';
-    if ( ! wp_verify_nonce($nonce, 'eventosapp_net2_resend_digest') ) wp_die('Bad nonce');
-
-    $ticket_id = isset($_GET['post_id']) ? absint($_GET['post_id']) : 0;
-    if (!$ticket_id) wp_die('Missing ticket');
-
-    $event_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
-
-    $ok = eventosapp_net2_send_digest_for_ticket($ticket_id, $event_id, [
-        'force'     => true,
-        'mark_sent' => false,
-    ]);
-
-    $url = add_query_arg([
-        'post'                => $ticket_id,
-        'action'              => 'edit',
-        'evapp_netdigest'     => $ok ? 1 : 0,
-        'evapp_netdigest_msg' => $ok ? 'Resumen enviado (manual) sin afectar el envío programado.' : 'No se envió. Verifica si existen interacciones.',
-    ], admin_url('post.php'));
-
-    wp_safe_redirect($url);
-    exit;
-}
