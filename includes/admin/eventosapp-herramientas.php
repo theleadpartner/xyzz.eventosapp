@@ -23,7 +23,7 @@ add_action('admin_menu', function(){
     );
 }, 20);
 
-// Enlace “Herramientas” en fila de eventos
+// Enlace "Herramientas" en fila de eventos
 add_filter('post_row_actions', function($actions, $post){
     if ($post->post_type === 'eventosapp_event' && current_user_can('manage_options')) {
         $url = add_query_arg([
@@ -304,6 +304,7 @@ function eventosapp_tools_render(){
  *   'offset' => int,
  *   'created_ids' => [ticket_post_id,...],
  *   'created_count' => int,
+ *   'total_rows' => int,
  * ]
  */
 function evapp_import_state_key($event_id, $hash){
@@ -377,6 +378,7 @@ $state = [
     'created_ids'  => [],
     'created_count'=> 0,
     'event_id'     => $event_id,
+    'total_rows'   => 0,
 ];
 
 // ⬅️ NUEVO: si ya existía estado para este mismo hash, preservamos progreso y configuración
@@ -385,6 +387,7 @@ if (is_array($existing)) {
     $state['offset']        = intval($existing['offset'] ?? 0);
     $state['created_ids']   = is_array($existing['created_ids'] ?? null) ? $existing['created_ids'] : [];
     $state['created_count'] = intval($existing['created_count'] ?? 0);
+    $state['total_rows']    = intval($existing['total_rows'] ?? 0);
     if (isset($existing['queue_email']))  $state['queue_email']  = $existing['queue_email'];
     if (isset($existing['rate_per_min'])) $state['rate_per_min'] = $existing['rate_per_min'];
 }
@@ -610,9 +613,17 @@ add_action('wp_ajax_eventosapp_import_confirm', function(){
     $state = get_option( evapp_import_state_key($event_id, $hash) );
     if (!$state) wp_die('Estado no encontrado', '', 404);
 
+    // Contar filas totales del CSV para la barra de progreso
+    $fh = fopen($state['file'], 'r');
+    $total_rows = 0;
+    fgetcsv($fh); // saltar header
+    while (fgetcsv($fh) !== false) { $total_rows++; }
+    fclose($fh);
+
     $state['queue_email']  = !empty($_POST['queue_email']) ? 1 : 0;
     $rate = intval($_POST['rate_per_min'] ?? 30);
     $state['rate_per_min'] = max(1, min(120, $rate));
+    $state['total_rows']   = $total_rows;
     update_option( evapp_import_state_key($event_id, $hash), $state, false );
 
     // Redirigir a step 4 (UI de progreso)
@@ -634,20 +645,39 @@ add_action('admin_init', function(){
     add_action('admin_notices', function() use ($state, $event_id, $hash){
         $nonce = wp_create_nonce('evapp_tools_'.$event_id);
 
-        echo '<div class="wrap" style="max-width:900px">';
-        echo '<h2>Importar — progreso</h2>';
-        echo '<p>Archivo: <code>'.esc_html($state['filename']).'</code> | Procesadas: <b id="evapp_count">'.intval($state['offset']).'</b> | Creadas: <b id="evapp_created">'.intval($state['created_count']).'</b></p>';
-        echo '<div id="evapp_log" style="background:#0b1020;color:#eaf1ff;padding:8px;border-radius:8px;min-height:140px;max-height:300px;overflow:auto;font-family:monospace;font-size:12px"></div>';
-        echo '<p style="margin-top:10px"><button class="button" id="evapp_btn_next">Procesar siguiente lote (100)</button></p>';
+        echo '<div style="border:1px solid #ccc; background:#fff; padding:1rem; margin-top:1rem; border-radius:4px;">';
+        echo '<h3>Paso 4: Importar</h3>';
+        echo '<p>Procesaremos el CSV en lotes de <strong>100 filas</strong> cada uno. El proceso puede tomar varios minutos dependiendo del tamaño del archivo.</p>';
+
+        echo '<button id="evapp_start_import" class="button button-primary">Comenzar Importación</button>';
+        echo '<div style="margin-top:1rem; padding:1rem; border:1px solid #ccc; background:#f9f9f9; border-radius:4px;">';
+        echo '<div style="margin-bottom:0.5rem;"><strong>Progreso:</strong></div>';
+        echo '<div style="margin-bottom:1rem;">';
+        echo '<div style="background:#e0e0e0; height:24px; border-radius:4px; overflow:hidden; position:relative;">';
+        echo '<div id="evapp_progress_bar" style="background:#2271b1; height:100%; width:0%; transition:width 0.3s;"></div>';
+        echo '<div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:12px; font-weight:600; color:#333;">';
+        echo '<span id="evapp_progress_text">0%</span>';
+        echo '</div></div></div>';
+        echo '<p><strong>Offset:</strong> <span id="evapp_offset">0</span> | <strong>Creados:</strong> <span id="evapp_created">0</span></p>';
+        echo '<div id="evapp_log" style="max-height:300px; overflow-y:auto; font-family:monospace; font-size:13px; background:#fff; padding:8px; border:1px solid #ccc; border-radius:4px;"></div>';
+        echo '</div>';
+
         echo '<script>
 (function(){
-  const btn = document.getElementById("evapp_btn_next");
+  const btn = document.getElementById("evapp_start_import");
   const log = document.getElementById("evapp_log");
-  const c   = document.getElementById("evapp_count");
+  const c   = document.getElementById("evapp_offset");
   const k   = document.getElementById("evapp_created");
+  const bar = document.getElementById("evapp_progress_bar");
+  const txt = document.getElementById("evapp_progress_text");
   let busy = false;
+  let autoRun = false;
+  const DELAY_MS = 500; // 500ms entre peticiones para evitar ERR_NETWORK_IO_SUSPENDED
 
-  function add(msg){ log.innerHTML += msg + "<br>"; log.scrollTop = log.scrollHeight; }
+  function add(msg){ 
+    log.innerHTML += msg + "<br>"; 
+    log.scrollTop = log.scrollHeight; 
+  }
 
   async function tick(){
     if (busy) return;
@@ -659,24 +689,55 @@ add_action('admin_init', function(){
       fd.append("event_id","'.intval($event_id).'");
       fd.append("hash","'.esc_js($hash).'");
       fd.append("_wpnonce","'.esc_js($nonce).'");
+      
       const resp = await fetch(ajaxurl,{method:"POST",body:fd,credentials:"same-origin"});
       const j = await resp.json();
+      
       if (!j || !j.success) throw new Error(j && j.data ? j.data : "Error");
+      
       c.textContent = j.data.offset;
       k.textContent = j.data.created_count;
+      
+      // Actualizar barra de progreso
+      const totalRows = '.intval($state['total_rows'] ?? 0).';
+      const percent = totalRows > 0 ? Math.min(100, Math.round((j.data.offset / totalRows) * 100)) : 0;
+      bar.style.width = percent + "%";
+      txt.textContent = percent + "%";
+      
       add(j.data.msg);
+      
       if (j.data.done){
         add("✔ Importación finalizada: "+j.data.created_count+" tickets creados.");
         if (j.data.email_queue_created){
           add("✉ Envío masivo programado: "+j.data.email_batch+" e-mails/min.");
         }
+        bar.style.background = "#00a32a"; // verde
+        autoRun = false;
         btn.remove();
+      } else {
+        // Continuar automáticamente después del delay
+        if (autoRun) {
+          setTimeout(tick, DELAY_MS);
+        }
       }
-    } catch(e){ add("❌ "+e.message); }
-    finally { busy = false; btn.disabled = false; }
+    } catch(e){ 
+      add("❌ ERROR: "+e.message); 
+      bar.style.background = "#d63638"; // rojo
+      autoRun = false;
+    }
+    finally { 
+      busy = false; 
+      btn.disabled = false; 
+    }
   }
 
-  btn.addEventListener("click", tick);
+  btn.addEventListener("click", function(){
+    if (!autoRun) {
+      autoRun = true;
+      add("🚀 Iniciando importación automática con delay de "+DELAY_MS+"ms entre lotes...");
+      tick();
+    }
+  });
 })();
         </script>';
         echo '</div>';
@@ -692,10 +753,14 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $event_id = intval($_POST['event_id'] ?? 0);
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
     $nonce    = $_POST['_wpnonce'] ?? '';
-    if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) wp_send_json_error('Solicitud inválida', 400);
+    if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) {
+        wp_send_json_error('Solicitud inválida', 400);
+    }
 
     $state = get_option( evapp_import_state_key($event_id, $hash) );
-    if (!$state) wp_send_json_error('Estado no encontrado', 404);
+    if (!$state) {
+        wp_send_json_error('Estado no encontrado', 404);
+    }
 
     $CHUNK = 100;
     $offset = intval($state['offset']);
@@ -705,8 +770,16 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $rev = [];
     foreach ($map as $i=>$k) if ($k) $rev[intval($i)] = $k;
 
-    $fh = fopen($state['file'],'r');
-    if (!$fh) wp_send_json_error('No se pudo abrir el archivo', 500);
+    // Validar que el archivo existe
+    if (!file_exists($state['file'])) {
+        wp_send_json_error('El archivo CSV no existe', 500);
+    }
+
+    $fh = @fopen($state['file'],'r');
+    if (!$fh) {
+        wp_send_json_error('No se pudo abrir el archivo', 500);
+    }
+    
     $hdr = fgetcsv($fh); // skip headers
     $line = 1;
     $processed = 0;
@@ -732,7 +805,7 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         $localidad = $data['localidad']?? '';
         if (!$nombre || !$apellido || (!$email && !$cc) || !$localidad) {
             $offset++; // contamos la fila igual para avanzar
-            continue;  // saltamos errores silenciosamente (puedes acumular log si gustas)
+            continue;  // saltamos errores silenciosamente
         }
 
         // Idempotencia por external_id o fingerprint
@@ -783,61 +856,61 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         $offset++;
     }
 
-    // <— MEJORA: usar el mismo handle para saber si terminó
+    // Verificar si terminó
     $done = feof($fh);
     fclose($fh);
 
-$state['offset'] = $offset;
-$state['created_count'] = $created;
+    $state['offset'] = $offset;
+    $state['created_count'] = $created;
 
-$email_queue_created = false;
-$admin_notified = false;
+    $email_queue_created = false;
+    $admin_notified = false;
 
-if ($done){
-    // Programar envío masivo si se eligió
-    if (!empty($state['queue_email']) && !empty($state['created_ids'])) {
-        evapp_schedule_bulk_mail($state['created_ids'], $state['rate_per_min'] ?? 30);
-        $email_queue_created = true;
+    if ($done){
+        // Programar envío masivo si se eligió
+        if (!empty($state['queue_email']) && !empty($state['created_ids'])) {
+            evapp_schedule_bulk_mail($state['created_ids'], $state['rate_per_min'] ?? 30);
+            $email_queue_created = true;
+        }
+
+        // Notificar al admin una sola vez por importación
+        if (empty($state['admin_notified'])) {
+            $site_name       = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+            $admin_email     = get_option('admin_email');
+            $ev_title        = get_the_title($event_id);
+            $filename        = $state['filename'] ?? '';
+            $total_processed = (int) $state['offset'];
+            $created_tot     = (int) $state['created_count'];
+
+            if ($admin_email) {
+                $subject = sprintf('[%s] Importación finalizada — %s [%d]', $site_name, $ev_title, $event_id);
+                $body = "Se completó una importación de tickets.\n\n".
+                        "Sitio: {$site_name}\n".
+                        "Evento: {$ev_title} [{$event_id}]\n".
+                        "Archivo: {$filename}\n".
+                        "Filas procesadas: {$total_processed}\n".
+                        "Tickets creados (nuevos): {$created_tot}\n".
+                        "Autor de los tickets: importador1 <importador1@eventosapp.com>\n";
+                $headers = ['Content-Type: text/plain; charset=UTF-8'];
+                wp_mail($admin_email, $subject, $body, $headers);
+            }
+
+            $state['admin_notified'] = 1;
+            $admin_notified = true;
+        }
     }
 
-// ✉ NUEVO: notificar al admin una sola vez por importación
-if (empty($state['admin_notified'])) {
-    $site_name       = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
-    $admin_email     = get_option('admin_email');
-    $ev_title        = get_the_title($event_id);
-    $filename        = $state['filename'] ?? '';
-    $total_processed = (int) $state['offset'];
-    $created_tot     = (int) $state['created_count'];
+    update_option( evapp_import_state_key($event_id, $hash), $state, false );
 
-    if ($admin_email) {
-        $subject = sprintf('[%s] Importación finalizada — %s [%d]', $site_name, $ev_title, $event_id);
-        $body = "Se completó una importación de tickets.\n\n".
-                "Sitio: {$site_name}\n".
-                "Evento: {$ev_title} [{$event_id}]\n".
-                "Archivo: {$filename}\n".
-                "Filas procesadas: {$total_processed}\n".
-                "Tickets creados (nuevos): {$created_tot}\n".
-                "Autor de los tickets: importador1 <importador1@eventosapp.com>\n";
-        $headers = ['Content-Type: text/plain; charset=UTF-8'];
-        wp_mail($admin_email, $subject, $body, $headers);
-    }
-
-    $state['admin_notified'] = 1;
-	$admin_notified = true;
-}
-}
-
-update_option( evapp_import_state_key($event_id, $hash), $state, false );
-
-wp_send_json_success([
-    'offset' => $offset,
-    'created_count' => $created,
-    'msg' => 'Lote procesado: '.$processed.' filas, nuevas: '.$created_now.'.'.
-             ($admin_notified ? ' Notifiqué al admin.' : ''),
-    'done' => $done ? 1 : 0,
-    'email_queue_created' => !empty($email_queue_created),
-    'email_batch' => intval($state['rate_per_min'] ?? 30),
-]);
+    wp_send_json_success([
+        'offset' => $offset,
+        'created_count' => $created,
+        'msg' => 'Lote procesado: '.$processed.' filas, nuevas: '.$created_now.'.'.
+                 ($admin_notified ? ' Notifiqué al admin.' : ''),
+        'done' => $done ? 1 : 0,
+        'email_queue_created' => !empty($email_queue_created),
+        'email_batch' => intval($state['rate_per_min'] ?? 30),
+    ]);
 
 });
 
@@ -961,11 +1034,11 @@ function evapp_schedule_bulk_mail($ticket_ids, $rate_per_min = 30){
     // Programación periódica
     $scheduled = wp_next_scheduled('evapp_run_bulk_mail');
     if (!$scheduled) {
-        $ok = wp_schedule_event(time()+5, 'minute', 'evapp_run_bulk_mail');
-        // Fallback inmediato si el cron está deshabilitado o la programación falla
-        if (!$ok || (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON)) {
-            do_action('evapp_run_bulk_mail');
-        }
+        wp_schedule_event(time()+5, 'minute', 'evapp_run_bulk_mail');
+        
+        // CRÍTICO: NO ejecutar inmediatamente en contexto AJAX
+        // El cron se encargará del envío programado
+        // Si el cron está deshabilitado, el admin debe configurarlo correctamente
     }
 }
 
