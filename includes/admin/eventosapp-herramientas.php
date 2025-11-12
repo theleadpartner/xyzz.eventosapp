@@ -3,6 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 /**
  * Herramientas por evento: Importador CSV de tickets (asistente 4 pasos) + envío masivo opcional.
+ * OPTIMIZADO para evitar timeouts en servidores con recursos limitados
  *
  * URL: /wp-admin/admin.php?page=eventosapp_tools&event_id=ID
  */
@@ -601,7 +602,7 @@ add_action('admin_init', function(){
 });
 
 //
-// === Step 4: confirmar → arrancar importación y mostrar progreso (100 en 100) ===
+// === Step 4: confirmar → arrancar importación y mostrar progreso (10 en 10) ===
 //
 add_action('wp_ajax_eventosapp_import_confirm', function(){
     if (!current_user_can('manage_options')) wp_die('No autorizado', '', 403);
@@ -652,12 +653,13 @@ add_action('admin_init', function(){
 
     add_action('admin_notices', function() use ($state, $event_id, $hash){
         $nonce = wp_create_nonce('evapp_tools_'.$event_id);
-        $ajax_url = admin_url('admin-ajax.php'); // Asegurar que tenemos la URL AJAX
+        $ajax_url = admin_url('admin-ajax.php');
 
         echo '<div style="border:1px solid #ccc; background:#fff; padding:1rem; margin-top:1rem; border-radius:4px;">';
         echo '<h3>Paso 4: Importar</h3>';
-        echo '<p>Procesaremos el CSV en lotes de <strong>100 filas</strong> cada uno. El proceso puede tomar varios minutos dependiendo del tamaño del archivo.</p>';
+        echo '<p>Procesaremos el CSV en lotes de <strong>10 filas</strong> cada uno. Esto evita sobrecargar el servidor.</p>';
         echo '<p><strong>Total de filas a procesar:</strong> '.intval($state['total_rows'] ?? 0).'</p>';
+        echo '<p style="background:#fffbcc;padding:8px;border-left:4px solid #f0b429;"><strong>⚡ Optimizado:</strong> Se crearán los tickets base ahora. Los PDFs, archivos ICS y Wallets se generarán automáticamente en segundo plano después de completar la importación.</p>';
 
         echo '<button id="evapp_start_import" class="button button-primary button-large">Comenzar Importación</button>';
         echo '<div style="margin-top:1rem; padding:1rem; border:1px solid #ccc; background:#f9f9f9; border-radius:4px;">';
@@ -668,23 +670,20 @@ add_action('admin_init', function(){
         echo '<div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:12px; font-weight:600; color:#333;">';
         echo '<span id="evapp_progress_text">0%</span>';
         echo '</div></div></div>';
-        echo '<p><strong>Offset:</strong> <span id="evapp_offset">0</span> | <strong>Creados:</strong> <span id="evapp_created">0</span></p>';
+        echo '<p><strong>Offset:</strong> <span id="evapp_offset">0</span> | <strong>Creados:</strong> <span id="evapp_created">0</span> | <strong>Velocidad:</strong> <span id="evapp_speed">~10/seg</span></p>';
         echo '<div id="evapp_log" style="max-height:300px; overflow-y:auto; font-family:monospace; font-size:13px; background:#fff; padding:8px; border:1px solid #ccc; border-radius:4px;"></div>';
         echo '</div>';
 
         ?>
         <script>
 (function(){
-  // CRÍTICO: Definir ajaxurl si no existe (para contextos donde no está disponible)
   if (typeof ajaxurl === 'undefined') {
     var ajaxurl = '<?php echo esc_js($ajax_url); ?>';
   }
   
-  console.log('[EventosApp Import] Inicializando importador...');
-  console.log('[EventosApp Import] AJAX URL:', ajaxurl);
-  console.log('[EventosApp Import] Event ID:', <?php echo intval($event_id); ?>);
-  console.log('[EventosApp Import] Hash:', '<?php echo esc_js($hash); ?>');
-  console.log('[EventosApp Import] Total rows:', <?php echo intval($state['total_rows'] ?? 0); ?>);
+  console.log('[EventosApp Import] Inicializando importador OPTIMIZADO...');
+  console.log('[EventosApp Import] Tamaño de lote: 10 tickets');
+  console.log('[EventosApp Import] Delay entre lotes: 800ms');
   
   const btn = document.getElementById("evapp_start_import");
   const log = document.getElementById("evapp_log");
@@ -692,6 +691,7 @@ add_action('admin_init', function(){
   const k   = document.getElementById("evapp_created");
   const bar = document.getElementById("evapp_progress_bar");
   const txt = document.getElementById("evapp_progress_text");
+  const spd = document.getElementById("evapp_speed");
   
   if (!btn || !log || !c || !k || !bar || !txt) {
     console.error('[EventosApp Import] ERROR: Elementos DOM no encontrados');
@@ -700,8 +700,10 @@ add_action('admin_init', function(){
   
   let busy = false;
   let autoRun = false;
-  const DELAY_MS = 500;
+  const DELAY_MS = 800; // 800ms entre lotes para dar más tiempo al servidor
   const totalRows = <?php echo intval($state['total_rows'] ?? 0); ?>;
+  let startTime = null;
+  let ticksProcessed = 0;
 
   function add(msg){ 
     const timestamp = new Date().toLocaleTimeString();
@@ -710,15 +712,24 @@ add_action('admin_init', function(){
     console.log('[EventosApp Import]', msg);
   }
 
+  function updateSpeed(created) {
+    if (!startTime) return;
+    const elapsed = (Date.now() - startTime) / 1000; // segundos
+    const rate = created > 0 ? (created / elapsed).toFixed(1) : '0';
+    spd.textContent = '~' + rate + '/seg';
+  }
+
   async function tick(){
     if (busy) {
       console.log('[EventosApp Import] Tick llamado pero busy=true, ignorando');
       return;
     }
     
-    console.log('[EventosApp Import] Ejecutando tick...');
+    console.log('[EventosApp Import] Ejecutando tick #' + (ticksProcessed + 1));
     busy = true;
     btn.disabled = true;
+    
+    if (!startTime) startTime = Date.now();
     
     try{
       const fd = new FormData();
@@ -727,86 +738,96 @@ add_action('admin_init', function(){
       fd.append("hash","<?php echo esc_js($hash); ?>");
       fd.append("_wpnonce","<?php echo esc_js($nonce); ?>");
       
-      console.log('[EventosApp Import] Enviando petición AJAX...', {
-        url: ajaxurl,
-        event_id: fd.get('event_id'),
-        hash: fd.get('hash')
-      });
+      console.log('[EventosApp Import] Enviando petición AJAX...');
+      add('📤 Enviando lote #' + (ticksProcessed + 1) + ' al servidor...');
       
-      add('Enviando petición al servidor...');
+      // AUMENTADO: Timeout de 90 segundos para dar más tiempo
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
       
       const resp = await fetch(ajaxurl, {
         method: "POST",
         body: fd,
-        credentials: "same-origin"
+        credentials: "same-origin",
+        signal: controller.signal
       });
       
-      console.log('[EventosApp Import] Respuesta recibida:', resp.status, resp.statusText);
+      clearTimeout(timeoutId);
+      
+      console.log('[EventosApp Import] Respuesta recibida:', resp.status);
       
       if (!resp.ok) {
         throw new Error('HTTP ' + resp.status + ': ' + resp.statusText);
       }
       
       const j = await resp.json();
-      console.log('[EventosApp Import] JSON parseado:', j);
+      console.log('[EventosApp Import] Datos:', j);
       
       if (!j || !j.success) {
-        const errorMsg = j && j.data ? j.data : "Error desconocido en la respuesta";
-        console.error('[EventosApp Import] Error en respuesta:', errorMsg);
+        const errorMsg = j && j.data ? j.data : "Error desconocido";
+        console.error('[EventosApp Import] Error:', errorMsg);
         throw new Error(errorMsg);
       }
+      
+      ticksProcessed++;
       
       // Actualizar UI
       c.textContent = j.data.offset;
       k.textContent = j.data.created_count;
+      updateSpeed(j.data.created_count);
       
       // Actualizar barra de progreso
       const percent = totalRows > 0 ? Math.min(100, Math.round((j.data.offset / totalRows) * 100)) : 0;
       bar.style.width = percent + "%";
       txt.textContent = percent + "%";
       
-      add(j.data.msg);
+      add('✅ ' + j.data.msg);
       
       if (j.data.done){
-        console.log('[EventosApp Import] Importación completada');
-        add("✔ Importación finalizada: " + j.data.created_count + " tickets creados.");
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log('[EventosApp Import] Completado en ' + elapsed + ' segundos');
+        add("🎉 Importación finalizada en " + elapsed + " segundos: " + j.data.created_count + " tickets creados.");
+        add("⚡ Los PDFs, archivos ICS y Wallets se generarán automáticamente en segundo plano.");
         if (j.data.email_queue_created){
-          add("✉ Envío masivo programado: " + j.data.email_batch + " e-mails/min.");
+          add("✉️ Envío masivo programado: " + j.data.email_batch + " e-mails/min.");
         }
-        bar.style.background = "#00a32a"; // verde
+        bar.style.background = "#00a32a";
         autoRun = false;
         btn.remove();
       } else {
-        // Continuar automáticamente después del delay
         if (autoRun) {
           console.log('[EventosApp Import] Programando siguiente tick en ' + DELAY_MS + 'ms');
           setTimeout(tick, DELAY_MS);
         }
       }
     } catch(e){ 
-      console.error('[EventosApp Import] Error capturado:', e);
+      console.error('[EventosApp Import] Error:', e);
       add("❌ ERROR: " + e.message); 
-      bar.style.background = "#d63638"; // rojo
-      autoRun = false;
+      if (e.name === 'AbortError') {
+        add("⏱️ Timeout: El servidor tardó más de 90 segundos. Reintentando...");
+        if (autoRun) setTimeout(tick, DELAY_MS);
+      } else {
+        bar.style.background = "#d63638";
+        autoRun = false;
+      }
     }
     finally { 
       busy = false; 
       btn.disabled = false;
-      console.log('[EventosApp Import] Tick completado, busy=false');
+      console.log('[EventosApp Import] Tick completado');
     }
   }
 
   btn.addEventListener("click", function(){
-    console.log('[EventosApp Import] Botón clickeado, autoRun:', autoRun);
+    console.log('[EventosApp Import] Botón clickeado');
     if (!autoRun) {
       autoRun = true;
-      add("🚀 Iniciando importación automática con delay de " + DELAY_MS + "ms entre lotes...");
-      console.log('[EventosApp Import] Iniciando proceso automático');
+      add("🚀 Iniciando importación optimizada (10 tickets/lote, " + DELAY_MS + "ms entre lotes)...");
       tick();
     }
   });
   
-  console.log('[EventosApp Import] Inicialización completada, esperando click en botón');
+  console.log('[EventosApp Import] Listo para iniciar');
 })();
         </script>
         <?php
@@ -815,10 +836,10 @@ add_action('admin_init', function(){
 });
 
 //
-// === Procesar un lote (100) ===
+// === Procesar un lote (OPTIMIZADO: 10 tickets con throttling) ===
 //
 add_action('wp_ajax_eventosapp_import_process', function(){
-    // Log inicial para debugging
+    $start_time = microtime(true);
     error_log('[EventosApp Import] Petición AJAX recibida');
     
     if (!current_user_can('manage_options')) {
@@ -830,42 +851,38 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
     $nonce    = $_POST['_wpnonce'] ?? '';
     
-    error_log('[EventosApp Import] Parámetros: event_id='.$event_id.', hash='.$hash);
-    
     if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) {
-        error_log('[EventosApp Import] ERROR: Solicitud inválida o nonce incorrecto');
+        error_log('[EventosApp Import] ERROR: Solicitud inválida');
         wp_send_json_error('Solicitud inválida', 400);
     }
 
     $state = get_option( evapp_import_state_key($event_id, $hash) );
     if (!$state) {
-        error_log('[EventosApp Import] ERROR: Estado no encontrado para key='.evapp_import_state_key($event_id, $hash));
+        error_log('[EventosApp Import] ERROR: Estado no encontrado');
         wp_send_json_error('Estado no encontrado', 404);
     }
 
-    error_log('[EventosApp Import] Estado cargado correctamente. Offset actual: '.intval($state['offset']));
-
-    $CHUNK = 100;
+    // CRÍTICO: Reducido de 100 a 10 para evitar timeouts
+    $CHUNK = 10;
     $offset = intval($state['offset']);
     $created = intval($state['created_count']);
 
-    $map = $state['map']; // csv index => field_key
+    $map = $state['map'];
     $rev = [];
     foreach ($map as $i=>$k) if ($k) $rev[intval($i)] = $k;
 
-    // Validar que el archivo existe
     if (!file_exists($state['file'])) {
-        error_log('[EventosApp Import] ERROR: Archivo no existe: '.$state['file']);
+        error_log('[EventosApp Import] ERROR: Archivo no existe');
         wp_send_json_error('El archivo CSV no existe', 500);
     }
 
     $fh = @fopen($state['file'],'r');
     if (!$fh) {
-        error_log('[EventosApp Import] ERROR: No se pudo abrir el archivo');
+        error_log('[EventosApp Import] ERROR: No se pudo abrir archivo');
         wp_send_json_error('No se pudo abrir el archivo', 500);
     }
     
-    $hdr = fgetcsv($fh); // skip headers
+    $hdr = fgetcsv($fh);
     $line = 1;
     $processed = 0;
     $created_now = 0;
@@ -873,7 +890,7 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     // Saltar hasta offset actual
     while($line < $offset + 1 && ($row = fgetcsv($fh)) !== false){ $line++; }
 
-    // Procesar hasta CHUNK
+    // Procesar hasta CHUNK (10 tickets)
     while($processed < $CHUNK && ($row = fgetcsv($fh)) !== false){
         $line++;
         $processed++;
@@ -889,15 +906,15 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         $cc        = $data['cc']       ?? '';
         $localidad = $data['localidad']?? '';
         if (!$nombre || !$apellido || (!$email && !$cc) || !$localidad) {
-            $offset++; // contamos la fila igual para avanzar
-            continue;  // saltamos errores silenciosamente
+            $offset++;
+            continue;
         }
 
         // Idempotencia por external_id o fingerprint
         $ext = $data['external_id'] ?? '';
         $finger = $ext ? 'ext:'.sanitize_text_field($ext) : 'fp:'.md5(strtolower($email.'|'.$cc.'|'.$nombre.'|'.$apellido.'|'.$event_id));
 
-        // ¿ya existe un ticket con esta marca?
+        // ¿ya existe?
         $dup = get_posts([
             'post_type'=>'eventosapp_ticket',
             'meta_key' => '_eventosapp_import_fingerprint',
@@ -929,23 +946,26 @@ add_action('wp_ajax_eventosapp_import_process', function(){
             if (strpos($k,'extra__') === 0) $payload['extras'][substr($k,7)] = $v;
         }
 
-        $new_id = eventosapp_create_ticket_programmatically($event_id, $payload, 'import');
+        // OPTIMIZACIÓN: Crear ticket sin operaciones pesadas
+        $new_id = eventosapp_create_ticket_programmatically($event_id, $payload, 'import', true);
         if ($new_id) {
             $created_now++;
             $created++;
-            // Marca import
             update_post_meta($new_id, '_eventosapp_import_fingerprint', $finger);
             $state['created_ids'][] = $new_id;
         }
 
         $offset++;
+        
+        // THROTTLING: Mini-pausa de 100ms entre tickets para no saturar
+        usleep(100000); // 100ms = 0.1 segundos
     }
 
-    // Verificar si terminó
     $done = feof($fh);
     fclose($fh);
 
-    error_log('[EventosApp Import] Lote procesado: '.$processed.' filas, '.$created_now.' creadas. Done: '.($done?'si':'no'));
+    $elapsed = round((microtime(true) - $start_time) * 1000); // milisegundos
+    error_log('[EventosApp Import] Lote procesado en '.$elapsed.'ms: '.$processed.' filas, '.$created_now.' creadas');
 
     $state['offset'] = $offset;
     $state['created_count'] = $created;
@@ -954,23 +974,27 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $admin_notified = false;
 
     if ($done){
-        error_log('[EventosApp Import] Importación completada. Total creados: '.$created);
+        error_log('[EventosApp Import] Importación completada. Total: '.$created);
+        
+        // Programar generación de assets en segundo plano
+        if (!empty($state['created_ids'])) {
+            evapp_schedule_asset_generation($state['created_ids'], $event_id);
+        }
         
         // Programar envío masivo si se eligió
         if (!empty($state['queue_email']) && !empty($state['created_ids'])) {
             evapp_schedule_bulk_mail($state['created_ids'], $state['rate_per_min'] ?? 30);
             $email_queue_created = true;
-            error_log('[EventosApp Import] Envío masivo programado');
         }
 
-        // Notificar al admin una sola vez por importación
+        // Notificar al admin
         if (empty($state['admin_notified'])) {
-            $site_name       = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
-            $admin_email     = get_option('admin_email');
-            $ev_title        = get_the_title($event_id);
-            $filename        = $state['filename'] ?? '';
+            $site_name = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+            $admin_email = get_option('admin_email');
+            $ev_title = get_the_title($event_id);
+            $filename = $state['filename'] ?? '';
             $total_processed = (int) $state['offset'];
-            $created_tot     = (int) $state['created_count'];
+            $created_tot = (int) $state['created_count'];
 
             if ($admin_email) {
                 $subject = sprintf('[%s] Importación finalizada — %s [%d]', $site_name, $ev_title, $event_id);
@@ -979,11 +1003,9 @@ add_action('wp_ajax_eventosapp_import_process', function(){
                         "Evento: {$ev_title} [{$event_id}]\n".
                         "Archivo: {$filename}\n".
                         "Filas procesadas: {$total_processed}\n".
-                        "Tickets creados (nuevos): {$created_tot}\n".
-                        "Autor de los tickets: importador1 <importador1@eventosapp.com>\n";
-                $headers = ['Content-Type: text/plain; charset=UTF-8'];
-                wp_mail($admin_email, $subject, $body, $headers);
-                error_log('[EventosApp Import] Notificación enviada al admin');
+                        "Tickets creados: {$created_tot}\n".
+                        "Los PDFs, archivos ICS y Wallets se están generando en segundo plano.\n";
+                wp_mail($admin_email, $subject, $body, ['Content-Type: text/plain; charset=UTF-8']);
             }
 
             $state['admin_notified'] = 1;
@@ -996,19 +1018,76 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $response = [
         'offset' => $offset,
         'created_count' => $created,
-        'msg' => 'Lote procesado: '.$processed.' filas, nuevas: '.$created_now.'.'.
-                 ($admin_notified ? ' Notifiqué al admin.' : ''),
+        'msg' => 'Lote procesado en '.$elapsed.'ms: '.$processed.' filas, '.$created_now.' nuevas.',
         'done' => $done ? 1 : 0,
         'email_queue_created' => !empty($email_queue_created),
         'email_batch' => intval($state['rate_per_min'] ?? 30),
     ];
     
-    error_log('[EventosApp Import] Enviando respuesta exitosa: '.json_encode($response));
+    error_log('[EventosApp Import] Respuesta exitosa');
     wp_send_json_success($response);
 });
 
 //
-// === Helper: crear ticket programáticamente (sin depender del nonce del metabox) ===
+// === NUEVO: Programar generación de assets en segundo plano ===
+//
+function evapp_schedule_asset_generation($ticket_ids, $event_id){
+    if (empty($ticket_ids)) return;
+    
+    // Guardar lista de tickets pendientes de procesar
+    $queue_key = 'evapp_asset_gen_queue_'.$event_id;
+    update_option($queue_key, $ticket_ids, false);
+    
+    // Programar evento para procesarlos
+    if (!wp_next_scheduled('evapp_process_asset_generation', [$event_id])) {
+        wp_schedule_single_event(time() + 60, 'evapp_process_asset_generation', [$event_id]);
+        error_log('[EventosApp Import] Programada generación de assets para '.count($ticket_ids).' tickets');
+    }
+}
+
+add_action('evapp_process_asset_generation', function($event_id){
+    $queue_key = 'evapp_asset_gen_queue_'.$event_id;
+    $tickets = get_option($queue_key, []);
+    if (empty($tickets)) return;
+    
+    error_log('[EventosApp Import] Procesando assets para '.count($tickets).' tickets');
+    
+    // Procesar en lotes de 5 para no saturar
+    $batch = array_splice($tickets, 0, 5);
+    
+    foreach ($batch as $ticket_id) {
+        // Generar PDF
+        if (function_exists('eventosapp_ticket_generar_pdf')) {
+            eventosapp_ticket_generar_pdf($ticket_id);
+        }
+        
+        // Generar ICS
+        if (function_exists('eventosapp_ticket_generar_ics')) {
+            eventosapp_ticket_generar_ics($ticket_id);
+        }
+        
+        // Generar wallet si está habilitado
+        $wallet_android_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true);
+        if ($wallet_android_on && function_exists('eventosapp_generar_enlace_wallet_android')) {
+            eventosapp_generar_enlace_wallet_android($ticket_id, false);
+        }
+        
+        usleep(200000); // 200ms entre tickets
+    }
+    
+    // Si quedan más, actualizar y reprogramar
+    if (!empty($tickets)) {
+        update_option($queue_key, $tickets, false);
+        wp_schedule_single_event(time() + 60, 'evapp_process_asset_generation', [$event_id]);
+        error_log('[EventosApp Import] Reprogramado para procesar '.count($tickets).' tickets restantes');
+    } else {
+        delete_option($queue_key);
+        error_log('[EventosApp Import] Generación de assets completada');
+    }
+}, 10, 1);
+
+//
+// === Helper: crear ticket programáticamente (OPTIMIZADO) ===
 //
 if (!function_exists('eventosapp_generate_unique_ticket_id')) {
     function eventosapp_generate_unique_ticket_id(){ return wp_generate_uuid4(); }
@@ -1023,7 +1102,7 @@ if (!function_exists('eventosapp_next_event_sequence')) {
     }
 }
 
-function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'manual'){
+function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'manual', $skip_heavy_operations = false){
     // Usuario importador (crea si no existe)
     $importer_id = evapp_get_or_create_importer_user();
 
@@ -1039,8 +1118,6 @@ function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'man
     // Metas base
     update_post_meta($post_id, '_eventosapp_ticket_evento_id', (int)$event_id);
     update_post_meta($post_id, '_eventosapp_ticket_user_id', $importer_id);
-
-    // ⬇️ NUEVO: marca canal de creación
     update_post_meta($post_id, '_eventosapp_creation_channel', $source);
 
     update_post_meta($post_id, '_eventosapp_asistente_nombre',   sanitize_text_field($p['first_name'] ?? ''));
@@ -1082,15 +1159,20 @@ function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'man
     update_post_meta($post_id, '_eventosapp_checkin_status', $status_arr);
     update_post_meta($post_id, '_eventosapp_checkin_log', []);
 
-    // Wallet Android on/off por evento
-    $wallet_android_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true);
-    if ($wallet_android_on) {
-        if (function_exists('eventosapp_generar_enlace_wallet_android')) eventosapp_generar_enlace_wallet_android($post_id, false);
-    }
+    // OPTIMIZACIÓN: Saltar operaciones pesadas durante importación
+    if (!$skip_heavy_operations) {
+        // Wallet Android on/off por evento
+        $wallet_android_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true);
+        if ($wallet_android_on) {
+            if (function_exists('eventosapp_generar_enlace_wallet_android')) {
+                eventosapp_generar_enlace_wallet_android($post_id, false);
+            }
+        }
 
-    // Generar PDF/ICS si aplica
-    if (function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
-    if (function_exists('eventosapp_ticket_generar_ics'))  eventosapp_ticket_generar_ics($post_id);
+        // Generar PDF/ICS
+        if (function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
+        if (function_exists('eventosapp_ticket_generar_ics'))  eventosapp_ticket_generar_ics($post_id);
+    }
 
     // Accesos por localidad
     $localidad_ticket = get_post_meta($post_id, '_eventosapp_asistente_localidad', true);
@@ -1104,7 +1186,7 @@ function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'man
     }
     if ($accesos) update_post_meta($post_id, '_eventosapp_ticket_sesiones_acceso', $accesos);
 
-    // Reindex
+    // Reindex (ligero)
     if (function_exists('eventosapp_ticket_build_search_blob')) eventosapp_ticket_build_search_blob($post_id);
 
     return $post_id;
@@ -1128,10 +1210,6 @@ function evapp_schedule_bulk_mail($ticket_ids, $rate_per_min = 30){
     $scheduled = wp_next_scheduled('evapp_run_bulk_mail');
     if (!$scheduled) {
         wp_schedule_event(time()+5, 'minute', 'evapp_run_bulk_mail');
-        
-        // CRÍTICO: NO ejecutar inmediatamente en contexto AJAX
-        // El cron se encargará del envío programado
-        // Si el cron está deshabilitado, el admin debe configurarlo correctamente
     }
 }
 
@@ -1155,7 +1233,6 @@ add_action('evapp_run_bulk_mail', function(){
         if (function_exists('eventosapp_send_ticket_email_now')) {
             eventosapp_send_ticket_email_now($ticket_id, ['source'=>'bulk','force'=>true]);
         }
-        // Pequeña pausa opcional (no bloquear cron en algunos hosts)
         usleep(50000); // 50ms
     }
 
