@@ -83,7 +83,7 @@ add_action('admin_post_eventosapp_send_ticket_email', 'eventosapp_send_ticket_em
 /**
  * Handler del envío de correo del ticket (uso manual desde admin).
  * Ahora asegura que los enlaces de Wallet (Android/Apple) existan antes de construir el HTML,
- * de modo que los botones salgan siempre cuando el evento los tiene activos.
+ * y registra el historial de envíos.
  */
 function eventosapp_send_ticket_email_handler() {
     $nonce = $_REQUEST['_wpnonce'] ?? ($_REQUEST['eventosapp_send_ticket_email_nonce'] ?? '');
@@ -107,51 +107,54 @@ function eventosapp_send_ticket_email_handler() {
     // Si es admin y pasó un correo alterno
     if (current_user_can('manage_options') && !empty($_REQUEST['eventosapp_email_alt_from_metabox'])) {
         $alt = sanitize_email($_REQUEST['eventosapp_email_alt'] ?? '');
-        if ($alt) $recipient = $alt;
+        if ($alt) {
+            $recipient = $alt;
+        }
     }
 
     if (!$recipient || !is_email($recipient)) {
         eventosapp_ticket_email_redirect($post_id, false, 'Correo destino inválido.');
+        return;
     }
 
-    // Flags del evento
     $evento_id = (int) get_post_meta($post_id, '_eventosapp_ticket_evento_id', true);
-    $pdf_on    = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true)            === '1';
-    $ics_on    = get_post_meta($evento_id, '_eventosapp_ticket_ics', true)            === '1';
-    $wa_on     = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
-    $wi_on     = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
-
-    // Generar adjuntos si corresponde
-    if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
-    if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($post_id);
-
-    // Asegurar ENLACES de Wallet (no se adjunta el .pkpass, solo botón/link)
-    if ($wa_on && function_exists('eventosapp_generar_enlace_wallet_android')) {
-        // No interrumpe si ya existe
-        eventosapp_generar_enlace_wallet_android($post_id, false);
+    if (!$evento_id) {
+        eventosapp_ticket_email_redirect($post_id, false, 'Ticket sin evento asignado.');
+        return;
     }
-    if ($wi_on) {
-        if (function_exists('eventosapp_apple_generate_pass')) {
-            eventosapp_apple_generate_pass($post_id, false);
-        } elseif (function_exists('eventosapp_generar_enlace_wallet_apple')) {
-            eventosapp_generar_enlace_wallet_apple($post_id);
+
+    // Asegurar enlaces de Wallet antes de armar HTML
+    $wa_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
+    $wi_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+
+    if ($wa_on && !get_post_meta($post_id, '_eventosapp_ticket_wallet_android_url', true)) {
+        if (function_exists('eventosapp_generate_wallet_android_ticket')) {
+            eventosapp_generate_wallet_android_ticket($post_id);
+        }
+    }
+    if ($wi_on && !get_post_meta($post_id, '_eventosapp_ticket_wallet_apple', true)) {
+        if (function_exists('eventosapp_generate_wallet_apple_pass')) {
+            eventosapp_generate_wallet_apple_pass($post_id);
         }
     }
 
-    // Adjuntos
+    // Attachments
     $attachments = [];
-    if ($pdf_on) {
-        $pdf_url = get_post_meta($post_id, '_eventosapp_ticket_pdf_url', true);
-        if ($pdf_url) {
-            $pdf_path = function_exists('eventosapp_url_to_path') ? eventosapp_url_to_path($pdf_url) : '';
-            if ($pdf_path && file_exists($pdf_path)) $attachments[] = $pdf_path;
+    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
+    $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
+
+    if ($pdf_on && function_exists('eventosapp_url_to_path')) {
+        $pdf_url  = get_post_meta($post_id, '_eventosapp_ticket_pdf_url', true);
+        $pdf_path = $pdf_url ? eventosapp_url_to_path($pdf_url) : '';
+        if ($pdf_path && file_exists($pdf_path)) {
+            $attachments[] = $pdf_path;
         }
     }
-    if ($ics_on) {
-        $ics_url = get_post_meta($post_id, '_eventosapp_ticket_ics_url', true);
-        if ($ics_url) {
-            $ics_path = function_exists('eventosapp_url_to_path') ? eventosapp_url_to_path($ics_url) : '';
-            if ($ics_path && file_exists($ics_path)) $attachments[] = $ics_path;
+    if ($ics_on && function_exists('eventosapp_url_to_path')) {
+        $ics_url  = get_post_meta($post_id, '_eventosapp_ticket_ics_url', true);
+        $ics_path = $ics_url ? eventosapp_url_to_path($ics_url) : '';
+        if ($ics_path && file_exists($ics_path)) {
+            $attachments[] = $ics_path;
         }
     }
 
@@ -165,7 +168,9 @@ function eventosapp_send_ticket_email_handler() {
 
     // Cabeceras: From con nombre personalizado (dominio propio para evitar DMARC)
     $site_host  = parse_url(home_url(), PHP_URL_HOST);
-    if (!$site_host) { $site_host = $_SERVER['SERVER_NAME'] ?? 'localhost'; }
+    if (!$site_host) {
+        $site_host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+    }
     $site_host  = preg_replace('/^www\./i', '', $site_host);
     $from_email = sanitize_email('no-reply@' . $site_host);
     if (!$from_email) {
@@ -204,8 +209,43 @@ function eventosapp_send_ticket_email_handler() {
     $ok = wp_mail($recipient, $subject, $html, $headers, $attachments);
 
     if ($ok) {
+        $current_datetime = current_time('mysql');
+        
+        // Actualizar último envío (legacy)
         update_post_meta($post_id, '_eventosapp_ticket_last_email_to', sanitize_email($recipient));
-        update_post_meta($post_id, '_eventosapp_ticket_last_email_at', current_time('mysql'));
+        update_post_meta($post_id, '_eventosapp_ticket_last_email_at', $current_datetime);
+        
+        // === NUEVO: TRACKING DE HISTORIAL DE ENVÍOS ===
+        
+        // 1. Registrar PRIMERA fecha de envío (inmutable)
+        $first_sent = get_post_meta($post_id, '_eventosapp_ticket_email_first_sent', true);
+        if (empty($first_sent)) {
+            update_post_meta($post_id, '_eventosapp_ticket_email_first_sent', $current_datetime);
+        }
+        
+        // 2. Marcar status como "enviado"
+        update_post_meta($post_id, '_eventosapp_ticket_email_sent_status', 'enviado');
+        
+        // 3. Actualizar historial de últimos 3 envíos
+        $history = get_post_meta($post_id, '_eventosapp_ticket_email_history', true);
+        if (!is_array($history)) {
+            $history = [];
+        }
+        
+        // Agregar nuevo envío al inicio del array
+        array_unshift($history, [
+            'fecha'        => $current_datetime,
+            'destinatario' => $recipient,
+            'source'       => 'manual',
+        ]);
+        
+        // Mantener solo los últimos 3 envíos
+        $history = array_slice($history, 0, 3);
+        
+        update_post_meta($post_id, '_eventosapp_ticket_email_history', $history);
+        
+        // === FIN TRACKING ===
+        
         eventosapp_ticket_email_redirect($post_id, true, 'Correo enviado correctamente a ' . $recipient);
     } else {
         eventosapp_ticket_email_redirect($post_id, false, 'No se pudo enviar el correo. Revisa configuración SMTP/hosting.');
@@ -226,9 +266,14 @@ function eventosapp_ticket_email_redirect($post_id, $success, $msg) {
     exit;
 }
 
+
 /**
- * Envío programático
- * Asegura enlaces de Wallet antes de construir el HTML (igual que el handler).
+ * Envío programático de correo de ticket
+ * Ahora registra historial de envíos: primera fecha, último envío y los 3 últimos envíos
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param array $args Argumentos opcionales
+ * @return array [bool $success, string $message]
  */
 function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
     $ticket_id = intval($ticket_id);
@@ -245,6 +290,7 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
     $args   = wp_parse_args($args, $defaults);
     $source = is_string($args['source']) ? strtolower($args['source']) : 'manual';
 
+    // Idempotencia: evitar reenvíos automáticos por webhook
     if ($source === 'webhook' && empty($args['force'])) {
         $already = get_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_sent', true);
         if (!empty($already)) {
@@ -253,71 +299,72 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
     }
 
     // Destinatario
-    $recipient = $args['recipient'];
-    if (!$recipient) {
-        $recipient = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
-    }
-    $recipient = sanitize_email($recipient);
+    $asistente_email = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
+    $recipient = !empty($args['recipient']) ? sanitize_email($args['recipient']) : $asistente_email;
     if (!$recipient || !is_email($recipient)) {
-        return [false, 'Correo destino inválido'];
+        return [false, 'Destinatario inválido: ' . $recipient];
     }
 
-    // Flags del evento
     $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
-    $pdf_on    = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true)            === '1';
-    $ics_on    = get_post_meta($evento_id, '_eventosapp_ticket_ics', true)            === '1';
-    $wa_on     = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
-    $wi_on     = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
-
-    if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($ticket_id);
-    if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($ticket_id);
-
-    // Asegurar enlaces Wallet
-    if ($wa_on && function_exists('eventosapp_generar_enlace_wallet_android')) {
-        eventosapp_generar_enlace_wallet_android($ticket_id, false);
+    if (!$evento_id) {
+        return [false, 'Ticket sin evento asignado'];
     }
-    if ($wi_on) {
-        if (function_exists('eventosapp_apple_generate_pass')) {
-            eventosapp_apple_generate_pass($ticket_id, false);
-        } elseif (function_exists('eventosapp_generar_enlace_wallet_apple')) {
-            eventosapp_generar_enlace_wallet_apple($ticket_id);
+
+    // Asegurar enlaces de Wallet antes de armar HTML
+    $wa_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
+    $wi_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+
+    if ($wa_on && !get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', true)) {
+        if (function_exists('eventosapp_generate_wallet_android_ticket')) {
+            eventosapp_generate_wallet_android_ticket($ticket_id);
+        }
+    }
+    if ($wi_on && !get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple', true)) {
+        if (function_exists('eventosapp_generate_wallet_apple_pass')) {
+            eventosapp_generate_wallet_apple_pass($ticket_id);
         }
     }
 
+    // Attachments
     $attachments = [];
-    if ($pdf_on) {
-        $pdf_url = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
-        if ($pdf_url) {
-            $pdf_path = function_exists('eventosapp_url_to_path') ? eventosapp_url_to_path($pdf_url) : '';
-            if ($pdf_path && file_exists($pdf_path)) $attachments[] = $pdf_path;
+    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
+    $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
+
+    if ($pdf_on && function_exists('eventosapp_url_to_path')) {
+        $pdf_url  = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
+        $pdf_path = $pdf_url ? eventosapp_url_to_path($pdf_url) : '';
+        if ($pdf_path && file_exists($pdf_path)) {
+            $attachments[] = $pdf_path;
         }
     }
-    if ($ics_on) {
-        $ics_url = get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true);
-        if ($ics_url) {
-            $ics_path = function_exists('eventosapp_url_to_path') ? eventosapp_url_to_path($ics_url) : '';
-            if ($ics_path && file_exists($ics_path)) $attachments[] = $ics_path;
+    if ($ics_on && function_exists('eventosapp_url_to_path')) {
+        $ics_url  = get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true);
+        $ics_path = $ics_url ? eventosapp_url_to_path($ics_url) : '';
+        if ($ics_path && file_exists($ics_path)) {
+            $attachments[] = $ics_path;
         }
     }
 
-    // Asunto (respeta override por evento salvo que el caller ya pasó uno)
+    // Asunto
     $evento_nombre = $evento_id ? get_the_title($evento_id) : 'Evento';
     $fallback      = 'Tu ticket para ' . $evento_nombre;
     $subject       = $args['subject'] ?: eventosapp_build_subject_for_ticket($ticket_id, $fallback);
 
     // HTML
-    $html    = eventosapp_build_ticket_email_html($ticket_id);
+    $html = eventosapp_build_ticket_email_html($ticket_id);
 
     // Cabeceras
     $site_host  = parse_url(home_url(), PHP_URL_HOST);
-    if (!$site_host) { $site_host = $_SERVER['SERVER_NAME'] ?? 'localhost'; }
+    if (!$site_host) {
+        $site_host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+    }
     $site_host  = preg_replace('/^www\./i', '', $site_host);
     $from_email = sanitize_email('no-reply@' . $site_host);
     if (!$from_email) {
         $admin_fallback = get_option('admin_email');
         $from_email = is_email($admin_fallback) ? $admin_fallback : 'no-reply@' . $site_host;
     }
-    $from_name  = eventosapp_event_from_name($evento_id);
+    $from_name = eventosapp_event_from_name($evento_id);
 
     $organizador_email = $evento_id ? (get_post_meta($evento_id, '_eventosapp_organizador_email', true) ?: '') : '';
     $organizador_name  = $evento_id ? (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') : '';
@@ -337,6 +384,7 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
         ['source' => $source]
     );
 
+    // Debug info
     update_post_meta($ticket_id, '_eventosapp_ticket_email_debug', [
         'at'          => current_time('mysql'),
         'recipient'   => $recipient,
@@ -346,14 +394,52 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
         'source'      => $source,
     ]);
 
+    // Enviar correo
     $ok = wp_mail($recipient, $subject, $html, $headers, $attachments);
 
     if ($ok) {
+        $current_datetime = current_time('mysql');
+        
+        // Actualizar último envío (campos legacy mantenidos por compatibilidad)
         update_post_meta($ticket_id, '_eventosapp_ticket_last_email_to', $recipient);
-        update_post_meta($ticket_id, '_eventosapp_ticket_last_email_at', current_time('mysql'));
-        if ($source === 'webhook') {
-            update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_sent', current_time('mysql'));
+        update_post_meta($ticket_id, '_eventosapp_ticket_last_email_at', $current_datetime);
+        
+        // === NUEVO: TRACKING DE HISTORIAL DE ENVÍOS ===
+        
+        // 1. Registrar PRIMERA fecha de envío (inmutable)
+        $first_sent = get_post_meta($ticket_id, '_eventosapp_ticket_email_first_sent', true);
+        if (empty($first_sent)) {
+            update_post_meta($ticket_id, '_eventosapp_ticket_email_first_sent', $current_datetime);
         }
+        
+        // 2. Marcar status como "enviado"
+        update_post_meta($ticket_id, '_eventosapp_ticket_email_sent_status', 'enviado');
+        
+        // 3. Actualizar historial de últimos 3 envíos
+        $history = get_post_meta($ticket_id, '_eventosapp_ticket_email_history', true);
+        if (!is_array($history)) {
+            $history = [];
+        }
+        
+        // Agregar nuevo envío al inicio del array
+        array_unshift($history, [
+            'fecha'       => $current_datetime,
+            'destinatario' => $recipient,
+            'source'      => $source,
+        ]);
+        
+        // Mantener solo los últimos 3 envíos
+        $history = array_slice($history, 0, 3);
+        
+        update_post_meta($ticket_id, '_eventosapp_ticket_email_history', $history);
+        
+        // === FIN TRACKING ===
+        
+        // Marca específica para webhook
+        if ($source === 'webhook') {
+            update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_sent', $current_datetime);
+        }
+        
         do_action('eventosapp_ticket_email_sent', $ticket_id, $recipient, $args);
 
         return [true, 'Correo enviado correctamente a ' . $recipient];
