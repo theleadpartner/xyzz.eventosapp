@@ -165,4 +165,20 @@ function eventosapp_ticket_build_search_blob($ticket_id){
     return $blob;
 }
 
+/**
+ * Inicializa el estado de envío de correo de un ticket como "no_enviado"
+ * Se debe llamar cuando se crea un ticket nuevo que aún no ha recibido correo
+ *
+ * @param int $ticket_id ID del ticket
+ * @return void
+ */
+function eventosapp_ticket_init_email_status($ticket_id) {
+    // Solo inicializar si no existe ya un estado
+    $existing_status = get_post_meta($ticket_id, '_eventosapp_ticket_email_sent_status', true);
+    
+    if (empty($existing_status)) {
+        update_post_meta($ticket_id, '_eventosapp_ticket_email_sent_status', 'no_enviado');
+    }
+}
+
 
