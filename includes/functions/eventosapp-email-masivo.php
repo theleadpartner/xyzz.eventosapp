@@ -871,13 +871,32 @@ function eventosapp_email_masivo_get_filtered_tickets($filters) {
         ];
     }
 
-    // Filtro por estado de email
+    // Filtro por estado de email - CORREGIDO para manejar no_enviado correctamente
     if (!empty($filters['email_status'])) {
-        $meta_query[] = [
-            'key' => '_eventosapp_ticket_email_sent_status',
-            'value' => sanitize_text_field($filters['email_status']),
-            'compare' => '='
-        ];
+        $email_status = sanitize_text_field($filters['email_status']);
+        
+        if ($email_status === 'no_enviado') {
+            // Para no_enviado: buscar tickets que TENGAN el valor 'no_enviado' O que NO TENGAN el meta field
+            $meta_query[] = [
+                'relation' => 'OR',
+                [
+                    'key' => '_eventosapp_ticket_email_sent_status',
+                    'value' => 'no_enviado',
+                    'compare' => '='
+                ],
+                [
+                    'key' => '_eventosapp_ticket_email_sent_status',
+                    'compare' => 'NOT EXISTS'
+                ]
+            ];
+        } else {
+            // Para enviado o error: buscar normalmente
+            $meta_query[] = [
+                'key' => '_eventosapp_ticket_email_sent_status',
+                'value' => $email_status,
+                'compare' => '='
+            ];
+        }
     }
 
     // Filtro por fecha de primer envío
