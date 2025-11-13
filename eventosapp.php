@@ -31,6 +31,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-campos-adici
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-privacidad.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-api-autocomplete.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-ticket-email.php';
+require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-email-masivo.php';
 require_once plugin_dir_path(__FILE__) . 'includes/api/eventosapp-intake-ac.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/metabox-curl.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-herramientas.php';
