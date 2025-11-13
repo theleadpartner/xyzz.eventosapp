@@ -169,6 +169,11 @@ function eventosapp_ticket_networking_digest_metabox_render($post){
 }
 
 
+
+/**
+ * Metabox: Enviar Ticket por Correo
+ * Ahora muestra el historial de envíos: status, primera fecha, último envío y los 3 últimos
+ */
 function eventosapp_ticket_email_metabox_render($post) {
     $asistente_email = get_post_meta($post->ID, '_eventosapp_asistente_email', true);
     $is_admin = current_user_can('manage_options');
@@ -181,8 +186,69 @@ function eventosapp_ticket_email_metabox_render($post) {
         ], admin_url('admin-post.php')),
         'eventosapp_send_ticket_email' // action del nonce
     );
+    
+    // === NUEVO: Obtener información de historial de envíos ===
+    $email_status = get_post_meta($post->ID, '_eventosapp_ticket_email_sent_status', true);
+    $first_sent = get_post_meta($post->ID, '_eventosapp_ticket_email_first_sent', true);
+    $last_email_at = get_post_meta($post->ID, '_eventosapp_ticket_last_email_at', true);
+    $last_email_to = get_post_meta($post->ID, '_eventosapp_ticket_last_email_to', true);
+    $email_history = get_post_meta($post->ID, '_eventosapp_ticket_email_history', true);
+    
+    if (!is_array($email_history)) {
+        $email_history = [];
+    }
+    
+    $status_enviado = ($email_status === 'enviado');
+    
     ?>
     <div style="font-size:13px;line-height:1.4">
+        
+        <?php if ($status_enviado): ?>
+            <!-- Estado: Enviado -->
+            <div style="background:#d1fae5;border:1px solid #10b981;padding:10px;border-radius:4px;margin-bottom:12px;">
+                <strong style="color:#047857;display:block;margin-bottom:4px;">
+                    ✓ Estado: Correo Enviado
+                </strong>
+                
+                <?php if ($first_sent): ?>
+                    <span style="color:#065f46;font-size:12px;">
+                        <strong>Primer envío:</strong> <?php echo esc_html(date_i18n('d/m/Y H:i', strtotime($first_sent))); ?>
+                    </span>
+                <?php endif; ?>
+            </div>
+        <?php else: ?>
+            <!-- Estado: No Enviado -->
+            <div style="background:#fee2e2;border:1px solid #ef4444;padding:10px;border-radius:4px;margin-bottom:12px;">
+                <strong style="color:#dc2626;">
+                    ✗ Estado: Correo No Enviado
+                </strong>
+            </div>
+        <?php endif; ?>
+        
+        <!-- Historial de los 3 últimos envíos -->
+        <?php if (!empty($email_history) && count($email_history) > 0): ?>
+            <div style="background:#f1f5f9;border:1px solid #cbd5e1;padding:10px;border-radius:4px;margin-bottom:12px;">
+                <strong style="display:block;margin-bottom:6px;color:#334155;">Últimos envíos:</strong>
+                <div style="font-size:12px;color:#475569;">
+                    <?php foreach ($email_history as $idx => $envio): ?>
+                        <div style="padding:4px 0;<?php echo $idx > 0 ? 'border-top:1px solid #e2e8f0;' : ''; ?>">
+                            <strong><?php echo ($idx + 1); ?>.</strong>
+                            <?php echo esc_html(date_i18n('d/m/Y H:i', strtotime($envio['fecha']))); ?>
+                            <br>
+                            <span style="padding-left:12px;color:#64748b;">
+                                → <?php echo esc_html($envio['destinatario']); ?>
+                                <?php if (!empty($envio['source'])): ?>
+                                    <em style="color:#94a3b8;">(<?php echo esc_html($envio['source']); ?>)</em>
+                                <?php endif; ?>
+                            </span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+        
+        <hr style="margin:12px 0;border:0;border-top:1px solid #e5e7eb;">
+        
         <p><b>Email del asistente:</b><br>
             <input type="email" class="widefat" value="<?php echo esc_attr($asistente_email); ?>" disabled>
             <small>Este es el correo guardado en el ticket.</small>
@@ -196,7 +262,9 @@ function eventosapp_ticket_email_metabox_render($post) {
         <?php endif; ?>
 
         <p>
-            <a href="<?php echo esc_url($base_url); ?>" class="button button-primary" id="eventosapp_send_ticket_btn">Enviar ticket por correo</a>
+            <a href="<?php echo esc_url($base_url); ?>" class="button button-primary" id="eventosapp_send_ticket_btn">
+                <?php echo $status_enviado ? 'Reenviar ticket por correo' : 'Enviar ticket por correo'; ?>
+            </a>
         </p>
         <small>El correo incluirá QR, PDF, archivo ICS y botones para Wallet.</small>
     </div>
