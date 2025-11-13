@@ -992,6 +992,11 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
     }
 
     $headers[] = 'Fecha creación';
+    
+    // === NUEVO: Encabezados de estado de correo ===
+    $headers[] = 'Estado Correo Ticket';
+    $headers[] = 'Fecha del Primer Envío';
+    $headers[] = 'Fecha del Último Envío';
 
     // === 5) Filas
     $dataRows = [];
@@ -1145,6 +1150,20 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
         }
 
         $row[] = (string)$created;
+        
+        // === NUEVO: Datos de estado de correo ===
+        // Estado: 'enviado' o 'no_enviado'
+        $email_status = get_post_meta($tid, '_eventosapp_ticket_email_sent_status', true);
+        $row[] = ($email_status === 'enviado') ? 'Enviado' : 'No Enviado';
+        
+        // Fecha del primer envío
+        $first_sent = get_post_meta($tid, '_eventosapp_ticket_email_first_sent', true);
+        $row[] = $first_sent ? date_i18n('Y-m-d H:i:s', strtotime($first_sent)) : '';
+        
+        // Fecha del último envío
+        $last_sent = get_post_meta($tid, '_eventosapp_ticket_last_email_at', true);
+        $row[] = $last_sent ? date_i18n('Y-m-d H:i:s', strtotime($last_sent)) : '';
+        
         $dataRows[] = $row;
     }
 
