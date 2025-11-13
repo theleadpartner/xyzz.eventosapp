@@ -961,6 +961,11 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         if ($accesos_auto) {
             update_post_meta($post_id, '_eventosapp_ticket_sesiones_acceso', $accesos_auto);
         }
+        
+        // 7.1) Inicializar estado de envío de correo para tickets nuevos
+        if (function_exists('eventosapp_ticket_init_email_status')) {
+            eventosapp_ticket_init_email_status($post_id);
+        }
     }
 
     // 8) Wallet Android on/off por evento
