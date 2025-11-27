@@ -64,6 +64,9 @@ function eventosapp_render_metabox_email_header($post){
     $from_name    = get_post_meta($post->ID, '_eventosapp_email_fromname', true) ?: '';
     $extra_msg    = get_post_meta($post->ID, '_eventosapp_email_msg', true) ?: '';
     $h_color      = get_post_meta($post->ID, '_eventosapp_email_heading_color', true) ?: '';
+    
+    // === NUEVO: Imagen del mensaje adicional ===
+    $extra_img    = get_post_meta($post->ID, '_eventosapp_email_msg_img', true) ?: '';
 
     // === NUEVO: Campos de recordatorio ===
     $rem_enable = get_post_meta($post->ID, '_eventosapp_reminder_enabled', true) === '1' ? '1' : '0';
@@ -95,6 +98,9 @@ function eventosapp_render_metabox_email_header($post){
       .evapp-reminder .inline input[type="number"]{max-width:100px}
       .evapp-reminder .muted{color:#666;font-size:11px;margin-top:6px;display:block}
       .evapp-reminder .preview-line{font-size:12px;background:#fff;border:1px dashed #e5e7eb;border-radius:4px;padding:6px;margin-top:6px}
+      /* Estilos para la imagen del mensaje adicional */
+      .evapp-msg-img-wrap{background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:8px}
+      .evapp-msg-img-wrap .preview{margin:8px 0;max-width:300px}
     </style>
 
     <div class="evapp-hdr">
@@ -155,6 +161,33 @@ function eventosapp_render_metabox_email_header($post){
         <textarea id="evapp_extra_msg" name="eventosapp_email_msg" placeholder="Escribe un aviso para los asistentes (se mostrará en un bloque especial en el correo)"><?php echo esc_textarea($extra_msg); ?></textarea>
       </p>
 
+      <!-- ===================== -->
+      <!-- NUEVO: Imagen del mensaje adicional -->
+      <!-- ===================== -->
+      <div class="evapp-msg-img-wrap">
+        <label><b>Imagen del mensaje del organizador (opcional)</b>
+          <span class="evapp-help-tip" title="Esta imagen aparecerá antes del texto del mensaje del organizador. Solo se mostrará si hay mensaje adicional.">?</span>
+        </label>
+        <p><small>Se mostrará solo si hay un mensaje adicional. Recomendado: JPG/PNG/GIF · &lt; 500 KB</small></p>
+        
+        <div class="preview" id="evapp_msg_img_preview" style="<?php echo $extra_img ? '' : 'display:none'; ?>">
+          <img src="<?php echo esc_url($extra_img); ?>" alt="Preview mensaje">
+        </div>
+
+        <input type="hidden" id="evapp_msg_img_field" name="eventosapp_email_msg_img" value="<?php echo esc_url($extra_img); ?>">
+
+        <div class="row">
+          <button type="button" class="button" id="evapp_msg_img_upload">Subir/Seleccionar</button>
+          <button type="button" class="button" id="evapp_msg_img_remove" <?php disabled(!$extra_img); ?>>Quitar</button>
+        </div>
+
+        <p style="margin-top:8px;margin-bottom:0;">
+          <label for="evapp_msg_img_url"><b>o pegar URL:</b></label><br>
+          <input type="url" id="evapp_msg_img_url" placeholder="https://..." value="<?php echo esc_attr($extra_img); ?>">
+        </p>
+      </div>
+      <!-- /NUEVO: Imagen del mensaje adicional -->
+
       <p class="field">
         <label for="evapp_heading_color"><b>Color de los encabezados</b>
           <span class="evapp-help-tip" title="Aplica a: Nombre del evento, Detalles del evento, Tu ticket y Mensaje del organizador.">?</span>
@@ -175,24 +208,20 @@ function eventosapp_render_metabox_email_header($post){
       <div class="evapp-reminder">
         <h4>Recordatorio de Ticket</h4>
 
-        <p class="field">
-          <label>
-            <input type="checkbox" id="evapp_reminder_enabled" name="eventosapp_reminder_enabled" value="1" <?php checked($rem_enable, '1'); ?>>
-            <b>Activar Recordatorio del Ticket</b>
-          </label>
-        </p>
+        <label style="display:block;margin-bottom:6px;">
+          <input type="checkbox" id="evapp_reminder_enabled" name="eventosapp_reminder_enabled" value="1" <?php checked($rem_enable, '1'); ?>>
+          <b>Habilitar recordatorio automático</b>
+        </label>
 
         <div class="inline">
-          <label for="evapp_reminder_amount" style="margin:0;"><b>Cantidad</b></label>
+          <label for="evapp_reminder_amount" style="margin:0;"><b>Enviar</b></label>
           <input type="number" min="0" step="1" id="evapp_reminder_amount" name="eventosapp_reminder_amount" value="<?php echo esc_attr($rem_amount); ?>">
-
-          <label for="evapp_reminder_unit" style="margin:0;"><b>Unidad</b></label>
           <select id="evapp_reminder_unit" name="eventosapp_reminder_unit">
             <option value="minutes" <?php selected($rem_unit, 'minutes'); ?>>minutos</option>
-            <option value="hours"   <?php selected($rem_unit, 'hours'); ?>>horas</option>
-            <option value="days"    <?php selected($rem_unit, 'days'); ?>>días</option>
+            <option value="hours"   <?php selected($rem_unit, 'hours');   ?>>horas</option>
+            <option value="days"    <?php selected($rem_unit, 'days');    ?>>días</option>
           </select>
-          <span>antes del evento.</span>
+          <span>antes del evento</span>
         </div>
 
         <div class="inline" style="margin-top:6px;">
@@ -262,6 +291,58 @@ function eventosapp_render_metabox_email_header($post){
         setVal($(this).val().trim());
       });
 
+      // ========================================
+      // NUEVO: Media uploader para imagen del mensaje adicional
+      // ========================================
+      let frameMsgImg;
+      const $msgImgField   = $('#evapp_msg_img_field');
+      const $msgImgUrlIn   = $('#evapp_msg_img_url');
+      const $msgImgPrevBox = $('#evapp_msg_img_preview');
+      const $msgImgImg     = $('#evapp_msg_img_preview img');
+      const $msgImgBtnUp   = $('#evapp_msg_img_upload');
+      const $msgImgBtnRm   = $('#evapp_msg_img_remove');
+
+      function setMsgImgVal(url){
+        $msgImgField.val(url || '');
+        $msgImgUrlIn.val(url || '');
+        if(url){
+          $msgImgImg.attr('src', url);
+          $msgImgPrevBox.show();
+          $msgImgBtnRm.prop('disabled', false);
+        }else{
+          $msgImgPrevBox.hide();
+          $msgImgBtnRm.prop('disabled', true);
+        }
+      }
+
+      $msgImgBtnUp.on('click', function(e){
+        e.preventDefault();
+        if(frameMsgImg){ frameMsgImg.open(); return; }
+        frameMsgImg = wp.media({
+          title: 'Seleccionar imagen del mensaje del organizador',
+          button: { text: 'Usar esta imagen' },
+          library: { type: 'image' },
+          multiple: false
+        });
+        frameMsgImg.on('select', function(){
+          const file = frameMsgImg.state().get('selection').first().toJSON();
+          setMsgImgVal(file.url || '');
+        });
+        frameMsgImg.open();
+      });
+
+      $msgImgBtnRm.on('click', function(e){
+        e.preventDefault();
+        setMsgImgVal('');
+      });
+
+      $msgImgUrlIn.on('change blur', function(){
+        setMsgImgVal($(this).val().trim());
+      });
+      // ========================================
+      // /NUEVO: Media uploader para imagen del mensaje adicional
+      // ========================================
+
       // Color picker
       $('#evapp_heading_color').wpColorPicker({
         palettes: ['#111827', '#1f2937', '#2563eb', '#dc2626', '#10b981', '#f59e0b', '#7c3aed']
@@ -323,6 +404,14 @@ add_action('save_post_eventosapp_event', function($post_id){
     $msg = wp_strip_all_tags($msg);
     if ($msg) update_post_meta($post_id, '_eventosapp_email_msg', $msg);
     else      delete_post_meta($post_id, '_eventosapp_email_msg');
+
+    // ==========================
+    // NUEVO: Imagen del mensaje adicional
+    // ==========================
+    $msg_img = isset($_POST['eventosapp_email_msg_img']) ? trim(wp_unslash($_POST['eventosapp_email_msg_img'])) : '';
+    $msg_img = esc_url_raw($msg_img);
+    if ($msg_img) update_post_meta($post_id, '_eventosapp_email_msg_img', $msg_img);
+    else          delete_post_meta($post_id, '_eventosapp_email_msg_img');
 
     // Color de encabezados
     $h_color = isset($_POST['eventosapp_email_heading_color']) ? wp_unslash($_POST['eventosapp_email_heading_color']) : '';
