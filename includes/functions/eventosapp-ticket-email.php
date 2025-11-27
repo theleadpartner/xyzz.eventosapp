@@ -540,12 +540,26 @@ function eventosapp_build_ticket_email_html($ticket_id) {
                          ?: get_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url', true);
     }
 
-    // Mensaje adicional (opcional)
+// Mensaje adicional (opcional) + imagen
     $extra_msg = $evento_id ? (get_post_meta($evento_id, '_eventosapp_email_msg', true) ?: '') : '';
     $extra_msg = wp_strip_all_tags($extra_msg);
+    $extra_img = $evento_id ? (get_post_meta($evento_id, '_eventosapp_email_msg_img', true) ?: '') : '';
     $extra_block = '';
-    if ($extra_msg !== '') {
-        $extra_block = '<div class="kvs" style="margin-top:16px;"><h2>Mensaje del organizador</h2><p>' . nl2br(esc_html($extra_msg)) . '</p></div>';
+    
+    if ($extra_msg !== '' || $extra_img !== '') {
+        $extra_block = '<div class="kvs" style="margin-top:16px;"><h2>Mensaje del organizador</h2>';
+        
+        // Agregar imagen si existe
+        if ($extra_img !== '') {
+            $extra_block .= '<div style="margin:12px 0;text-align:center;"><img src="' . esc_url($extra_img) . '" alt="Mensaje del organizador" style="max-width:100%;height:auto;border-radius:8px;"></div>';
+        }
+        
+        // Agregar texto si existe
+        if ($extra_msg !== '') {
+            $extra_block .= '<p>' . nl2br(esc_html($extra_msg)) . '</p>';
+        }
+        
+        $extra_block .= '</div>';
     }
 
     // Cargar plantilla seleccionada
