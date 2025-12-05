@@ -240,9 +240,6 @@ function eventosapp_render_qr_double_auth_shortcode() {
     
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <script>
-    // Definir ajaxurl para el frontend (solo existe en admin por defecto)
-    var ajaxurl = '<?php echo admin_url("admin-ajax.php"); ?>';
-    
     (function($) {
         let html5QrCode;
         let currentTicketId = null;
@@ -451,10 +448,7 @@ function eventosapp_render_qr_double_auth_shortcode() {
 // AJAX: Buscar ticket por QR
 // ========================================
 
-add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', 'eventosapp_ajax_search_ticket_by_qr' );
-add_action( 'wp_ajax_nopriv_eventosapp_search_ticket_by_qr', 'eventosapp_ajax_search_ticket_by_qr' );
-
-function eventosapp_ajax_search_ticket_by_qr() {
+add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', function() {
     check_ajax_referer( 'eventosapp_qr_search', 'nonce' );
     
     $qr_code  = isset( $_POST['qr_code'] ) ? sanitize_text_field( $_POST['qr_code'] ) : '';
@@ -493,27 +487,50 @@ function eventosapp_ajax_search_ticket_by_qr() {
     $ticket = $tickets[0];
     $ticket_id = $ticket->ID;
     
-    // Obtener datos
+    // Obtener zona horaria del evento para determinar "hoy"
+    $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
+    if ( ! $event_tz ) {
+        $event_tz = wp_timezone_string();
+        if ( ! $event_tz || $event_tz === 'UTC' ) {
+            $offset = get_option( 'gmt_offset' );
+            $event_tz = $offset ? timezone_name_from_abbr( '', $offset * 3600, 0 ) ?: 'UTC' : 'UTC';
+        }
+    }
+    
+    try {
+        $dt = new DateTime( 'now', new DateTimeZone( $event_tz ) );
+    } catch ( Exception $e ) {
+        $dt = new DateTime( 'now', wp_timezone() );
+    }
+    $today = $dt->format( 'Y-m-d' );
+    
+    // Obtener datos del asistente
     $nombre       = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
     $apellido     = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
     $email        = get_post_meta( $ticket_id, '_eventosapp_asistente_email', true );
     $localidad    = get_post_meta( $ticket_id, '_eventosapp_asistente_localidad', true );
     $ticket_public_id = get_post_meta( $ticket_id, 'eventosapp_ticketID', true );
-    $checked_in   = get_post_meta( $ticket_id, '_eventosapp_checkin', true ) === '1';
-    $checkin_date = get_post_meta( $ticket_id, '_eventosapp_checkin_date', true );
     
-    if ( $checkin_date ) {
-        $checkin_date = date_i18n( 'd/m/Y H:i', strtotime( $checkin_date ) );
+    // Verificar estado de check-in usando el sistema correcto (por día)
+    $status_arr = get_post_meta( $ticket_id, '_eventosapp_checkin_status', true );
+    if ( is_string( $status_arr ) ) {
+        $status_arr = @unserialize( $status_arr );
     }
+    if ( ! is_array( $status_arr ) ) {
+        $status_arr = [];
+    }
+    
+    $checked_in = ( isset( $status_arr[$today] ) && $status_arr[$today] === 'checked_in' );
+    $checkin_date = $checked_in ? date_i18n( 'd/m/Y', strtotime( $today ) ) : '';
     
     wp_send_json_success([
         'ticket' => [
-            'id'          => $ticket_id,
-            'nombre'      => trim( $nombre . ' ' . $apellido ),
-            'email'       => $email,
-            'ticket_id'   => $ticket_public_id,
-            'localidad'   => $localidad,
-            'checked_in'  => $checked_in,
+            'id'           => $ticket_id,
+            'nombre'       => trim( $nombre . ' ' . $apellido ),
+            'email'        => $email,
+            'ticket_id'    => $ticket_public_id,
+            'localidad'    => $localidad,
+            'checked_in'   => $checked_in,
             'checkin_date' => $checkin_date,
         ],
     ]);
@@ -554,24 +571,85 @@ function eventosapp_ajax_verify_and_checkin() {
         wp_send_json_error( 'Código de verificación incorrecto. Por favor verifica e intenta nuevamente.' );
     }
     
-    // Código válido, proceder con check-in
-    $already_checked = get_post_meta( $ticket_id, '_eventosapp_checkin', true ) === '1';
+    // ===== Código válido, proceder con check-in =====
     
-    update_post_meta( $ticket_id, '_eventosapp_checkin', '1' );
-    update_post_meta( $ticket_id, '_eventosapp_checkin_date', current_time( 'mysql' ) );
-    update_post_meta( $ticket_id, '_eventosapp_checkin_user', get_current_user_id() );
+    // 1) Obtener zona horaria del evento (o la del sitio)
+    $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
+    if ( ! $event_tz ) {
+        $event_tz = wp_timezone_string();
+        if ( ! $event_tz || $event_tz === 'UTC' ) {
+            $offset = get_option( 'gmt_offset' );
+            $event_tz = $offset ? timezone_name_from_abbr( '', $offset * 3600, 0 ) ?: 'UTC' : 'UTC';
+        }
+    }
     
+    // 2) "Hoy" en la TZ del evento
+    try {
+        $dt = new DateTime( 'now', new DateTimeZone( $event_tz ) );
+    } catch ( Exception $e ) {
+        $dt = new DateTime( 'now', wp_timezone() );
+    }
+    $today = $dt->format( 'Y-m-d' );
+    
+    // 3) Días válidos del evento
+    $days = function_exists( 'eventosapp_get_event_days' ) ? (array) eventosapp_get_event_days( $event_id ) : [];
+    
+    // 4) Si hoy NO es un día del evento => bloquear
+    if ( empty( $days ) || ! in_array( $today, $days, true ) ) {
+        wp_send_json_error( 'El check-in solo está permitido en las fechas del evento. Hoy no corresponde.' );
+    }
+    
+    // 5) Estado multidía - usar el sistema correcto de EventosApp
+    $status_arr = get_post_meta( $ticket_id, '_eventosapp_checkin_status', true );
+    if ( is_string( $status_arr ) ) {
+        $status_arr = @unserialize( $status_arr );
+    }
+    if ( ! is_array( $status_arr ) ) {
+        $status_arr = [];
+    }
+    
+    $already_checked = ( isset( $status_arr[$today] ) && $status_arr[$today] === 'checked_in' );
+    
+    // 6) Si NO está chequeado, hacer check-in
+    if ( ! $already_checked ) {
+        $status_arr[$today] = 'checked_in';
+        update_post_meta( $ticket_id, '_eventosapp_checkin_status', $status_arr );
+        
+        // Log de check-in
+        $log = get_post_meta( $ticket_id, '_eventosapp_checkin_log', true );
+        if ( is_string( $log ) ) {
+            $log = @unserialize( $log );
+        }
+        if ( ! is_array( $log ) ) {
+            $log = [];
+        }
+        
+        $user = wp_get_current_user();
+        $log[] = [
+            'fecha'   => $dt->format( 'Y-m-d' ),
+            'hora'    => $dt->format( 'H:i:s' ),
+            'dia'     => $today,
+            'status'  => 'checked_in',
+            'origen'  => 'QR Doble Autenticación',
+            'usuario' => $user && $user->exists() ? ( $user->display_name . ' (' . $user->user_email . ')' ) : 'Sistema'
+        ];
+        update_post_meta( $ticket_id, '_eventosapp_checkin_log', $log );
+    }
+    
+    // 7) Obtener datos del asistente para respuesta
     $nombre   = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
     $apellido = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
     
     if ( $already_checked ) {
-        $message = sprintf( 'Check-in confirmado para %s %s (ya había ingresado anteriormente)', $nombre, $apellido );
+        $message = sprintf( 'Check-in confirmado para %s %s (ya había ingresado hoy anteriormente)', $nombre, $apellido );
     } else {
         $message = sprintf( 'Check-in exitoso para %s %s', $nombre, $apellido );
     }
     
     wp_send_json_success([
-        'message' => $message,
-        'already_checked' => $already_checked,
+        'message'            => $message,
+        'already_checked'    => $already_checked,
+        'checkin_date'       => $today,
+        'checkin_date_label' => date_i18n( 'D, d M Y', strtotime( $today ) ),
     ]);
 }
