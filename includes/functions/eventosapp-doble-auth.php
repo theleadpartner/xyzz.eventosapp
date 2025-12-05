@@ -298,6 +298,81 @@ add_action( 'eventosapp_auto_send_auth_codes', function( $event_id ) {
     eventosapp_send_mass_auth_codes( $event_id );
 }, 10, 1 );
 
+/**
+ * Regenera códigos para todos los tickets de un evento y los envía
+ * ATENCIÓN: Esta función BORRA todos los códigos existentes
+ * 
+ * @param int $event_id ID del evento
+ * @return array Resultados: ['success' => int, 'failed' => int, 'total' => int]
+ */
+function eventosapp_regenerate_and_send_mass_auth_codes( $event_id ) {
+    $tickets = get_posts([
+        'post_type'      => 'eventosapp_ticket',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'meta_key'       => '_eventosapp_ticket_evento_id',
+        'meta_value'     => $event_id,
+    ]);
+    
+    $success = 0;
+    $failed  = 0;
+    
+    foreach ( $tickets as $ticket ) {
+        // IMPORTANTE: Generar un NUEVO código (esto sobrescribe el anterior)
+        $new_code = eventosapp_assign_auth_code_to_ticket( $ticket->ID );
+        
+        // Enviar el nuevo código
+        $sent = eventosapp_send_auth_code_email( $ticket->ID, 'masivo' );
+        
+        if ( $sent ) {
+            $success++;
+        } else {
+            $failed++;
+        }
+    }
+    
+    $total = count( $tickets );
+    
+    // Registrar en el log del evento (con indicador de regeneración)
+    eventosapp_log_mass_send( $event_id, $total, $success, $failed );
+    
+    return [
+        'success' => $success,
+        'failed'  => $failed,
+        'total'   => $total,
+    ];
+}
+
+// ========================================
+// AJAX: REGENERAR Y ENVIAR CÓDIGOS MASIVAMENTE
+// ========================================
+
+add_action( 'wp_ajax_eventosapp_regenerate_and_send_auth_codes', function() {
+    check_ajax_referer( 'eventosapp_double_auth_regenerate', 'nonce' );
+    
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_send_json_error( 'Permisos insuficientes' );
+    }
+    
+    $event_id = isset( $_POST['event_id'] ) ? absint( $_POST['event_id'] ) : 0;
+    
+    if ( ! $event_id ) {
+        wp_send_json_error( 'ID de evento no proporcionado' );
+    }
+    
+    $result = eventosapp_regenerate_and_send_mass_auth_codes( $event_id );
+    
+    wp_send_json_success( [
+        'message' => sprintf( 
+            'Códigos regenerados y enviados: %d exitosos, %d fallidos de %d total', 
+            $result['success'], 
+            $result['failed'], 
+            $result['total'] 
+        ),
+        'result' => $result,
+    ]);
+});
+
 // ========================================
 // AJAX: ENVÍO MANUAL DESDE METABOX DE EVENTO
 // ========================================
