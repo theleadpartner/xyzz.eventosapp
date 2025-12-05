@@ -30,11 +30,13 @@ function eventosapp_render_metabox_extras_ticket($post) {
     // NUEVO: envío auto para registro público
     $auto_public = get_post_meta($post->ID, '_eventosapp_ticket_auto_email_public', true);
 
-    // NUEVO: flag “usar QR preimpreso”
+    // NUEVO: flag "usar QR preimpreso"
     $use_preprinted = get_post_meta($post->ID, '_eventosapp_ticket_use_preprinted_qr', true);
-	// NUEVO: flag “usar QR preimpreso SOLO para Networking”
-	$use_preprinted_net = get_post_meta($post->ID, '_eventosapp_ticket_use_preprinted_qr_networking', true);
+    // NUEVO: flag "usar QR preimpreso SOLO para Networking"
+    $use_preprinted_net = get_post_meta($post->ID, '_eventosapp_ticket_use_preprinted_qr_networking', true);
 
+    // NUEVO: flag "Activar Doble Autenticación"
+    $double_auth = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_enabled', true);
 
     wp_nonce_field('eventosapp_extras_ticket_guardar', 'eventosapp_extras_ticket_nonce');
     ?>
@@ -74,16 +76,28 @@ function eventosapp_render_metabox_extras_ticket($post) {
     </label>
     <br>
     <small style="color:#666">Si está activo, el lector QR buscará por el campo numérico para realizar Checkin <code>eventosapp_ticket_preprintedID</code> del ticket.</small>
-<hr>
-<label>
-  <input type="checkbox" name="eventosapp_ticket_use_preprinted_qr_networking" value="1" <?php checked($use_preprinted_net, '1'); ?>>
-  <strong>Usar QR Preimpreso en Networking</strong>
-</label>
-<br>
-<small style="color:#666">
-  Aplica únicamente al lector de <code>[eventosapp_qr_contacto]</code>. Al activarlo, buscará por el campo numérico
-  <code>eventosapp_ticket_preprintedID</code> en lugar de <code>eventosapp_ticketID</code>.
-</small>
+
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_use_preprinted_qr_networking" value="1" <?php checked($use_preprinted_net, '1'); ?>>
+        <strong>Usar QR Preimpreso en Networking</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Aplica únicamente al lector de <code>[eventosapp_qr_contacto]</code>. Al activarlo, buscará por el campo numérico
+        <code>eventosapp_ticket_preprintedID</code> en lugar de <code>eventosapp_ticketID</code>.
+    </small>
+
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_double_auth_enabled" value="1" <?php checked($double_auth, '1'); ?>>
+        <strong>🔐 Activar Doble Autenticación para Check-In</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Requiere que los asistentes presenten un código de 5 dígitos además del QR para hacer check-in.
+        Agrega una capa extra de seguridad contra tickets robados o compartidos.
+    </small>
 
     <?php
 }
@@ -113,15 +127,371 @@ add_action('save_post_eventosapp_event', function($post_id){
 
     // NUEVO: solo para registro público
     update_post_meta($post_id, '_eventosapp_ticket_auto_email_public',  isset($_POST['eventosapp_ticket_auto_email_public']) ? '1' : '0');
-	// NUEVO: usar QR preimpreso (por evento)
+    // NUEVO: usar QR preimpreso (por evento)
     update_post_meta($post_id, '_eventosapp_ticket_use_preprinted_qr', isset($_POST['eventosapp_ticket_use_preprinted_qr']) ? '1' : '0');
-	
-	// NUEVO: usar QR preimpreso SOLO para networking
-update_post_meta(
-  $post_id,
-  '_eventosapp_ticket_use_preprinted_qr_networking',
-  isset($_POST['eventosapp_ticket_use_preprinted_qr_networking']) ? '1' : '0'
-);
+    
+    // NUEVO: usar QR preimpreso SOLO para networking
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_use_preprinted_qr_networking',
+        isset($_POST['eventosapp_ticket_use_preprinted_qr_networking']) ? '1' : '0'
+    );
 
-	
+    // NUEVO: Activar Doble Autenticación
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_double_auth_enabled',
+        isset($_POST['eventosapp_ticket_double_auth_enabled']) ? '1' : '0'
+    );
+    
 }, 25); // prioridad > 20 para correr después del guardado base
+
+
+// ========================================
+// NUEVO METABOX: Configuración de Doble Autenticación
+// ========================================
+
+add_action('add_meta_boxes', function () {
+    add_meta_box(
+        'eventosapp_double_auth_config',
+        '🔐 Configuración de Doble Autenticación',
+        'eventosapp_render_metabox_double_auth_config',
+        'eventosapp_event',
+        'normal',
+        'default'
+    );
+});
+
+/**
+ * Render del metabox de configuración de doble autenticación
+ */
+function eventosapp_render_metabox_double_auth_config($post) {
+    $double_auth_enabled = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_enabled', true);
+    
+    // Solo mostrar si está activada la doble autenticación
+    if ($double_auth_enabled !== '1') {
+        echo '<p style="color:#666;">⚠️ Para activar este sistema, marca la casilla <strong>"Activar Doble Autenticación para Check-In"</strong> en el panel lateral "Funciones Extra del Ticket".</p>';
+        return;
+    }
+    
+    // Recuperar datos guardados
+    $scheduled_datetime = get_post_meta($post->ID, '_eventosapp_double_auth_scheduled_datetime', true);
+    $scheduled_timezone = get_post_meta($post->ID, '_eventosapp_double_auth_scheduled_timezone', true);
+    $mass_log = eventosapp_get_event_mass_log($post->ID);
+    
+    // Timezone por defecto
+    if (!$scheduled_timezone) {
+        $scheduled_timezone = wp_timezone_string();
+    }
+    
+    wp_nonce_field('eventosapp_double_auth_config_save', 'eventosapp_double_auth_config_nonce');
+    
+    ?>
+    <style>
+    .evapp-double-auth-section {
+        background: #f9f9f9;
+        padding: 15px;
+        margin: 15px 0;
+        border-radius: 6px;
+        border-left: 4px solid #2F73B5;
+    }
+    .evapp-double-auth-section h4 {
+        margin-top: 0;
+        color: #2F73B5;
+    }
+    .evapp-form-row {
+        margin: 15px 0;
+    }
+    .evapp-form-row label {
+        display: block;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    .evapp-form-row input,
+    .evapp-form-row select {
+        width: 100%;
+        max-width: 400px;
+    }
+    .evapp-btn-test {
+        background: #0073aa;
+        color: white;
+        border: none;
+        padding: 8px 15px;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+    .evapp-btn-test:hover {
+        background: #005177;
+    }
+    .evapp-btn-mass {
+        background: #d9534f;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+    .evapp-btn-mass:hover {
+        background: #c9302c;
+    }
+    .evapp-log-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+    }
+    .evapp-log-table th,
+    .evapp-log-table td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+    }
+    .evapp-log-table th {
+        background: #2F73B5;
+        color: white;
+    }
+    .evapp-ajax-message {
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 4px;
+        display: none;
+    }
+    .evapp-ajax-message.success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    .evapp-ajax-message.error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+    </style>
+    
+    <div class="evapp-double-auth-section">
+        <h4>⏰ Envío Programado Automático</h4>
+        <p>Programa la fecha y hora exacta en la que se enviarán los códigos de verificación a todos los tickets emitidos.</p>
+        
+        <div class="evapp-form-row">
+            <label for="evapp-scheduled-datetime">Fecha y Hora de Envío:</label>
+            <input 
+                type="datetime-local" 
+                id="evapp-scheduled-datetime" 
+                name="eventosapp_double_auth_scheduled_datetime"
+                value="<?php echo $scheduled_datetime ? date('Y-m-d\TH:i', $scheduled_datetime) : ''; ?>"
+            />
+        </div>
+        
+        <div class="evapp-form-row">
+            <label for="evapp-scheduled-timezone">Zona Horaria:</label>
+            <select id="evapp-scheduled-timezone" name="eventosapp_double_auth_scheduled_timezone">
+                <?php
+                $timezones = timezone_identifiers_list();
+                foreach ($timezones as $tz) {
+                    printf(
+                        '<option value="%s"%s>%s</option>',
+                        esc_attr($tz),
+                        selected($scheduled_timezone, $tz, false),
+                        esc_html($tz)
+                    );
+                }
+                ?>
+            </select>
+        </div>
+        
+        <p style="color:#666;font-size:13px;">
+            <strong>Nota:</strong> El envío programado se ejecutará automáticamente en la fecha/hora especificada.
+            Guarda los cambios del evento para activar la programación.
+        </p>
+    </div>
+    
+    <div class="evapp-double-auth-section">
+        <h4>🧪 Prueba Manual</h4>
+        <p>Envía un código de verificación a un ticket específico para probar el sistema.</p>
+        
+        <div class="evapp-form-row">
+            <label for="evapp-test-ticket-id">ID del Ticket (ej: tkA9fL2...):</label>
+            <input 
+                type="text" 
+                id="evapp-test-ticket-id" 
+                placeholder="tkXXXXXXXXXXXX"
+                style="max-width:300px;"
+            />
+            <button type="button" id="evapp-test-send-btn" class="evapp-btn-test">
+                Enviar Código de Prueba
+            </button>
+        </div>
+        
+        <div id="evapp-test-message" class="evapp-ajax-message"></div>
+    </div>
+    
+    <div class="evapp-double-auth-section">
+        <h4>📤 Envío Masivo</h4>
+        <p>Envía códigos de verificación a <strong>todos los tickets emitidos</strong> de este evento.</p>
+        
+        <button type="button" id="evapp-mass-send-btn" class="evapp-btn-mass">
+            Enviar Códigos a Todos los Tickets Ahora
+        </button>
+        
+        <div id="evapp-mass-message" class="evapp-ajax-message"></div>
+    </div>
+    
+    <div class="evapp-double-auth-section">
+        <h4>📊 Log de Envíos Masivos (Últimos 3)</h4>
+        <?php if (empty($mass_log)): ?>
+            <p style="color:#666;">No hay envíos masivos registrados aún.</p>
+        <?php else: ?>
+            <table class="evapp-log-table">
+                <thead>
+                    <tr>
+                        <th>Fecha/Hora</th>
+                        <th>Total Tickets</th>
+                        <th>Exitosos</th>
+                        <th>Fallidos</th>
+                        <th>Usuario</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach (array_reverse($mass_log) as $entry): ?>
+                        <tr>
+                            <td><?php echo date_i18n('d/m/Y H:i', $entry['timestamp']); ?></td>
+                            <td><?php echo absint($entry['total']); ?></td>
+                            <td style="color:#28a745;"><?php echo absint($entry['success']); ?></td>
+                            <td style="color:#d9534f;"><?php echo absint($entry['failed']); ?></td>
+                            <td><?php echo esc_html($entry['user_name']); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    </div>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        // Envío de prueba
+        $('#evapp-test-send-btn').on('click', function() {
+            const ticketId = $('#evapp-test-ticket-id').val().trim();
+            const $btn = $(this);
+            const $msg = $('#evapp-test-message');
+            
+            if (!ticketId) {
+                $msg.removeClass('success').addClass('error').text('Por favor ingresa un ID de ticket').show();
+                return;
+            }
+            
+            $btn.prop('disabled', true).text('Enviando...');
+            $msg.hide();
+            
+            $.ajax({
+                url: ajaxurl,
+                method: 'POST',
+                data: {
+                    action: 'eventosapp_test_send_auth_code',
+                    ticket_id: ticketId,
+                    nonce: '<?php echo wp_create_nonce("eventosapp_double_auth_test"); ?>'
+                },
+                success: function(response) {
+                    $btn.prop('disabled', false).text('Enviar Código de Prueba');
+                    
+                    if (response.success) {
+                        $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
+                        $('#evapp-test-ticket-id').val('');
+                    } else {
+                        $msg.removeClass('success').addClass('error').text('❌ ' + (response.data || 'Error desconocido')).show();
+                    }
+                },
+                error: function() {
+                    $btn.prop('disabled', false).text('Enviar Código de Prueba');
+                    $msg.removeClass('success').addClass('error').text('❌ Error de conexión').show();
+                }
+            });
+        });
+        
+        // Envío masivo
+        $('#evapp-mass-send-btn').on('click', function() {
+            if (!confirm('¿Estás seguro de que deseas enviar códigos a TODOS los tickets de este evento? Esta acción no se puede deshacer.')) {
+                return;
+            }
+            
+            const $btn = $(this);
+            const $msg = $('#evapp-mass-message');
+            
+            $btn.prop('disabled', true).text('Enviando...');
+            $msg.hide();
+            
+            $.ajax({
+                url: ajaxurl,
+                method: 'POST',
+                data: {
+                    action: 'eventosapp_mass_send_auth_codes',
+                    event_id: <?php echo absint($post->ID); ?>,
+                    nonce: '<?php echo wp_create_nonce("eventosapp_double_auth_mass"); ?>'
+                },
+                success: function(response) {
+                    $btn.prop('disabled', false).text('Enviar Códigos a Todos los Tickets Ahora');
+                    
+                    if (response.success) {
+                        $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
+                        // Recargar página después de 2 segundos para actualizar el log
+                        setTimeout(function() {
+                            location.reload();
+                        }, 2000);
+                    } else {
+                        $msg.removeClass('success').addClass('error').text('❌ ' + (response.data || 'Error desconocido')).show();
+                    }
+                },
+                error: function() {
+                    $btn.prop('disabled', false).text('Enviar Códigos a Todos los Tickets Ahora');
+                    $msg.removeClass('success').addClass('error').text('❌ Error de conexión').show();
+                }
+            });
+        });
+    });
+    </script>
+    <?php
+}
+
+/**
+ * Guardar configuración de doble autenticación
+ */
+add_action('save_post_eventosapp_event', function($post_id){
+    // Evitar autosaves y revisiones
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    if (wp_is_post_revision($post_id)) return;
+    
+    // Verifica capacidades mínimas
+    if (!current_user_can('edit_post', $post_id)) return;
+    
+    // Nonce del metabox de doble auth
+    if (!isset($_POST['eventosapp_double_auth_config_nonce']) || !wp_verify_nonce($_POST['eventosapp_double_auth_config_nonce'], 'eventosapp_double_auth_config_save')) {
+        return;
+    }
+    
+    // Guardar fecha/hora programada
+    if (isset($_POST['eventosapp_double_auth_scheduled_datetime']) && $_POST['eventosapp_double_auth_scheduled_datetime']) {
+        $datetime_local = sanitize_text_field($_POST['eventosapp_double_auth_scheduled_datetime']);
+        $timezone = isset($_POST['eventosapp_double_auth_scheduled_timezone']) ? sanitize_text_field($_POST['eventosapp_double_auth_scheduled_timezone']) : wp_timezone_string();
+        
+        // Convertir a timestamp
+        try {
+            $dt = new DateTime($datetime_local, new DateTimeZone($timezone));
+            $timestamp = $dt->getTimestamp();
+            
+            update_post_meta($post_id, '_eventosapp_double_auth_scheduled_datetime', $timestamp);
+            update_post_meta($post_id, '_eventosapp_double_auth_scheduled_timezone', $timezone);
+            
+            // Programar el envío
+            if (function_exists('eventosapp_schedule_auth_codes')) {
+                eventosapp_schedule_auth_codes($post_id, $timestamp);
+            }
+        } catch (Exception $e) {
+            // Error en la fecha, no guardar
+        }
+    } else {
+        // Si no hay fecha, cancelar cualquier programación
+        delete_post_meta($post_id, '_eventosapp_double_auth_scheduled_datetime');
+        delete_post_meta($post_id, '_eventosapp_double_auth_scheduled_timezone');
+        wp_clear_scheduled_hook('eventosapp_auto_send_auth_codes', [$post_id]);
+    }
+    
+}, 30); // prioridad > 25 para correr después del guardado de extras
