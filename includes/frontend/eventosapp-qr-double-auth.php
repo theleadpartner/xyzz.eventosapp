@@ -474,7 +474,7 @@ add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', function() {
                 'value' => $qr_code,
             ],
             [
-                'key'   => '_eventosapp_event_id',
+                'key'   => '_eventosapp_ticket_evento_id',
                 'value' => $event_id,
             ],
         ],
@@ -529,7 +529,7 @@ add_action( 'wp_ajax_eventosapp_verify_and_checkin', function() {
     }
     
     // Verificar que el ticket pertenece al evento
-    $ticket_event = get_post_meta( $ticket_id, '_eventosapp_event_id', true );
+    $ticket_event = get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
     if ( absint( $ticket_event ) !== $event_id ) {
         wp_send_json_error( 'El ticket no pertenece a este evento' );
     }
