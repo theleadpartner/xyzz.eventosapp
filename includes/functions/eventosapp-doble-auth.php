@@ -92,7 +92,7 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
     $email    = get_post_meta( $ticket_id, '_eventosapp_asistente_email', true );
     $nombre   = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
     $apellido = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
-    $event_id = get_post_meta( $ticket_id, '_eventosapp_event_id', true );
+    $event_id = get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
     
     if ( ! $email || ! $event_id ) {
         return false;
@@ -200,7 +200,7 @@ function eventosapp_send_mass_auth_codes( $event_id ) {
         'post_type'      => 'eventosapp_ticket',
         'post_status'    => 'publish',
         'posts_per_page' => -1,
-        'meta_key'       => '_eventosapp_event_id',
+        'meta_key'       => '_eventosapp_ticket_evento_id',
         'meta_value'     => $event_id,
     ]);
     
