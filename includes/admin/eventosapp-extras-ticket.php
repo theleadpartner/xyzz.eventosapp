@@ -235,6 +235,23 @@ function eventosapp_render_metabox_double_auth_config($post) {
     .evapp-btn-mass:hover {
         background: #c9302c;
     }
+    .evapp-btn-regenerate {
+        background: #ff6b6b;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+    .evapp-btn-regenerate:hover {
+        background: #ee5a5a;
+    }
+    .evapp-btn-regenerate:disabled,
+    .evapp-btn-mass:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+    }
     .evapp-log-table {
         width: 100%;
         border-collapse: collapse;
@@ -278,7 +295,20 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 type="datetime-local" 
                 id="evapp-scheduled-datetime" 
                 name="eventosapp_double_auth_scheduled_datetime"
-                value="<?php echo $scheduled_datetime ? date('Y-m-d\TH:i', $scheduled_datetime) : ''; ?>"
+                value="<?php 
+                if ($scheduled_datetime) {
+                    // Convertir el timestamp a la zona horaria correcta
+                    try {
+                        $dt = new DateTime('@' . $scheduled_datetime);
+                        $dt->setTimezone(new DateTimeZone($scheduled_timezone));
+                        echo $dt->format('Y-m-d\TH:i');
+                    } catch (Exception $e) {
+                        echo '';
+                    }
+                } else {
+                    echo '';
+                }
+                ?>"
             />
         </div>
         
@@ -334,6 +364,18 @@ function eventosapp_render_metabox_double_auth_config($post) {
         </button>
         
         <div id="evapp-mass-message" class="evapp-ajax-message"></div>
+        
+        <hr style="margin: 20px 0;">
+        
+        <h4 style="color: #d9534f;">🔄 Regenerar y Enviar Nuevos Códigos</h4>
+        <p style="color:#d9534f;"><strong>⚠️ ATENCIÓN:</strong> Esta acción <strong>BORRARÁ</strong> todos los códigos actuales y generará nuevos códigos para todos los tickets.</p>
+        <p>Usa esta opción cuando necesites invalidar todos los códigos existentes por seguridad.</p>
+        
+        <button type="button" id="evapp-regenerate-send-btn" class="evapp-btn-regenerate">
+            Regenerar y Enviar Códigos a Todos los Tickets
+        </button>
+        
+        <div id="evapp-regenerate-message" class="evapp-ajax-message"></div>
     </div>
     
     <div class="evapp-double-auth-section">
@@ -442,6 +484,51 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 },
                 error: function() {
                     $btn.prop('disabled', false).text('Enviar Códigos a Todos los Tickets Ahora');
+                    $msg.removeClass('success').addClass('error').text('❌ Error de conexión').show();
+                }
+            });
+        });
+        
+        // Regenerar y enviar códigos
+        $('#evapp-regenerate-send-btn').on('click', function() {
+            if (!confirm('⚠️ ADVERTENCIA: Esta acción BORRARÁ todos los códigos actuales y generará nuevos códigos para TODOS los tickets.\n\n¿Estás completamente seguro de que deseas continuar?')) {
+                return;
+            }
+            
+            // Confirmación doble
+            if (!confirm('Esta es una acción irreversible. Los códigos antiguos dejarán de funcionar.\n\n¿Confirmas que deseas regenerar TODOS los códigos?')) {
+                return;
+            }
+            
+            const $btn = $(this);
+            const $msg = $('#evapp-regenerate-message');
+            
+            $btn.prop('disabled', true).text('Regenerando y enviando...');
+            $msg.hide();
+            
+            $.ajax({
+                url: ajaxurl,
+                method: 'POST',
+                data: {
+                    action: 'eventosapp_regenerate_and_send_auth_codes',
+                    event_id: <?php echo absint($post->ID); ?>,
+                    nonce: '<?php echo wp_create_nonce("eventosapp_double_auth_regenerate"); ?>'
+                },
+                success: function(response) {
+                    $btn.prop('disabled', false).text('Regenerar y Enviar Códigos a Todos los Tickets');
+                    
+                    if (response.success) {
+                        $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
+                        // Recargar página después de 2 segundos para actualizar el log
+                        setTimeout(function() {
+                            location.reload();
+                        }, 2000);
+                    } else {
+                        $msg.removeClass('success').addClass('error').text('❌ ' + (response.data || 'Error desconocido')).show();
+                    }
+                },
+                error: function() {
+                    $btn.prop('disabled', false).text('Regenerar y Enviar Códigos a Todos los Tickets');
                     $msg.removeClass('success').addClass('error').text('❌ Error de conexión').show();
                 }
             });
