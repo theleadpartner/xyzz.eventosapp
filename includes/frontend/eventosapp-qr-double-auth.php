@@ -240,6 +240,9 @@ function eventosapp_render_qr_double_auth_shortcode() {
     
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <script>
+    // Definir ajaxurl para el frontend (solo existe en admin por defecto)
+    var ajaxurl = '<?php echo admin_url("admin-ajax.php"); ?>';
+    
     (function($) {
         let html5QrCode;
         let currentTicketId = null;
@@ -448,7 +451,10 @@ function eventosapp_render_qr_double_auth_shortcode() {
 // AJAX: Buscar ticket por QR
 // ========================================
 
-add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', function() {
+add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', 'eventosapp_ajax_search_ticket_by_qr' );
+add_action( 'wp_ajax_nopriv_eventosapp_search_ticket_by_qr', 'eventosapp_ajax_search_ticket_by_qr' );
+
+function eventosapp_ajax_search_ticket_by_qr() {
     check_ajax_referer( 'eventosapp_qr_search', 'nonce' );
     
     $qr_code  = isset( $_POST['qr_code'] ) ? sanitize_text_field( $_POST['qr_code'] ) : '';
@@ -511,13 +517,16 @@ add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', function() {
             'checkin_date' => $checkin_date,
         ],
     ]);
-});
+}
 
 // ========================================
 // AJAX: Verificar código y hacer check-in
 // ========================================
 
-add_action( 'wp_ajax_eventosapp_verify_and_checkin', function() {
+add_action( 'wp_ajax_eventosapp_verify_and_checkin', 'eventosapp_ajax_verify_and_checkin' );
+add_action( 'wp_ajax_nopriv_eventosapp_verify_and_checkin', 'eventosapp_ajax_verify_and_checkin' );
+
+function eventosapp_ajax_verify_and_checkin() {
     check_ajax_referer( 'eventosapp_verify_checkin', 'nonce' );
     
     $ticket_id = isset( $_POST['ticket_id'] ) ? absint( $_POST['ticket_id'] ) : 0;
@@ -565,4 +574,4 @@ add_action( 'wp_ajax_eventosapp_verify_and_checkin', function() {
         'message' => $message,
         'already_checked' => $already_checked,
     ]);
-});
+}
