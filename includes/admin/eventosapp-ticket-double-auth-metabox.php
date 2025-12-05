@@ -26,8 +26,8 @@ add_action('add_meta_boxes', function() {
  * Render del metabox de doble autenticación en tickets
  */
 function eventosapp_render_ticket_double_auth_metabox($post) {
-    // Obtener el evento del ticket
-    $event_id = get_post_meta($post->ID, '_eventosapp_event_id', true);
+    // Obtener el evento del ticket (CORREGIDO: usar _eventosapp_ticket_evento_id)
+    $event_id = get_post_meta($post->ID, '_eventosapp_ticket_evento_id', true);
     
     if (!$event_id) {
         echo '<p style="color:#666;">Este ticket no está asociado a ningún evento.</p>';
