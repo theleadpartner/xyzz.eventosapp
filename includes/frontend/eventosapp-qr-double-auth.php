@@ -448,7 +448,10 @@ function eventosapp_render_qr_double_auth_shortcode() {
 // AJAX: Buscar ticket por QR
 // ========================================
 
-add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', function() {
+add_action( 'wp_ajax_eventosapp_search_ticket_by_qr', 'eventosapp_ajax_search_ticket_by_qr' );
+add_action( 'wp_ajax_nopriv_eventosapp_search_ticket_by_qr', 'eventosapp_ajax_search_ticket_by_qr' );
+
+function eventosapp_ajax_search_ticket_by_qr() {
     check_ajax_referer( 'eventosapp_qr_search', 'nonce' );
     
     $qr_code  = isset( $_POST['qr_code'] ) ? sanitize_text_field( $_POST['qr_code'] ) : '';
