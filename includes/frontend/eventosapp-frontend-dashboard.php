@@ -54,10 +54,16 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
 				</svg>';
 
-			case 'trophy': // NUEVO: Ranking Networking
+			case 'trophy': // Ranking Networking
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M4 5h16v2a5 5 0 0 1-5 5h-6a5 5 0 0 1-5-5V5Z" fill="none" stroke="currentColor" stroke-width="2"/>
 					<path d="M9 12v2a3 3 0 0 0 6 0v-2M8 21h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+				</svg>';
+
+			case 'shield-check': // NUEVO: Doble Autenticación
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M12 2L4 6v6c0 5.5 3.8 10.7 8 12 4.2-1.3 8-6.5 8-12V6l-8-4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+					<path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>';
 
 			default:
@@ -224,7 +230,8 @@ add_shortcode('eventosapp_dashboard', function(){
 		$url_qr_localidad  = function_exists('eventosapp_get_qr_localidad_url')          ? eventosapp_get_qr_localidad_url()          : '#';
 		$url_qr_sesion     = function_exists('eventosapp_get_qr_sesion_url')             ? eventosapp_get_qr_sesion_url()             : '#';
 		$url_checklist     = function_exists('eventosapp_get_checklist_url')             ? eventosapp_get_checklist_url()             : '#';
-		$url_net_ranking   = function_exists('eventosapp_get_networking_ranking_url')    ? eventosapp_get_networking_ranking_url()    : '#'; // NUEVO
+		$url_net_ranking   = function_exists('eventosapp_get_networking_ranking_url')    ? eventosapp_get_networking_ranking_url()    : '#';
+		$url_qr_double_auth = function_exists('eventosapp_get_qr_double_auth_url')       ? eventosapp_get_qr_double_auth_url()        : '#'; // NUEVO
 
 		?>
 		<div class="evapp-grid" role="navigation" aria-label="Panel de acciones del evento">
@@ -288,6 +295,13 @@ add_shortcode('eventosapp_dashboard', function(){
 				<a class="evapp-card" href="<?php echo esc_url($url_net_ranking); ?>" aria-label="Ranking Networking">
 					<?php echo eventosapp_dashboard_icon('trophy'); ?>
 					<span class="evapp-title">Ranking Networking</span>
+				</a>
+			<?php endif; ?>
+
+			<?php if (eventosapp_role_can('qr_double_auth')): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_qr_double_auth); ?>" aria-label="Check-In QR Doble Autenticación">
+					<?php echo eventosapp_dashboard_icon('shield-check'); ?>
+					<span class="evapp-title">Check-In QR Doble Autenticación</span>
 				</a>
 			<?php endif; ?>
 
