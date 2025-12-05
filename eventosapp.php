@@ -47,7 +47,10 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-batch-refres
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-webhook-conditionals.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-networking-search.php';
 
-
+// NUEVO: Sistema de Doble Autenticación
+require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-doble-auth.php';
+require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-ticket-double-auth-metabox.php';
+require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-double-auth.php';
 
 
 // === Debug de correo (solo si EVENTOSAPP_DEBUG_MAIL está habilitado) ===
