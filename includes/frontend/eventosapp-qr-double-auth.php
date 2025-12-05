@@ -1,448 +1,577 @@
 <?php
 /**
- * Shortcode de Check-In con QR y Doble Autenticación
- * [qr_checkin_doble_auth]
- *
+ * EventosApp – QR Check-In con Doble Autenticación
+ * Shortcode: [qr_checkin_doble_auth]
+ * 
+ * Flujo:
+ * 1. Escanea el QR del ticket
+ * 2. Muestra info del ticket y solicita código de 5 dígitos
+ * 3. Valida el código ingresado
+ * 4. Si es correcto, hace check-in (mismo sistema que QR check-in normal)
+ * 
  * @package EventosApp
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-add_shortcode( 'qr_checkin_doble_auth', 'eventosapp_render_qr_double_auth_shortcode' );
+// ========================================
+// SHORTCODE: QR Check-In con Doble Autenticación
+// ========================================
 
-function eventosapp_render_qr_double_auth_shortcode() {
-    // Requerir feature
+add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
+    // 🔒 Requiere permiso para "qr_double_auth"
     if ( function_exists( 'eventosapp_require_feature' ) ) {
         eventosapp_require_feature( 'qr_double_auth' );
     }
     
-    // Verificar evento activo
-    if ( function_exists( 'eventosapp_require_active_event' ) ) {
-        eventosapp_require_active_event();
-    }
-    
-    $event_id = function_exists( 'eventosapp_get_active_event' ) ? eventosapp_get_active_event() : 0;
-    
-    if ( ! $event_id ) {
-        return '<p>No hay evento activo.</p>';
+    // Debe existir un evento activo
+    $active_event = function_exists( 'eventosapp_get_active_event' ) ? eventosapp_get_active_event() : 0;
+    if ( ! $active_event ) {
+        ob_start();
+        if ( function_exists( 'eventosapp_require_active_event' ) ) {
+            eventosapp_require_active_event();
+        } else {
+            echo '<p>Debes seleccionar un evento activo.</p>';
+        }
+        return ob_get_clean();
     }
     
     // Verificar si el evento tiene doble autenticación activada
-    $double_auth_enabled = get_post_meta( $event_id, '_eventosapp_ticket_double_auth_enabled', true );
-    
+    $double_auth_enabled = get_post_meta( $active_event, '_eventosapp_ticket_double_auth_enabled', true );
     if ( $double_auth_enabled !== '1' ) {
-        return '<div class="notice notice-warning" style="padding:12px;margin:10px 0;">
-            <strong>Advertencia:</strong> Este evento no tiene activada la Doble Autenticación. 
-            Por favor actívala en la configuración del evento o usa el Check-In QR estándar.
-        </div>';
+        return '<div style="padding:20px;background:#fee;border:1px solid #fcc;border-radius:8px;color:#c33;">⚠️ Este evento no tiene activada la Doble Autenticación. Por favor actívala en la configuración del evento.</div>';
     }
+    
+    // Registrar jsQR para fallback
+    add_action( 'wp_enqueue_scripts', function() {
+        if ( ! wp_script_is( 'jsqr', 'registered' ) ) {
+            wp_register_script( 'jsqr', 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', [], null, true );
+        }
+    });
+    
+    // Nonces para AJAX
+    $nonce_search = wp_create_nonce( 'eventosapp_qr_search' );
+    $nonce_verify = wp_create_nonce( 'eventosapp_verify_checkin' );
     
     ob_start();
-    
-    // Barra de evento activo
-    if ( function_exists( 'eventosapp_active_event_bar' ) ) {
-        eventosapp_active_event_bar();
-    }
-    
     ?>
     <style>
-    .evapp-qr-double-auth-container {
-        max-width: 800px;
-        margin: 20px auto;
-        padding: 20px;
-        background: #fff;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    .evapp-qr-shell {
+      max-width: 520px; margin: 0 auto; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
-    .evapp-qr-double-auth-container h2 {
-        margin-top: 0;
-        color: #2F73B5;
-        border-bottom: 2px solid #2F73B5;
-        padding-bottom: 10px;
+    .evapp-qr-card {
+      background:#0b1020; color:#eaf1ff; border-radius:16px; padding:18px; box-shadow:0 8px 24px rgba(0,0,0,.15);
     }
-    #evapp-qr-reader {
-        width: 100%;
-        max-width: 500px;
-        margin: 20px auto;
-        border: 3px solid #2F73B5;
-        border-radius: 8px;
+    .evapp-qr-title {
+      display:flex; align-items:center; gap:.6rem; margin:0 0 10px 0; font-weight:700; font-size:1.05rem; letter-spacing:.2px;
     }
-    .evapp-ticket-info {
-        background: #f9f9f9;
-        padding: 15px;
-        border-radius: 6px;
-        margin: 15px 0;
-        border-left: 4px solid #2F73B5;
+    .evapp-qr-title svg { opacity:.9 }
+    .evapp-qr-btn {
+      display:flex; align-items:center; justify-content:center; gap:.5rem;
+      border:0; border-radius:12px; padding:.9rem 1.1rem; font-weight:700; cursor:pointer; width:100%;
+      background:#4f7cff; color:#fff;
+      transition: filter .15s ease, background .15s ease;
     }
-    .evapp-ticket-info h3 {
-        margin-top: 0;
-        color: #333;
+    .evapp-qr-btn:hover { filter:brightness(.96); }
+    .evapp-qr-btn.is-live { background:#e04f5f; color:#fff; }
+
+    .evapp-qr-btn-secondary{
+      margin-top:12px; width:100%;
+      background:#4f7cff!important;
+      color:#fff; border:0; border-radius:10px; padding:.7rem 1rem; font-weight:800; cursor:pointer;
+      transition: filter .15s ease;
     }
-    .evapp-auth-code-input {
-        margin: 20px 0;
-        padding: 20px;
-        background: #fffbea;
-        border: 2px dashed #f0ad4e;
-        border-radius: 6px;
+    .evapp-qr-btn-secondary:hover{ filter:brightness(1.05); }
+
+    .evapp-qr-video-wrap {
+      position:relative; margin-top:12px; border-radius:14px; overflow:hidden; background:#0a0f1d;
+      aspect-ratio: 3/4;
     }
-    .evapp-auth-code-input label {
-        display: block;
-        font-weight: bold;
-        margin-bottom: 10px;
-        color: #333;
+    .evapp-qr-video { width:100%; height:100%; object-fit:cover; display:none; }
+    .evapp-qr-frame { position:absolute; inset:0; pointer-events:none; display:none; }
+    .evapp-qr-frame .mask {
+      position:absolute; inset:0; backdrop-filter: none;
+      background: radial-gradient(ellipse 60% 40% at 50% 50%, rgba(255,255,255,0) 62%, rgba(10,15,29,.55) 64%);
     }
-    .evapp-auth-code-input input[type="text"] {
-        width: 100%;
-        max-width: 200px;
-        font-size: 24px;
-        letter-spacing: 8px;
-        text-align: center;
-        padding: 12px;
-        border: 2px solid #ddd;
-        border-radius: 4px;
-        font-family: monospace;
+    .evapp-qr-corner {
+      position:absolute; width:44px; height:44px; border:4px solid #4f7cff; border-radius:10px;
     }
-    .evapp-auth-code-input input[type="text"]:focus {
-        outline: none;
-        border-color: #2F73B5;
-        box-shadow: 0 0 5px rgba(47,115,181,0.3);
+    .evapp-qr-corner.tl { top:16px; left:16px; border-right:0; border-bottom:0; }
+    .evapp-qr-corner.tr { top:16px; right:16px; border-left:0; border-bottom:0; }
+    .evapp-qr-corner.bl { bottom:16px; left:16px; border-right:0; border-top:0; }
+    .evapp-qr-corner.br { bottom:16px; right:16px; border-left:0; border-top:0; }
+
+    .evapp-qr-result {
+      margin-top:14px; background:#0a0f1d; border:1px solid rgba(255,255,255,.06);
+      border-radius:12px; padding:14px;
     }
-    .evapp-verify-btn {
-        background: #28a745;
-        color: white;
-        border: none;
-        padding: 12px 30px;
-        font-size: 16px;
-        border-radius: 4px;
-        cursor: pointer;
-        margin-top: 15px;
-        transition: background 0.3s;
+    .evapp-qr-ok    { color:#7CFF8D; font-weight:800; }
+    .evapp-qr-warn  { color:#ffd166; font-weight:700; }
+    .evapp-qr-bad   { color:#ff6b6b; font-weight:700; }
+    .evapp-qr-grid { display:grid; grid-template-columns: 1fr; gap:.2rem .8rem; margin-top:.4rem; }
+    .evapp-qr-grid div b { color:#a7b8ff; font-weight:600; }
+    .evapp-qr-help { color:#a9b6d3; font-size:.9rem; margin-top:.6rem; opacity:.8 }
+
+    @media (min-width: 480px){
+      .evapp-qr-grid { grid-template-columns: auto 1fr; }
+      .evapp-qr-grid div { display:contents; }
+      .evapp-qr-grid b { text-align:right; }
     }
-    .evapp-verify-btn:hover {
-        background: #218838;
+
+    .evapp-qr-video-wrap.is-immersive{
+      aspect-ratio:auto;
+      height: calc(100vh - var(--evapp-offset, 56px));
+      width: 100%;
     }
-    .evapp-verify-btn:disabled {
-        background: #ccc;
-        cursor: not-allowed;
+    
+    /* === FORMULARIO DE CÓDIGO === */
+    .evapp-auth-form {
+      margin-top: 16px;
+      padding: 16px;
+      background: #1a2332;
+      border-radius: 12px;
+      border: 2px solid #4f7cff;
     }
-    .evapp-cancel-btn {
-        background: #6c757d;
-        color: white;
-        border: none;
-        padding: 10px 20px;
-        font-size: 14px;
-        border-radius: 4px;
-        cursor: pointer;
-        margin-left: 10px;
+    .evapp-auth-label {
+      display: block;
+      color: #a7b8ff;
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-size: 0.95rem;
     }
-    .evapp-cancel-btn:hover {
-        background: #5a6268;
+    .evapp-auth-input {
+      width: 100%;
+      padding: 12px;
+      font-size: 24px;
+      font-weight: 700;
+      text-align: center;
+      letter-spacing: 8px;
+      font-family: monospace;
+      border: 2px solid #4f7cff;
+      border-radius: 8px;
+      background: #0b1020;
+      color: #eaf1ff;
+      margin-bottom: 12px;
     }
-    .evapp-message {
-        padding: 15px;
-        border-radius: 6px;
-        margin: 15px 0;
-        font-weight: bold;
+    .evapp-auth-input:focus {
+      outline: none;
+      border-color: #7CFF8D;
+      box-shadow: 0 0 0 3px rgba(124,255,141,0.2);
     }
-    .evapp-message.success {
-        background: #d4edda;
-        color: #155724;
-        border: 1px solid #c3e6cb;
+    .evapp-auth-buttons {
+      display: flex;
+      gap: 10px;
     }
-    .evapp-message.error {
-        background: #f8d7da;
-        color: #721c24;
-        border: 1px solid #f5c6cb;
+    .evapp-auth-btn-verify {
+      flex: 1;
+      padding: 12px;
+      border: 0;
+      border-radius: 8px;
+      background: #28a745;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s ease;
     }
-    .evapp-message.info {
-        background: #d1ecf1;
-        color: #0c5460;
-        border: 1px solid #bee5eb;
+    .evapp-auth-btn-verify:hover {
+      background: #218838;
     }
-    .evapp-hidden {
-        display: none;
+    .evapp-auth-btn-verify:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
     }
-    .evapp-loading {
-        text-align: center;
-        padding: 20px;
-        color: #666;
+    .evapp-auth-btn-cancel {
+      padding: 12px 20px;
+      border: 0;
+      border-radius: 8px;
+      background: #6c757d;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s ease;
     }
-    .evapp-spinner {
-        display: inline-block;
-        width: 20px;
-        height: 20px;
-        border: 3px solid rgba(0,0,0,.1);
-        border-radius: 50%;
-        border-top-color: #2F73B5;
-        animation: evapp-spin 1s ease-in-out infinite;
-    }
-    @keyframes evapp-spin {
-        to { transform: rotate(360deg); }
+    .evapp-auth-btn-cancel:hover {
+      background: #5a6268;
     }
     </style>
-    
-    <div class="evapp-qr-double-auth-container">
-        <h2>🔐 Check-In con QR y Doble Autenticación</h2>
-        
-        <div id="evapp-message-container"></div>
-        
-        <!-- Lector de QR -->
-        <div id="evapp-scanner-section">
-            <p><strong>Instrucciones:</strong></p>
-            <ol>
-                <li>Escanea el código QR del ticket del asistente</li>
-                <li>El sistema te pedirá el código de verificación de 5 dígitos</li>
-                <li>El asistente debe proporcionarte su código personal</li>
-                <li>Ingresa el código y presiona "Verificar y Aprobar Check-In"</li>
-            </ol>
-            <div id="evapp-qr-reader"></div>
-            <p style="text-align:center;color:#666;margin-top:10px;">
-                <small>El lector se activará automáticamente al cargar esta página</small>
-            </p>
+
+    <div class="evapp-qr-shell" data-event="<?php echo esc_attr( $active_event ); ?>">
+      <div class="evapp-qr-card">
+        <div class="evapp-qr-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L4 6v6c0 5.5 3.8 10.7 8 12 4.2-1.3 8-6.5 8-12V6l-8-4Z" fill="none" stroke="#a7b8ff" stroke-width="2"/>
+            <path d="M9 12l2 2 4-4" fill="none" stroke="#a7b8ff" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          🔐 Check-In con QR y Doble Autenticación
         </div>
-        
-        <!-- Información del ticket + input de código -->
-        <div id="evapp-verification-section" class="evapp-hidden">
-            <div class="evapp-ticket-info">
-                <h3>📋 Información del Ticket</h3>
-                <div id="evapp-ticket-details"></div>
-            </div>
-            
-            <div class="evapp-auth-code-input">
-                <label for="evapp-auth-code">
-                    🔑 Solicita al asistente su código de verificación:
-                </label>
-                <input 
-                    type="text" 
-                    id="evapp-auth-code" 
-                    maxlength="5" 
-                    placeholder="00000"
-                    autocomplete="off"
-                    pattern="[0-9]*"
-                    inputmode="numeric"
-                />
-                <div style="margin-top:10px;">
-                    <button type="button" id="evapp-verify-btn" class="evapp-verify-btn">
-                        Verificar y Aprobar Check-In
-                    </button>
-                    <button type="button" id="evapp-cancel-btn" class="evapp-cancel-btn">
-                        Cancelar
-                    </button>
-                </div>
-            </div>
+
+        <button class="evapp-qr-btn" id="evappStartScan">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/><rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/></svg>
+          Activar cámara y escanear
+        </button>
+
+        <div class="evapp-qr-video-wrap">
+          <video id="evappVideo" class="evapp-qr-video" playsinline></video>
+          <div class="evapp-qr-frame" id="evappFrame">
+            <div class="mask"></div>
+            <div class="evapp-qr-corner tl"></div>
+            <div class="evapp-qr-corner tr"></div>
+            <div class="evapp-qr-corner bl"></div>
+            <div class="evapp-qr-corner br"></div>
+          </div>
+          <canvas id="evappCanvas" style="display:none;"></canvas>
         </div>
-        
-        <div id="evapp-loading" class="evapp-loading evapp-hidden">
-            <div class="evapp-spinner"></div>
-            <p>Procesando...</p>
+
+        <div class="evapp-qr-result" id="evappResult">
+          <div class="evapp-qr-help">Tip: coloca el QR dentro del marco. La lectura vibra/emite sonido al capturar.</div>
         </div>
+      </div>
     </div>
+
+<script>
+(function(){
+  const ajaxURL = "<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>";
+  const nonceSearch = "<?php echo esc_js( $nonce_search ); ?>";
+  const nonceVerify = "<?php echo esc_js( $nonce_verify ); ?>";
+  const eventID = parseInt(document.querySelector('.evapp-qr-shell').dataset.event,10)||0;
+
+  const btn   = document.getElementById('evappStartScan');
+  const video = document.getElementById('evappVideo');
+  const frame = document.getElementById('evappFrame');
+  const cvs   = document.getElementById('evappCanvas');
+  const ctx   = cvs.getContext('2d');
+  const out   = document.getElementById('evappResult');
+  const vwrap = video.closest('.evapp-qr-video-wrap') || video.parentElement;
+
+  let stream = null;
+  let running = false;
+  let lastScan = "";
+  let lastAt   = 0;
+  let currentTicketData = null;
+  let barcodeDetector = ('BarcodeDetector' in window) ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
+
+  // === Helpers ===
+  function getOffsetCompensation(){
+    const adminBar = document.getElementById('wpadminbar');
+    const adminH = adminBar ? adminBar.offsetHeight : 0;
+    return adminH + 10;
+  }
+  
+  function smoothScrollTo(el){
+    if (!el) return;
+    const offset = getOffsetCompensation();
+    try { el.style.setProperty('--evapp-offset', offset + 'px'); } catch(e){}
+    const y = el.getBoundingClientRect().top + window.pageYOffset - offset;
+    window.scrollTo({ top: y, behavior: 'smooth' });
+  }
+
+  function setLiveUI(on){
+    if (on) {
+      btn.classList.add('is-live');
+      btn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M6 6h12v12H6z" stroke="white"/>
+        </svg>
+        Detener cámara
+      `;
+    } else {
+      btn.classList.remove('is-live');
+      btn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/>
+          <rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/>
+        </svg>
+        Activar cámara y escanear
+      `;
+    }
+  }
+
+  function beep(){
+    try { const a = new Audio(); a.src = 'data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAWGlinZwAAAA8AAAACAAACcQAA'; a.play().catch(()=>{}); } catch(e){}
+    if (navigator.vibrate) navigator.vibrate(60);
+  }
+
+  function setOutput(html){ out.innerHTML = html; }
+  function row(label, value){ return `<div><b>${label}:</b></div><div>${value || '-'}</div>`; }
+
+  function normalizeRaw(raw){
+    let s = String(raw||'').trim();
+    if (s.includes('/')) s = s.split('/').pop();
+    s = s.replace(/\.(png|jpg|jpeg|pdf)$/i,'').replace(/-tn$/i,'').replace(/^#/, '');
+    return s;
+  }
+
+  function stop(){
+    running = false;
+    if (stream) stream.getTracks().forEach(t=>t.stop());
+    stream = null;
+    video.style.display = 'none';
+    frame.style.display = 'none';
+    if (vwrap){ vwrap.classList.remove('is-immersive'); }
+    setLiveUI(false);
+  }
+
+  async function ensureJsQR(){
+    if ('BarcodeDetector' in window) return false;
+    if (!window.jsQR) {
+      await new Promise((resolve)=>{
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+        s.onload = resolve;
+        document.head.appendChild(s);
+      });
+    }
+    return true;
+  }
+
+  async function start(){
+    if (!eventID){
+      setOutput('<div class="evapp-qr-bad">No hay evento activo.</div>');
+      return;
+    }
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal:'environment' } }, audio:false });
+    }catch(e){
+      setOutput('<div class="evapp-qr-bad">No se pudo acceder a la cámara.</div>');
+      return;
+    }
+    video.srcObject = stream;
+    await video.play();
+    video.style.display = 'block';
+    frame.style.display = 'block';
+
+    if (vwrap){ vwrap.classList.add('is-immersive'); smoothScrollTo(vwrap); }
+
+    cvs.width  = video.videoWidth  || 640;
+    cvs.height = video.videoHeight || 480;
+
+    running = true;
+    setLiveUI(true);
+    tick();
+  }
+
+  async function tick(){
+    if (!running) return;
+    ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
+
+    if (barcodeDetector) {
+      try {
+        const bitmap = await createImageBitmap(cvs);
+        const codes  = await barcodeDetector.detect(bitmap);
+        if (codes && codes.length){
+          const data = normalizeRaw(codes[0].rawValue || '');
+          onScan(data);
+          return;
+        }
+      } catch(e){}
+    } else if (window.jsQR) {
+      const img  = ctx.getImageData(0,0,cvs.width,cvs.height);
+      const code = window.jsQR(img.data, img.width, img.height);
+      if (code && code.data) {
+        const data = normalizeRaw(code.data);
+        onScan(data);
+        return;
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function injectScanAgainButton(){
+    const againBtn = document.createElement('button');
+    againBtn.id = 'evappScanAnother';
+    againBtn.type = 'button';
+    againBtn.className = 'evapp-qr-btn-secondary';
+    againBtn.textContent = 'Escanear otro QR';
+    out.appendChild(againBtn);
+
+    againBtn.addEventListener('click', async ()=>{
+      smoothScrollTo(vwrap || btn);
+      await ensureJsQR();
+      await start();
+      setOutput('<div class="evapp-qr-help">Tip: coloca el QR dentro del marco. La lectura vibra/emite sonido al capturar.</div>');
+    }, { once:false });
+  }
+
+  function onScan(data){
+    const now = Date.now();
+    if (data === lastScan && (now - lastAt) < 2500){
+      requestAnimationFrame(tick);
+      return;
+    }
+    lastScan = data; lastAt = now;
+    beep();
+    stop();
+
+    setOutput('<div class="evapp-qr-help">Procesando: '+ data +'…</div>');
+    smoothScrollTo(out);
+
+    // Fase 1: Buscar el ticket
+    const fd = new FormData();
+    fd.append('action','eventosapp_search_ticket_by_qr');
+    fd.append('nonce', nonceSearch);
+    fd.append('event_id', String(eventID));
+    fd.append('qr_code', data);
+
+    fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
+      .then(r=>r.json())
+      .then(resp=>{
+        if (!resp || !resp.success){
+          const msg = (resp && resp.data) ? resp.data : 'Ticket no encontrado';
+          setOutput('<div class="evapp-qr-bad">'+ msg +'</div>');
+          injectScanAgainButton();
+          smoothScrollTo(out);
+          return;
+        }
+        
+        // Ticket encontrado
+        const ticket = resp.data.ticket;
+        currentTicketData = ticket;
+        
+        // Verificar si ya hizo check-in HOY
+        if (ticket.checked_in) {
+          let html = '<span class="evapp-qr-warn">⚠️ Este ticket ya hizo check-in hoy</span>';
+          html += '<div class="evapp-qr-grid">';
+          html += row('Nombre', ticket.nombre);
+          html += row('Email', ticket.email);
+          html += row('Ticket ID', ticket.ticket_id);
+          html += row('Localidad', ticket.localidad);
+          html += row('Check-in realizado', ticket.checkin_date);
+          html += '</div>';
+          setOutput(html);
+          injectScanAgainButton();
+          smoothScrollTo(out);
+          return;
+        }
+        
+        // Mostrar formulario de código
+        showAuthForm(ticket);
+      })
+      .catch(()=>{
+        setOutput('<div class="evapp-qr-bad">Error de conexión al buscar el ticket.</div>');
+        injectScanAgainButton();
+        smoothScrollTo(out);
+      });
+  }
+
+  function showAuthForm(ticket){
+    let html = '<div class="evapp-qr-ok">✔ Ticket encontrado</div>';
+    html += '<div class="evapp-qr-grid">';
+    html += row('Nombre', ticket.nombre);
+    html += row('Email', ticket.email);
+    html += row('Ticket ID', ticket.ticket_id);
+    html += row('Localidad', ticket.localidad);
+    html += '</div>';
     
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-    <script>
-    (function($) {
-        let html5QrCode;
-        let currentTicketId = null;
-        let currentTicketData = null;
-        
-        const $messageContainer = $('#evapp-message-container');
-        const $scannerSection = $('#evapp-scanner-section');
-        const $verificationSection = $('#evapp-verification-section');
-        const $ticketDetails = $('#evapp-ticket-details');
-        const $authCodeInput = $('#evapp-auth-code');
-        const $verifyBtn = $('#evapp-verify-btn');
-        const $cancelBtn = $('#evapp-cancel-btn');
-        const $loading = $('#evapp-loading');
-        
-        // Inicializar lector QR
-        function initQrScanner() {
-            html5QrCode = new Html5Qrcode("evapp-qr-reader");
-            
-            html5QrCode.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                onScanSuccess,
-                onScanFailure
-            ).catch(err => {
-                showMessage('Error al iniciar la cámara: ' + err, 'error');
-            });
+    html += '<div class="evapp-auth-form">';
+    html += '<label class="evapp-auth-label">🔐 Solicita al asistente su código de verificación:</label>';
+    html += '<input type="text" id="evappAuthCode" class="evapp-auth-input" placeholder="00000" maxlength="5" inputmode="numeric" pattern="[0-9]*">';
+    html += '<div class="evapp-auth-buttons">';
+    html += '<button type="button" id="evappVerifyBtn" class="evapp-auth-btn-verify">Verificar y Aprobar Check-In</button>';
+    html += '<button type="button" id="evappCancelBtn" class="evapp-auth-btn-cancel">Cancelar</button>';
+    html += '</div>';
+    html += '</div>';
+    
+    setOutput(html);
+    smoothScrollTo(out);
+    
+    // Agregar eventos
+    const input = document.getElementById('evappAuthCode');
+    const verifyBtn = document.getElementById('evappVerifyBtn');
+    const cancelBtn = document.getElementById('evappCancelBtn');
+    
+    // Auto-focus en el input
+    setTimeout(() => input.focus(), 100);
+    
+    // Solo permitir números
+    input.addEventListener('input', (e) => {
+      e.target.value = e.target.value.replace(/[^0-9]/g, '');
+    });
+    
+    // Verificar al presionar Enter
+    input.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && input.value.length === 5) {
+        verifyBtn.click();
+      }
+    });
+    
+    // Botón Verificar
+    verifyBtn.addEventListener('click', () => {
+      const code = input.value.trim();
+      if (code.length !== 5) {
+        alert('Por favor ingresa un código de 5 dígitos');
+        return;
+      }
+      verifyAndCheckin(ticket.id, code);
+    });
+    
+    // Botón Cancelar
+    cancelBtn.addEventListener('click', () => {
+      setOutput('<div class="evapp-qr-help">Operación cancelada.</div>');
+      injectScanAgainButton();
+      smoothScrollTo(out);
+    });
+  }
+
+  function verifyAndCheckin(ticketId, code){
+    setOutput('<div class="evapp-qr-help">Verificando código...</div>');
+    smoothScrollTo(out);
+    
+    const fd = new FormData();
+    fd.append('action','eventosapp_verify_and_checkin');
+    fd.append('nonce', nonceVerify);
+    fd.append('event_id', String(eventID));
+    fd.append('ticket_id', String(ticketId));
+    fd.append('auth_code', code);
+
+    fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
+      .then(r=>r.json())
+      .then(resp=>{
+        if (!resp || !resp.success){
+          const msg = (resp && resp.data) ? resp.data : 'Código incorrecto';
+          setOutput('<div class="evapp-qr-bad">❌ ' + msg + '</div>');
+          injectScanAgainButton();
+          smoothScrollTo(out);
+          return;
         }
         
-        // Cuando se escanea un QR exitosamente
-        function onScanSuccess(decodedText, decodedResult) {
-            // Detener el scanner
-            html5QrCode.stop();
-            
-            // Buscar el ticket
-            searchTicket(decodedText);
-        }
+        // Check-in exitoso
+        const d = resp.data || {};
+        const statusHtml = d.already_checked
+          ? '<span class="evapp-qr-warn">✔ Check-in confirmado (ya había ingresado hoy)</span>'
+          : '<span class="evapp-qr-ok">✅ Check-in exitoso</span>';
         
-        function onScanFailure(error) {
-            // Ignorar errores de no detección
-        }
-        
-        // Buscar ticket por QR
-        function searchTicket(qrCode) {
-            showLoading(true);
-            
-            $.ajax({
-                url: ajaxurl || '<?php echo admin_url("admin-ajax.php"); ?>',
-                method: 'POST',
-                data: {
-                    action: 'eventosapp_search_ticket_by_qr',
-                    qr_code: qrCode,
-                    event_id: <?php echo absint($event_id); ?>,
-                    nonce: '<?php echo wp_create_nonce("eventosapp_qr_search"); ?>'
-                },
-                success: function(response) {
-                    showLoading(false);
-                    
-                    if (response.success && response.data.ticket) {
-                        currentTicketId = response.data.ticket.id;
-                        currentTicketData = response.data.ticket;
-                        showVerificationSection(response.data.ticket);
-                    } else {
-                        showMessage(response.data || 'Ticket no encontrado', 'error');
-                        setTimeout(restartScanner, 3000);
-                    }
-                },
-                error: function() {
-                    showLoading(false);
-                    showMessage('Error de conexión', 'error');
-                    setTimeout(restartScanner, 3000);
-                }
-            });
-        }
-        
-        // Mostrar sección de verificación
-        function showVerificationSection(ticket) {
-            $scannerSection.addClass('evapp-hidden');
-            
-            // Construir HTML de detalles
-            let html = '<p><strong>Nombre:</strong> ' + ticket.nombre + '</p>';
-            html += '<p><strong>Email:</strong> ' + ticket.email + '</p>';
-            html += '<p><strong>Ticket ID:</strong> ' + ticket.ticket_id + '</p>';
-            
-            if (ticket.localidad) {
-                html += '<p><strong>Localidad:</strong> ' + ticket.localidad + '</p>';
-            }
-            
-            if (ticket.checked_in) {
-                html += '<p style="color:#d9534f;"><strong>⚠️ ADVERTENCIA:</strong> Este ticket ya hizo check-in el ' + ticket.checkin_date + '</p>';
-            }
-            
-            $ticketDetails.html(html);
-            $verificationSection.removeClass('evapp-hidden');
-            $authCodeInput.val('').focus();
-        }
-        
-        // Verificar código y hacer check-in
-        $verifyBtn.on('click', function() {
-            const code = $authCodeInput.val().trim();
-            
-            if (code.length !== 5) {
-                showMessage('El código debe tener 5 dígitos', 'error');
-                return;
-            }
-            
-            if (!currentTicketId) {
-                showMessage('Error: No hay ticket seleccionado', 'error');
-                return;
-            }
-            
-            showLoading(true);
-            
-            $.ajax({
-                url: ajaxurl || '<?php echo admin_url("admin-ajax.php"); ?>',
-                method: 'POST',
-                data: {
-                    action: 'eventosapp_verify_and_checkin',
-                    ticket_id: currentTicketId,
-                    auth_code: code,
-                    event_id: <?php echo absint($event_id); ?>,
-                    nonce: '<?php echo wp_create_nonce("eventosapp_verify_checkin"); ?>'
-                },
-                success: function(response) {
-                    showLoading(false);
-                    
-                    if (response.success) {
-                        showMessage('✅ ' + response.data.message, 'success');
-                        setTimeout(function() {
-                            resetAndRestart();
-                        }, 3000);
-                    } else {
-                        showMessage('❌ ' + (response.data || 'Código incorrecto'), 'error');
-                        $authCodeInput.val('').focus();
-                    }
-                },
-                error: function() {
-                    showLoading(false);
-                    showMessage('Error de conexión', 'error');
-                }
-            });
-        });
-        
-        // Cancelar y volver a escanear
-        $cancelBtn.on('click', function() {
-            resetAndRestart();
-        });
-        
-        // Permitir Enter en el input
-        $authCodeInput.on('keypress', function(e) {
-            if (e.which === 13) {
-                $verifyBtn.click();
-            }
-        });
-        
-        // Solo permitir números
-        $authCodeInput.on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
-        
-        // Funciones auxiliares
-        function showMessage(text, type) {
-            const msgClass = 'evapp-message ' + type;
-            $messageContainer.html('<div class="' + msgClass + '">' + text + '</div>');
-            
-            setTimeout(function() {
-                $messageContainer.empty();
-            }, 5000);
-        }
-        
-        function showLoading(show) {
-            if (show) {
-                $loading.removeClass('evapp-hidden');
-                $verifyBtn.prop('disabled', true);
-            } else {
-                $loading.addClass('evapp-hidden');
-                $verifyBtn.prop('disabled', false);
-            }
-        }
-        
-        function restartScanner() {
-            initQrScanner();
-        }
-        
-        function resetAndRestart() {
-            currentTicketId = null;
-            currentTicketData = null;
-            $verificationSection.addClass('evapp-hidden');
-            $messageContainer.empty();
-            $scannerSection.removeClass('evapp-hidden');
-            restartScanner();
-        }
-        
-        // Inicializar al cargar
-        $(document).ready(function() {
-            initQrScanner();
-        });
-        
-    })(jQuery);
-    </script>
+        let html = statusHtml + '<div class="evapp-qr-grid">';
+        html += row('Mensaje', d.message);
+        html += row('Fecha del check-in', d.checkin_date_label || d.checkin_date);
+        html += '</div>';
+        setOutput(html);
+        injectScanAgainButton();
+        smoothScrollTo(out);
+      })
+      .catch(()=>{
+        setOutput('<div class="evapp-qr-bad">Error de conexión al verificar el código.</div>');
+        injectScanAgainButton();
+        smoothScrollTo(out);
+      });
+  }
+
+  // Botón toggle: enciende/apaga la cámara
+  btn.addEventListener('click', async ()=>{
+    if (stream && stream.active) {
+      stop();
+      setOutput('<div class="evapp-qr-help">Cámara detenida. Haz clic para activar y escanear.</div>');
+      smoothScrollTo(out);
+      return;
+    }
+    await ensureJsQR();
+    await start();
+    setOutput('<div class="evapp-qr-help">Tip: coloca el QR dentro del marco. La lectura vibra/emite sonido al capturar.</div>');
+  });
+})();
+</script>
     <?php
-    
     return ob_get_clean();
-}
+});
 
 // ========================================
 // AJAX: Buscar ticket por QR
@@ -576,7 +705,7 @@ function eventosapp_ajax_verify_and_checkin() {
     
     // ===== Código válido, proceder con check-in =====
     
-    // 1) Obtener zona horaria del evento (o la del sitio)
+    // 1) Obtener zona horaria del evento
     $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
     if ( ! $event_tz ) {
         $event_tz = wp_timezone_string();
