@@ -373,17 +373,6 @@ function eventosapp_send_mass_auth_codes( $event_id, $specific_date = null ) {
 }
 
 /**
- * Envía códigos para un día específico de un evento multi-día
- * 
- * @param int $event_id ID del evento
- * @param string $date Fecha en formato Y-m-d
- * @return array Resultados del envío
- */
-function eventosapp_send_mass_auth_codes_for_day( $event_id, $date ) {
-    return eventosapp_send_mass_auth_codes( $event_id, $date );
-}
-
-/**
  * Registra un envío masivo en el log del evento
  * Mantiene solo los últimos 3 registros
  * 
