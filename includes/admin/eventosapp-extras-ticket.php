@@ -221,6 +221,50 @@ function eventosapp_render_metabox_double_auth_config($post) {
         width: 100%;
         max-width: 400px;
     }
+    .evapp-form-row input[type="radio"] {
+        width: auto;
+        margin-right: 8px;
+        vertical-align: middle;
+    }
+    .evapp-radio-option {
+        margin: 12px 0;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        background: #fff;
+        transition: all 0.2s ease;
+    }
+    .evapp-radio-option:hover {
+        background: #f5f5f5;
+        border-color: #2F73B5;
+    }
+    .evapp-radio-option label {
+        display: flex;
+        align-items: flex-start;
+        font-weight: normal;
+        margin: 0;
+        cursor: pointer;
+    }
+    .evapp-radio-option input[type="radio"] {
+        margin-top: 2px;
+        flex-shrink: 0;
+    }
+    .evapp-radio-label-content {
+        flex: 1;
+    }
+    .evapp-radio-label-content strong {
+        display: block;
+        font-size: 14px;
+        color: #1d2327;
+        margin-bottom: 4px;
+    }
+    .evapp-radio-description {
+        display: block;
+        color: #666;
+        font-size: 13px;
+        line-height: 1.4;
+        margin-top: 4px;
+    }
     .evapp-btn-test {
         background: #0073aa;
         color: white;
@@ -347,32 +391,36 @@ function eventosapp_render_metabox_double_auth_config($post) {
     <?php if ($tipo_fecha !== 'unica'): ?>
     <div class="evapp-double-auth-section">
         <h4>📅 Configuración Multi-Día</h4>
-        <p>Este evento tiene múltiples fechas. Configura cómo funcionará la doble autenticación:</p>
+        <p style="margin-bottom:15px;">Este evento tiene múltiples fechas. Configura cómo funcionará la doble autenticación:</p>
         
-        <div class="evapp-form-row">
+        <div class="evapp-radio-option">
             <label>
                 <input type="radio" name="eventosapp_ticket_double_auth_mode" value="first_day" <?php checked($auth_mode, 'first_day'); ?>>
-                <strong>Solo Primer Día</strong>
+                <div class="evapp-radio-label-content">
+                    <strong>Solo Primer Día</strong>
+                    <span class="evapp-radio-description">
+                        Se genera y envía un único código que sirve para hacer check-in en el primer día del evento.
+                        Los días siguientes no requieren código de verificación.
+                    </span>
+                </div>
             </label>
-            <p style="margin:5px 0 0 25px;color:#666;font-size:13px;">
-                Se genera y envía un único código que sirve para hacer check-in en el primer día del evento.
-                Los días siguientes no requieren código de verificación.
-            </p>
         </div>
         
-        <div class="evapp-form-row" style="margin-top:15px;">
+        <div class="evapp-radio-option">
             <label>
                 <input type="radio" name="eventosapp_ticket_double_auth_mode" value="all_days" <?php checked($auth_mode, 'all_days'); ?>>
-                <strong>Todos los Días</strong>
+                <div class="evapp-radio-label-content">
+                    <strong>Todos los Días</strong>
+                    <span class="evapp-radio-description">
+                        Se genera y envía un código diferente para cada día del evento. 
+                        Los códigos se envían automáticamente a las 6:00 AM de cada día (zona horaria del evento).
+                        El primer código se envía en la fecha programada arriba.
+                    </span>
+                </div>
             </label>
-            <p style="margin:5px 0 0 25px;color:#666;font-size:13px;">
-                Se genera y envía un código diferente para cada día del evento. 
-                Los códigos se envían automáticamente a las 6:00 AM de cada día (zona horaria del evento).
-                El primer código se envía en la fecha programada arriba.
-            </p>
         </div>
         
-        <p style="color:#d9534f;font-size:13px;margin-top:15px;">
+        <p style="color:#d9534f;font-size:13px;margin-top:15px;background:#fff3cd;padding:10px;border-radius:4px;border-left:3px solid #d9534f;">
             <strong>⚠️ Importante:</strong> Si cambias esta configuración después de haber enviado códigos, 
             deberás usar "Regenerar y Enviar Códigos" para actualizar todos los tickets.
         </p>
