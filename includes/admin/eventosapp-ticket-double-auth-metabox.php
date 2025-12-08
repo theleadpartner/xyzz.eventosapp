@@ -43,6 +43,11 @@ function eventosapp_render_ticket_double_auth_metabox($post) {
         return;
     }
     
+    // Obtener configuración del evento
+    $auth_mode = get_post_meta($event_id, '_eventosapp_ticket_double_auth_mode', true);
+    $tipo_fecha = get_post_meta($event_id, '_eventosapp_tipo_fecha', true);
+    $current_day = get_post_meta($post->ID, '_eventosapp_double_auth_current_day', true);
+    
     // Obtener datos del código
     $code = eventosapp_get_ticket_auth_code($post->ID);
     $code_date = get_post_meta($post->ID, '_eventosapp_double_auth_code_date', true);
@@ -127,6 +132,16 @@ function eventosapp_render_ticket_double_auth_metabox($post) {
     
     <div class="evapp-auth-code-box">
         <h4 style="margin-top:0;">Código de Verificación</h4>
+        
+        <?php if ($auth_mode === 'all_days' && $tipo_fecha !== 'unica' && $current_day): ?>
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:8px;margin:8px 0;font-size:12px;color:#856404;">
+                <strong>📅 Código válido para:</strong> <?php echo date_i18n('d/m/Y', strtotime($current_day)); ?>
+            </div>
+        <?php elseif ($auth_mode === 'all_days' && $tipo_fecha !== 'unica'): ?>
+            <div style="background:#e7f3ff;border:1px solid #0073aa;border-radius:4px;padding:8px;margin:8px 0;font-size:12px;color:#004c73;">
+                <strong>ℹ️ Evento Multi-Día:</strong> Se genera un código diferente para cada día.
+            </div>
+        <?php endif; ?>
         
         <?php if ($code): ?>
             <div class="evapp-auth-code-display" id="evapp-code-display">
