@@ -177,7 +177,16 @@ function eventosapp_render_metabox_double_auth_config($post) {
     // Recuperar datos guardados
     $scheduled_datetime = get_post_meta($post->ID, '_eventosapp_double_auth_scheduled_datetime', true);
     $scheduled_timezone = get_post_meta($post->ID, '_eventosapp_double_auth_scheduled_timezone', true);
+    $auth_mode = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_mode', true);
     $mass_log = eventosapp_get_event_mass_log($post->ID);
+    
+    // Obtener tipo de fecha del evento
+    $tipo_fecha = get_post_meta($post->ID, '_eventosapp_tipo_fecha', true) ?: 'unica';
+    
+    // Valores por defecto
+    if (!$auth_mode) {
+        $auth_mode = 'first_day';
+    }
     
     // Timezone por defecto
     if (!$scheduled_timezone) {
@@ -334,6 +343,41 @@ function eventosapp_render_metabox_double_auth_config($post) {
             Guarda los cambios del evento para activar la programación.
         </p>
     </div>
+    
+    <?php if ($tipo_fecha !== 'unica'): ?>
+    <div class="evapp-double-auth-section">
+        <h4>📅 Configuración Multi-Día</h4>
+        <p>Este evento tiene múltiples fechas. Configura cómo funcionará la doble autenticación:</p>
+        
+        <div class="evapp-form-row">
+            <label>
+                <input type="radio" name="eventosapp_ticket_double_auth_mode" value="first_day" <?php checked($auth_mode, 'first_day'); ?>>
+                <strong>Solo Primer Día</strong>
+            </label>
+            <p style="margin:5px 0 0 25px;color:#666;font-size:13px;">
+                Se genera y envía un único código que sirve para hacer check-in en el primer día del evento.
+                Los días siguientes no requieren código de verificación.
+            </p>
+        </div>
+        
+        <div class="evapp-form-row" style="margin-top:15px;">
+            <label>
+                <input type="radio" name="eventosapp_ticket_double_auth_mode" value="all_days" <?php checked($auth_mode, 'all_days'); ?>>
+                <strong>Todos los Días</strong>
+            </label>
+            <p style="margin:5px 0 0 25px;color:#666;font-size:13px;">
+                Se genera y envía un código diferente para cada día del evento. 
+                Los códigos se envían automáticamente a las 6:00 AM de cada día (zona horaria del evento).
+                El primer código se envía en la fecha programada arriba.
+            </p>
+        </div>
+        
+        <p style="color:#d9534f;font-size:13px;margin-top:15px;">
+            <strong>⚠️ Importante:</strong> Si cambias esta configuración después de haber enviado códigos, 
+            deberás usar "Regenerar y Enviar Códigos" para actualizar todos los tickets.
+        </p>
+    </div>
+    <?php endif; ?>
     
     <div class="evapp-double-auth-section">
         <h4>🧪 Prueba Manual</h4>
@@ -554,6 +598,12 @@ add_action('save_post_eventosapp_event', function($post_id){
         return;
     }
     
+    // Guardar modo de autenticación (first_day o all_days)
+    $auth_mode = isset($_POST['eventosapp_ticket_double_auth_mode']) ? sanitize_text_field($_POST['eventosapp_ticket_double_auth_mode']) : 'first_day';
+    if (in_array($auth_mode, ['first_day', 'all_days'])) {
+        update_post_meta($post_id, '_eventosapp_ticket_double_auth_mode', $auth_mode);
+    }
+    
     // Guardar fecha/hora programada
     if (isset($_POST['eventosapp_double_auth_scheduled_datetime']) && $_POST['eventosapp_double_auth_scheduled_datetime']) {
         $datetime_local = sanitize_text_field($_POST['eventosapp_double_auth_scheduled_datetime']);
@@ -568,8 +618,8 @@ add_action('save_post_eventosapp_event', function($post_id){
             update_post_meta($post_id, '_eventosapp_double_auth_scheduled_timezone', $timezone);
             
             // Programar el envío
-            if (function_exists('eventosapp_schedule_auth_codes')) {
-                eventosapp_schedule_auth_codes($post_id, $timestamp);
+            if (function_exists('eventosapp_schedule_auth_codes_send')) {
+                eventosapp_schedule_auth_codes_send($post_id);
             }
         } catch (Exception $e) {
             // Error en la fecha, no guardar
