@@ -77,6 +77,7 @@ function eventosapp_validate_auth_code( $ticket_id, $input_code ) {
 
 /**
  * Envía el código de doble autenticación al asistente por email
+ * Usa la plantilla email-ticket-auth.html y la configuración del metabox del evento
  * 
  * @param int $ticket_id ID del ticket
  * @param string $method Método de envío: 'manual', 'masivo', 'automatico'
@@ -99,6 +100,7 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
     }
     
     $event_title = get_the_title( $event_id );
+    $ticket_code = get_post_meta( $ticket_id, 'eventosapp_ticketID', true );
     $code        = eventosapp_get_ticket_auth_code( $ticket_id );
     
     // Si no existe código, generar uno nuevo
@@ -108,8 +110,153 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
     
     $nombre_completo = trim( $nombre . ' ' . $apellido );
     
-    // Construir el email
-    $subject = sprintf( 'Código de Verificación - %s', $event_title );
+    // ========================================
+    // OBTENER CONFIGURACIÓN DEL METABOX
+    // ========================================
+    
+    // Header image del evento (igual que el ticket normal)
+    $header_img = get_post_meta( $event_id, '_eventosapp_email_header_img', true );
+    if ( ! $header_img ) {
+        $header_img = 'https://eventosapp.com/wp-content/uploads/2025/08/header_ticket_gen.jpg';
+    }
+    
+    // From Name configurado en el metabox
+    $from_name = get_post_meta( $event_id, '_eventosapp_email_fromname', true );
+    if ( ! $from_name ) {
+        $from_name = get_bloginfo( 'name' );
+    }
+    
+    // ========================================
+    // CARGAR PLANTILLA HTML
+    // ========================================
+    
+    $template_path = dirname( __FILE__, 2 ) . '/templates/email_tickets/email-ticket-auth.html';
+    
+    if ( ! file_exists( $template_path ) ) {
+        // Fallback a texto plano si no existe la plantilla
+        return eventosapp_send_auth_code_email_plain( $ticket_id, $method, $code, $from_name );
+    }
+    
+    $html = file_get_contents( $template_path );
+    
+    // ========================================
+    // REEMPLAZAR TOKENS EN LA PLANTILLA
+    // ========================================
+    
+    // Datos del evento
+    $organizador  = get_post_meta( $event_id, '_eventosapp_organizador', true ) ?: '';
+    $lugar_evento = get_post_meta( $event_id, '_eventosapp_direccion', true ) ?: '';
+    
+    // Fecha legible del evento
+    $tipo_fecha = get_post_meta( $event_id, '_eventosapp_tipo_fechas', true );
+    $fecha_evento = '';
+    $hora_evento  = '';
+    
+    if ( $tipo_fecha === 'unico' ) {
+        $fecha_raw = get_post_meta( $event_id, '_eventosapp_fecha_unico', true );
+        if ( $fecha_raw ) {
+            $dt = DateTime::createFromFormat( 'Y-m-d', $fecha_raw );
+            if ( $dt ) {
+                $fecha_evento = $dt->format( 'd/m/Y' );
+            }
+        }
+        $hora_evento = get_post_meta( $event_id, '_eventosapp_hora_unico', true ) ?: '';
+    } elseif ( $tipo_fecha === 'rango' ) {
+        $inicio = get_post_meta( $event_id, '_eventosapp_fecha_inicio', true );
+        $fin    = get_post_meta( $event_id, '_eventosapp_fecha_fin', true );
+        if ( $inicio && $fin ) {
+            $dt_ini = DateTime::createFromFormat( 'Y-m-d', $inicio );
+            $dt_fin = DateTime::createFromFormat( 'Y-m-d', $fin );
+            if ( $dt_ini && $dt_fin ) {
+                $fecha_evento = $dt_ini->format( 'd/m/Y' ) . ' - ' . $dt_fin->format( 'd/m/Y' );
+            }
+        }
+        $hora_evento = get_post_meta( $event_id, '_eventosapp_hora_rango', true ) ?: '';
+    }
+    
+    // Tokens a reemplazar
+    $tokens = [
+        '{{header_img}}'        => esc_url( $header_img ),
+        '{{evento_nombre}}'     => esc_html( $event_title ),
+        '{{organizador}}'       => esc_html( $organizador ),
+        '{{fecha_evento}}'      => esc_html( $fecha_evento ),
+        '{{hora_evento}}'       => esc_html( $hora_evento ),
+        '{{lugar_evento}}'      => esc_html( $lugar_evento ),
+        '{{asistente_nombre}}'  => esc_html( $nombre_completo ),
+        '{{asistente_email}}'   => esc_html( $email ),
+        '{{ticket_id}}'         => esc_html( $ticket_code ),
+        '{{codigo_auth}}'       => esc_html( $code ),
+    ];
+    
+    $html = strtr( $html, $tokens );
+    
+    // ========================================
+    // CONFIGURAR Y ENVIAR EMAIL
+    // ========================================
+    
+    // Asunto
+    $subject = sprintf( '🔐 Tu Código de Verificación - %s', $event_title );
+    
+    // Cabeceras: From con nombre personalizado (dominio propio para evitar DMARC)
+    $site_host = parse_url( home_url(), PHP_URL_HOST );
+    if ( ! $site_host ) {
+        $site_host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+    }
+    $site_host  = preg_replace( '/^www\./i', '', $site_host );
+    $from_email = sanitize_email( 'no-reply@' . $site_host );
+    
+    if ( ! $from_email ) {
+        $admin_fallback = get_option( 'admin_email' );
+        $from_email = is_email( $admin_fallback ) ? $admin_fallback : 'no-reply@localhost';
+    }
+    
+    // Sanitizar From Name (sin saltos de línea ni caracteres especiales)
+    $from_name = preg_replace( "/[\r\n]+/u", ' ', trim( $from_name ) );
+    $from_name = str_replace( ['"', '<', '>'], '', $from_name );
+    if ( strlen( $from_name ) > 120 ) {
+        $from_name = mb_substr( $from_name, 0, 120 );
+    }
+    
+    $headers = [
+        'Content-Type: text/html; charset=UTF-8',
+        sprintf( 'From: %s <%s>', $from_name, $from_email ),
+    ];
+    
+    // Enviar
+    $content_type_cb = function() { return 'text/html'; };
+    add_filter( 'wp_mail_content_type', $content_type_cb );
+    
+    $sent = wp_mail( $email, $subject, $html, $headers );
+    
+    remove_filter( 'wp_mail_content_type', $content_type_cb );
+    
+    // Registrar en el log del ticket
+    if ( $sent ) {
+        eventosapp_log_auth_code_send( $ticket_id, $method );
+    }
+    
+    return $sent;
+}
+
+/**
+ * Fallback: Enviar código en texto plano si no existe la plantilla HTML
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param string $method Método de envío
+ * @param string $code Código de autenticación
+ * @param string $from_name Nombre del remitente
+ * @return bool True si se envió correctamente
+ */
+function eventosapp_send_auth_code_email_plain( $ticket_id, $method, $code, $from_name ) {
+    $email    = get_post_meta( $ticket_id, '_eventosapp_asistente_email', true );
+    $nombre   = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
+    $apellido = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
+    $event_id = get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
+    
+    $event_title     = get_the_title( $event_id );
+    $nombre_completo = trim( $nombre . ' ' . $apellido );
+    
+    $subject = sprintf( '🔐 Tu Código de Verificación - %s', $event_title );
     
     $message = sprintf(
         "Hola %s,\n\n" .
@@ -122,18 +269,36 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
         "• Preséntalo junto a tu ticket para ingresar al evento\n" .
         "• NO compartas este código con nadie\n\n" .
         "Nos vemos en el evento,\n" .
-        "Equipo de %s",
+        "%s",
         $nombre_completo,
         $event_title,
         $code,
-        get_bloginfo( 'name' )
+        $from_name
     );
     
-    // Enviar email
-    $headers = ['Content-Type: text/plain; charset=UTF-8'];
-    $sent    = wp_mail( $email, $subject, $message, $headers );
+    // Configurar From Name
+    $site_host = parse_url( home_url(), PHP_URL_HOST );
+    if ( ! $site_host ) {
+        $site_host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+    }
+    $site_host  = preg_replace( '/^www\./i', '', $site_host );
+    $from_email = sanitize_email( 'no-reply@' . $site_host );
     
-    // Registrar en el log del ticket
+    if ( ! $from_email ) {
+        $admin_fallback = get_option( 'admin_email' );
+        $from_email = is_email( $admin_fallback ) ? $admin_fallback : 'no-reply@localhost';
+    }
+    
+    $from_name = preg_replace( "/[\r\n]+/u", ' ', trim( $from_name ) );
+    $from_name = str_replace( ['"', '<', '>'], '', $from_name );
+    
+    $headers = [
+        'Content-Type: text/plain; charset=UTF-8',
+        sprintf( 'From: %s <%s>', $from_name, $from_email ),
+    ];
+    
+    $sent = wp_mail( $email, $subject, $message, $headers );
+    
     if ( $sent ) {
         eventosapp_log_auth_code_send( $ticket_id, $method );
     }
