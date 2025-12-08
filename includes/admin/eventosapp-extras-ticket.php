@@ -180,12 +180,29 @@ function eventosapp_render_metabox_double_auth_config($post) {
     $auth_mode = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_mode', true);
     $mass_log = eventosapp_get_event_mass_log($post->ID);
     
+    // NUEVO: Configuración para días siguientes (eventos multi-día)
+    $followup_amount = get_post_meta($post->ID, '_eventosapp_double_auth_followup_amount', true);
+    $followup_unit = get_post_meta($post->ID, '_eventosapp_double_auth_followup_unit', true);
+    $followup_time = get_post_meta($post->ID, '_eventosapp_double_auth_followup_time', true);
+    
     // Obtener tipo de fecha del evento
     $tipo_fecha = get_post_meta($post->ID, '_eventosapp_tipo_fecha', true) ?: 'unica';
     
     // Valores por defecto
     if (!$auth_mode) {
         $auth_mode = 'first_day';
+    }
+    
+    if (!$followup_amount) {
+        $followup_amount = 1;
+    }
+    
+    if (!$followup_unit) {
+        $followup_unit = 'days';
+    }
+    
+    if (!$followup_time) {
+        $followup_time = '06:00';
     }
     
     // Timezone por defecto
@@ -264,6 +281,55 @@ function eventosapp_render_metabox_double_auth_config($post) {
         font-size: 13px;
         line-height: 1.4;
         margin-top: 4px;
+    }
+    .evapp-followup-config {
+        background: #e7f3ff;
+        border: 2px solid #0073aa;
+        border-radius: 6px;
+        padding: 15px;
+        margin-top: 15px;
+        display: none;
+    }
+    .evapp-followup-config.active {
+        display: block;
+    }
+    .evapp-followup-config h5 {
+        margin: 0 0 10px 0;
+        color: #0073aa;
+        font-size: 14px;
+    }
+    .evapp-inline-fields {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin: 10px 0;
+    }
+    .evapp-inline-field {
+        display: flex;
+        flex-direction: column;
+    }
+    .evapp-inline-field label {
+        font-size: 12px;
+        color: #666;
+        margin-bottom: 4px;
+    }
+    .evapp-inline-field input[type="number"],
+    .evapp-inline-field input[type="time"],
+    .evapp-inline-field select {
+        padding: 6px 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+    .evapp-inline-field input[type="number"] {
+        width: 80px;
+    }
+    .evapp-inline-field input[type="time"] {
+        width: 120px;
+    }
+    .evapp-inline-field select {
+        width: 150px;
     }
     .evapp-btn-test {
         background: #0073aa;
@@ -395,7 +461,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
         
         <div class="evapp-radio-option">
             <label>
-                <input type="radio" name="eventosapp_ticket_double_auth_mode" value="first_day" <?php checked($auth_mode, 'first_day'); ?>>
+                <input type="radio" name="eventosapp_ticket_double_auth_mode" value="first_day" <?php checked($auth_mode, 'first_day'); ?> class="evapp-auth-mode-radio">
                 <div class="evapp-radio-label-content">
                     <strong>Solo Primer Día</strong>
                     <span class="evapp-radio-description">
@@ -408,16 +474,63 @@ function eventosapp_render_metabox_double_auth_config($post) {
         
         <div class="evapp-radio-option">
             <label>
-                <input type="radio" name="eventosapp_ticket_double_auth_mode" value="all_days" <?php checked($auth_mode, 'all_days'); ?>>
+                <input type="radio" name="eventosapp_ticket_double_auth_mode" value="all_days" <?php checked($auth_mode, 'all_days'); ?> class="evapp-auth-mode-radio">
                 <div class="evapp-radio-label-content">
                     <strong>Todos los Días</strong>
                     <span class="evapp-radio-description">
                         Se genera y envía un código diferente para cada día del evento. 
-                        Los códigos se envían automáticamente a las 6:00 AM de cada día (zona horaria del evento).
                         El primer código se envía en la fecha programada arriba.
+                        Los códigos de días siguientes se programan automáticamente según la configuración abajo.
                     </span>
                 </div>
             </label>
+        </div>
+        
+        <!-- Configuración para días siguientes -->
+        <div class="evapp-followup-config <?php echo ($auth_mode === 'all_days') ? 'active' : ''; ?>" id="evapp-followup-config">
+            <h5>⏰ Programación de Códigos para Días Siguientes (desde día 2 en adelante)</h5>
+            <p style="font-size:13px;color:#004c73;margin:8px 0;">
+                Configura cuándo se deben enviar los códigos para los días siguientes del evento:
+            </p>
+            
+            <div class="evapp-inline-fields">
+                <div class="evapp-inline-field">
+                    <label for="evapp-followup-amount">Enviar</label>
+                    <input 
+                        type="number" 
+                        id="evapp-followup-amount" 
+                        name="eventosapp_double_auth_followup_amount" 
+                        value="<?php echo esc_attr($followup_amount); ?>" 
+                        min="1" 
+                        max="999"
+                    />
+                </div>
+                
+                <div class="evapp-inline-field">
+                    <label for="evapp-followup-unit">Unidad</label>
+                    <select id="evapp-followup-unit" name="eventosapp_double_auth_followup_unit">
+                        <option value="hours" <?php selected($followup_unit, 'hours'); ?>>Horas antes</option>
+                        <option value="days" <?php selected($followup_unit, 'days'); ?>>Días antes</option>
+                        <option value="weeks" <?php selected($followup_unit, 'weeks'); ?>>Semanas antes</option>
+                    </select>
+                </div>
+                
+                <div class="evapp-inline-field">
+                    <label for="evapp-followup-time">A las</label>
+                    <input 
+                        type="time" 
+                        id="evapp-followup-time" 
+                        name="eventosapp_double_auth_followup_time" 
+                        value="<?php echo esc_attr($followup_time); ?>"
+                    />
+                </div>
+            </div>
+            
+            <p style="font-size:12px;color:#666;margin:10px 0 0 0;line-height:1.5;">
+                <strong>Ejemplo:</strong> Si configuras "1 día antes a las 06:00", los asistentes recibirán 
+                el código del día 2 un día antes del día 2 a las 6:00 AM, el código del día 3 un día antes 
+                del día 3 a las 6:00 AM, y así sucesivamente.
+            </p>
         </div>
         
         <p style="color:#d9534f;font-size:13px;margin-top:15px;background:#fff3cd;padding:10px;border-radius:4px;border-left:3px solid #d9534f;">
@@ -502,6 +615,17 @@ function eventosapp_render_metabox_double_auth_config($post) {
     
     <script>
     jQuery(document).ready(function($) {
+        // Control de visibilidad de configuración de días siguientes
+        $('.evapp-auth-mode-radio').on('change', function() {
+            const selectedMode = $('input[name="eventosapp_ticket_double_auth_mode"]:checked').val();
+            
+            if (selectedMode === 'all_days') {
+                $('#evapp-followup-config').addClass('active');
+            } else {
+                $('#evapp-followup-config').removeClass('active');
+            }
+        });
+        
         // Envío de prueba
         $('#evapp-test-send-btn').on('click', function() {
             const ticketId = $('#evapp-test-ticket-id').val().trim();
@@ -650,6 +774,37 @@ add_action('save_post_eventosapp_event', function($post_id){
     $auth_mode = isset($_POST['eventosapp_ticket_double_auth_mode']) ? sanitize_text_field($_POST['eventosapp_ticket_double_auth_mode']) : 'first_day';
     if (in_array($auth_mode, ['first_day', 'all_days'])) {
         update_post_meta($post_id, '_eventosapp_ticket_double_auth_mode', $auth_mode);
+    }
+    
+    // NUEVO: Guardar configuración de días siguientes (solo para modo all_days)
+    if ($auth_mode === 'all_days') {
+        $followup_amount = isset($_POST['eventosapp_double_auth_followup_amount']) ? absint($_POST['eventosapp_double_auth_followup_amount']) : 1;
+        $followup_unit = isset($_POST['eventosapp_double_auth_followup_unit']) ? sanitize_text_field($_POST['eventosapp_double_auth_followup_unit']) : 'days';
+        $followup_time = isset($_POST['eventosapp_double_auth_followup_time']) ? sanitize_text_field($_POST['eventosapp_double_auth_followup_time']) : '06:00';
+        
+        // Validar unidad
+        if (!in_array($followup_unit, ['hours', 'days', 'weeks'])) {
+            $followup_unit = 'days';
+        }
+        
+        // Validar cantidad
+        if ($followup_amount < 1) {
+            $followup_amount = 1;
+        }
+        
+        // Validar formato de hora (HH:MM)
+        if (!preg_match('/^\d{2}:\d{2}$/', $followup_time)) {
+            $followup_time = '06:00';
+        }
+        
+        update_post_meta($post_id, '_eventosapp_double_auth_followup_amount', $followup_amount);
+        update_post_meta($post_id, '_eventosapp_double_auth_followup_unit', $followup_unit);
+        update_post_meta($post_id, '_eventosapp_double_auth_followup_time', $followup_time);
+    } else {
+        // Si no es modo all_days, eliminar estos campos
+        delete_post_meta($post_id, '_eventosapp_double_auth_followup_amount');
+        delete_post_meta($post_id, '_eventosapp_double_auth_followup_unit');
+        delete_post_meta($post_id, '_eventosapp_double_auth_followup_time');
     }
     
     // Guardar fecha/hora programada
