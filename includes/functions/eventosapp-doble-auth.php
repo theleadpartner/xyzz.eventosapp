@@ -662,3 +662,342 @@ add_action( 'wp_ajax_eventosapp_reveal_auth_code', function() {
         wp_send_json_error( 'No hay código asignado' );
     }
 });
+
+// ========================================
+// SOPORTE PARA CÓDIGOS POR DÍA (MULTI-DÍA)
+// ========================================
+
+/**
+ * Asigna un código de autenticación para un día específico de un ticket
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param string $date Fecha en formato Y-m-d
+ * @return string Código generado
+ */
+function eventosapp_assign_auth_code_to_ticket_for_day( $ticket_id, $date ) {
+    $code = eventosapp_generate_auth_code();
+    $now  = current_time('timestamp');
+    
+    // Guardar código para este día específico
+    $meta_key_code = '_eventosapp_double_auth_code_day_' . $date;
+    $meta_key_date = '_eventosapp_double_auth_code_date_day_' . $date;
+    
+    update_post_meta( $ticket_id, $meta_key_code, $code );
+    update_post_meta( $ticket_id, $meta_key_date, $now );
+    
+    // También actualizar el "día actual" del ticket
+    update_post_meta( $ticket_id, '_eventosapp_double_auth_current_day', $date );
+    
+    return $code;
+}
+
+/**
+ * Obtiene el código de autenticación de un ticket para un día específico
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param string $date Fecha en formato Y-m-d (null para código general)
+ * @return string|false Código o false si no existe
+ */
+function eventosapp_get_ticket_auth_code_for_day( $ticket_id, $date = null ) {
+    if ( ! $date ) {
+        // Código general (backward compatibility)
+        return eventosapp_get_ticket_auth_code( $ticket_id );
+    }
+    
+    $meta_key = '_eventosapp_double_auth_code_day_' . $date;
+    $code = get_post_meta( $ticket_id, $meta_key, true );
+    
+    return $code ? $code : false;
+}
+
+/**
+ * Obtiene la fecha de generación de un código para un día específico
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param string $date Fecha en formato Y-m-d
+ * @return int|false Timestamp o false si no existe
+ */
+function eventosapp_get_ticket_auth_code_date_for_day( $ticket_id, $date ) {
+    $meta_key = '_eventosapp_double_auth_code_date_day_' . $date;
+    $timestamp = get_post_meta( $ticket_id, $meta_key, true );
+    
+    return $timestamp ? (int) $timestamp : false;
+}
+
+/**
+ * Obtiene todos los códigos de un ticket para todos sus días
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param int $event_id ID del evento
+ * @return array Array con estructura ['date' => ['code' => string, 'timestamp' => int]]
+ */
+function eventosapp_get_all_ticket_day_codes( $ticket_id, $event_id ) {
+    $days = function_exists('eventosapp_get_event_days') 
+        ? eventosapp_get_event_days($event_id) 
+        : [];
+    
+    if ( empty($days) ) {
+        return [];
+    }
+    
+    $result = [];
+    
+    foreach ( $days as $day ) {
+        $code = eventosapp_get_ticket_auth_code_for_day( $ticket_id, $day );
+        $timestamp = eventosapp_get_ticket_auth_code_date_for_day( $ticket_id, $day );
+        
+        $result[$day] = [
+            'code' => $code ? $code : null,
+            'timestamp' => $timestamp ? $timestamp : null,
+        ];
+    }
+    
+    return $result;
+}
+
+/**
+ * Envía códigos de autenticación para un día específico a todos los tickets de un evento
+ * Función llamada por el sistema de cron para eventos multi-día
+ * 
+ * @param int $event_id ID del evento
+ * @param string|null $date Fecha específica (Y-m-d) o null para primer día
+ * @return array Resultados: ['success' => int, 'failed' => int, 'total' => int, 'date' => string]
+ */
+function eventosapp_send_mass_auth_codes_for_day( $event_id, $date = null ) {
+    // Si no se especifica fecha, usar el primer día del evento
+    if ( ! $date ) {
+        $days = function_exists('eventosapp_get_event_days') 
+            ? eventosapp_get_event_days($event_id) 
+            : [];
+        
+        if ( empty($days) ) {
+            return [
+                'success' => 0,
+                'failed' => 0,
+                'total' => 0,
+                'date' => null,
+                'error' => 'No se encontraron días para el evento'
+            ];
+        }
+        
+        $date = $days[0];
+    }
+    
+    // Obtener todos los tickets del evento
+    $tickets = get_posts([
+        'post_type'      => 'eventosapp_ticket',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'meta_key'       => '_eventosapp_ticket_evento_id',
+        'meta_value'     => $event_id,
+    ]);
+    
+    $success = 0;
+    $failed  = 0;
+    
+    foreach ( $tickets as $ticket ) {
+        // Generar código para este día
+        $code = eventosapp_assign_auth_code_to_ticket_for_day( $ticket->ID, $date );
+        
+        // Enviar email
+        $sent = eventosapp_send_auth_code_email_for_day( $ticket->ID, $date, 'automatico' );
+        
+        if ( $sent ) {
+            $success++;
+        } else {
+            $failed++;
+        }
+    }
+    
+    $total = count( $tickets );
+    
+    // Registrar en el log del evento
+    eventosapp_log_mass_send_for_day( $event_id, $date, $total, $success, $failed );
+    
+    return [
+        'success' => $success,
+        'failed'  => $failed,
+        'total'   => $total,
+        'date'    => $date,
+    ];
+}
+
+/**
+ * Envía el código de autenticación de un día específico por email
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param string $date Fecha en formato Y-m-d
+ * @param string $method Método de envío: 'manual', 'masivo', 'automatico'
+ * @return bool True si se envió correctamente, false si falló
+ */
+function eventosapp_send_auth_code_email_for_day( $ticket_id, $date, $method = 'manual' ) {
+    // Obtener o generar el código para este día
+    $code = eventosapp_get_ticket_auth_code_for_day( $ticket_id, $date );
+    
+    if ( ! $code ) {
+        $code = eventosapp_assign_auth_code_to_ticket_for_day( $ticket_id, $date );
+    }
+    
+    // Usar la función de envío estándar (que usa el código general)
+    // Temporalmente guardamos el código del día como código general
+    $original_code = get_post_meta( $ticket_id, '_eventosapp_double_auth_code', true );
+    update_post_meta( $ticket_id, '_eventosapp_double_auth_code', $code );
+    
+    // Enviar email
+    $sent = eventosapp_send_auth_code_email( $ticket_id, $method );
+    
+    // Restaurar código original
+    if ( $original_code ) {
+        update_post_meta( $ticket_id, '_eventosapp_double_auth_code', $original_code );
+    }
+    
+    // Registrar en el log del ticket con información del día
+    if ( $sent ) {
+        eventosapp_log_ticket_send_for_day( $ticket_id, $date, $method );
+    }
+    
+    return $sent;
+}
+
+/**
+ * Registra un envío de código para un día específico en el log del ticket
+ * 
+ * @param int $ticket_id ID del ticket
+ * @param string $date Fecha del día
+ * @param string $method Método de envío
+ */
+function eventosapp_log_ticket_send_for_day( $ticket_id, $date, $method ) {
+    $log = get_post_meta( $ticket_id, '_eventosapp_double_auth_send_log', true );
+    
+    if ( ! is_array( $log ) ) {
+        $log = [];
+    }
+    
+    $user_id = get_current_user_id();
+    $user    = $user_id ? get_userdata( $user_id ) : null;
+    
+    // Agregar nuevo registro con información del día
+    $log[] = [
+        'timestamp' => current_time( 'timestamp' ),
+        'method'    => $method,
+        'user_id'   => $user_id,
+        'user_name' => $user ? $user->display_name : 'Sistema',
+        'day'       => $date, // NUEVO: registrar el día específico
+    ];
+    
+    // Mantener solo los últimos 5 (aumentamos a 5 para eventos multi-día)
+    if ( count( $log ) > 5 ) {
+        $log = array_slice( $log, -5 );
+    }
+    
+    update_post_meta( $ticket_id, '_eventosapp_double_auth_send_log', $log );
+}
+
+/**
+ * Registra un envío masivo para un día específico en el log del evento
+ * 
+ * @param int $event_id ID del evento
+ * @param string $date Fecha del día
+ * @param int $total Total de tickets
+ * @param int $success Enviados correctamente
+ * @param int $failed Fallos
+ */
+function eventosapp_log_mass_send_for_day( $event_id, $date, $total, $success, $failed ) {
+    $log = get_post_meta( $event_id, '_eventosapp_double_auth_mass_log', true );
+    
+    if ( ! is_array( $log ) ) {
+        $log = [];
+    }
+    
+    $user_id = get_current_user_id();
+    $user    = $user_id ? get_userdata( $user_id ) : null;
+    
+    // Agregar nuevo registro
+    $log[] = [
+        'timestamp' => current_time( 'timestamp' ),
+        'total'     => $total,
+        'success'   => $success,
+        'failed'    => $failed,
+        'user_id'   => $user_id,
+        'user_name' => $user ? $user->display_name : 'Sistema',
+        'day'       => $date, // NUEVO: registrar el día específico
+    ];
+    
+    // Mantener solo los últimos 5
+    if ( count( $log ) > 5 ) {
+        $log = array_slice( $log, -5 );
+    }
+    
+    update_post_meta( $event_id, '_eventosapp_double_auth_mass_log', $log );
+}
+
+// ========================================
+// AJAX: REVELAR CÓDIGO DE UN DÍA ESPECÍFICO
+// ========================================
+
+add_action( 'wp_ajax_eventosapp_reveal_auth_code_for_day', function() {
+    check_ajax_referer( 'eventosapp_double_auth_reveal', 'nonce' );
+    
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_send_json_error( 'Permisos insuficientes' );
+    }
+    
+    $ticket_id = isset( $_POST['ticket_id'] ) ? absint( $_POST['ticket_id'] ) : 0;
+    $date = isset( $_POST['date'] ) ? sanitize_text_field( $_POST['date'] ) : '';
+    
+    if ( ! $ticket_id || ! $date ) {
+        wp_send_json_error( 'Datos incompletos' );
+    }
+    
+    // Validar formato de fecha
+    if ( ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ) {
+        wp_send_json_error( 'Formato de fecha inválido' );
+    }
+    
+    $code = eventosapp_get_ticket_auth_code_for_day( $ticket_id, $date );
+    
+    if ( $code ) {
+        wp_send_json_success( [ 'code' => $code ] );
+    } else {
+        wp_send_json_error( 'No hay código asignado para este día' );
+    }
+});
+
+// ========================================
+// AJAX: ENVIAR CÓDIGO DE UN DÍA ESPECÍFICO
+// ========================================
+
+add_action( 'wp_ajax_eventosapp_send_auth_code_for_day', function() {
+    check_ajax_referer( 'eventosapp_double_auth_single', 'nonce' );
+    
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_send_json_error( 'Permisos insuficientes' );
+    }
+    
+    $ticket_id = isset( $_POST['ticket_id'] ) ? absint( $_POST['ticket_id'] ) : 0;
+    $date = isset( $_POST['date'] ) ? sanitize_text_field( $_POST['date'] ) : '';
+    
+    if ( ! $ticket_id || ! $date ) {
+        wp_send_json_error( 'Datos incompletos' );
+    }
+    
+    // Validar formato de fecha
+    if ( ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ) {
+        wp_send_json_error( 'Formato de fecha inválido' );
+    }
+    
+    // Generar y enviar código para este día
+    $code = eventosapp_assign_auth_code_to_ticket_for_day( $ticket_id, $date );
+    $sent = eventosapp_send_auth_code_email_for_day( $ticket_id, $date, 'manual' );
+    
+    if ( $sent ) {
+        $email = get_post_meta( $ticket_id, '_eventosapp_asistente_email', true );
+        $date_formatted = date_i18n( 'd/m/Y', strtotime($date) );
+        wp_send_json_success( [
+            'message' => sprintf( 'Código del %s enviado exitosamente a %s', $date_formatted, $email ),
+            'code'    => $code,
+        ]);
+    } else {
+        wp_send_json_error( 'Error al enviar el email' );
+    }
+});
