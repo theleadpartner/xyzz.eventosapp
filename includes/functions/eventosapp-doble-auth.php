@@ -147,31 +147,55 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
     $organizador  = get_post_meta( $event_id, '_eventosapp_organizador', true ) ?: '';
     $lugar_evento = get_post_meta( $event_id, '_eventosapp_direccion', true ) ?: '';
     
-    // Fecha legible del evento
-    $tipo_fecha = get_post_meta( $event_id, '_eventosapp_tipo_fechas', true );
+    // Fecha legible del evento (usando el mismo método que el ticket normal)
+    $tipo_fecha = get_post_meta( $event_id, '_eventosapp_tipo_fecha', true );
     $fecha_evento = '';
     $hora_evento  = '';
     
-    if ( $tipo_fecha === 'unico' ) {
-        $fecha_raw = get_post_meta( $event_id, '_eventosapp_fecha_unico', true );
+    if ( $tipo_fecha === 'unica' ) {
+        $fecha_raw = get_post_meta( $event_id, '_eventosapp_fecha_unica', true );
         if ( $fecha_raw ) {
-            $dt = DateTime::createFromFormat( 'Y-m-d', $fecha_raw );
-            if ( $dt ) {
-                $fecha_evento = $dt->format( 'd/m/Y' );
-            }
+            $fecha_evento = date_i18n( 'F d, Y', strtotime( $fecha_raw ) );
         }
-        $hora_evento = get_post_meta( $event_id, '_eventosapp_hora_unico', true ) ?: '';
-    } elseif ( $tipo_fecha === 'rango' ) {
+    } elseif ( $tipo_fecha === 'consecutiva' ) {
         $inicio = get_post_meta( $event_id, '_eventosapp_fecha_inicio', true );
-        $fin    = get_post_meta( $event_id, '_eventosapp_fecha_fin', true );
-        if ( $inicio && $fin ) {
-            $dt_ini = DateTime::createFromFormat( 'Y-m-d', $inicio );
-            $dt_fin = DateTime::createFromFormat( 'Y-m-d', $fin );
-            if ( $dt_ini && $dt_fin ) {
-                $fecha_evento = $dt_ini->format( 'd/m/Y' ) . ' - ' . $dt_fin->format( 'd/m/Y' );
-            }
+        if ( $inicio ) {
+            $fecha_evento = date_i18n( 'F d, Y', strtotime( $inicio ) );
         }
-        $hora_evento = get_post_meta( $event_id, '_eventosapp_hora_rango', true ) ?: '';
+    } elseif ( $tipo_fecha === 'noconsecutiva' ) {
+        $fechas = get_post_meta( $event_id, '_eventosapp_fechas_noco', true );
+        if ( is_string( $fechas ) ) {
+            $fechas = @unserialize( $fechas );
+        }
+        if ( ! is_array( $fechas ) ) {
+            $fechas = [];
+        }
+        if ( $fechas ) {
+            $fecha_evento = implode( ', ', array_map( function( $f ) {
+                return date_i18n( 'F d, Y', strtotime( $f ) );
+            }, $fechas ) );
+        }
+    }
+    
+    // Hora del evento
+    $hora_inicio = get_post_meta( $event_id, '_eventosapp_hora_inicio', true ) ?: '';
+    $hora_cierre = get_post_meta( $event_id, '_eventosapp_hora_cierre', true ) ?: '';
+    $tz_label    = get_post_meta( $event_id, '_eventosapp_zona_horaria', true ) ?: '';
+    
+    if ( ! $tz_label ) {
+        $tz_label = wp_timezone_string();
+    }
+    
+    if ( $hora_inicio && $hora_cierre ) {
+        $hora_evento = $hora_inicio . ' – ' . $hora_cierre;
+    } elseif ( $hora_inicio ) {
+        $hora_evento = $hora_inicio;
+    } elseif ( $hora_cierre ) {
+        $hora_evento = 'Hasta ' . $hora_cierre;
+    }
+    
+    if ( $hora_evento && $tz_label ) {
+        $hora_evento .= ' (' . $tz_label . ')';
     }
     
     // Tokens a reemplazar
@@ -231,74 +255,6 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
     remove_filter( 'wp_mail_content_type', $content_type_cb );
     
     // Registrar en el log del ticket
-    if ( $sent ) {
-        eventosapp_log_auth_code_send( $ticket_id, $method );
-    }
-    
-    return $sent;
-}
-
-/**
- * Fallback: Enviar código en texto plano si no existe la plantilla HTML
- * 
- * @param int $ticket_id ID del ticket
- * @param string $method Método de envío
- * @param string $code Código de autenticación
- * @param string $from_name Nombre del remitente
- * @return bool True si se envió correctamente
- */
-function eventosapp_send_auth_code_email_plain( $ticket_id, $method, $code, $from_name ) {
-    $email    = get_post_meta( $ticket_id, '_eventosapp_asistente_email', true );
-    $nombre   = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
-    $apellido = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
-    $event_id = get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
-    
-    $event_title     = get_the_title( $event_id );
-    $nombre_completo = trim( $nombre . ' ' . $apellido );
-    
-    $subject = sprintf( '🔐 Tu Código de Verificación - %s', $event_title );
-    
-    $message = sprintf(
-        "Hola %s,\n\n" .
-        "Has recibido este mensaje porque estás registrado para el evento:\n" .
-        "📅 %s\n\n" .
-        "Para completar tu check-in en el evento, necesitarás presentar el siguiente código de verificación:\n\n" .
-        "🔐 CÓDIGO: %s\n\n" .
-        "⚠️ IMPORTANTE:\n" .
-        "• Este código es personal e intransferible\n" .
-        "• Preséntalo junto a tu ticket para ingresar al evento\n" .
-        "• NO compartas este código con nadie\n\n" .
-        "Nos vemos en el evento,\n" .
-        "%s",
-        $nombre_completo,
-        $event_title,
-        $code,
-        $from_name
-    );
-    
-    // Configurar From Name
-    $site_host = parse_url( home_url(), PHP_URL_HOST );
-    if ( ! $site_host ) {
-        $site_host = $_SERVER['SERVER_NAME'] ?? 'localhost';
-    }
-    $site_host  = preg_replace( '/^www\./i', '', $site_host );
-    $from_email = sanitize_email( 'no-reply@' . $site_host );
-    
-    if ( ! $from_email ) {
-        $admin_fallback = get_option( 'admin_email' );
-        $from_email = is_email( $admin_fallback ) ? $admin_fallback : 'no-reply@localhost';
-    }
-    
-    $from_name = preg_replace( "/[\r\n]+/u", ' ', trim( $from_name ) );
-    $from_name = str_replace( ['"', '<', '>'], '', $from_name );
-    
-    $headers = [
-        'Content-Type: text/plain; charset=UTF-8',
-        sprintf( 'From: %s <%s>', $from_name, $from_email ),
-    ];
-    
-    $sent = wp_mail( $email, $subject, $message, $headers );
-    
     if ( $sent ) {
         eventosapp_log_auth_code_send( $ticket_id, $method );
     }
