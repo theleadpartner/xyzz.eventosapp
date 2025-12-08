@@ -147,33 +147,48 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
     $organizador  = get_post_meta( $event_id, '_eventosapp_organizador', true ) ?: '';
     $lugar_evento = get_post_meta( $event_id, '_eventosapp_direccion', true ) ?: '';
     
+    // Verificar si este código es para un día específico (eventos multi-día con all_days)
+    $specific_date = get_post_meta( $ticket_id, '_eventosapp_double_auth_current_day', true );
+    $auth_mode = get_post_meta( $event_id, '_eventosapp_ticket_double_auth_mode', true );
+    
     // Fecha legible del evento (usando el mismo método que el ticket normal)
     $tipo_fecha = get_post_meta( $event_id, '_eventosapp_tipo_fecha', true );
     $fecha_evento = '';
     $hora_evento  = '';
+    $fecha_especifica_text = ''; // Para mostrar "Este código es válido para el día X"
     
-    if ( $tipo_fecha === 'unica' ) {
-        $fecha_raw = get_post_meta( $event_id, '_eventosapp_fecha_unica', true );
-        if ( $fecha_raw ) {
-            $fecha_evento = date_i18n( 'F d, Y', strtotime( $fecha_raw ) );
-        }
-    } elseif ( $tipo_fecha === 'consecutiva' ) {
-        $inicio = get_post_meta( $event_id, '_eventosapp_fecha_inicio', true );
-        if ( $inicio ) {
-            $fecha_evento = date_i18n( 'F d, Y', strtotime( $inicio ) );
-        }
-    } elseif ( $tipo_fecha === 'noconsecutiva' ) {
-        $fechas = get_post_meta( $event_id, '_eventosapp_fechas_noco', true );
-        if ( is_string( $fechas ) ) {
-            $fechas = @unserialize( $fechas );
-        }
-        if ( ! is_array( $fechas ) ) {
-            $fechas = [];
-        }
-        if ( $fechas ) {
-            $fecha_evento = implode( ', ', array_map( function( $f ) {
-                return date_i18n( 'F d, Y', strtotime( $f ) );
-            }, $fechas ) );
+    // Si hay una fecha específica (modo all_days en eventos multi-día), usarla
+    if ( $specific_date && $auth_mode === 'all_days' && $tipo_fecha !== 'unica' ) {
+        $fecha_evento = date_i18n( 'F d, Y', strtotime( $specific_date ) );
+        $fecha_especifica_text = sprintf( 
+            '<p style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px;margin:16px 0;color:#856404;font-size:14px;"><strong>📅 Este código es válido solo para:</strong> %s</p>',
+            $fecha_evento
+        );
+    } else {
+        // Fecha normal para eventos de día único o primer día
+        if ( $tipo_fecha === 'unica' ) {
+            $fecha_raw = get_post_meta( $event_id, '_eventosapp_fecha_unica', true );
+            if ( $fecha_raw ) {
+                $fecha_evento = date_i18n( 'F d, Y', strtotime( $fecha_raw ) );
+            }
+        } elseif ( $tipo_fecha === 'consecutiva' ) {
+            $inicio = get_post_meta( $event_id, '_eventosapp_fecha_inicio', true );
+            if ( $inicio ) {
+                $fecha_evento = date_i18n( 'F d, Y', strtotime( $inicio ) );
+            }
+        } elseif ( $tipo_fecha === 'noconsecutiva' ) {
+            $fechas = get_post_meta( $event_id, '_eventosapp_fechas_noco', true );
+            if ( is_string( $fechas ) ) {
+                $fechas = @unserialize( $fechas );
+            }
+            if ( ! is_array( $fechas ) ) {
+                $fechas = [];
+            }
+            if ( $fechas ) {
+                $fecha_evento = implode( ', ', array_map( function( $f ) {
+                    return date_i18n( 'F d, Y', strtotime( $f ) );
+                }, $fechas ) );
+            }
         }
     }
     
@@ -200,16 +215,17 @@ function eventosapp_send_auth_code_email( $ticket_id, $method = 'manual' ) {
     
     // Tokens a reemplazar
     $tokens = [
-        '{{header_img}}'        => esc_url( $header_img ),
-        '{{evento_nombre}}'     => esc_html( $event_title ),
-        '{{organizador}}'       => esc_html( $organizador ),
-        '{{fecha_evento}}'      => esc_html( $fecha_evento ),
-        '{{hora_evento}}'       => esc_html( $hora_evento ),
-        '{{lugar_evento}}'      => esc_html( $lugar_evento ),
-        '{{asistente_nombre}}'  => esc_html( $nombre_completo ),
-        '{{asistente_email}}'   => esc_html( $email ),
-        '{{ticket_id}}'         => esc_html( $ticket_code ),
-        '{{codigo_auth}}'       => esc_html( $code ),
+        '{{header_img}}'           => esc_url( $header_img ),
+        '{{evento_nombre}}'        => esc_html( $event_title ),
+        '{{organizador}}'          => esc_html( $organizador ),
+        '{{fecha_evento}}'         => esc_html( $fecha_evento ),
+        '{{hora_evento}}'          => esc_html( $hora_evento ),
+        '{{lugar_evento}}'         => esc_html( $lugar_evento ),
+        '{{asistente_nombre}}'     => esc_html( $nombre_completo ),
+        '{{asistente_email}}'      => esc_html( $email ),
+        '{{ticket_id}}'            => esc_html( $ticket_code ),
+        '{{codigo_auth}}'          => esc_html( $code ),
+        '{{fecha_especifica}}'     => $fecha_especifica_text, // Ya viene con HTML escapado
     ];
     
     $html = strtr( $html, $tokens );
@@ -314,9 +330,10 @@ function eventosapp_get_ticket_auth_log( $ticket_id ) {
  * Envía códigos a todos los tickets de un evento
  * 
  * @param int $event_id ID del evento
+ * @param string|null $specific_date Fecha específica en formato Y-m-d para eventos multi-día (null = todos o primer día según configuración)
  * @return array Resultados: ['success' => int, 'failed' => int, 'total' => int]
  */
-function eventosapp_send_mass_auth_codes( $event_id ) {
+function eventosapp_send_mass_auth_codes( $event_id, $specific_date = null ) {
     $tickets = get_posts([
         'post_type'      => 'eventosapp_ticket',
         'post_status'    => 'publish',
@@ -329,6 +346,11 @@ function eventosapp_send_mass_auth_codes( $event_id ) {
     $failed  = 0;
     
     foreach ( $tickets as $ticket ) {
+        // Si hay una fecha específica, guardarla en el ticket antes de enviar
+        if ( $specific_date ) {
+            update_post_meta( $ticket->ID, '_eventosapp_double_auth_current_day', $specific_date );
+        }
+        
         $sent = eventosapp_send_auth_code_email( $ticket->ID, 'masivo' );
         
         if ( $sent ) {
@@ -340,14 +362,25 @@ function eventosapp_send_mass_auth_codes( $event_id ) {
     
     $total = count( $tickets );
     
-    // Registrar en el log del evento
-    eventosapp_log_mass_send( $event_id, $total, $success, $failed );
+    // Registrar en el log del evento (incluyendo la fecha si aplica)
+    eventosapp_log_mass_send( $event_id, $total, $success, $failed, $specific_date );
     
     return [
         'success' => $success,
         'failed'  => $failed,
         'total'   => $total,
     ];
+}
+
+/**
+ * Envía códigos para un día específico de un evento multi-día
+ * 
+ * @param int $event_id ID del evento
+ * @param string $date Fecha en formato Y-m-d
+ * @return array Resultados del envío
+ */
+function eventosapp_send_mass_auth_codes_for_day( $event_id, $date ) {
+    return eventosapp_send_mass_auth_codes( $event_id, $date );
 }
 
 /**
@@ -358,8 +391,9 @@ function eventosapp_send_mass_auth_codes( $event_id ) {
  * @param int $total Total de tickets
  * @param int $success Enviados correctamente
  * @param int $failed Fallos
+ * @param string|null $date Fecha específica del envío (para eventos multi-día)
  */
-function eventosapp_log_mass_send( $event_id, $total, $success, $failed ) {
+function eventosapp_log_mass_send( $event_id, $total, $success, $failed, $date = null ) {
     $log = get_post_meta( $event_id, '_eventosapp_double_auth_mass_log', true );
     
     if ( ! is_array( $log ) ) {
@@ -377,6 +411,7 @@ function eventosapp_log_mass_send( $event_id, $total, $success, $failed ) {
         'failed'    => $failed,
         'user_id'   => $user_id,
         'user_name' => $user ? $user->display_name : 'Sistema',
+        'date'      => $date, // Fecha específica para eventos multi-día
     ];
     
     // Mantener solo los últimos 3
