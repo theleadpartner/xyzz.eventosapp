@@ -56,11 +56,11 @@ function eventosapp_render_staff_access_control_metabox($post) {
         ? eventosapp_dashboard_features() 
         : [];
     
-    // Roles que queremos controlar por evento
+    // Roles que queremos controlar por evento (SIN prefijo eventosapp_)
     $controlled_roles = [
-        'eventosapp_staff'       => 'Staff',
-        'eventosapp_organizador' => 'Organizador',
-        'eventosapp_logistico'   => 'Logístico'
+        'staff'       => 'Staff',
+        'organizador' => 'Organizador',
+        'logistico'   => 'Logístico'
     ];
     
     ?>
@@ -72,25 +72,52 @@ function eventosapp_render_staff_access_control_metabox($post) {
         </p>
         
         <style>
+            .eventosapp-staff-access-control {
+                overflow-x: auto;
+            }
+            .eventosapp-staff-access-control .access-table-wrapper {
+                overflow-x: auto;
+                margin-top: 10px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+            }
             .eventosapp-staff-access-control .access-table {
                 width: 100%;
+                min-width: 900px;
                 border-collapse: collapse;
-                margin-top: 10px;
+                margin: 0;
             }
             .eventosapp-staff-access-control .access-table th,
             .eventosapp-staff-access-control .access-table td {
                 border: 1px solid #ddd;
-                padding: 8px 10px;
+                padding: 6px 8px;
                 text-align: center;
+                font-size: 12px;
             }
             .eventosapp-staff-access-control .access-table th {
                 background: #f6f7f7;
                 font-weight: 600;
+                position: sticky;
+                top: 0;
+                z-index: 2;
+                white-space: nowrap;
+                max-width: 100px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .eventosapp-staff-access-control .access-table th.role-header {
+                min-width: 100px;
+                max-width: 100px;
             }
             .eventosapp-staff-access-control .access-table td.role-name {
                 text-align: left;
                 background: #fafafa;
                 font-weight: 600;
+                position: sticky;
+                left: 0;
+                z-index: 1;
+                white-space: nowrap;
+                min-width: 100px;
             }
             .eventosapp-staff-access-control .access-table td.disabled {
                 background: #f9f9f9;
@@ -101,66 +128,74 @@ function eventosapp_render_staff_access_control_metabox($post) {
             }
             .eventosapp-staff-access-control .global-blocked {
                 color: #d63638;
-                font-size: 11px;
+                font-size: 10px;
+                display: block;
+                margin-top: 2px;
+            }
+            .eventosapp-staff-access-control .role-code {
+                font-size: 9px;
+                color: #666;
                 display: block;
                 margin-top: 2px;
             }
         </style>
         
-        <table class="access-table">
-            <thead>
-                <tr>
-                    <th style="width: 150px;">Rol</th>
-                    <?php foreach ($features as $feature_key => $feature_label): ?>
-                        <th><?php echo esc_html($feature_label); ?></th>
-                    <?php endforeach; ?>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($controlled_roles as $role_slug => $role_label): ?>
+        <div class="access-table-wrapper">
+            <table class="access-table">
+                <thead>
                     <tr>
-                        <td class="role-name">
-                            <?php echo esc_html($role_label); ?>
-                            <br><code style="font-size: 10px;"><?php echo esc_html($role_slug); ?></code>
-                        </td>
+                        <th class="role-header">Rol</th>
                         <?php foreach ($features as $feature_key => $feature_label): ?>
-                            <?php
-                            // Verificar si el rol tiene permiso global para esta feature
-                            $has_global_permission = !empty($global_visibility[$role_slug][$feature_key]);
-                            
-                            // Verificar si está habilitado para este evento específico
-                            // Por defecto, si tiene permiso global, está habilitado (a menos que se haya desmarcado)
-                            $event_permission = isset($event_access[$role_slug][$feature_key]) 
-                                ? (int)$event_access[$role_slug][$feature_key] 
-                                : ($has_global_permission ? 1 : 0);
-                            
-                            $field_name = '_eventosapp_staff_event_access[' . esc_attr($role_slug) . '][' . esc_attr($feature_key) . ']';
-                            
-                            // Si no tiene permiso global, el checkbox está deshabilitado
-                            $disabled = !$has_global_permission;
-                            $checked = $has_global_permission && $event_permission ? 'checked' : '';
-                            $td_class = $disabled ? 'disabled' : '';
-                            ?>
-                            <td class="<?php echo esc_attr($td_class); ?>">
-                                <input 
-                                    type="checkbox" 
-                                    name="<?php echo esc_attr($field_name); ?>" 
-                                    value="1"
-                                    <?php echo $checked; ?>
-                                    <?php echo $disabled ? 'disabled' : ''; ?>
-                                    <?php if ($disabled): ?>
-                                        title="Bloqueado globalmente"
-                                    <?php endif; ?>
-                                />
-                                <?php if ($disabled): ?>
-                                    <span class="global-blocked">Bloqueado</span>
-                                <?php endif; ?>
-                            </td>
+                            <th title="<?php echo esc_attr($feature_label); ?>"><?php echo esc_html($feature_label); ?></th>
                         <?php endforeach; ?>
                     </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    <?php foreach ($controlled_roles as $role_slug => $role_label): ?>
+                        <tr>
+                            <td class="role-name">
+                                <?php echo esc_html($role_label); ?>
+                                <span class="role-code"><?php echo esc_html($role_slug); ?></span>
+                            </td>
+                            <?php foreach ($features as $feature_key => $feature_label): ?>
+                                <?php
+                                // Verificar si el rol tiene permiso global para esta feature
+                                $has_global_permission = !empty($global_visibility[$role_slug][$feature_key]);
+                                
+                                // Verificar si está habilitado para este evento específico
+                                // Por defecto, si tiene permiso global, está habilitado (a menos que se haya desmarcado)
+                                $event_permission = isset($event_access[$role_slug][$feature_key]) 
+                                    ? (int)$event_access[$role_slug][$feature_key] 
+                                    : ($has_global_permission ? 1 : 0);
+                                
+                                $field_name = '_eventosapp_staff_event_access[' . esc_attr($role_slug) . '][' . esc_attr($feature_key) . ']';
+                                
+                                // Si no tiene permiso global, el checkbox está deshabilitado
+                                $disabled = !$has_global_permission;
+                                $checked = $has_global_permission && $event_permission ? 'checked' : '';
+                                $td_class = $disabled ? 'disabled' : '';
+                                ?>
+                                <td class="<?php echo esc_attr($td_class); ?>">
+                                    <input 
+                                        type="checkbox" 
+                                        name="<?php echo esc_attr($field_name); ?>" 
+                                        value="1"
+                                        <?php echo $checked; ?>
+                                        <?php echo $disabled ? 'disabled' : ''; ?>
+                                        <?php if ($disabled): ?>
+                                            title="Bloqueado globalmente"
+                                        <?php endif; ?>
+                                    />
+                                    <?php if ($disabled): ?>
+                                        <span class="global-blocked">❌</span>
+                                    <?php endif; ?>
+                                </td>
+                            <?php endforeach; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
         
         <p class="description" style="margin-top: 15px;">
             <strong>Cómo funciona:</strong>
@@ -208,11 +243,11 @@ function eventosapp_save_staff_access_control_metabox($post_id, $post) {
         ? eventosapp_dashboard_features() 
         : [];
     
-    // Roles que controlamos
+    // Roles que controlamos (SIN prefijo eventosapp_)
     $controlled_roles = [
-        'eventosapp_staff',
-        'eventosapp_organizador',
-        'eventosapp_logistico'
+        'staff',
+        'organizador',
+        'logistico'
     ];
     
     // Procesar y sanitizar los datos
@@ -271,11 +306,11 @@ function eventosapp_validate_event_specific_access($has_permission, $feature, $u
         return $has_permission;
     }
     
-    // Verificar si el usuario tiene alguno de los roles controlados por evento
+    // Verificar si el usuario tiene alguno de los roles controlados por evento (SIN prefijo)
     $controlled_roles = [
-        'eventosapp_staff',
-        'eventosapp_organizador',
-        'eventosapp_logistico'
+        'staff',
+        'organizador',
+        'logistico'
     ];
     
     $user_roles = (array) $user->roles;
@@ -333,11 +368,11 @@ function eventosapp_role_can_in_event($role, $feature, $event_id) {
         return false; // Si no tiene permiso global, no puede acceder
     }
     
-    // Verificar si es un rol controlado
+    // Verificar si es un rol controlado (SIN prefijo)
     $controlled_roles = [
-        'eventosapp_staff',
-        'eventosapp_organizador',
-        'eventosapp_logistico'
+        'staff',
+        'organizador',
+        'logistico'
     ];
     
     if (!in_array($role, $controlled_roles, true)) {
