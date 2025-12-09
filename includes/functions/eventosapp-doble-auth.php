@@ -51,25 +51,77 @@ function eventosapp_get_ticket_auth_code( $ticket_id ) {
 }
 
 /**
- * Valida si un código ingresado coincide con el asignado al ticket
+ * Valida si un código ingresado coincide con el asignado al ticket.
+ *
+ * - Para eventos de día único o modo "first_day": valida contra el código general.
+ * - Para eventos multi-día en modo "all_days": intenta validar contra el código del día actual
+ *   (según la zona horaria del evento). Si no existe, cae al código general.
  * 
- * @param int $ticket_id ID del ticket
+ * @param int    $ticket_id  ID del ticket
  * @param string $input_code Código ingresado por el usuario
  * @return bool True si coincide, false si no
  */
 function eventosapp_validate_auth_code( $ticket_id, $input_code ) {
+    // Normalizar input
+    $input_code = trim( (string) $input_code );
+    if ( $input_code === '' ) {
+        return false;
+    }
+
+    // Código general por defecto
     $stored_code = eventosapp_get_ticket_auth_code( $ticket_id );
-    
+
+    // Intentar detectar contexto de evento / multi-día
+    $event_id = get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
+    if ( $event_id ) {
+        $auth_mode  = get_post_meta( $event_id, '_eventosapp_ticket_double_auth_mode', true );
+        $tipo_fecha = get_post_meta( $event_id, '_eventosapp_tipo_fecha', true );
+        $tipo_fecha = $tipo_fecha ? $tipo_fecha : 'unica';
+
+        // Solo aplicar lógica por día cuando:
+        // - El evento es multi-día (no 'unica')
+        // - El modo de autenticación es "all_days"
+        if ( $auth_mode === 'all_days' && $tipo_fecha !== 'unica' && function_exists( 'eventosapp_get_event_days' ) ) {
+            $days = (array) eventosapp_get_event_days( $event_id );
+            if ( ! empty( $days ) ) {
+                // Obtener "hoy" en la zona horaria del evento
+                $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
+                if ( ! $event_tz ) {
+                    $event_tz = wp_timezone_string();
+                    if ( ! $event_tz || $event_tz === 'UTC' ) {
+                        $offset   = get_option( 'gmt_offset' );
+                        $event_tz = $offset ? timezone_name_from_abbr( '', $offset * 3600, 0 ) ?: 'UTC' : 'UTC';
+                    }
+                }
+
+                try {
+                    $dt    = new DateTime( 'now', new DateTimeZone( $event_tz ) );
+                    $today = $dt->format( 'Y-m-d' );
+                } catch ( Exception $e ) {
+                    $dt    = new DateTime( 'now', wp_timezone() );
+                    $today = $dt->format( 'Y-m-d' );
+                }
+
+                // Si hoy es un día del evento, intentamos validar contra el código específico de ese día
+                if ( in_array( $today, $days, true ) ) {
+                    $stored_day_code = eventosapp_get_ticket_auth_code_for_day( $ticket_id, $today );
+                    if ( $stored_day_code ) {
+                        $stored_code = $stored_day_code;
+                    }
+                }
+            }
+        }
+    }
+
     if ( ! $stored_code ) {
         return false;
     }
-    
-    // Normalizar: quitar espacios y convertir a string
-    $input_code  = trim( (string) $input_code );
+
     $stored_code = trim( (string) $stored_code );
-    
+
     return $input_code === $stored_code;
 }
+
 
 // ========================================
 // ENVÍO DE CÓDIGOS POR EMAIL
@@ -444,49 +496,138 @@ add_action( 'eventosapp_auto_send_auth_codes', function( $event_id ) {
 }, 10, 1 );
 
 /**
- * Regenera códigos para todos los tickets de un evento y los envía
- * ATENCIÓN: Esta función BORRA todos los códigos existentes
- * 
+ * Regenera códigos para todos los tickets de un evento y los envía.
+ *
+ * - Eventos de día único o modo "first_day":
+ *      * Regenera SIEMPRE un nuevo código general por ticket.
+ *      * Envía el código por email (método "masivo").
+ *
+ * - Eventos multi-día en modo "all_days":
+ *      * Regenera los códigos de TODOS los días del evento para cada ticket.
+ *      * Sincroniza el código general y el "día actual" con el día objetivo.
+ *      * Envía por email SOLO el código del día objetivo (hoy si es día del evento,
+ *        o el primer día del evento en su defecto).
+ *
+ * En todos los casos actualiza el log masivo del evento y el log del ticket,
+ * de forma que el metabox "🔐 Información de Doble Autenticación" vea los códigos
+ * correctamente.
+ *
  * @param int $event_id ID del evento
  * @return array Resultados: ['success' => int, 'failed' => int, 'total' => int]
  */
 function eventosapp_regenerate_and_send_mass_auth_codes( $event_id ) {
-    $tickets = get_posts([
+    // Detectar configuración del evento
+    $auth_mode  = get_post_meta( $event_id, '_eventosapp_ticket_double_auth_mode', true );
+    $tipo_fecha = get_post_meta( $event_id, '_eventosapp_tipo_fecha', true );
+    $tipo_fecha = $tipo_fecha ? $tipo_fecha : 'unica';
+
+    $event_days = [];
+    if ( function_exists( 'eventosapp_get_event_days' ) ) {
+        $event_days = (array) eventosapp_get_event_days( $event_id );
+    }
+
+    // Calcular día objetivo para multi-día (solo modo all_days)
+    $target_day = null;
+    if ( $auth_mode === 'all_days' && $tipo_fecha !== 'unica' && ! empty( $event_days ) ) {
+        // Determinar "hoy" en la zona horaria del evento
+        $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
+        if ( ! $event_tz ) {
+            $event_tz = wp_timezone_string();
+            if ( ! $event_tz || $event_tz === 'UTC' ) {
+                $offset   = get_option( 'gmt_offset' );
+                $event_tz = $offset ? timezone_name_from_abbr( '', $offset * 3600, 0 ) ?: 'UTC' : 'UTC';
+            }
+        }
+
+        try {
+            $dt    = new DateTime( 'now', new DateTimeZone( $event_tz ) );
+            $today = $dt->format( 'Y-m-d' );
+        } catch ( Exception $e ) {
+            $dt    = new DateTime( 'now', wp_timezone() );
+            $today = $dt->format( 'Y-m-d' );
+        }
+
+        if ( in_array( $today, $event_days, true ) ) {
+            $target_day = $today;
+        } else {
+            // Si hoy no es un día del evento, usar el primer día del mismo
+            $target_day = reset( $event_days );
+        }
+    }
+
+    // Obtener todos los tickets del evento
+    $tickets = get_posts( [
         'post_type'      => 'eventosapp_ticket',
         'post_status'    => 'publish',
         'posts_per_page' => -1,
         'meta_key'       => '_eventosapp_ticket_evento_id',
         'meta_value'     => $event_id,
-    ]);
-    
+    ] );
+
     $success = 0;
     $failed  = 0;
-    
+
     foreach ( $tickets as $ticket ) {
-        // IMPORTANTE: Generar un NUEVO código (esto sobrescribe el anterior)
-        $new_code = eventosapp_assign_auth_code_to_ticket( $ticket->ID );
-        
-        // Enviar el nuevo código
-        $sent = eventosapp_send_auth_code_email( $ticket->ID, 'masivo' );
-        
+        $sent = false;
+
+        if ( $target_day && ! empty( $event_days ) ) {
+            // ===== Evento multi-día en modo all_days =====
+            // 1) Regenerar códigos para TODOS los días del evento
+            $target_code = null;
+
+            foreach ( $event_days as $day ) {
+                $code_for_day = eventosapp_assign_auth_code_to_ticket_for_day( $ticket->ID, $day );
+                if ( $day === $target_day ) {
+                    $target_code = $code_for_day;
+                }
+            }
+
+            // Seguridad: si por cualquier razón no se obtuvo código para el día objetivo
+            if ( ! $target_code ) {
+                $target_code = eventosapp_assign_auth_code_to_ticket_for_day( $ticket->ID, $target_day );
+            }
+
+            // 2) Sincronizar "día actual" y código general con el día objetivo
+            update_post_meta( $ticket->ID, '_eventosapp_double_auth_current_day', $target_day );
+            update_post_meta( $ticket->ID, '_eventosapp_double_auth_code', $target_code );
+            update_post_meta( $ticket->ID, '_eventosapp_double_auth_code_date', current_time( 'timestamp' ) );
+
+            // 3) Enviar correo usando la función específica por día (registra log por día)
+            $sent = eventosapp_send_auth_code_email_for_day( $ticket->ID, $target_day, 'masivo' );
+        } else {
+            // ===== Evento de día único o modo first_day =====
+            // Generar SIEMPRE un nuevo código general
+            $new_code = eventosapp_assign_auth_code_to_ticket( $ticket->ID );
+
+            // Enviar el nuevo código (registra log genérico en el ticket)
+            $sent = eventosapp_send_auth_code_email( $ticket->ID, 'masivo' );
+        }
+
         if ( $sent ) {
             $success++;
         } else {
             $failed++;
         }
     }
-    
+
     $total = count( $tickets );
-    
-    // Registrar en el log del evento (con indicador de regeneración)
-    eventosapp_log_mass_send( $event_id, $total, $success, $failed );
-    
+
+    // Registrar en el log del evento
+    if ( $target_day ) {
+        // Multi-día: guardar con información del día
+        eventosapp_log_mass_send_for_day( $event_id, $target_day, $total, $success, $failed );
+    } else {
+        // Caso clásico
+        eventosapp_log_mass_send( $event_id, $total, $success, $failed );
+    }
+
     return [
         'success' => $success,
         'failed'  => $failed,
         'total'   => $total,
     ];
 }
+
 
 // ========================================
 // AJAX: REGENERAR Y ENVIAR CÓDIGOS MASIVAMENTE
