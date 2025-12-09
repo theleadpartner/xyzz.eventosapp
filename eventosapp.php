@@ -44,6 +44,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-notificacion
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-auto-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-auto-networking.php';  // <-- NUEVO: Auto-creación páginas networking
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-event-checklist.php'; // <-- NUEVO
+require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-ranking-networking.php'; // <-- NUEVO: Ranking de Networking
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-batch-refresh.php';   // <-- NUEVO: batch refresh tickets por evento
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-webhook-conditionals.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-networking-search.php';
@@ -665,4 +666,3 @@ function eventosapp_ensure_core_roles(){
         }
     }
 }
-
