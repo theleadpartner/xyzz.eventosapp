@@ -64,18 +64,18 @@ function eventosapp_cron_send_auth_codes($event_id) {
         return;
     }
 
-    // Determinar qué día enviar
+    // Determinar qué día enviar (no se usa directamente pero se mantiene por compatibilidad futura)
     $today = current_time('Y-m-d');
     
     if ($auth_mode === 'all_days') {
-        // Modo multi-día: enviar código del primer día en el envío programado
-        // Los días siguientes se programarán automáticamente
+        // Modo multi-día: enviar código del primer día en el envío programado.
+        // Los días siguientes se programarán automáticamente.
         $first_day = $event_days[0];
         
-        // Enviar códigos para el primer día
+        // Enviar códigos para el primer día (códigos por día)
         eventosapp_send_mass_auth_codes_for_day($event_id, $first_day);
         
-        // Programar envíos para los días siguientes (6:00 AM de cada día)
+        // Programar envíos para los días siguientes (por ejemplo 06:00 AM de cada día)
         for ($i = 1; $i < count($event_days); $i++) {
             $day = $event_days[$i];
             
@@ -103,10 +103,12 @@ function eventosapp_cron_send_auth_codes($event_id) {
         }
         
     } else {
-        // Modo primer día: envío único
-        eventosapp_send_mass_auth_codes_for_day($event_id, null);
+        // Modo clásico / primer día: envío único usando códigos generales
+        // (compatible con eventos de día único y multi-día en modo "first_day")
+        eventosapp_send_mass_auth_codes($event_id);
     }
 }
+
 
 /**
  * Hook para envío de código de un día específico
