@@ -611,6 +611,10 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 </tbody>
             </table>
         <?php endif; ?>
+    
+    
+    
+    
     </div>
     
     <script>
@@ -752,6 +756,71 @@ function eventosapp_render_metabox_double_auth_config($post) {
     });
     </script>
     <?php
+
+
+<hr style="margin: 20px 0;">
+    <h4 style="margin-bottom:10px;">🔄 Reprogramar Envío Completo</h4>
+    <p style="color:#666;font-size:12px;margin-bottom:10px;">
+        Si necesitas reprogramar el envío de códigos (por ejemplo, si cambiaste las fechas del evento), 
+        puedes limpiar el registro de días enviados. Esto permitirá que se vuelvan a enviar los códigos 
+        según la programación configurada.
+    </p>
+    
+    <button type="button" class="button" id="evapp-clear-sent-days" style="background:#dc3545;color:#fff;border-color:#dc3545;">
+        🗑️ Limpiar Registro de Días Enviados
+    </button>
+    
+    <div id="evapp-clear-message" style="display:none;padding:8px;margin-top:10px;border-radius:4px;"></div>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        $('#evapp-clear-sent-days').on('click', function() {
+            if (!confirm('⚠️ ADVERTENCIA: Esta acción limpiará el registro de días enviados.\n\nEsto significa que el sistema volverá a enviar los códigos según la programación configurada, incluso para días que ya se enviaron anteriormente.\n\n¿Estás completamente seguro?')) {
+                return;
+            }
+            
+            const $btn = $(this);
+            const $msg = $('#evapp-clear-message');
+            
+            $btn.prop('disabled', true).text('Limpiando...');
+            $msg.hide();
+            
+            $.ajax({
+                url: ajaxurl,
+                method: 'POST',
+                data: {
+                    action: 'eventosapp_clear_sent_days',
+                    event_id: <?php echo absint($post->ID); ?>,
+                    nonce: '<?php echo wp_create_nonce("eventosapp_clear_sent_days"); ?>'
+                },
+                success: function(response) {
+                    $btn.prop('disabled', false).text('🗑️ Limpiar Registro de Días Enviados');
+                    
+                    if (response.success) {
+                        $msg.css({background:'#d4edda',color:'#155724',border:'1px solid #c3e6cb'})
+                            .text('✅ ' + response.data.message).show();
+                        
+                        setTimeout(function() {
+                            location.reload();
+                        }, 2000);
+                    } else {
+                        $msg.css({background:'#f8d7da',color:'#721c24',border:'1px solid #f5c6cb'})
+                            .text('❌ ' + (response.data || 'Error desconocido')).show();
+                    }
+                },
+                error: function() {
+                    $btn.prop('disabled', false).text('🗑️ Limpiar Registro de Días Enviados');
+                    $msg.css({background:'#f8d7da',color:'#721c24',border:'1px solid #f5c6cb'})
+                        .text('❌ Error de conexión').show();
+                }
+            });
+        });
+    });
+    </script>
+    <?php
+}
+
+
 }
 
 /**
@@ -835,3 +904,50 @@ add_action('save_post_eventosapp_event', function($post_id){
     }
     
 }, 30); // prioridad > 25 para correr después del guardado de extras
+
+/**
+ * AJAX: Limpiar registro de días enviados
+ */
+add_action('wp_ajax_eventosapp_clear_sent_days', function() {
+    check_ajax_referer('eventosapp_clear_sent_days', 'nonce');
+    
+    if (!current_user_can('edit_posts')) {
+        wp_send_json_error('Permisos insuficientes');
+    }
+    
+    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
+    
+    if (!$event_id) {
+        wp_send_json_error('ID de evento no proporcionado');
+    }
+    
+    // Limpiar el registro
+    if (function_exists('eventosapp_clear_sent_days')) {
+        eventosapp_clear_sent_days($event_id);
+        
+        // También cancelar todos los crons programados para reprogramar desde cero
+        wp_clear_scheduled_hook('eventosapp_send_auth_codes_scheduled', [$event_id]);
+        
+        // Cancelar crons de días específicos
+        if (function_exists('eventosapp_get_event_days')) {
+            $days = eventosapp_get_event_days($event_id);
+            foreach ($days as $day) {
+                $timestamp = wp_next_scheduled('eventosapp_send_auth_codes_for_specific_day', [$event_id, $day]);
+                if ($timestamp) {
+                    wp_unschedule_event($timestamp, 'eventosapp_send_auth_codes_for_specific_day', [$event_id, $day]);
+                }
+            }
+        }
+        
+        // Reprogramar desde cero
+        if (function_exists('eventosapp_schedule_auth_codes_send')) {
+            eventosapp_schedule_auth_codes_send($event_id);
+        }
+        
+        wp_send_json_success([
+            'message' => 'Registro limpiado exitosamente. Los envíos se han reprogramado desde cero.'
+        ]);
+    } else {
+        wp_send_json_error('Función no disponible');
+    }
+});
