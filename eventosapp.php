@@ -18,6 +18,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-email-header
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-sesiones.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-configuracion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-co-gestion.php';
+require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-access-staff-control-event.php'; // Control de acceso dashboard por evento
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-helpers.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-dashboard.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-search.php';
@@ -49,6 +50,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-networki
 
 // NUEVO: Sistema de Doble Autenticación
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-doble-auth.php';
+require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-doble-auth-cron.php'; // NUEVO
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-ticket-double-auth-metabox.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-double-auth.php';
 
