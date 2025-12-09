@@ -610,11 +610,23 @@ function eventosapp_render_metabox_double_auth_config($post) {
                     <?php endforeach; ?>
                 </tbody>
             </table>
-        <?php endif; ?>
+<?php endif; ?>
+    </div>
     
-    
-    
-    
+    <!-- NUEVA SECCIÓN: Reprogramar Envío Completo -->
+    <div class="evapp-double-auth-section">
+        <h4 style="color:#d9534f;">🔄 Reprogramar Envío Completo</h4>
+        <p style="color:#666;font-size:12px;margin-bottom:10px;line-height:1.5;">
+            Si necesitas reprogramar el envío de códigos (por ejemplo, si cambiaste las fechas del evento), 
+            puedes limpiar el registro de días enviados. Esto permitirá que se vuelvan a enviar los códigos 
+            según la programación configurada.
+        </p>
+        
+        <button type="button" class="button" id="evapp-clear-sent-days" style="background:#dc3545;color:#fff;border-color:#dc3545;">
+            🗑️ Limpiar Registro de Días Enviados
+        </button>
+        
+        <div id="evapp-clear-message" class="evapp-ajax-message"></div>
     </div>
     
     <script>
@@ -671,7 +683,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
         
         // Envío masivo
         $('#evapp-mass-send-btn').on('click', function() {
-            if (!confirm('¿Estás seguro de que deseas enviar códigos a TODOS los tickets de este evento? Esta acción no se puede deshacer.')) {
+            if (!confirm('¿Estás seguro de que deseas enviar códigos a TODOS los tickets de este evento?')) {
                 return;
             }
             
@@ -753,27 +765,8 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 }
             });
         });
-    });
-    </script>
-    <?php
-
-
-<hr style="margin: 20px 0;">
-    <h4 style="margin-bottom:10px;">🔄 Reprogramar Envío Completo</h4>
-    <p style="color:#666;font-size:12px;margin-bottom:10px;">
-        Si necesitas reprogramar el envío de códigos (por ejemplo, si cambiaste las fechas del evento), 
-        puedes limpiar el registro de días enviados. Esto permitirá que se vuelvan a enviar los códigos 
-        según la programación configurada.
-    </p>
-    
-    <button type="button" class="button" id="evapp-clear-sent-days" style="background:#dc3545;color:#fff;border-color:#dc3545;">
-        🗑️ Limpiar Registro de Días Enviados
-    </button>
-    
-    <div id="evapp-clear-message" style="display:none;padding:8px;margin-top:10px;border-radius:4px;"></div>
-    
-    <script>
-    jQuery(document).ready(function($) {
+        
+        // NUEVO: Limpiar registro de días enviados
         $('#evapp-clear-sent-days').on('click', function() {
             if (!confirm('⚠️ ADVERTENCIA: Esta acción limpiará el registro de días enviados.\n\nEsto significa que el sistema volverá a enviar los códigos según la programación configurada, incluso para días que ya se enviaron anteriormente.\n\n¿Estás completamente seguro?')) {
                 return;
@@ -797,30 +790,24 @@ function eventosapp_render_metabox_double_auth_config($post) {
                     $btn.prop('disabled', false).text('🗑️ Limpiar Registro de Días Enviados');
                     
                     if (response.success) {
-                        $msg.css({background:'#d4edda',color:'#155724',border:'1px solid #c3e6cb'})
-                            .text('✅ ' + response.data.message).show();
+                        $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
                         
                         setTimeout(function() {
                             location.reload();
                         }, 2000);
                     } else {
-                        $msg.css({background:'#f8d7da',color:'#721c24',border:'1px solid #f5c6cb'})
-                            .text('❌ ' + (response.data || 'Error desconocido')).show();
+                        $msg.removeClass('error').addClass('success').text('❌ ' + (response.data || 'Error desconocido')).show();
                     }
                 },
                 error: function() {
                     $btn.prop('disabled', false).text('🗑️ Limpiar Registro de Días Enviados');
-                    $msg.css({background:'#f8d7da',color:'#721c24',border:'1px solid #f5c6cb'})
-                        .text('❌ Error de conexión').show();
+                    $msg.removeClass('error').addClass('success').text('❌ Error de conexión').show();
                 }
             });
         });
     });
     </script>
     <?php
-}
-
-
 }
 
 /**
