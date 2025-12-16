@@ -9,6 +9,7 @@ Author: The Lead Partner
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 require_once plugin_dir_path(__FILE__) . 'eventosapp-tickets.php';
+require_once plugin_dir_path(__FILE__) . 'eventosapp-qr-ecosystem.php'; // NUEVO: Sistema de QR diferenciados
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-integraciones.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/google-wallet-android.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-badges.php';
