@@ -352,8 +352,8 @@ function eventosapp_ticket_status_metabox($post) {
 function eventosapp_ticket_files_metabox($post) {
     $ticketID = get_post_meta($post->ID, 'eventosapp_ticketID', true);
 
-    // URL QR por defecto (email)
-    $qr_url = $ticketID ? eventosapp_get_ticket_qr_url($ticketID, 'email') : '';
+    // URL QR
+    $qr_url = $ticketID ? eventosapp_get_ticket_qr_url($ticketID) : '';
     // URL PDF
     $pdf_url = get_post_meta($post->ID, '_eventosapp_ticket_pdf_url', true);
     // ICS
@@ -363,27 +363,14 @@ function eventosapp_ticket_files_metabox($post) {
     // Wallet Apple
     $wallet_apple_url = get_post_meta($post->ID, '_eventosapp_ticket_wallet_apple', true);
 
-    // Obtener estadísticas de uso de medios QR
-    $qr_stats = function_exists('eventosapp_get_qr_medio_stats') ? eventosapp_get_qr_medio_stats($post->ID) : null;
-
     ?>
     <style>
         .eventosapp-file-links label { display:block; font-weight:600; margin-bottom:2px; margin-top:12px;}
         .eventosapp-file-links input[type="text"] { width:100%; font-size:13px; }
         .eventosapp-file-links a { font-size:13px; }
-        .eventosapp-qr-stats { background:#f0f9ff; border:1px solid #bae6fd; padding:12px; border-radius:8px; margin-top:15px; }
-        .eventosapp-qr-stats h4 { margin:0 0 10px; color:#0369a1; font-size:14px; }
-        .eventosapp-qr-medio-item { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #e0f2fe; }
-        .eventosapp-qr-medio-item:last-child { border-bottom:none; }
-        .eventosapp-qr-medio-name { font-weight:600; color:#334155; }
-        .eventosapp-qr-medio-count { color:#0369a1; font-weight:700; }
-        .eventosapp-qr-all-codes { margin-top:15px; padding:12px; background:#fafafa; border:1px solid #e5e7eb; border-radius:8px; }
-        .eventosapp-qr-all-codes h4 { margin:0 0 10px; font-size:14px; }
-        .eventosapp-qr-code-grid { display:grid; grid-template-columns:auto 1fr; gap:8px; font-size:13px; }
-        .eventosapp-qr-code-grid strong { color:#475569; }
     </style>
     <div class="eventosapp-file-links">
-        <label>QR Principal (Email):</label>
+        <label>QR:</label>
         <?php if ($qr_url): ?>
             <a href="<?php echo esc_url($qr_url); ?>" target="_blank"><?php echo esc_html($qr_url); ?></a>
         <?php else: ?>
@@ -424,74 +411,13 @@ function eventosapp_ticket_files_metabox($post) {
             echo '<span style="color:#888;">No generado aún.</span>';
         }
         ?>
-
-        <!-- Mostrar todos los QR generados -->
-        <?php if ($ticketID && function_exists('eventosapp_qr_medio_label')): ?>
-        <div class="eventosapp-qr-all-codes">
-            <h4>🔲 Códigos QR por Medio</h4>
-            <div class="eventosapp-qr-code-grid">
-                <?php
-                $medios = ['email', 'pdf', 'google_wallet', 'apple_wallet', 'badge'];
-                foreach ($medios as $medio) {
-                    $url = function_exists('eventosapp_get_qr_url_for_medio') ? eventosapp_get_qr_url_for_medio($ticketID, $medio) : '';
-                    $label = function_exists('eventosapp_qr_medio_label') ? eventosapp_qr_medio_label($medio) : $medio;
-                    echo '<strong>' . esc_html($label) . ':</strong>';
-                    if ($url) {
-                        echo '<a href="' . esc_url($url) . '" target="_blank" style="word-break:break-all;">Ver QR</a>';
-                    } else {
-                        echo '<span style="color:#888;">No disponible</span>';
-                    }
-                }
-                ?>
-            </div>
-        </div>
-        <?php endif; ?>
-
-        <!-- Estadísticas de uso de medios QR -->
-        <?php if ($qr_stats && $qr_stats['total_scans'] > 0): ?>
-        <div class="eventosapp-qr-stats">
-            <h4>📊 Estadísticas de Uso de QR</h4>
-            <div style="margin-bottom:10px;">
-                <strong>Último medio usado:</strong> 
-                <span style="color:#0369a1;">
-                    <?php 
-                    echo function_exists('eventosapp_qr_medio_label') 
-                        ? esc_html(eventosapp_qr_medio_label($qr_stats['last_used'])) 
-                        : esc_html($qr_stats['last_used']); 
-                    ?>
-                </span>
-            </div>
-            <div style="margin-bottom:8px;"><strong>Escaneos por medio:</strong></div>
-            <?php foreach ($qr_stats['counter'] as $medio => $count): ?>
-                <div class="eventosapp-qr-medio-item">
-                    <span class="eventosapp-qr-medio-name">
-                        <?php 
-                        echo function_exists('eventosapp_qr_medio_label') 
-                            ? esc_html(eventosapp_qr_medio_label($medio)) 
-                            : esc_html($medio); 
-                        ?>
-                    </span>
-                    <span class="eventosapp-qr-medio-count"><?php echo esc_html($count); ?> vez<?php echo $count > 1 ? 'es' : ''; ?></span>
-                </div>
-            <?php endforeach; ?>
-            <div style="margin-top:10px;padding-top:10px;border-top:1px solid #bae6fd;">
-                <strong>Total de escaneos:</strong> <span style="color:#0369a1;font-weight:700;"><?php echo esc_html($qr_stats['total_scans']); ?></span>
-            </div>
-        </div>
-        <?php endif; ?>
     </div>
     <?php
 }
 
 
 
-function eventosapp_get_ticket_qr_url($ticketID, $medio = 'email') {
-    // Ahora usa el sistema de QR diferenciados
-    if (function_exists('eventosapp_get_qr_url_for_medio')) {
-        return eventosapp_get_qr_url_for_medio($ticketID, $medio);
-    }
-    
-    // Fallback al sistema antiguo si no está disponible
+function eventosapp_get_ticket_qr_url($ticketID) {
     $upload_dir = wp_upload_dir();
     $qr_dir = $upload_dir['basedir'] . '/eventosapp-qr/';
     $qr_url = $upload_dir['baseurl'] . '/eventosapp-qr/';
@@ -1040,11 +966,6 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         if (function_exists('eventosapp_ticket_init_email_status')) {
             eventosapp_ticket_init_email_status($post_id);
         }
-        
-        // 7.2) Generar todos los QR diferenciados (email, pdf, google_wallet, apple_wallet, badge)
-        if (function_exists('eventosapp_generate_all_qr_codes')) {
-            eventosapp_generate_all_qr_codes($new_id);
-        }
     }
 
     // 8) Wallet Android on/off por evento
@@ -1156,12 +1077,6 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     // 14) Regenerar PDF / ICS si corresponde
     if (function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
     if (function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($post_id);
-
-    // 14.1) Regenerar QR diferenciados para tickets existentes (si ya tienen ticketID)
-    $existing_ticket_id = get_post_meta($post_id, 'eventosapp_ticketID', true);
-    if ($existing_ticket_id && function_exists('eventosapp_generate_all_qr_codes')) {
-        eventosapp_generate_all_qr_codes($existing_ticket_id);
-    }
 
     // Canal de creación por defecto si no existe aún: manual (editor del admin)
     if (!get_post_meta($post_id, '_eventosapp_creation_channel', true)) {
