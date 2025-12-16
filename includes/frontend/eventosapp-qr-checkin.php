@@ -367,6 +367,9 @@ if ( function_exists('eventosapp_require_feature') ) {
         html += row('Empresa', d.company);
         html += row('Cargo', d.designation);
         html += row('Localidad', d.localidad);
+        if (d.qr_medio) {
+          html += row('QR usado', d.qr_medio);
+        }
         html += '</div>';
         setOutput(html);
         injectScanAgainButton(); // <-- aquí agregamos el botón
@@ -431,18 +434,22 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
 
     global $wpdb;
 
+    // ===== NUEVO: Decodificar QR con sistema de medios =====
+    $qr_decoded = function_exists('eventosapp_qr_decode') ? eventosapp_qr_decode($scanned) : ['ticket_id' => $scanned, 'medio' => 'legacy', 'legacy' => true];
+    $scan_val = $qr_decoded['ticket_id'];
+    $qr_medio = $qr_decoded['medio'];
+    // ===== FIN NUEVO =====
+
     // ¿El evento usa QR preimpreso?
     $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
 
     // Meta a consultar y normalización del valor escaneado
     $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
     if ( $use_preprinted ) {
-        $scan_val = preg_replace('/\D+/', '', $scanned); // solo dígitos
+        $scan_val = preg_replace('/\D+/', '', $scan_val); // solo dígitos
         if ($scan_val === '') {
             wp_send_json_error(['error' => 'QR inválido: se esperaba un número.']);
         }
-    } else {
-        $scan_val = $scanned;
     }
 
     // Busca TODOS los posibles y luego filtra por evento (evita colisiones entre eventos)
@@ -522,10 +529,17 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
             'hora'    => $dt->format('H:i:s'),
             'dia'     => $today,
             'status'  => 'checked_in',
+            'medio'   => $qr_medio, // NUEVO: registrar el medio usado
             'usuario' => $user && $user->exists() ? ($user->display_name.' ('.$user->user_email.')') : 'Sistema'
         ];
         update_post_meta($ticket_post_id, '_eventosapp_checkin_log', $log);
     }
+
+    // ===== NUEVO: Trackear medio de QR usado =====
+    if (function_exists('eventosapp_track_qr_medio_usage')) {
+        eventosapp_track_qr_medio_usage($ticket_post_id, $qr_medio, $today);
+    }
+    // ===== FIN NUEVO =====
 
     // Datos para mostrar
     $first = get_post_meta($ticket_post_id, '_eventosapp_asistente_nombre', true);
@@ -533,6 +547,9 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     $comp  = get_post_meta($ticket_post_id, '_eventosapp_asistente_empresa', true);
     $role  = get_post_meta($ticket_post_id, '_eventosapp_asistente_cargo', true);
     $loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
+
+    // NUEVO: Agregar info del medio usado
+    $medio_label = function_exists('eventosapp_qr_medio_label') ? eventosapp_qr_medio_label($qr_medio) : $qr_medio;
 
     wp_send_json_success([
         'already'     => $already,
@@ -544,6 +561,7 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
         'ticket_id'   => $ticket_post_id,
 		'checkin_date'       => $today,
         'checkin_date_label' => date_i18n('D, d M Y', strtotime($today)),
+        'qr_medio'    => $medio_label, // NUEVO
     ]);
 });
 
@@ -934,18 +952,21 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
 
     global $wpdb;
 
+    // ===== NUEVO: Decodificar QR con sistema de medios =====
+    $qr_decoded = function_exists('eventosapp_qr_decode') ? eventosapp_qr_decode($scanned) : ['ticket_id' => $scanned, 'medio' => 'legacy', 'legacy' => true];
+    $scan_val = $qr_decoded['ticket_id'];
+    // ===== FIN NUEVO =====
+
     // ¿El evento usa QR preimpreso?
     $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
 
     // Meta a consultar y normalización del valor escaneado
     $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
     if ( $use_preprinted ) {
-        $scan_val = preg_replace('/\D+/', '', $scanned); // solo dígitos
+        $scan_val = preg_replace('/\D+/', '', $scan_val); // solo dígitos
         if ($scan_val === '') {
             wp_send_json_error(['error' => 'QR inválido: se esperaba un número.']);
         }
-    } else {
-        $scan_val = $scanned;
     }
 
     // Busca TODOS los posibles y luego filtra por evento (evita colisiones entre eventos)
@@ -1462,14 +1483,17 @@ add_action('wp_ajax_eventosapp_qr_sesion_lookup', function(){
 
     global $wpdb;
 
+    // ===== NUEVO: Decodificar QR con sistema de medios =====
+    $qr_decoded = function_exists('eventosapp_qr_decode') ? eventosapp_qr_decode($scanned) : ['ticket_id' => $scanned, 'medio' => 'legacy', 'legacy' => true];
+    $scan_val = $qr_decoded['ticket_id'];
+    // ===== FIN NUEVO =====
+
     // ¿Evento usa QR preimpreso?
     $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
     $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
     if ($use_preprinted) {
-        $scan_val = preg_replace('/\D+/', '', $scanned);
+        $scan_val = preg_replace('/\D+/', '', $scan_val);
         if ($scan_val === '') wp_send_json_error(['error'=>'QR inválido: se esperaba un número.']);
-    } else {
-        $scan_val = $scanned;
     }
 
     $ids = $wpdb->get_col( $wpdb->prepare(
@@ -1941,4 +1965,3 @@ function eventosapp_qr_contact_lookup_cb(){
         'phone'       => $phone,
     ]);
 }
-
