@@ -281,18 +281,10 @@ function eventosapp_regenerate_ticket_qr_codes($ticket_post_id) {
 }
 
 /**
- * Hook: al crear o actualizar un ticket, genera todos sus QR
+ * NOTA: La generación de QR se realiza directamente desde la función eventosapp_save_ticket()
+ * en eventosapp-tickets.php, por lo que no se requiere un hook adicional aquí.
+ * Esto asegura que los QR se generen solo después de que el ticketID esté disponible.
  */
-add_action('save_post_eventosapp_ticket', function($post_id, $post, $update) {
-    // Evitar auto-saves y revisiones
-    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
-    if (wp_is_post_revision($post_id)) return;
-    
-    $ticket_id = get_post_meta($post_id, 'eventosapp_ticketID', true);
-    if ($ticket_id) {
-        eventosapp_generate_all_qr_codes($ticket_id);
-    }
-}, 20, 3);
 
 /**
  * Shortcode para página de networking con validador (badge QR)
