@@ -452,15 +452,6 @@ function eventosapp_net2_log_cb(){
         wp_send_json_error(['error'=>'El ticket lector no pertenece a este evento.']);
     }
 
-    // ===== NUEVO: Decodificar QR con sistema de medios =====
-    // El scanned puede venir con formato: ticketID|medio
-    // La función eventosapp_net2_record_interaction espera el ticketID limpio
-    if (function_exists('eventosapp_qr_decode')) {
-        $qr_decoded = eventosapp_qr_decode($scanned);
-        $scanned = $qr_decoded['ticket_id']; // Usar solo el ticket ID para el registro
-    }
-    // ===== FIN NUEVO =====
-
     // Resolver el ticket leído y registrar
     $result = eventosapp_net2_record_interaction($event_id, $reader_ticket_id, $scanned, [
         'ip' => $_SERVER['REMOTE_ADDR'] ?? '',
