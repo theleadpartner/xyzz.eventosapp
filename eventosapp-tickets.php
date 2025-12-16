@@ -1040,6 +1040,11 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         if (function_exists('eventosapp_ticket_init_email_status')) {
             eventosapp_ticket_init_email_status($post_id);
         }
+        
+        // 7.2) Generar todos los QR diferenciados (email, pdf, google_wallet, apple_wallet, badge)
+        if (function_exists('eventosapp_generate_all_qr_codes')) {
+            eventosapp_generate_all_qr_codes($new_id);
+        }
     }
 
     // 8) Wallet Android on/off por evento
@@ -1151,6 +1156,12 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     // 14) Regenerar PDF / ICS si corresponde
     if (function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
     if (function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($post_id);
+
+    // 14.1) Regenerar QR diferenciados para tickets existentes (si ya tienen ticketID)
+    $existing_ticket_id = get_post_meta($post_id, 'eventosapp_ticketID', true);
+    if ($existing_ticket_id && function_exists('eventosapp_generate_all_qr_codes')) {
+        eventosapp_generate_all_qr_codes($existing_ticket_id);
+    }
 
     // Canal de creación por defecto si no existe aún: manual (editor del admin)
     if (!get_post_meta($post_id, '_eventosapp_creation_channel', true)) {
