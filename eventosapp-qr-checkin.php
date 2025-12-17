@@ -1,0 +1,498 @@
+<?php
+/**
+ * EventosApp - QR Manager
+ * Gestiona la generación y visualización de múltiples códigos QR por ticket
+ * 
+ * @package EventosApp
+ * @version 1.0
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class EventosApp_QR_Manager {
+    
+    /**
+     * Tipos de QR disponibles
+     */
+    const QR_TYPES = array(
+        'email' => 'Email',
+        'google_wallet' => 'Google Wallet',
+        'apple_wallet' => 'Apple Wallet',
+        'pdf' => 'PDF Impreso',
+        'badge' => 'Escarapela Impresa'
+    );
+
+    /**
+     * Constructor
+     */
+    public function __construct() {
+        add_action('add_meta_boxes', array($this, 'add_qr_metabox'));
+        add_action('save_post_eventosapp_ticket', array($this, 'generate_all_qr_codes'), 20, 1);
+        add_action('wp_ajax_eventosapp_regenerate_qr', array($this, 'ajax_regenerate_qr'));
+    }
+
+    /**
+     * Agrega el metabox de QR codes
+     */
+    public function add_qr_metabox() {
+        add_meta_box(
+            'eventosapp_qr_codes',
+            'Códigos QR por Medio',
+            array($this, 'render_qr_metabox'),
+            'eventosapp_ticket',
+            'side',
+            'high'
+        );
+    }
+
+    /**
+     * Renderiza el metabox con todos los QR codes
+     */
+    public function render_qr_metabox($post) {
+        $ticket_id = $post->ID;
+        
+        echo '<div class="eventosapp-qr-container">';
+        echo '<style>
+            .eventosapp-qr-container { padding: 10px 0; }
+            .eventosapp-qr-item { 
+                margin-bottom: 20px; 
+                padding: 15px;
+                background: #f9f9f9;
+                border-radius: 5px;
+                border: 1px solid #ddd;
+            }
+            .eventosapp-qr-item h4 { 
+                margin: 0 0 10px 0; 
+                color: #23282d;
+                font-size: 14px;
+                font-weight: 600;
+            }
+            .eventosapp-qr-item img { 
+                max-width: 100%; 
+                height: auto;
+                display: block;
+                margin: 10px 0;
+                background: white;
+                padding: 10px;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+            }
+            .eventosapp-qr-info {
+                font-size: 12px;
+                color: #666;
+                margin-top: 8px;
+                padding: 8px;
+                background: white;
+                border-radius: 3px;
+            }
+            .eventosapp-qr-info strong {
+                color: #23282d;
+            }
+            .eventosapp-qr-download {
+                display: inline-block;
+                margin-top: 8px;
+                padding: 6px 12px;
+                background: #0073aa;
+                color: white;
+                text-decoration: none;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            .eventosapp-qr-download:hover {
+                background: #005177;
+                color: white;
+            }
+            .eventosapp-qr-regenerate {
+                margin-top: 15px;
+                text-align: center;
+            }
+            .eventosapp-qr-regenerate .button {
+                width: 100%;
+            }
+        </style>';
+        
+        foreach (self::QR_TYPES as $type => $label) {
+            $qr_data = $this->get_qr_code($ticket_id, $type);
+            
+            echo '<div class="eventosapp-qr-item">';
+            echo '<h4>📱 ' . esc_html($label) . '</h4>';
+            
+            if ($qr_data && isset($qr_data['url'])) {
+                echo '<img src="' . esc_url($qr_data['url']) . '" alt="QR ' . esc_attr($label) . '" />';
+                
+                echo '<div class="eventosapp-qr-info">';
+                echo '<strong>ID:</strong> ' . esc_html($qr_data['qr_id']) . '<br>';
+                echo '<strong>Creado:</strong> ' . esc_html($qr_data['created_date']);
+                echo '</div>';
+                
+                echo '<a href="' . esc_url($qr_data['url']) . '" download="qr-' . esc_attr($type) . '-' . $ticket_id . '.png" class="eventosapp-qr-download">⬇️ Descargar QR</a>';
+            } else {
+                echo '<p style="color: #999; font-style: italic;">QR no generado aún</p>';
+            }
+            
+            echo '</div>';
+        }
+        
+        echo '<div class="eventosapp-qr-regenerate">';
+        echo '<button type="button" class="button button-secondary" onclick="eventosappRegenerateQR(' . $ticket_id . ')">🔄 Regenerar todos los QR</button>';
+        echo '</div>';
+        
+        echo '</div>';
+        
+        // JavaScript para regenerar QR
+        ?>
+        <script>
+        function eventosappRegenerateQR(ticketId) {
+            if (!confirm('¿Estás seguro de que deseas regenerar todos los códigos QR? Esto sobrescribirá los existentes.')) {
+                return;
+            }
+            
+            var button = event.target;
+            button.disabled = true;
+            button.textContent = '⏳ Regenerando...';
+            
+            jQuery.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'eventosapp_regenerate_qr',
+                    ticket_id: ticketId,
+                    nonce: '<?php echo wp_create_nonce('eventosapp_regenerate_qr'); ?>'
+                },
+                success: function(response) {
+                    if (response.success) {
+                        alert('✅ Códigos QR regenerados exitosamente');
+                        location.reload();
+                    } else {
+                        alert('❌ Error: ' + response.data.message);
+                        button.disabled = false;
+                        button.textContent = '🔄 Regenerar todos los QR';
+                    }
+                },
+                error: function() {
+                    alert('❌ Error de conexión');
+                    button.disabled = false;
+                    button.textContent = '🔄 Regenerar todos los QR';
+                }
+            });
+        }
+        </script>
+        <?php
+    }
+
+    /**
+     * Genera todos los códigos QR para un ticket
+     */
+    public function generate_all_qr_codes($ticket_id) {
+        // Verificar que es un ticket válido
+        if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return;
+        }
+
+        // Verificar si ya existen QR codes
+        $existing_qrs = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (!empty($existing_qrs) && is_array($existing_qrs)) {
+            // Ya existen QR codes, no regenerar automáticamente
+            return;
+        }
+
+        // Generar QR codes para cada tipo
+        foreach (self::QR_TYPES as $type => $label) {
+            $this->generate_qr_code($ticket_id, $type);
+        }
+    }
+
+    /**
+     * Genera un código QR específico para un ticket y tipo
+     */
+    public function generate_qr_code($ticket_id, $type) {
+        // Validar tipo
+        if (!array_key_exists($type, self::QR_TYPES)) {
+            return false;
+        }
+
+        // Obtener datos del ticket
+        $ticket_code = get_post_meta($ticket_id, '_ticket_code', true);
+        if (empty($ticket_code)) {
+            $ticket_code = $this->generate_ticket_code($ticket_id);
+        }
+
+        // Crear identificador único para este QR
+        $qr_id = $ticket_code . '-' . $type;
+        
+        // Preparar datos para el QR
+        $qr_content = $this->prepare_qr_content($ticket_id, $type, $qr_id);
+        
+        // Generar la imagen del QR
+        $qr_image = $this->create_qr_image($qr_content, $qr_id);
+        
+        if ($qr_image) {
+            // Guardar información del QR
+            $qr_data = array(
+                'qr_id' => $qr_id,
+                'type' => $type,
+                'content' => $qr_content,
+                'url' => $qr_image['url'],
+                'path' => $qr_image['path'],
+                'created_date' => current_time('mysql')
+            );
+            
+            // Obtener QR codes existentes
+            $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+            if (!is_array($all_qr_codes)) {
+                $all_qr_codes = array();
+            }
+            
+            // Agregar o actualizar el QR de este tipo
+            $all_qr_codes[$type] = $qr_data;
+            
+            // Guardar en post meta
+            update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_codes);
+            
+            // También guardar el QR ID individualmente para fácil acceso
+            update_post_meta($ticket_id, '_eventosapp_qr_' . $type, $qr_id);
+            
+            return $qr_data;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Prepara el contenido del código QR
+     */
+    private function prepare_qr_content($ticket_id, $type, $qr_id) {
+        // Estructura del contenido del QR
+        $data = array(
+            'ticket_id' => $ticket_id,
+            'qr_id' => $qr_id,
+            'type' => $type,
+            'timestamp' => time()
+        );
+        
+        // Convertir a JSON
+        $json_data = json_encode($data);
+        
+        // Codificar en base64 para hacer el QR más compacto
+        return base64_encode($json_data);
+    }
+
+    /**
+     * Crea la imagen del código QR
+     */
+    private function create_qr_image($content, $qr_id) {
+        // Verificar si existe la librería phpqrcode
+        $qr_lib_path = plugin_dir_path(__FILE__) . 'includes/phpqrcode/qrlib.php';
+        
+        if (!file_exists($qr_lib_path)) {
+            // Buscar en ubicaciones alternativas
+            $alt_paths = array(
+                plugin_dir_path(__FILE__) . 'phpqrcode/qrlib.php',
+                plugin_dir_path(__FILE__) . 'lib/phpqrcode/qrlib.php',
+                WP_PLUGIN_DIR . '/eventosapp/includes/phpqrcode/qrlib.php',
+                WP_PLUGIN_DIR . '/eventosapp/phpqrcode/qrlib.php'
+            );
+            
+            foreach ($alt_paths as $path) {
+                if (file_exists($path)) {
+                    $qr_lib_path = $path;
+                    break;
+                }
+            }
+        }
+        
+        if (!file_exists($qr_lib_path)) {
+            error_log('EventosApp QR Manager: No se encuentra la librería phpqrcode');
+            return false;
+        }
+        
+        require_once($qr_lib_path);
+        
+        // Directorio para guardar QR codes
+        $upload_dir = wp_upload_dir();
+        $qr_dir = $upload_dir['basedir'] . '/eventosapp-qr/';
+        
+        if (!file_exists($qr_dir)) {
+            wp_mkdir_p($qr_dir);
+        }
+        
+        // Nombre del archivo
+        $filename = 'qr-' . sanitize_file_name($qr_id) . '.png';
+        $file_path = $qr_dir . $filename;
+        
+        // Generar el código QR
+        try {
+            QRcode::png($content, $file_path, QR_ECLEVEL_L, 8, 2);
+            
+            if (file_exists($file_path)) {
+                return array(
+                    'path' => $file_path,
+                    'url' => $upload_dir['baseurl'] . '/eventosapp-qr/' . $filename
+                );
+            }
+        } catch (Exception $e) {
+            error_log('EventosApp QR Manager Error: ' . $e->getMessage());
+        }
+        
+        return false;
+    }
+
+    /**
+     * Genera un código de ticket único
+     */
+    private function generate_ticket_code($ticket_id) {
+        $code = 'TKT-' . strtoupper(substr(md5($ticket_id . time()), 0, 10));
+        update_post_meta($ticket_id, '_ticket_code', $code);
+        return $code;
+    }
+
+    /**
+     * Obtiene los datos de un código QR específico
+     */
+    public function get_qr_code($ticket_id, $type) {
+        $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        
+        if (is_array($all_qr_codes) && isset($all_qr_codes[$type])) {
+            return $all_qr_codes[$type];
+        }
+        
+        return false;
+    }
+
+    /**
+     * Obtiene todos los códigos QR de un ticket
+     */
+    public function get_all_qr_codes($ticket_id) {
+        $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        
+        if (!is_array($all_qr_codes)) {
+            return array();
+        }
+        
+        return $all_qr_codes;
+    }
+
+    /**
+     * AJAX: Regenerar todos los QR codes
+     */
+    public function ajax_regenerate_qr() {
+        // Verificar nonce
+        check_ajax_referer('eventosapp_regenerate_qr', 'nonce');
+        
+        // Verificar permisos
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error(array('message' => 'Permisos insuficientes'));
+        }
+        
+        $ticket_id = isset($_POST['ticket_id']) ? intval($_POST['ticket_id']) : 0;
+        
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            wp_send_json_error(array('message' => 'Ticket inválido'));
+        }
+        
+        // Eliminar QR codes anteriores
+        $old_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (is_array($old_qr_codes)) {
+            foreach ($old_qr_codes as $type => $qr_data) {
+                if (isset($qr_data['path']) && file_exists($qr_data['path'])) {
+                    @unlink($qr_data['path']);
+                }
+            }
+        }
+        
+        // Eliminar metadatos
+        delete_post_meta($ticket_id, '_eventosapp_qr_codes');
+        foreach (self::QR_TYPES as $type => $label) {
+            delete_post_meta($ticket_id, '_eventosapp_qr_' . $type);
+        }
+        
+        // Regenerar QR codes
+        $generated = 0;
+        foreach (self::QR_TYPES as $type => $label) {
+            if ($this->generate_qr_code($ticket_id, $type)) {
+                $generated++;
+            }
+        }
+        
+        if ($generated > 0) {
+            wp_send_json_success(array(
+                'message' => 'QR codes regenerados exitosamente',
+                'generated' => $generated
+            ));
+        } else {
+            wp_send_json_error(array('message' => 'Error al regenerar QR codes'));
+        }
+    }
+
+    /**
+     * Decodifica el contenido de un código QR
+     */
+    public static function decode_qr_content($qr_content) {
+        // Decodificar base64
+        $json_data = base64_decode($qr_content);
+        
+        if ($json_data === false) {
+            return false;
+        }
+        
+        // Decodificar JSON
+        $data = json_decode($json_data, true);
+        
+        if (!is_array($data) || !isset($data['ticket_id']) || !isset($data['type'])) {
+            return false;
+        }
+        
+        return $data;
+    }
+
+    /**
+     * Valida un código QR
+     */
+    public static function validate_qr($qr_content) {
+        $data = self::decode_qr_content($qr_content);
+        
+        if (!$data) {
+            return array(
+                'valid' => false,
+                'message' => 'Código QR inválido'
+            );
+        }
+        
+        $ticket_id = $data['ticket_id'];
+        
+        // Verificar que el ticket existe
+        if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return array(
+                'valid' => false,
+                'message' => 'Ticket no encontrado'
+            );
+        }
+        
+        // Verificar que el QR ID coincide
+        $type = $data['type'];
+        $stored_qr_id = get_post_meta($ticket_id, '_eventosapp_qr_' . $type, true);
+        
+        if ($stored_qr_id !== $data['qr_id']) {
+            return array(
+                'valid' => false,
+                'message' => 'QR no válido o revocado'
+            );
+        }
+        
+        return array(
+            'valid' => true,
+            'ticket_id' => $ticket_id,
+            'type' => $type,
+            'qr_id' => $data['qr_id'],
+            'type_label' => self::QR_TYPES[$type] ?? $type
+        );
+    }
+}
+
+// Inicializar la clase
+function eventosapp_qr_manager_init() {
+    new EventosApp_QR_Manager();
+}
+add_action('plugins_loaded', 'eventosapp_qr_manager_init');
