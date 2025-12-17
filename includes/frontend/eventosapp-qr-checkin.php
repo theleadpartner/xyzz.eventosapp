@@ -402,8 +402,7 @@ if ( function_exists('eventosapp_require_feature') ) {
 
 //
 // === AJAX: marcar Check-In del ticket para el EVENTO ACTIVO ===
-// Busca por meta 'eventosapp_ticketID' (ID público opaco) o 'eventosapp_ticket_preprintedID' (si el evento lo usa),
-// valida que pertenezca al evento y marca el día actual (en la TZ del evento) como 'checked_in'.
+// MODIFICADO: Agrega soporte para QR tipo URL (badge)
 //
 add_action('wp_ajax_eventosapp_qr_checkin_toggle', function(){
 // 🔒 Seguridad por rol (feature: qr)
@@ -426,48 +425,96 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
         }
     }
 
-
     if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos']);
 
     global $wpdb;
     
-    // === NUEVO: Intentar decodificar como QR del nuevo sistema multi-medio ===
+    // === Variables iniciales ===
     $qr_type = 'unknown';
     $qr_type_label = 'QR Estándar';
     $ticket_post_id = 0;
     
-    // Verificar si es un QR del nuevo sistema (base64 + JSON)
-    $decoded = base64_decode($scanned, true);
-    if ($decoded !== false) {
-        $qr_data = @json_decode($decoded, true);
-        if (is_array($qr_data) && isset($qr_data['ticket_id']) && isset($qr_data['type']) && isset($qr_data['qr_id'])) {
-            // Es un QR del nuevo sistema
-            $ticket_post_id = absint($qr_data['ticket_id']);
-            $qr_type = sanitize_text_field($qr_data['type']);
+    // === NUEVO: Verificar si el contenido escaneado es una URL (QR de badge) ===
+    if (strpos($scanned, 'http') === 0) {
+        // Es una URL, intentar extraer datos
+        $url_parts = parse_url($scanned);
+        if (isset($url_parts['query'])) {
+            parse_str($url_parts['query'], $params);
             
-            // Validar que el ticket existe y el QR ID coincide
-            if (get_post_type($ticket_post_id) === 'eventosapp_ticket') {
-                $stored_qr_id = get_post_meta($ticket_post_id, '_eventosapp_qr_' . $qr_type, true);
-                if ($stored_qr_id !== $qr_data['qr_id']) {
-                    wp_send_json_error(['error' => 'QR no válido o revocado.']);
-                }
+            if (isset($params['event'])) {
+                // Formato esperado: event=123-ticketid=456-7890
+                $parts = explode('-', $params['event']);
                 
-                // Obtener el label del tipo
-                $qr_types = array(
-                    'email' => 'Email',
-                    'google_wallet' => 'Google Wallet',
-                    'apple_wallet' => 'Apple Wallet',
-                    'pdf' => 'PDF Impreso',
-                    'badge' => 'Escarapela Impresa'
-                );
-                $qr_type_label = isset($qr_types[$qr_type]) ? $qr_types[$qr_type] : $qr_type;
-            } else {
-                $ticket_post_id = 0; // Ticket no válido
+                if (count($parts) >= 3) {
+                    // Extraer event_id
+                    $url_event_id = intval($parts[0]);
+                    
+                    // Extraer ticket_id
+                    $ticket_part = isset($parts[1]) ? $parts[1] : '';
+                    if (strpos($ticket_part, 'ticketid=') === 0) {
+                        $url_ticket_id = intval(str_replace('ticketid=', '', $ticket_part));
+                    }
+                    
+                    // Código de seguridad
+                    $url_security_code = isset($parts[2]) ? $parts[2] : '';
+                    
+                    // Validar que el evento coincide
+                    if ($url_event_id === $event_id && $url_ticket_id > 0) {
+                        // Validar código de seguridad
+                        $stored_security_code = get_post_meta($url_ticket_id, '_eventosapp_badge_security_code', true);
+                        
+                        if (!empty($stored_security_code) && $stored_security_code === $url_security_code) {
+                            // Validar que el ticket existe
+                            if (get_post_type($url_ticket_id) === 'eventosapp_ticket') {
+                                $ticket_post_id = $url_ticket_id;
+                                $qr_type = 'badge';
+                                $qr_type_label = 'Escarapela Impresa (URL)';
+                            }
+                        } else {
+                            wp_send_json_error(['error' => 'Código de seguridad del badge inválido']);
+                        }
+                    } else {
+                        wp_send_json_error(['error' => 'El QR del badge no corresponde a este evento']);
+                    }
+                }
             }
         }
     }
     
-    // === Si no es del nuevo sistema, usar el método tradicional ===
+    // === Si no es URL, intentar decodificar como QR del sistema multi-medio (base64) ===
+    if (!$ticket_post_id) {
+        $decoded = base64_decode($scanned, true);
+        if ($decoded !== false) {
+            $qr_data = @json_decode($decoded, true);
+            if (is_array($qr_data) && isset($qr_data['ticket_id']) && isset($qr_data['type']) && isset($qr_data['qr_id'])) {
+                // Es un QR del nuevo sistema
+                $ticket_post_id = absint($qr_data['ticket_id']);
+                $qr_type = sanitize_text_field($qr_data['type']);
+                
+                // Validar que el ticket existe y el QR ID coincide
+                if (get_post_type($ticket_post_id) === 'eventosapp_ticket') {
+                    $stored_qr_id = get_post_meta($ticket_post_id, '_eventosapp_qr_' . $qr_type, true);
+                    if ($stored_qr_id !== $qr_data['qr_id']) {
+                        wp_send_json_error(['error' => 'QR no válido o revocado.']);
+                    }
+                    
+                    // Obtener el label del tipo
+                    $qr_types = array(
+                        'email' => 'Email',
+                        'google_wallet' => 'Google Wallet',
+                        'apple_wallet' => 'Apple Wallet',
+                        'pdf' => 'PDF Impreso',
+                        'badge' => 'Escarapela Impresa'
+                    );
+                    $qr_type_label = isset($qr_types[$qr_type]) ? $qr_types[$qr_type] : $qr_type;
+                } else {
+                    $ticket_post_id = 0; // Ticket no válido
+                }
+            }
+        }
+    }
+    
+    // === Si tampoco es del nuevo sistema, usar el método legacy (tradicional) ===
     if (!$ticket_post_id) {
         // ¿El evento usa QR preimpreso?
         $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
