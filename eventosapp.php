@@ -40,6 +40,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-herramientas
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-embed-form.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-edicion-masiva.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-networking-auth.php';
+require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-networking-global.php';
 require_once plugin_dir_path(__FILE__) . 'includes/public/eventosapp-pkpass-endpoint.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-notificaciones-evento.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-auto-register.php';
