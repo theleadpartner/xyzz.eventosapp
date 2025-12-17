@@ -11,8 +11,8 @@ if ( ! defined('ABSPATH') ) exit;
  * URL esperada: /networking/global/?event=123-ticketid=ABC123-7890
  * 
  * @package EventosApp
- * @version 1.5
- * CORREGIDO: Event ID preservado en sesión, UI mejorada tipo networking-auth
+ * @version 1.6
+ * CORREGIDO: Parser de QR mejorado para evitar duplicación de parámetros
  */
 
 add_shortcode('eventosapp_networking_global', function($atts){
@@ -77,6 +77,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
                 return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
                     <h3 style="color:#dc2626;margin:0 0 1rem;">⚠️ Evento no coincide</h3>
                     <p style="color:#991b1b;margin:0;">Este ticket no pertenece al evento indicado.</p>
+                    <p style="color:#991b1b;margin-top:0.5rem;font-size:0.9rem;">Ticket evento: ' . esc_html($ticket_event_id) . ' | URL evento: ' . esc_html($event_id) . '</p>
                 </div>';
             }
             
@@ -298,7 +299,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
         }
       }
 
-      // NUEVO: Buscar sesión activa en localStorage
+      // Buscar sesión activa en localStorage
       function findActiveSession() {
         try {
           for (let i = 0; i < localStorage.length; i++) {
@@ -324,8 +325,29 @@ add_shortcode('eventosapp_networking_global', function($atts){
       
       function normalizeRaw(raw) {
         let s = String(raw || '').trim();
-        if (s.includes('/')) s = s.split('/').pop();
+        
+        // Si contiene URL completa, extraer solo los parámetros
+        if (s.includes('/networking/global/')) {
+          // Extraer todo después de ?event=
+          const match = s.match(/\?event=(.+)$/);
+          if (match && match[1]) {
+            return match[1]; // Retorna: "14564-ticketid=ABC123-5389"
+          }
+        }
+        
+        // Si tiene '/', tomar la última parte
+        if (s.includes('/')) {
+          s = s.split('/').pop();
+        }
+        
+        // Eliminar el prefijo ?event= si existe
+        if (s.startsWith('?event=')) {
+          s = s.substring(7); // Elimina "?event="
+        }
+        
+        // Limpiar extensiones y caracteres
         s = s.replace(/\.(png|jpg|jpeg|pdf)$/i, '').replace(/-tn$/i, '').replace(/^#/, '');
+        
         return s;
       }
 
@@ -448,7 +470,10 @@ add_shortcode('eventosapp_networking_global', function($atts){
         stopScanner();
         beep();
         
-        // Redirigir a la URL con los parámetros del QR escaneado
+        console.log('QR escaneado (normalizado):', raw);
+        
+        // raw ya viene limpio: "14564-ticketid=ABC123-5389"
+        // Construir URL correctamente
         const baseUrl = window.location.origin + window.location.pathname;
         window.location.href = baseUrl + '?event=' + raw;
       }
