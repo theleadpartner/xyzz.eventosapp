@@ -446,7 +446,7 @@ $js = <<<'JS'
             const colors = {
                 'Email': '#4f7cff',
                 'Google Wallet': '#34a853',
-                'Apple Wallet': '#000000',
+                'Apple Wallet': '#E5E5EA',
                 'PDF Impreso': '#f59e0b',
                 'Escarapela Impresa': '#8b5cf6',
                 'QR Legacy': '#94a3b8',
