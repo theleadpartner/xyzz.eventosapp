@@ -25,6 +25,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-public-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-checkin.php';
+require_once plugin_dir_path(__FILE__) . 'eventosapp-qr-manager.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-generador-masivo-qr.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-edit.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-metrics.php';
