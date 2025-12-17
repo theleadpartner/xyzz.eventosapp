@@ -11,8 +11,8 @@ if ( ! defined('ABSPATH') ) exit;
  * URL esperada: /networking/global/?event=123-ticketid=ABC123-7890
  * 
  * @package EventosApp
- * @version 1.1
- * CORREGIDO: Busca por eventosapp_ticketID en lugar de Post ID
+ * @version 1.2
+ * CORREGIDO: Campo correcto _eventosapp_asistente_apellido (singular)
  */
 
 add_shortcode('eventosapp_networking_global', function($atts){
@@ -144,10 +144,10 @@ add_shortcode('eventosapp_networking_global', function($atts){
           </div>
           
           <div class="evapp-netglobal-field">
-            <label>Tus Apellidos</label>
-            <input type="text" id="evappAuthLast" class="evapp-netglobal-input" placeholder="Ej: Pérez García">
+            <label>Tu Apellido</label>
+            <input type="text" id="evappAuthLast" class="evapp-netglobal-input" placeholder="Ej: Pérez o García">
             <small class="evapp-netglobal-help">
-              Escribe tal cual como están en tu inscripción.
+              Escribe tal cual como está en tu inscripción (solo apellido, no apellidos completos).
             </small>
           </div>
           
@@ -341,6 +341,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
 
 /**
  * AJAX: Identificar al usuario lector
+ * CORREGIDO: Usa _eventosapp_asistente_apellido (singular)
  */
 add_action('wp_ajax_eventosapp_netglobal_identify', 'eventosapp_netglobal_identify_handler');
 add_action('wp_ajax_nopriv_eventosapp_netglobal_identify', 'eventosapp_netglobal_identify_handler');
@@ -385,11 +386,15 @@ function eventosapp_netglobal_identify_handler(){
     $ticket = $query->posts[0];
     $ticket_id = $ticket->ID;
 
-    // Validar apellidos
-    $stored_last = get_post_meta($ticket_id, '_eventosapp_asistente_apellidos', true);
+    // CORRECCIÓN: Validar apellido usando el campo correcto (singular)
+    $stored_last = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
     
-    if (strtolower(trim($stored_last)) !== strtolower(trim($last_name))) {
-        wp_send_json_error(['message' => 'Los apellidos no coinciden']);
+    // Comparación flexible: normalizar y comparar
+    $stored_last_normalized = strtolower(trim($stored_last));
+    $input_last_normalized = strtolower(trim($last_name));
+    
+    if ($stored_last_normalized !== $input_last_normalized) {
+        wp_send_json_error(['message' => 'El apellido no coincide']);
     }
 
     wp_send_json_success([
@@ -400,6 +405,7 @@ function eventosapp_netglobal_identify_handler(){
 
 /**
  * AJAX: Obtener datos del ticket escaneado
+ * CORREGIDO: Usa _eventosapp_asistente_apellido (singular)
  */
 add_action('wp_ajax_eventosapp_netglobal_get_ticket_data', 'eventosapp_netglobal_get_ticket_data_handler');
 add_action('wp_ajax_nopriv_eventosapp_netglobal_get_ticket_data', 'eventosapp_netglobal_get_ticket_data_handler');
@@ -413,14 +419,14 @@ function eventosapp_netglobal_get_ticket_data_handler(){
         wp_send_json_error(['message' => 'Ticket inválido']);
     }
 
-    // Obtener datos del ticket
+    // CORRECCIÓN: Obtener datos con campos correctos
     $first_name = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
-    $last_name  = get_post_meta($ticket_id, '_eventosapp_asistente_apellidos', true);
+    $last_name  = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
     $email      = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
-    $phone      = get_post_meta($ticket_id, '_eventosapp_asistente_telefono', true);
+    $phone      = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
     $company    = get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true);
     $designation = get_post_meta($ticket_id, '_eventosapp_asistente_cargo', true);
-    $localidad  = get_post_meta($ticket_id, '_eventosapp_ticket_localidad', true);
+    $localidad  = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
     $foto_url   = get_post_meta($ticket_id, '_eventosapp_asistente_foto', true);
 
     $full_name = trim($first_name . ' ' . $last_name);
@@ -470,6 +476,7 @@ function eventosapp_netglobal_log_interaction_handler(){
 
 /**
  * AJAX: Descargar vCard del asistente
+ * CORREGIDO: Usa _eventosapp_asistente_apellido (singular)
  */
 add_action('wp_ajax_eventosapp_netglobal_download_vcard', 'eventosapp_netglobal_download_vcard_handler');
 add_action('wp_ajax_nopriv_eventosapp_netglobal_download_vcard', 'eventosapp_netglobal_download_vcard_handler');
@@ -483,11 +490,11 @@ function eventosapp_netglobal_download_vcard_handler(){
         wp_die('Ticket inválido');
     }
 
-    // Obtener datos del ticket
+    // CORRECCIÓN: Obtener datos con campos correctos
     $first_name  = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
-    $last_name   = get_post_meta($ticket_id, '_eventosapp_asistente_apellidos', true);
+    $last_name   = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
     $email       = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
-    $phone       = get_post_meta($ticket_id, '_eventosapp_asistente_telefono', true);
+    $phone       = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
     $company     = get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true);
     $designation = get_post_meta($ticket_id, '_eventosapp_asistente_cargo', true);
 
