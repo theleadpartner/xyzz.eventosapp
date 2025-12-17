@@ -290,7 +290,7 @@ function eventosapp_ticket_email_metabox_render($post) {
 }
 
 
-// REEMPLAZA COMPLETO
+
 function eventosapp_ticket_status_metabox($post) {
     $evento_id = (int) get_post_meta($post->ID, '_eventosapp_ticket_evento_id', true);
     $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
@@ -313,39 +313,171 @@ function eventosapp_ticket_status_metabox($post) {
     foreach ($days as $day) {
         $status = $status_arr[$day] ?? 'not_checked_in';
         $field_name = "eventosapp_checkin_status[".$day."]";
-        echo "<div style='margin-bottom:8px'>";
+        
+        echo "<div style='margin-bottom:15px; padding:10px; background:#f9f9f9; border-radius:5px;'>";
         echo "<b>" . esc_html(date_i18n("D, d M Y", strtotime($day))) . "</b><br>";
-        echo "<select name='{$field_name}'>
+        echo "<select name='{$field_name}' style='width:100%; margin-top:5px;'>
                 <option value='not_checked_in' ".selected($status,'not_checked_in',false).">Not Checked In</option>
                 <option value='checked_in' ".selected($status,'checked_in',false).">Checked In</option>
               </select>";
+        
+        // NUEVO: Mostrar información del último check-in para este día si existe
+        if ($status === 'checked_in' && !empty($log)) {
+            // Buscar el último check-in para este día
+            $day_checkins = array_filter($log, function($entry) use ($day) {
+                return isset($entry['dia']) && $entry['dia'] === $day;
+            });
+            
+            if (!empty($day_checkins)) {
+                $last_checkin = end($day_checkins);
+                echo "<div style='margin-top:8px; padding:8px; background:#e8f4f8; border-left:3px solid #0073aa; font-size:12px;'>";
+                
+                if (!empty($last_checkin['qr_type_label'])) {
+                    echo "<strong>📱 QR usado:</strong> " . esc_html($last_checkin['qr_type_label']) . "<br>";
+                }
+                
+                if (!empty($last_checkin['hora'])) {
+                    echo "<strong>🕒 Hora:</strong> " . esc_html($last_checkin['hora']) . "<br>";
+                }
+                
+                if (!empty($last_checkin['usuario'])) {
+                    // Extraer solo el nombre sin el email
+                    $usuario = $last_checkin['usuario'];
+                    if (strpos($usuario, '(') !== false) {
+                        $usuario = substr($usuario, 0, strpos($usuario, '('));
+                    }
+                    echo "<strong>👤 Staff:</strong> " . esc_html(trim($usuario));
+                }
+                
+                echo "</div>";
+            }
+        }
+        
         echo "</div>";
     }
     echo '<small style="color:#666;display:block;margin:6px 0 10px">Puedes cambiar el estado manualmente para corregir lecturas accidentales. Se registrará en el log.</small>';
 
-    // LOG
+    // LOG - MODIFICADO: Mostrar información del tipo de QR
     echo '<hr><b>Log de Check-ins:</b>';
-    echo "<div style='font-size:12px; max-height:140px; overflow-y:auto; background:#fafbfc; border:1px solid #e5e5e5; padding:6px; border-radius:7px;'>";
+    echo "<div style='font-size:12px; max-height:200px; overflow-y:auto; background:#fafbfc; border:1px solid #e5e5e5; padding:8px; border-radius:7px;'>";
     if (!empty($log)) {
         foreach(array_reverse($log) as $row) {
-            echo '<div style="margin-bottom:6px">';
-            echo '<span style="color:#225;">' . esc_html($row['fecha'] ?? '') . ' ' . esc_html($row['hora'] ?? '') . "</span><br>";
-            echo '<b>Dia:</b> ' . esc_html($row['dia'] ?? '-') . ' ';
-            echo '<b>Status:</b> ' . esc_html($row['status'] ?? '-') . '<br>';
+            // Determinar color del borde según el tipo de QR (si existe)
+            $border_color = '#ccc';
+            if (!empty($row['qr_type'])) {
+                switch($row['qr_type']) {
+                    case 'email':
+                        $border_color = '#4285f4'; // Azul Gmail
+                        break;
+                    case 'google_wallet':
+                        $border_color = '#34a853'; // Verde Google
+                        break;
+                    case 'apple_wallet':
+                        $border_color = '#000000'; // Negro Apple
+                        break;
+                    case 'pdf':
+                        $border_color = '#d32f2f'; // Rojo PDF
+                        break;
+                    case 'badge':
+                        $border_color = '#ff9800'; // Naranja Badge
+                        break;
+                    default:
+                        $border_color = '#666'; // Gris para legacy
+                }
+            }
+            
+            echo '<div style="margin-bottom:8px; padding:8px; background:white; border-left:3px solid '.$border_color.'; border-radius:3px;">';
+            
+            // Fecha y hora
+            echo '<div style="color:#0066cc; font-weight:600; margin-bottom:4px;">';
+            echo '📅 ' . esc_html($row['fecha'] ?? '') . ' - ' . esc_html($row['hora'] ?? '');
+            echo '</div>';
+            
+            // Día del evento
+            echo '<div style="margin-bottom:3px;">';
+            echo '<strong>Día evento:</strong> ' . esc_html(date_i18n("D, d M Y", strtotime($row['dia'] ?? '')));
+            echo '</div>';
+            
+            // Estado
+            $status_emoji = ($row['status'] ?? '') === 'checked_in' ? '✅' : '❌';
+            echo '<div style="margin-bottom:3px;">';
+            echo '<strong>Estado:</strong> ' . $status_emoji . ' ' . esc_html($row['status'] ?? '-');
+            echo '</div>';
+            
+            // NUEVO: Tipo de QR usado (si existe)
+            if (!empty($row['qr_type_label'])) {
+                $qr_emoji = '📱';
+                if (!empty($row['qr_type'])) {
+                    switch($row['qr_type']) {
+                        case 'email': $qr_emoji = '📧'; break;
+                        case 'google_wallet': $qr_emoji = '📱'; break;
+                        case 'apple_wallet': $qr_emoji = '🍎'; break;
+                        case 'pdf': $qr_emoji = '📄'; break;
+                        case 'badge': $qr_emoji = '🏷️'; break;
+                        default: $qr_emoji = '📱';
+                    }
+                }
+                echo '<div style="margin-bottom:3px; background:#f0f8ff; padding:3px 6px; border-radius:3px; display:inline-block;">';
+                echo '<strong>' . $qr_emoji . ' QR:</strong> ' . esc_html($row['qr_type_label']);
+                echo '</div><br>';
+            }
+            
+            // Campos adicionales (previo, origen - si existen)
             if (!empty($row['previo'])) {
-                echo '<b>Previo:</b> ' . esc_html($row['previo']) . '<br>';
+                echo '<div style="margin-bottom:3px;">';
+                echo '<strong>Previo:</strong> ' . esc_html($row['previo']);
+                echo '</div>';
             }
             if (!empty($row['origen'])) {
-                echo '<b>Origen:</b> ' . esc_html($row['origen']) . '<br>';
+                echo '<div style="margin-bottom:3px;">';
+                echo '<strong>Origen:</strong> ' . esc_html($row['origen']);
+                echo '</div>';
             }
-            echo '<b>Por:</b> ' . esc_html($row['usuario'] ?? 'Sistema');
-            echo '<hr style="margin:6px 0">';
+            
+            // Usuario
+            echo '<div style="color:#666; font-size:11px;">';
+            echo '👤 ' . esc_html($row['usuario'] ?? 'Sistema');
+            echo '</div>';
+            
             echo '</div>';
         }
     } else {
-        echo '<span style="color:#888;">Sin registros aún.</span>';
+        echo '<div style="text-align:center; padding:20px; color:#888;">';
+        echo '📝 Sin registros aún.';
+        echo '</div>';
     }
     echo '</div>';
+    
+    // NUEVO: Mostrar estadísticas de uso de QR si existen
+    if (!empty($log)) {
+        echo '<hr style="margin:15px 0 10px;">';
+        echo '<b>📊 Estadísticas de QR usados:</b>';
+        
+        // Contar tipos de QR
+        $qr_counts = array();
+        foreach ($log as $entry) {
+            if (!empty($entry['qr_type_label'])) {
+                $label = $entry['qr_type_label'];
+                if (!isset($qr_counts[$label])) {
+                    $qr_counts[$label] = 0;
+                }
+                $qr_counts[$label]++;
+            }
+        }
+        
+        if (!empty($qr_counts)) {
+            echo '<div style="font-size:11px; background:#f9f9f9; padding:8px; border-radius:5px; margin-top:8px;">';
+            foreach ($qr_counts as $label => $count) {
+                $percentage = round(($count / count($log)) * 100);
+                echo '<div style="margin-bottom:5px;">';
+                echo '<span style="font-weight:600;">' . esc_html($label) . ':</span> ';
+                echo '<span style="color:#0073aa;">' . $count . ' vez' . ($count > 1 ? 'es' : '') . '</span> ';
+                echo '<span style="color:#999;">(' . $percentage . '%)</span>';
+                echo '</div>';
+            }
+            echo '</div>';
+        }
+    }
 }
 
 
