@@ -31,6 +31,46 @@ class EventosApp_QR_Manager {
         add_action('add_meta_boxes', array($this, 'add_qr_metabox'));
         add_action('save_post_eventosapp_ticket', array($this, 'generate_all_qr_codes'), 20, 1);
         add_action('wp_ajax_eventosapp_regenerate_qr', array($this, 'ajax_regenerate_qr'));
+        
+        // Cargar la librería QR si no está cargada
+        $this->load_qr_library();
+    }
+
+    /**
+     * Carga la librería QR
+     */
+    private function load_qr_library() {
+        // Si la clase QRcode ya existe, no cargar de nuevo
+        if (class_exists('QRcode')) {
+            return true;
+        }
+        
+        // Ruta correcta de la librería
+        $qr_lib_path = plugin_dir_path(__FILE__) . 'includes/qrlib/qrlib.php';
+        
+        if (!file_exists($qr_lib_path)) {
+            error_log('EventosApp QR Manager: No se encuentra la librería qrlib en: ' . $qr_lib_path);
+            return false;
+        }
+        
+        // Definir constantes necesarias antes de cargar la librería
+        $upload = wp_upload_dir();
+        $qr_cache_dir = trailingslashit($upload['basedir']) . 'eventosapp-qr-cache/';
+        
+        if (!file_exists($qr_cache_dir)) {
+            wp_mkdir_p($qr_cache_dir);
+        }
+        
+        if (!defined('QR_CACHEABLE')) {
+            define('QR_CACHEABLE', true);
+        }
+        if (!defined('QR_CACHE_DIR')) {
+            define('QR_CACHE_DIR', $qr_cache_dir);
+        }
+        
+        require_once($qr_lib_path);
+        
+        return class_exists('QRcode');
     }
 
     /**
@@ -213,6 +253,12 @@ class EventosApp_QR_Manager {
             return false;
         }
 
+        // Verificar que la librería QR esté disponible
+        if (!$this->load_qr_library()) {
+            error_log('EventosApp QR Manager: No se pudo cargar la librería QR');
+            return false;
+        }
+
         // Obtener datos del ticket
         $ticket_code = get_post_meta($ticket_id, '_ticket_code', true);
         if (empty($ticket_code)) {
@@ -283,32 +329,11 @@ class EventosApp_QR_Manager {
      * Crea la imagen del código QR
      */
     private function create_qr_image($content, $qr_id) {
-        // Verificar si existe la librería phpqrcode
-        $qr_lib_path = plugin_dir_path(__FILE__) . 'includes/phpqrcode/qrlib.php';
-        
-        if (!file_exists($qr_lib_path)) {
-            // Buscar en ubicaciones alternativas
-            $alt_paths = array(
-                plugin_dir_path(__FILE__) . 'phpqrcode/qrlib.php',
-                plugin_dir_path(__FILE__) . 'lib/phpqrcode/qrlib.php',
-                WP_PLUGIN_DIR . '/eventosapp/includes/phpqrcode/qrlib.php',
-                WP_PLUGIN_DIR . '/eventosapp/phpqrcode/qrlib.php'
-            );
-            
-            foreach ($alt_paths as $path) {
-                if (file_exists($path)) {
-                    $qr_lib_path = $path;
-                    break;
-                }
-            }
-        }
-        
-        if (!file_exists($qr_lib_path)) {
-            error_log('EventosApp QR Manager: No se encuentra la librería phpqrcode');
+        // Verificar que la clase QRcode existe
+        if (!class_exists('QRcode')) {
+            error_log('EventosApp QR Manager: Clase QRcode no disponible');
             return false;
         }
-        
-        require_once($qr_lib_path);
         
         // Directorio para guardar QR codes
         $upload_dir = wp_upload_dir();
@@ -322,14 +347,18 @@ class EventosApp_QR_Manager {
         $filename = 'qr-' . sanitize_file_name($qr_id) . '.png';
         $file_path = $qr_dir . $filename;
         
-        // Generar el código QR
+        // Generar el código QR usando los parámetros correctos
         try {
-            QRcode::png($content, $file_path, QR_ECLEVEL_L, 8, 2);
+            // Parámetros: (data, filename, errorCorrectionLevel, pixelSize, frameSize)
+            // 'L' = Low error correction (7% de recuperación)
+            // 6 = tamaño del pixel
+            // 2 = margen en módulos
+            QRcode::png($content, $file_path, 'L', 6, 2);
             
             if (file_exists($file_path)) {
                 return array(
                     'path' => $file_path,
-                    'url' => $upload_dir['baseurl'] . '/eventosapp-qr/' . $filename
+                    'url' => $upload_dir['baseurl'] . '/eventosapp-qr/' . $filename . '?v=' . time()
                 );
             }
         } catch (Exception $e) {
