@@ -430,41 +430,81 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos']);
 
     global $wpdb;
-
-    // ¿El evento usa QR preimpreso?
-    $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
-
-    // Meta a consultar y normalización del valor escaneado
-    $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
-    if ( $use_preprinted ) {
-        $scan_val = preg_replace('/\D+/', '', $scanned); // solo dígitos
-        if ($scan_val === '') {
-            wp_send_json_error(['error' => 'QR inválido: se esperaba un número.']);
-        }
-    } else {
-        $scan_val = $scanned;
-    }
-
-    // Busca TODOS los posibles y luego filtra por evento (evita colisiones entre eventos)
-    $ids = $wpdb->get_col( $wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
-        $meta_key, $scan_val
-    ) );
-
+    
+    // === NUEVO: Intentar decodificar como QR del nuevo sistema multi-medio ===
+    $qr_type = 'unknown';
+    $qr_type_label = 'QR Estándar';
     $ticket_post_id = 0;
-    if ($ids) {
-        foreach ($ids as $cand) {
-            if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id) {
-                $ticket_post_id = (int) $cand;
-                break;
+    
+    // Verificar si es un QR del nuevo sistema (base64 + JSON)
+    $decoded = base64_decode($scanned, true);
+    if ($decoded !== false) {
+        $qr_data = @json_decode($decoded, true);
+        if (is_array($qr_data) && isset($qr_data['ticket_id']) && isset($qr_data['type']) && isset($qr_data['qr_id'])) {
+            // Es un QR del nuevo sistema
+            $ticket_post_id = absint($qr_data['ticket_id']);
+            $qr_type = sanitize_text_field($qr_data['type']);
+            
+            // Validar que el ticket existe y el QR ID coincide
+            if (get_post_type($ticket_post_id) === 'eventosapp_ticket') {
+                $stored_qr_id = get_post_meta($ticket_post_id, '_eventosapp_qr_' . $qr_type, true);
+                if ($stored_qr_id !== $qr_data['qr_id']) {
+                    wp_send_json_error(['error' => 'QR no válido o revocado.']);
+                }
+                
+                // Obtener el label del tipo
+                $qr_types = array(
+                    'email' => 'Email',
+                    'google_wallet' => 'Google Wallet',
+                    'apple_wallet' => 'Apple Wallet',
+                    'pdf' => 'PDF Impreso',
+                    'badge' => 'Escarapela Impresa'
+                );
+                $qr_type_label = isset($qr_types[$qr_type]) ? $qr_types[$qr_type] : $qr_type;
+            } else {
+                $ticket_post_id = 0; // Ticket no válido
             }
         }
     }
+    
+    // === Si no es del nuevo sistema, usar el método tradicional ===
+    if (!$ticket_post_id) {
+        // ¿El evento usa QR preimpreso?
+        $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
+
+        // Meta a consultar y normalización del valor escaneado
+        $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
+        if ( $use_preprinted ) {
+            $scan_val = preg_replace('/\D+/', '', $scanned); // solo dígitos
+            if ($scan_val === '') {
+                wp_send_json_error(['error' => 'QR inválido: se esperaba un número.']);
+            }
+        } else {
+            $scan_val = $scanned;
+        }
+
+        // Busca TODOS los posibles y luego filtra por evento (evita colisiones entre eventos)
+        $ids = $wpdb->get_col( $wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
+            $meta_key, $scan_val
+        ) );
+
+        if ($ids) {
+            foreach ($ids as $cand) {
+                if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id) {
+                    $ticket_post_id = (int) $cand;
+                    break;
+                }
+            }
+        }
+        
+        // Marcar como QR legacy
+        $qr_type = 'legacy';
+        $qr_type_label = $use_preprinted ? 'QR Preimpreso' : 'QR Legacy';
+    }
 
     if ( ! $ticket_post_id ) {
-        wp_send_json_error(['error' => $use_preprinted
-            ? 'Ticket no encontrado para este evento (ID preimpreso).'
-            : 'Ticket no encontrado']);
+        wp_send_json_error(['error' => 'Ticket no encontrado']);
     }
 
     // Seguridad extra (una sola vez)
@@ -511,7 +551,7 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
         $status_arr[$today] = 'checked_in';
         update_post_meta($ticket_post_id, '_eventosapp_checkin_status', $status_arr);
 
-        // Log
+        // Log - MODIFICADO: Agregar información del tipo de QR
         $log = get_post_meta($ticket_post_id, '_eventosapp_checkin_log', true);
         if (is_string($log)) $log = @unserialize($log);
         if (!is_array($log)) $log = [];
@@ -522,9 +562,14 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
             'hora'    => $dt->format('H:i:s'),
             'dia'     => $today,
             'status'  => 'checked_in',
-            'usuario' => $user && $user->exists() ? ($user->display_name.' ('.$user->user_email.')') : 'Sistema'
+            'usuario' => $user && $user->exists() ? ($user->display_name.' ('.$user->user_email.')') : 'Sistema',
+            'qr_type' => $qr_type,              // NUEVO: Tipo de QR usado
+            'qr_type_label' => $qr_type_label   // NUEVO: Label legible del tipo
         ];
         update_post_meta($ticket_post_id, '_eventosapp_checkin_log', $log);
+        
+        // NUEVO: Actualizar estadísticas de uso de QR por tipo
+        eventosapp_update_qr_usage_stats($event_id, $qr_type);
     }
 
     // Datos para mostrar
@@ -542,10 +587,60 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
         'localidad'   => $loc,
         'event_name'  => get_the_title($event_id),
         'ticket_id'   => $ticket_post_id,
-		'checkin_date'       => $today,
+        'checkin_date'       => $today,
         'checkin_date_label' => date_i18n('D, d M Y', strtotime($today)),
+        'qr_type_label'      => $qr_type_label  // NUEVO: Enviar tipo de QR al frontend
     ]);
 });
+
+/**
+ * ========================================================================
+ * FUNCIÓN NUEVA: Actualizar estadísticas de uso de QR
+ * ========================================================================
+ * 
+ * UBICACIÓN: Agregar AL FINAL del archivo eventosapp-qr-checkin.php
+ * JUSTO ANTES del cierre: ?>
+ * 
+ * INSTRUCCIONES:
+ * 1. Ve al final del archivo eventosapp-qr-checkin.php
+ * 2. Busca la línea final que tiene: ?>
+ * 3. ANTES de esa línea, agrega esta función COMPLETA
+ */
+
+if (!function_exists('eventosapp_update_qr_usage_stats')) {
+    function eventosapp_update_qr_usage_stats($event_id, $qr_type) {
+        if (!$event_id || !$qr_type) return;
+        
+        // Obtener estadísticas actuales
+        $stats = get_post_meta($event_id, '_eventosapp_qr_usage_stats', true);
+        if (!is_array($stats)) {
+            $stats = array(
+                'email' => 0,
+                'google_wallet' => 0,
+                'apple_wallet' => 0,
+                'pdf' => 0,
+                'badge' => 0,
+                'legacy' => 0,
+                'total' => 0
+            );
+        }
+        
+        // Incrementar contador del tipo
+        if (!isset($stats[$qr_type])) {
+            $stats[$qr_type] = 0;
+        }
+        $stats[$qr_type]++;
+        
+        // Actualizar total
+        $stats['total'] = array_sum(array_filter($stats, 'is_numeric'));
+        
+        // Agregar timestamp de última actualización
+        $stats['last_updated'] = current_time('mysql');
+        
+        // Guardar
+        update_post_meta($event_id, '_eventosapp_qr_usage_stats', $stats);
+    }
+}
 
 // === Shortcode: Validador de Localidad (solo lectura) ===
 // Uso: [eventosapp_qr_localidad]
