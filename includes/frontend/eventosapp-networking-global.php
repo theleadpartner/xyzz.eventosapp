@@ -11,8 +11,8 @@ if ( ! defined('ABSPATH') ) exit;
  * URL esperada: /networking/global/?event=123-ticketid=ABC123-7890
  * 
  * @package EventosApp
- * @version 1.4
- * NUEVO: Scanner de QR integrado con cámara en pantalla de bienvenida
+ * @version 1.5
+ * CORREGIDO: Event ID preservado en sesión, UI mejorada tipo networking-auth
  */
 
 add_shortcode('eventosapp_networking_global', function($atts){
@@ -90,17 +90,16 @@ add_shortcode('eventosapp_networking_global', function($atts){
     
     ob_start(); ?>
     <style>
-      .evapp-netglobal-shell { max-width:560px; margin:2rem auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-      .evapp-netglobal-card  { background:#0b1020; color:#eaf1ff; border-radius:16px; padding:24px; box-shadow:0 8px 24px rgba(0,0,0,.15); }
-      .evapp-netglobal-title { display:flex; align-items:center; gap:.6rem; margin:0 0 1.5rem; font-weight:800; font-size:1.2rem; letter-spacing:.2px; }
-      .evapp-netglobal-field { margin:16px 0; }
-      .evapp-netglobal-field label { display:block; font-size:.95rem; margin-bottom:8px; color:#c9d6ff; font-weight:600; }
-      .evapp-netglobal-input { width:100%; padding:.8rem; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#0a0f1d; color:#eaf1ff; font-size:1rem; }
-      .evapp-netglobal-btn   { display:flex; align-items:center; justify-content:center; gap:.5rem; border:0; border-radius:12px; padding:1rem 1.2rem; font-weight:800; cursor:pointer; width:100%; background:#2563eb; color:#fff; transition:filter .15s, background .15s; font-size:1rem; }
-      .evapp-netglobal-btn:hover{ filter:brightness(1.05); }
-      .evapp-netglobal-btn:disabled{ opacity:.5; cursor:not-allowed; }
+      .evapp-netglobal-shell { max-width:560px; margin:0 auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+      .evapp-netglobal-card  { background:#0b1020; color:#eaf1ff; border-radius:16px; padding:18px; box-shadow:0 8px 24px rgba(0,0,0,.15); }
+      .evapp-netglobal-title { display:flex; align-items:center; gap:.6rem; margin:0 0 10px; font-weight:800; font-size:1.05rem; letter-spacing:.2px; }
+      .evapp-netglobal-field { margin:10px 0; }
+      .evapp-netglobal-field label { display:block; font-size:.95rem; margin-bottom:6px; color:#c9d6ff; font-weight:600; }
+      .evapp-netglobal-input { width:100%; padding:.7rem .8rem; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#0a0f1d; color:#eaf1ff; }
+      .evapp-netglobal-btn   { display:flex; align-items:center; justify-content:center; gap:.5rem; border:0; border-radius:12px; padding:.9rem 1.1rem; font-weight:800; cursor:pointer; width:100%; background:#2563eb; color:#fff; transition:filter .15s, background .15s; }
+      .evapp-netglobal-btn:hover{ filter:brightness(.98); }
       .evapp-netglobal-btn.is-live{ background:#e04f5f; }
-      .evapp-netglobal-help  { color:#a9b6d3; font-size:.9rem; opacity:.85; margin-top:8px; line-height:1.4; }
+      .evapp-netglobal-help  { color:#a9b6d3; font-size:.9rem; opacity:.85; margin-top:6px; }
       .evapp-netglobal-msg   { padding:12px; border-radius:8px; margin-top:12px; text-align:center; font-weight:600; }
       .evapp-netglobal-bad   { background:#fee2e2; color:#dc2626; border:1px solid #ef4444; }
       .evapp-netglobal-ok    { background:#d1fae5; color:#047857; border:1px solid #10b981; }
@@ -129,10 +128,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
       .evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}
       .evapp-qr-video-wrap.is-immersive{ aspect-ratio:auto; height: calc(100vh - var(--evapp-offset, 56px)); width:100%; display:block; }
       
-      /* Estilos para pantalla de bienvenida */
-      .evapp-netglobal-welcome { text-align:center; padding:1rem 0; }
-      .evapp-netglobal-welcome h2 { color:#eaf1ff; font-size:1.3rem; margin:0 0 .8rem; }
-      .evapp-netglobal-welcome p { color:#a9b6d3; font-size:.95rem; line-height:1.6; margin:0 0 1.5rem; }
+      .evapp-qr-result-box { margin-top:14px; background:#0a0f1d; border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:14px; }
     </style>
 
     <div class="evapp-netglobal-shell"
@@ -144,17 +140,37 @@ add_shortcode('eventosapp_networking_global', function($atts){
 
       <div class="evapp-netglobal-card">
         <div class="evapp-netglobal-title">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="#a7b8ff" stroke-width="2"/></svg>
-          Networking – Identificación
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z" stroke="#a7b8ff"/></svg>
+          Networking – Doble autenticación
         </div>
 
-        <!-- Pantalla de bienvenida con scanner -->
-        <div id="evappNetGlobalWelcome" style="display:none;">
-          <div class="evapp-netglobal-welcome">
-            <h2>¡Listo para escanear!</h2>
-            <p>Ya estás autenticado. Activa la cámara para escanear códigos QR de escarapelas.</p>
+        <!-- Paso 1: Autenticación -->
+        <div id="evappNetGlobalAuth">
+          <div class="evapp-netglobal-field">
+            <label>Cédula</label>
+            <input type="text" id="evappAuthCC" class="evapp-netglobal-input" placeholder="Ej: 1020304050">
+            <small class="evapp-netglobal-help">
+              Escribe tal cual como está en tu inscripción.
+            </small>
           </div>
           
+          <div class="evapp-netglobal-field">
+            <label>Apellido</label>
+            <input type="text" id="evappAuthLast" class="evapp-netglobal-input" placeholder="Ej: Pérez o García">
+            <small class="evapp-netglobal-help">
+              Escribe tal cual como está en tu inscripción.
+            </small>
+          </div>
+          
+          <button type="button" id="evappAuthBtn" class="evapp-netglobal-btn">Confirmar identidad</button>
+          
+          <div id="evappAuthMsg" class="evapp-netglobal-help" style="margin-top:12px;text-align:center;"></div>
+        </div>
+
+        <!-- Paso 2: Scanner -->
+        <div id="evappNetGlobalScan" style="display:none">
+          <div class="evapp-netglobal-help" id="evappScanWelcome" style="margin-bottom:12px;"></div>
+
           <button class="evapp-netglobal-btn" id="evappStartScanGlobal">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/><rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/></svg>
             Activar cámara y escanear
@@ -172,39 +188,12 @@ add_shortcode('eventosapp_networking_global', function($atts){
             <canvas id="evappCanvasGlobal" style="display:none;"></canvas>
           </div>
 
-          <div class="evapp-netglobal-help" style="margin-top:12px; text-align:center;" id="evappScanHintGlobal">
-            Tip: Coloca el QR dentro del marco para escanearlo.
+          <div class="evapp-qr-result-box" id="evappResultBoxGlobal">
+            <div class="evapp-netglobal-help">Tip: coloca el QR dentro del marco.</div>
           </div>
         </div>
 
-        <!-- Paso 1: Autenticación -->
-        <div id="evappNetGlobalAuth">
-          <p class="evapp-netglobal-help" style="margin-bottom:1.5rem;">Para ver la información de este asistente, primero debes identificarte:</p>
-          
-          <div class="evapp-netglobal-field">
-            <label>Tu Cédula</label>
-            <input type="text" id="evappAuthCC" class="evapp-netglobal-input" placeholder="Ej: 1020304050">
-            <small class="evapp-netglobal-help">
-              Escribe tal cual como está en tu inscripción.
-            </small>
-          </div>
-          
-          <div class="evapp-netglobal-field">
-            <label>Tu Apellido</label>
-            <input type="text" id="evappAuthLast" class="evapp-netglobal-input" placeholder="Ej: Pérez o García">
-            <small class="evapp-netglobal-help">
-              Escribe tal cual como está en tu inscripción (solo apellido, no apellidos completos).
-            </small>
-          </div>
-          
-          <button type="button" id="evappAuthBtn" class="evapp-netglobal-btn">
-            🔐 Confirmar mi identidad
-          </button>
-          
-          <div id="evappAuthMsg"></div>
-        </div>
-
-        <!-- Paso 2: Datos del asistente escaneado -->
+        <!-- Paso 3: Datos del asistente escaneado -->
         <div class="evapp-netglobal-result" id="evappNetGlobalResult">
           <!-- Se llenará con JavaScript -->
         </div>
@@ -215,7 +204,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
     (function(){
       const shell = document.querySelector('.evapp-netglobal-shell');
       const ajaxURL    = "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
-      const eventID    = parseInt(shell?.dataset.event || '0', 10) || 0;
+      let eventID      = parseInt(shell?.dataset.event || '0', 10) || 0;
       const scannedTicketID = parseInt(shell?.dataset.scannedTicket || '0', 10) || 0;
       const hasQRParams = shell?.dataset.hasQrParams === '1';
       const authNonce  = shell?.dataset.authNonce || '';
@@ -223,12 +212,13 @@ add_shortcode('eventosapp_networking_global', function($atts){
 
       // Elementos del DOM
       const authSection = document.getElementById('evappNetGlobalAuth');
-      const welcomeSection = document.getElementById('evappNetGlobalWelcome');
+      const scanSection = document.getElementById('evappNetGlobalScan');
       const resultSection = document.getElementById('evappNetGlobalResult');
       const ccInput = document.getElementById('evappAuthCC');
       const lastInput = document.getElementById('evappAuthLast');
       const authBtn = document.getElementById('evappAuthBtn');
       const authMsg = document.getElementById('evappAuthMsg');
+      const scanWelcome = document.getElementById('evappScanWelcome');
 
       // Scanner elements
       const btnScan = document.getElementById('evappStartScanGlobal');
@@ -237,7 +227,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
       const cvs = document.getElementById('evappCanvasGlobal');
       const ctx = cvs?.getContext('2d');
       const vwrap = document.getElementById('evappVideoWrapGlobal');
-      const scanHint = document.getElementById('evappScanHintGlobal');
+      const resultBox = document.getElementById('evappResultBoxGlobal');
 
       let readerTicketId = 0;
       const SESSION_DURATION = 4 * 60 * 60 * 1000; // 4 horas en milisegundos
@@ -251,44 +241,44 @@ add_shortcode('eventosapp_networking_global', function($atts){
 
       // ========== SISTEMA DE SESIÓN PERSISTENTE ==========
       
-      function getStorageKey() {
-        return 'eventosapp_net_session_' + eventID;
+      function getStorageKey(evId) {
+        return 'eventosapp_net_session_' + evId;
       }
 
-      function saveSession(ticketId) {
-        if (!eventID || !ticketId) return;
+      function saveSession(ticketId, evId) {
+        if (!evId || !ticketId) return;
         
         const session = {
           reader_ticket_id: ticketId,
-          event_id: eventID,
+          event_id: evId,
           timestamp: Date.now(),
           expires: Date.now() + SESSION_DURATION
         };
         
         try {
-          localStorage.setItem(getStorageKey(), JSON.stringify(session));
+          localStorage.setItem(getStorageKey(evId), JSON.stringify(session));
         } catch(e) {
           console.error('Error guardando sesión:', e);
         }
       }
 
-      function getSession() {
-        if (!eventID) return null;
+      function getSession(evId) {
+        if (!evId) return null;
         
         try {
-          const stored = localStorage.getItem(getStorageKey());
+          const stored = localStorage.getItem(getStorageKey(evId));
           if (!stored) return null;
           
           const session = JSON.parse(stored);
           
           // Verificar si la sesión ha expirado
           if (Date.now() > session.expires) {
-            clearSession();
+            clearSession(evId);
             return null;
           }
           
           // Verificar que es del mismo evento
-          if (session.event_id !== eventID) {
+          if (session.event_id !== evId) {
             return null;
           }
           
@@ -299,13 +289,35 @@ add_shortcode('eventosapp_networking_global', function($atts){
         }
       }
 
-      function clearSession() {
-        if (!eventID) return;
+      function clearSession(evId) {
+        if (!evId) return;
         try {
-          localStorage.removeItem(getStorageKey());
+          localStorage.removeItem(getStorageKey(evId));
         } catch(e) {
           console.error('Error limpiando sesión:', e);
         }
+      }
+
+      // NUEVO: Buscar sesión activa en localStorage
+      function findActiveSession() {
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('eventosapp_net_session_')) {
+              const stored = localStorage.getItem(key);
+              if (stored) {
+                const session = JSON.parse(stored);
+                // Verificar si no ha expirado
+                if (Date.now() <= session.expires) {
+                  return session;
+                }
+              }
+            }
+          }
+        } catch(e) {
+          console.error('Error buscando sesión:', e);
+        }
+        return null;
       }
 
       // ========== SCANNER QR ==========
@@ -381,7 +393,8 @@ add_shortcode('eventosapp_networking_global', function($atts){
             audio: false
           });
         } catch(e) {
-          scanHint.innerHTML = '<span class="evapp-netglobal-bad">No se pudo acceder a la cámara.</span>';
+          resultBox.innerHTML = '<div class="evapp-netglobal-bad">No se pudo acceder a la cámara.</div>';
+          smoothScrollTo(resultBox);
           return;
         }
         
@@ -455,7 +468,16 @@ add_shortcode('eventosapp_networking_global', function($atts){
       // ========== INICIALIZACIÓN ==========
       
       function init() {
-        const session = getSession();
+        // Si no hay eventID en la URL, buscar sesión activa
+        if (!eventID) {
+          const activeSession = findActiveSession();
+          if (activeSession) {
+            eventID = activeSession.event_id;
+            readerTicketId = activeSession.reader_ticket_id;
+          }
+        }
+
+        const session = eventID ? getSession(eventID) : null;
         
         if (session) {
           // Ya hay sesión válida
@@ -464,32 +486,59 @@ add_shortcode('eventosapp_networking_global', function($atts){
           if (hasQRParams && scannedTicketID) {
             // Hay sesión Y hay QR escaneado -> cargar datos automáticamente
             authSection.style.display = 'none';
-            welcomeSection.style.display = 'none';
+            scanSection.style.display = 'none';
             loadScannedTicketData();
           } else {
-            // Hay sesión pero NO hay QR -> mostrar bienvenida con scanner
+            // Hay sesión pero NO hay QR -> mostrar scanner
             authSection.style.display = 'none';
-            welcomeSection.style.display = 'block';
+            scanSection.style.display = 'block';
             resultSection.style.display = 'none';
+            
+            // Obtener nombre del usuario
+            fetchReaderName();
           }
         } else {
           // No hay sesión válida
           if (hasQRParams && scannedTicketID) {
             // No hay sesión pero hay QR -> mostrar formulario de autenticación
             authSection.style.display = 'block';
-            welcomeSection.style.display = 'none';
+            scanSection.style.display = 'none';
             resultSection.style.display = 'none';
+            authMsg.textContent = 'Para iniciar a escanear un QR debes autenticarte.';
           } else {
-            // No hay sesión ni QR -> mostrar mensaje de error
-            authSection.style.display = 'none';
-            welcomeSection.style.display = 'none';
-            setMsg(authMsg, '⚠️ Por favor escanea un código QR para continuar', false);
+            // No hay sesión ni QR -> mostrar mensaje
             authSection.style.display = 'block';
+            scanSection.style.display = 'none';
+            resultSection.style.display = 'none';
+            authMsg.innerHTML = '<span class="evapp-netglobal-bad">⚠️ Por favor escanea un código QR para continuar</span>';
             authBtn.style.display = 'none';
             ccInput.parentElement.style.display = 'none';
             lastInput.parentElement.style.display = 'none';
           }
         }
+      }
+
+      function fetchReaderName() {
+        if (!readerTicketId) return;
+        
+        fetch(ajaxURL, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({
+            action: 'eventosapp_netglobal_get_ticket_data',
+            _wpnonce: authNonce,
+            ticket_id: readerTicketId
+          })
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            scanWelcome.textContent = 'Hola, ' + (data.data.full_name || 'asistente') + '. Activa la cámara para escanear.';
+          }
+        })
+        .catch(() => {
+          scanWelcome.textContent = 'Activa la cámara para escanear.';
+        });
       }
 
       // ========== FUNCIONES DE UI ==========
@@ -506,12 +555,14 @@ add_shortcode('eventosapp_networking_global', function($atts){
           const last = lastInput.value.trim();
 
           if (!cc || !last) {
-            setMsg(authMsg, '⚠️ Por favor completa ambos campos');
+            authMsg.textContent = 'Completa cédula y apellido.';
+            authMsg.className = 'evapp-netglobal-bad';
             return;
           }
 
           authBtn.disabled = true;
-          authBtn.textContent = '⏳ Verificando...';
+          authMsg.className = 'evapp-netglobal-help';
+          authMsg.textContent = 'Validando…';
 
           fetch(ajaxURL, {
             method: 'POST',
@@ -530,23 +581,31 @@ add_shortcode('eventosapp_networking_global', function($atts){
               readerTicketId = data.data.ticket_id;
               
               // Guardar sesión en localStorage
-              saveSession(readerTicketId);
+              saveSession(readerTicketId, eventID);
               
-              setMsg(authMsg, '✅ Identidad confirmada. Cargando información...', true);
+              authMsg.className = 'evapp-netglobal-ok';
+              authMsg.textContent = 'Identidad confirmada.';
               
               setTimeout(() => {
-                loadScannedTicketData();
+                if (hasQRParams && scannedTicketID) {
+                  loadScannedTicketData();
+                } else {
+                  // Mostrar scanner
+                  authSection.style.display = 'none';
+                  scanSection.style.display = 'block';
+                  fetchReaderName();
+                }
               }, 800);
             } else {
-              setMsg(authMsg, '❌ ' + (data.data?.message || 'No se encontró tu registro'));
+              authMsg.className = 'evapp-netglobal-bad';
+              authMsg.textContent = data.data?.message || 'No se encontró tu registro';
               authBtn.disabled = false;
-              authBtn.textContent = '🔐 Confirmar mi identidad';
             }
           })
           .catch(err => {
-            setMsg(authMsg, '❌ Error de conexión');
+            authMsg.className = 'evapp-netglobal-bad';
+            authMsg.textContent = 'Error de red.';
             authBtn.disabled = false;
-            authBtn.textContent = '🔐 Confirmar mi identidad';
           });
         });
       }
@@ -555,7 +614,8 @@ add_shortcode('eventosapp_networking_global', function($atts){
 
       function loadScannedTicketData(){
         if (!scannedTicketID) {
-          setMsg(authMsg, '❌ No hay ticket para cargar');
+          authMsg.className = 'evapp-netglobal-bad';
+          authMsg.textContent = 'No hay ticket para cargar';
           return;
         }
 
@@ -575,11 +635,13 @@ add_shortcode('eventosapp_networking_global', function($atts){
             displayTicketData(info);
             logInteraction();
           } else {
-            setMsg(authMsg, '❌ ' + (data.data?.message || 'Error al cargar datos'));
+            authMsg.className = 'evapp-netglobal-bad';
+            authMsg.textContent = data.data?.message || 'Error al cargar datos';
           }
         })
         .catch(err => {
-          setMsg(authMsg, '❌ Error al cargar información del asistente');
+          authMsg.className = 'evapp-netglobal-bad';
+          authMsg.textContent = 'Error al cargar información del asistente';
         });
       }
 
@@ -627,7 +689,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
         
         resultSection.innerHTML = html;
         authSection.style.display = 'none';
-        welcomeSection.style.display = 'none';
+        scanSection.style.display = 'none';
         resultSection.style.display = 'block';
       }
 
