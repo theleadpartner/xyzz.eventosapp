@@ -4,8 +4,8 @@
  * Gestiona la generación y visualización de múltiples códigos QR por ticket
  * 
  * @package EventosApp
- * @version 1.1
- * Modificado: QR de badge genera URL para networking global
+ * @version 1.2
+ * Modificado: QR de badge usa eventosapp_ticketID en lugar de Post ID
  */
 
 if (!defined('ABSPATH')) {
@@ -352,7 +352,7 @@ class EventosApp_QR_Manager {
 
     /**
      * Prepara el contenido del código QR
-     * MODIFICADO: Para tipo "badge" genera URL, para otros tipos usa codificación base64
+     * MODIFICADO: Para tipo "badge" genera URL con eventosapp_ticketID (ID único) en lugar de Post ID
      */
     private function prepare_qr_content($ticket_id, $type, $qr_id) {
         // Si es QR de badge (escarapela), generar URL
@@ -360,9 +360,17 @@ class EventosApp_QR_Manager {
             $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
             $security_code = get_post_meta($ticket_id, '_eventosapp_badge_security_code', true);
             
-            // Construir URL: https://sitio.com/networking/global/?event=123-ticketid=456-7890
+            // CORRECCIÓN: Obtener el eventosapp_ticketID (ID único) en lugar del Post ID
+            $unique_ticket_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+            
+            // Si no existe el ID único, generarlo
+            if (empty($unique_ticket_id)) {
+                $unique_ticket_id = $this->generate_ticket_code($ticket_id);
+            }
+            
+            // Construir URL: https://sitio.com/networking/global/?event=123-ticketid=ABC123-7890
             $site_url = home_url();
-            $badge_url = $site_url . '/networking/global/?event=' . $evento_id . '-ticketid=' . $ticket_id . '-' . $security_code;
+            $badge_url = $site_url . '/networking/global/?event=' . $evento_id . '-ticketid=' . $unique_ticket_id . '-' . $security_code;
             
             return $badge_url;
         }
@@ -517,6 +525,7 @@ class EventosApp_QR_Manager {
 
     /**
      * Decodifica el contenido de un código QR
+     * MODIFICADO: Maneja URLs con eventosapp_ticketID
      */
     public static function decode_qr_content($qr_content) {
         // Si el contenido parece ser una URL (empieza con http), es un QR de badge
@@ -527,25 +536,25 @@ class EventosApp_QR_Manager {
                 parse_str($url_parts['query'], $params);
                 
                 if (isset($params['event'])) {
-                    // Formato: event=123-ticketid=456-7890
+                    // Formato: event=123-ticketid=ABC123-7890
                     $parts = explode('-', $params['event']);
                     
                     if (count($parts) >= 3) {
                         // Extraer event_id del primer segmento
                         $event_id = intval($parts[0]);
                         
-                        // Extraer ticket_id del segundo segmento (después de "ticketid=")
+                        // Extraer unique_ticket_id del segundo segmento (después de "ticketid=")
                         $ticket_part = isset($parts[1]) ? $parts[1] : '';
-                        $ticket_id = 0;
+                        $unique_ticket_id = '';
                         if (strpos($ticket_part, 'ticketid=') === 0) {
-                            $ticket_id = intval(str_replace('ticketid=', '', $ticket_part));
+                            $unique_ticket_id = str_replace('ticketid=', '', $ticket_part);
                         }
                         
                         // El último segmento es el código de seguridad
                         $security_code = isset($parts[2]) ? $parts[2] : '';
                         
                         return array(
-                            'ticket_id' => $ticket_id,
+                            'unique_ticket_id' => $unique_ticket_id,
                             'event_id' => $event_id,
                             'security_code' => $security_code,
                             'type' => 'badge',
@@ -578,8 +587,11 @@ class EventosApp_QR_Manager {
 
     /**
      * Valida un código QR
+     * MODIFICADO: Valida usando eventosapp_ticketID para badges
      */
     public static function validate_qr($qr_content) {
+        global $wpdb;
+        
         $data = self::decode_qr_content($qr_content);
         
         if (!$data) {
@@ -589,19 +601,28 @@ class EventosApp_QR_Manager {
             );
         }
         
-        $ticket_id = $data['ticket_id'];
-        
-        // Verificar que el ticket existe
-        if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
-            return array(
-                'valid' => false,
-                'message' => 'Ticket no encontrado'
-            );
-        }
-        
-        // Si es un QR tipo URL (badge), validar código de seguridad
+        // Si es un QR tipo URL (badge), buscar por eventosapp_ticketID
         if (isset($data['is_url']) && $data['is_url'] === true) {
-            $stored_security_code = get_post_meta($ticket_id, '_eventosapp_badge_security_code', true);
+            $unique_ticket_id = $data['unique_ticket_id'];
+            
+            // Buscar el Post ID por eventosapp_ticketID
+            $ticket_post_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT post_id FROM {$wpdb->postmeta} 
+                WHERE meta_key = 'eventosapp_ticketID' 
+                AND meta_value = %s 
+                LIMIT 1",
+                $unique_ticket_id
+            ));
+            
+            if (!$ticket_post_id || get_post_type($ticket_post_id) !== 'eventosapp_ticket') {
+                return array(
+                    'valid' => false,
+                    'message' => 'Ticket no encontrado'
+                );
+            }
+            
+            // Validar código de seguridad
+            $stored_security_code = get_post_meta($ticket_post_id, '_eventosapp_badge_security_code', true);
             
             if (empty($stored_security_code) || $stored_security_code !== $data['security_code']) {
                 return array(
@@ -612,14 +633,25 @@ class EventosApp_QR_Manager {
             
             return array(
                 'valid' => true,
-                'ticket_id' => $ticket_id,
+                'ticket_id' => $ticket_post_id,
                 'type' => 'badge',
                 'is_url' => true,
                 'type_label' => 'Escarapela Impresa'
             );
         }
         
-        // Para QR tradicionales, verificar que el QR ID coincide
+        // Para QR tradicionales, usar Post ID directamente
+        $ticket_id = $data['ticket_id'];
+        
+        // Verificar que el ticket existe
+        if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return array(
+                'valid' => false,
+                'message' => 'Ticket no encontrado'
+            );
+        }
+        
+        // Verificar que el QR ID coincide
         $type = $data['type'];
         $stored_qr_id = get_post_meta($ticket_id, '_eventosapp_qr_' . $type, true);
         
