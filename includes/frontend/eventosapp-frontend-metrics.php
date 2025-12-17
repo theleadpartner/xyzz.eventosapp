@@ -12,9 +12,11 @@ if ( ! defined('ABSPATH') ) exit;
  *   3) Barras por hora (00–23): check-in principal (azul) + sesiones (colores determinísticos)
  *      -> Con filtro: Acumulado (rango) o Por día
  *   4) Tabla por Localidad (Check-ins, Not check-ins, % Asistencia, Check-ins sesiones adicionales*, % asistentes a sesiones*)
- *   5) Botón descargar base de datos (XLSX compatible con Excel)
+ *   5) NUEVO: Gráfico de torta de tipos de QR
+ *   6) NUEVO: Tabla de estadísticas por tipo de QR
+ *   7) Botón descargar base de datos (XLSX compatible con Excel) con columna de medio de checkin
  *
- * (*) Por “sesiones adicionales”, se contabiliza el número de asistentes ÚNICOS con al menos un check-in de sesión.
+ * (*) Por "sesiones adicionales", se contabiliza el número de asistentes ÚNICOS con al menos un check-in de sesión.
  */
 
 //
@@ -99,6 +101,14 @@ add_shortcode('eventosapp_front_metrics', function(){
           font-weight:700;
           border-top:2px solid rgba(255,255,255,.25);
         }
+        
+      /* NUEVO: Estilos para gráfico y tabla de QR */
+      .evapp-qr-pie { grid-column: span 12; }
+      .evapp-qr-table { grid-column: span 12; }
+      @media(min-width:740px){
+        .evapp-qr-pie { grid-column: span 6; }
+        .evapp-qr-table { grid-column: span 6; }
+      }
     </style>
 
     <div class="evapp-metrics-wrap" data-event="<?php echo esc_attr($active_event); ?>">
@@ -164,7 +174,7 @@ add_shortcode('eventosapp_front_metrics', function(){
 
         <!-- Barras -->
         <div class="evapp-card evapp-bars">
-          <h3 id="evappBarsTitle">Check-ins por hora</h3>
+          <h3 id="evappBarsTitle">Check-ins por hora (acumulado)</h3>
           <canvas id="evappBars"></canvas>
           <div class="evapp-hint">Azul = Check-in principal. Sesiones = colores variados.</div>
         </div>
@@ -190,7 +200,33 @@ add_shortcode('eventosapp_front_metrics', function(){
             </table>
           </div>
           <div class="evapp-footnote">
-            * “Sesiones adicionales” cuenta asistentes únicos que confirmaron al menos una sesión.
+            * "Sesiones adicionales" cuenta asistentes únicos que confirmaron al menos una sesión.
+          </div>
+        </div>
+        
+        <!-- NUEVO: Gráfico de torta de tipos de QR -->
+        <div class="evapp-card evapp-qr-pie">
+          <h3>Check-ins por Tipo de QR</h3>
+          <canvas id="evappQrPie"></canvas>
+          <div class="evapp-hint" id="evappQrPieHint"></div>
+        </div>
+        
+        <!-- NUEVO: Tabla de estadísticas de tipos de QR -->
+        <div class="evapp-card evapp-qr-table">
+          <h3>Estadísticas por Tipo de QR</h3>
+          <div style="overflow:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tipo de QR</th>
+                  <th>Check-ins</th>
+                  <th>% del Total</th>
+                </tr>
+              </thead>
+              <tbody id="evappQrTableBody">
+                <tr><td colspan="3" class="evapp-muted">Cargando…</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -226,6 +262,10 @@ $js = <<<'JS'
         const tableBody  = document.getElementById('evappTableBody');
         const pieHint    = document.getElementById('evappPieHint');
         const barsTitle  = document.getElementById('evappBarsTitle');
+        
+        // NUEVO: Referencias para gráfico y tabla de QR
+        const qrPieHint = document.getElementById('evappQrPieHint');
+        const qrTableBody = document.getElementById('evappQrTableBody');
 
         // Filtros
         const modeSel = document.getElementById('evappMode');
@@ -254,6 +294,7 @@ $js = <<<'JS'
 
         let pieChart = null;
         let barChart = null;
+        let qrPieChart = null; // NUEVO: Chart para tipos de QR
 
         // Color estable por nombre de sesión
         function colorFor(text){
@@ -386,6 +427,119 @@ $js = <<<'JS'
 
             tableBody.innerHTML = bodyHTML + totalsHTML;
         }
+        
+        // NUEVO: Renderizar gráfico de torta de tipos de QR
+        function renderQrPie(qrStats){
+            if (!qrStats || !qrStats.types || Object.keys(qrStats.types).length === 0) {
+                qrPieHint.textContent = 'No hay datos de tipos de QR disponibles';
+                if (qrPieChart) {
+                    qrPieChart.destroy();
+                    qrPieChart = null;
+                }
+                return;
+            }
+            
+            const ctx = document.getElementById('evappQrPie').getContext('2d');
+            const types = qrStats.types || {};
+            const labels = [];
+            const dataValues = [];
+            const colors = {
+                'Email': '#4f7cff',
+                'Google Wallet': '#34a853',
+                'Apple Wallet': '#000000',
+                'PDF Impreso': '#f59e0b',
+                'Escarapela Impresa': '#8b5cf6',
+                'QR Legacy': '#94a3b8',
+                'QR Preimpreso': '#64748b'
+            };
+            
+            const backgroundColors = [];
+            
+            Object.keys(types).sort().forEach(type => {
+                labels.push(type);
+                dataValues.push(types[type]);
+                backgroundColors.push(colors[type] || colorFor(type));
+            });
+            
+            const total = qrStats.total || 0;
+            qrPieHint.textContent = `Total de check-ins: ${fmt(total)}`;
+            
+            const cfg = {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: dataValues,
+                        backgroundColor: backgroundColors,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: '#eaf1ff' }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.label || '';
+                                    const value = context.parsed || 0;
+                                    const percentage = total ? ((value / total) * 100).toFixed(2) : 0;
+                                    return `${label}: ${fmt(value)} (${percentage}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            
+            if (qrPieChart) {
+                qrPieChart.data = cfg.data;
+                qrPieChart.update();
+            } else {
+                qrPieChart = new Chart(ctx, cfg);
+            }
+        }
+        
+        // NUEVO: Renderizar tabla de tipos de QR
+        function renderQrTable(qrStats){
+            if (!qrStats || !qrStats.types || Object.keys(qrStats.types).length === 0) {
+                qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-muted">Sin datos de tipos de QR.</td></tr>';
+                return;
+            }
+            
+            const types = qrStats.types || {};
+            const total = qrStats.total || 0;
+            
+            // Crear array de tipos ordenado por cantidad (descendente)
+            const typeArray = Object.keys(types).map(type => ({
+                type: type,
+                count: types[type],
+                percentage: total ? ((types[type] / total) * 100) : 0
+            })).sort((a, b) => b.count - a.count);
+            
+            let bodyHTML = typeArray.map(item => {
+                return (
+                    '<tr>'
+                    + '<td>' + escapeHTML(item.type) + '</td>'
+                    + '<td>' + fmt(item.count) + '</td>'
+                    + '<td>' + item.percentage.toFixed(2) + '%</td>'
+                    + '</tr>'
+                );
+            }).join('');
+            
+            // Agregar fila de totales
+            bodyHTML += 
+                '<tr class="evapp-total">'
+                + '<td>Total</td>'
+                + '<td>' + fmt(total) + '</td>'
+                + '<td>100.00%</td>'
+                + '</tr>';
+            
+            qrTableBody.innerHTML = bodyHTML;
+        }
 
         function setKpis(total, checked){
             kpiTotal.textContent   = fmt(total||0);
@@ -423,9 +577,14 @@ $js = <<<'JS'
                 renderPie(d);
                 renderBars(d);
                 renderTable((d.table && d.table.rows) ? d.table.rows : []);
+                
+                // NUEVO: Renderizar gráfico y tabla de tipos de QR
+                renderQrPie(d.qr_stats);
+                renderQrTable(d.qr_stats);
             } catch(e){
                 console.error(e);
                 tableBody.innerHTML = '<tr><td colspan="6" class="evapp-bad">No se pudieron cargar las métricas.</td></tr>';
+                qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-bad">Error al cargar datos de QR.</td></tr>';
             }
         }
 
@@ -528,6 +687,17 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
     $loc_totals       = []; // localidad => total
     $loc_checked      = []; // localidad => checked_total
     $loc_ses_uniques  = []; // localidad => set(ticket_id => true)
+    
+    // NUEVO: Agregador para tipos de QR
+    $qr_types_count = [
+        'Email' => 0,
+        'Google Wallet' => 0,
+        'Apple Wallet' => 0,
+        'PDF Impreso' => 0,
+        'Escarapela Impresa' => 0,
+        'QR Legacy' => 0,
+        'QR Preimpreso' => 0
+    ];
 
     $all_localidades = get_post_meta($event_id, '_eventosapp_localidades', true);
     if (!is_array($all_localidades)) $all_localidades = ['General','VIP','Platino'];
@@ -569,7 +739,7 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             $loc_checked[$loc]++;
         }
 
-        // Log para barras y sesiones únicas
+        // Log para barras, sesiones únicas y NUEVO: tipos de QR
         $log = get_post_meta($tid, '_eventosapp_checkin_log', true);
         if (is_string($log)) $log = @unserialize($log);
         if (!is_array($log)) $log = [];
@@ -581,9 +751,9 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             $ses   = isset($row['sesion'])? $row['sesion']: '';
             $H     = ($hora && preg_match('/^\d{2}/', $hora)) ? intval(substr($hora,0,2)) : null;
 
-            if ($H === null || $H < 0 || $H > 23) continue;
+            if ($H === null || $H < 0 || $H > 23) $H = null;
 
-            if ($in_filter($fecha)) {
+            if ($in_filter($fecha) && $H !== null) {
                 if ($status === 'checked_in') {
                     $hourly_main[$H] = (isset($hourly_main[$H]) ? $hourly_main[$H] : 0) + 1;
                 } elseif ($status === 'session_checked_in' && $ses) {
@@ -595,6 +765,16 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             // Un asistente cuenta 1 sola vez para sesiones (en cualquier fecha)
             if ($status === 'session_checked_in') {
                 $loc_ses_uniques[$loc][$tid] = true;
+            }
+            
+            // NUEVO: Contar tipos de QR (solo para check-ins principales)
+            if ($status === 'checked_in' && isset($row['qr_type_label'])) {
+                $qr_label = $row['qr_type_label'];
+                if (isset($qr_types_count[$qr_label])) {
+                    $qr_types_count[$qr_label]++;
+                } else {
+                    $qr_types_count[$qr_label] = 1;
+                }
             }
         }
     }
@@ -636,6 +816,16 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         $bar_meta['to']   = $to;
         $bar_meta['day']  = $today;
     }
+    
+    // NUEVO: Preparar estadísticas de tipos de QR (filtrar los que tienen 0)
+    $qr_stats_filtered = [];
+    $qr_total = 0;
+    foreach ($qr_types_count as $type => $count) {
+        if ($count > 0) {
+            $qr_stats_filtered[$type] = $count;
+            $qr_total += $count;
+        }
+    }
 
     $out = [
         'total_tickets'        => $total,
@@ -643,6 +833,10 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         'not_checked_in_total' => max($total - $checked_total, 0),
         'bar'   => $bar_meta,
         'table' => [ 'rows' => $rows ],
+        'qr_stats' => [ // NUEVO: Estadísticas de tipos de QR
+            'types' => $qr_stats_filtered,
+            'total' => $qr_total
+        ]
     ];
 
     wp_send_json_success($out);
@@ -974,29 +1168,32 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
         foreach ($extra_fields as $f) { $headers[] = 'Extra: ' . ($f['label'] ?? ''); }
     }
 
-    // Check-in por día (SI/NO) + Hora por día (NUEVO)
+    // Check-in por día (SI/NO) + Hora por día
     foreach ($event_days as $d) {
         $headers[] = 'Check-in — '.$d;
-        $headers[] = 'Hora check-in — '.$d; // NUEVO
+        $headers[] = 'Hora check-in — '.$d;
     }
 
     // Sesiones (acceso y check-in por sesión)
     foreach ($all_sessions as $sname) { $headers[] = 'Sesión: '.$sname.' (Acceso)'; }
     foreach ($all_sessions as $sname) { $headers[] = 'Sesión: '.$sname.' (Check-in)'; }
 
-    // Hora por sesión y día (NUEVO: una columna por Sesión x Día)
+    // Hora por sesión y día
     foreach ($all_sessions as $sname) {
         foreach ($event_days as $d) {
-            $headers[] = 'Hora sesión: '.$sname.' — '.$d; // NUEVO
+            $headers[] = 'Hora sesión: '.$sname.' — '.$d;
         }
     }
 
     $headers[] = 'Fecha creación';
     
-    // === NUEVO: Encabezados de estado de correo ===
+    // Encabezados de estado de correo
     $headers[] = 'Estado Correo Ticket';
     $headers[] = 'Fecha del Primer Envío';
     $headers[] = 'Fecha del Último Envío';
+    
+    // NUEVO: Encabezado para medio de check-in
+    $headers[] = 'Medio de Check-in';
 
     // === 5) Filas
     $dataRows = [];
@@ -1046,7 +1243,7 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
 
         $created = get_post_time('Y-m-d H:i:s', true, $tid);
 
-        // ====== NUEVO: mapear horas por día (principal) y por sesión x día ======
+        // Mapear horas por día (principal) y por sesión x día
         $main_time_by_day = [];
         foreach ($event_days as $d) $main_time_by_day[$d] = '';
 
@@ -1055,6 +1252,9 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
             $session_time_by_day[$sname] = [];
             foreach ($event_days as $d) $session_time_by_day[$sname][$d] = '';
         }
+        
+        // NUEVO: Variable para almacenar el tipo de QR del primer check-in
+        $qr_type_checkin = '';
 
         $log = get_post_meta($tid, '_eventosapp_checkin_log', true);
         if (is_string($log)) $log = @unserialize($log);
@@ -1071,6 +1271,11 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
             // principal por día: tomar la PRIMERA hora del día
             if (in_array($f, $event_days, true) && ($st === 'checked_in' || $st === 'checked-in')) {
                 $main_time_by_day[$f] = $min_time($main_time_by_day[$f], $h);
+                
+                // NUEVO: Capturar el tipo de QR del primer check-in principal
+                if ($qr_type_checkin === '' && isset($entry['qr_type_label'])) {
+                    $qr_type_checkin = $entry['qr_type_label'];
+                }
             }
 
             // sesión por día
@@ -1080,7 +1285,6 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
                 }
             }
         }
-        // ====== FIN NUEVO ======
 
         // base
         $row[] = (string)$pub_id;
@@ -1128,11 +1332,11 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
             }
         }
 
-        // por día: SI/NO + HORA (NUEVO)
+        // por día: SI/NO + HORA
         foreach ($event_days as $d) {
             $st  = isset($status_arr[$d]) ? $status_arr[$d] : '';
             $row[] = ($st === 'checked_in' || $st === 'checked-in') ? 'SI' : 'NO';
-            $row[] = (string)$main_time_by_day[$d]; // HORA NUEVA
+            $row[] = (string)$main_time_by_day[$d];
         }
 
         // sesiones acceso
@@ -1142,7 +1346,7 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
             $st  = isset($ses[$sname]) ? $ses[$sname] : '';
             $row[] = ($st === 'checked_in' || $st === 'checked-in') ? 'SI' : 'NO';
         }
-        // sesiones x día — HORA (NUEVO)
+        // sesiones x día — HORA
         foreach ($all_sessions as $sname) {
             foreach ($event_days as $d) {
                 $row[] = (string)$session_time_by_day[$sname][$d];
@@ -1151,18 +1355,18 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
 
         $row[] = (string)$created;
         
-        // === NUEVO: Datos de estado de correo ===
-        // Estado: 'enviado' o 'no_enviado'
+        // Datos de estado de correo
         $email_status = get_post_meta($tid, '_eventosapp_ticket_email_sent_status', true);
         $row[] = ($email_status === 'enviado') ? 'Enviado' : 'No Enviado';
         
-        // Fecha del primer envío
         $first_sent = get_post_meta($tid, '_eventosapp_ticket_email_first_sent', true);
         $row[] = $first_sent ? date_i18n('Y-m-d H:i:s', strtotime($first_sent)) : '';
         
-        // Fecha del último envío
         $last_sent = get_post_meta($tid, '_eventosapp_ticket_last_email_at', true);
         $row[] = $last_sent ? date_i18n('Y-m-d H:i:s', strtotime($last_sent)) : '';
+        
+        // NUEVO: Agregar medio de check-in
+        $row[] = (string)$qr_type_checkin;
         
         $dataRows[] = $row;
     }
