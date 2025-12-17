@@ -11,8 +11,8 @@ if ( ! defined('ABSPATH') ) exit;
  * URL esperada: /networking/global/?event=123-ticketid=ABC123-7890
  * 
  * @package EventosApp
- * @version 1.3
- * NUEVO: Autenticación persistente con localStorage (4 horas de duración)
+ * @version 1.4
+ * NUEVO: Scanner de QR integrado con cámara en pantalla de bienvenida
  */
 
 add_shortcode('eventosapp_networking_global', function($atts){
@@ -99,6 +99,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
       .evapp-netglobal-btn   { display:flex; align-items:center; justify-content:center; gap:.5rem; border:0; border-radius:12px; padding:1rem 1.2rem; font-weight:800; cursor:pointer; width:100%; background:#2563eb; color:#fff; transition:filter .15s, background .15s; font-size:1rem; }
       .evapp-netglobal-btn:hover{ filter:brightness(1.05); }
       .evapp-netglobal-btn:disabled{ opacity:.5; cursor:not-allowed; }
+      .evapp-netglobal-btn.is-live{ background:#e04f5f; }
       .evapp-netglobal-help  { color:#a9b6d3; font-size:.9rem; opacity:.85; margin-top:8px; line-height:1.4; }
       .evapp-netglobal-msg   { padding:12px; border-radius:8px; margin-top:12px; text-align:center; font-weight:600; }
       .evapp-netglobal-bad   { background:#fee2e2; color:#dc2626; border:1px solid #ef4444; }
@@ -116,11 +117,22 @@ add_shortcode('eventosapp_networking_global', function($atts){
       .evapp-netglobal-download { background:#10b981!important; }
       .evapp-netglobal-back { background:transparent!important; border:1px solid rgba(255,255,255,.18)!important; }
       
+      /* Scanner QR */
+      .evapp-qr-video-wrap { position:relative; margin-top:12px; border-radius:14px; overflow:hidden; background:#0a0f1d; aspect-ratio:3/4; display:none; }
+      .evapp-qr-video { width:100%; height:100%; object-fit:cover; display:none; }
+      .evapp-qr-frame { position:absolute; inset:0; pointer-events:none; display:none; }
+      .evapp-qr-frame .mask { position:absolute; inset:0; background: radial-gradient(ellipse 60% 40% at 50% 50%, rgba(255,255,255,0) 62%, rgba(10,15,29,.55) 64%); }
+      .evapp-qr-corner { position:absolute; width:44px; height:44px; border:4px solid #4f7cff; border-radius:10px; }
+      .evapp-qr-corner.tl{top:16px;left:16px;border-right:0;border-bottom:0}
+      .evapp-qr-corner.tr{top:16px;right:16px;border-left:0;border-bottom:0}
+      .evapp-qr-corner.bl{bottom:16px;left:16px;border-right:0;border-top:0}
+      .evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}
+      .evapp-qr-video-wrap.is-immersive{ aspect-ratio:auto; height: calc(100vh - var(--evapp-offset, 56px)); width:100%; display:block; }
+      
       /* Estilos para pantalla de bienvenida */
-      .evapp-netglobal-welcome { text-align:center; padding:2rem 0; }
-      .evapp-netglobal-welcome h2 { color:#eaf1ff; font-size:1.5rem; margin:0 0 1rem; }
-      .evapp-netglobal-welcome p { color:#a9b6d3; font-size:1rem; line-height:1.6; margin:0 0 1.5rem; }
-      .evapp-netglobal-welcome .icon { font-size:4rem; margin-bottom:1rem; }
+      .evapp-netglobal-welcome { text-align:center; padding:1rem 0; }
+      .evapp-netglobal-welcome h2 { color:#eaf1ff; font-size:1.3rem; margin:0 0 .8rem; }
+      .evapp-netglobal-welcome p { color:#a9b6d3; font-size:.95rem; line-height:1.6; margin:0 0 1.5rem; }
     </style>
 
     <div class="evapp-netglobal-shell"
@@ -136,15 +148,32 @@ add_shortcode('eventosapp_networking_global', function($atts){
           Networking – Identificación
         </div>
 
-        <!-- Pantalla de bienvenida (se muestra si está autenticado pero no hay QR) -->
+        <!-- Pantalla de bienvenida con scanner -->
         <div id="evappNetGlobalWelcome" style="display:none;">
           <div class="evapp-netglobal-welcome">
-            <div class="icon">📱</div>
             <h2>¡Listo para escanear!</h2>
-            <p>Ya estás autenticado. Escanea otro código QR de una escarapela para ver los datos del contacto.</p>
-            <div class="evapp-netglobal-help" style="margin-top:2rem; opacity:1;">
-              <strong>💡 Tip:</strong> Tu sesión durará 4 horas. Puedes escanear todos los QR que necesites sin volver a autenticarte.
+            <p>Ya estás autenticado. Activa la cámara para escanear códigos QR de escarapelas.</p>
+          </div>
+          
+          <button class="evapp-netglobal-btn" id="evappStartScanGlobal">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/><rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/></svg>
+            Activar cámara y escanear
+          </button>
+
+          <div class="evapp-qr-video-wrap" id="evappVideoWrapGlobal">
+            <video id="evappVideoGlobal" class="evapp-qr-video" playsinline></video>
+            <div class="evapp-qr-frame" id="evappFrameGlobal">
+              <div class="mask"></div>
+              <div class="evapp-qr-corner tl"></div>
+              <div class="evapp-qr-corner tr"></div>
+              <div class="evapp-qr-corner bl"></div>
+              <div class="evapp-qr-corner br"></div>
             </div>
+            <canvas id="evappCanvasGlobal" style="display:none;"></canvas>
+          </div>
+
+          <div class="evapp-netglobal-help" style="margin-top:12px; text-align:center;" id="evappScanHintGlobal">
+            Tip: Coloca el QR dentro del marco para escanearlo.
           </div>
         </div>
 
@@ -201,8 +230,24 @@ add_shortcode('eventosapp_networking_global', function($atts){
       const authBtn = document.getElementById('evappAuthBtn');
       const authMsg = document.getElementById('evappAuthMsg');
 
+      // Scanner elements
+      const btnScan = document.getElementById('evappStartScanGlobal');
+      const video = document.getElementById('evappVideoGlobal');
+      const frame = document.getElementById('evappFrameGlobal');
+      const cvs = document.getElementById('evappCanvasGlobal');
+      const ctx = cvs?.getContext('2d');
+      const vwrap = document.getElementById('evappVideoWrapGlobal');
+      const scanHint = document.getElementById('evappScanHintGlobal');
+
       let readerTicketId = 0;
       const SESSION_DURATION = 4 * 60 * 60 * 1000; // 4 horas en milisegundos
+
+      // Scanner state
+      let stream = null;
+      let running = false;
+      let lastScan = "";
+      let lastAt = 0;
+      let barcodeDetector = ('BarcodeDetector' in window) ? new window.BarcodeDetector({formats:['qr_code']}) : null;
 
       // ========== SISTEMA DE SESIÓN PERSISTENTE ==========
       
@@ -263,6 +308,150 @@ add_shortcode('eventosapp_networking_global', function($atts){
         }
       }
 
+      // ========== SCANNER QR ==========
+      
+      function normalizeRaw(raw) {
+        let s = String(raw || '').trim();
+        if (s.includes('/')) s = s.split('/').pop();
+        s = s.replace(/\.(png|jpg|jpeg|pdf)$/i, '').replace(/-tn$/i, '').replace(/^#/, '');
+        return s;
+      }
+
+      function beep() {
+        try {
+          const a = new Audio();
+          a.src = 'data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAACcQAA';
+          a.play().catch(() => {});
+        } catch(e) {}
+        if (navigator.vibrate) navigator.vibrate(60);
+      }
+
+      function getOffset() {
+        const ab = document.getElementById('wpadminbar');
+        return (ab ? ab.offsetHeight : 0) + 10;
+      }
+
+      function smoothScrollTo(el) {
+        if (!el) return;
+        const off = getOffset();
+        try {
+          el.style.setProperty('--evapp-offset', off + 'px');
+        } catch(e) {}
+        const y = el.getBoundingClientRect().top + window.pageYOffset - off;
+        window.scrollTo({top: y, behavior: 'smooth'});
+      }
+
+      function setLiveUI(on) {
+        if (on) {
+          btnScan.classList.add('is-live');
+          btnScan.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 6h12v12H6z" stroke="white"/></svg> Detener cámara';
+        } else {
+          btnScan.classList.remove('is-live');
+          btnScan.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/><rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/></svg> Activar cámara y escanear';
+        }
+      }
+
+      function stopScanner() {
+        running = false;
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        video.style.display = 'none';
+        frame.style.display = 'none';
+        vwrap?.classList.remove('is-immersive');
+        setLiveUI(false);
+      }
+
+      async function ensureJsQR() {
+        if ('BarcodeDetector' in window) return false;
+        if (!window.jsQR) {
+          await new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+            s.onload = resolve;
+            document.head.appendChild(s);
+          });
+        }
+        return true;
+      }
+
+      async function startScanner() {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {facingMode: {ideal: 'environment'}},
+            audio: false
+          });
+        } catch(e) {
+          scanHint.innerHTML = '<span class="evapp-netglobal-bad">No se pudo acceder a la cámara.</span>';
+          return;
+        }
+        
+        video.srcObject = stream;
+        await video.play();
+        video.style.display = 'block';
+        frame.style.display = 'block';
+        vwrap?.classList.add('is-immersive');
+        smoothScrollTo(vwrap);
+        cvs.width = video.videoWidth || 640;
+        cvs.height = video.videoHeight || 480;
+        running = true;
+        setLiveUI(true);
+        tick();
+      }
+
+      async function tick() {
+        if (!running) return;
+        ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
+        
+        if (barcodeDetector) {
+          try {
+            const bmp = await createImageBitmap(cvs);
+            const codes = await barcodeDetector.detect(bmp);
+            if (codes && codes.length) {
+              onScan(normalizeRaw(codes[0].rawValue || ''));
+              return;
+            }
+          } catch(e) {}
+        } else if (window.jsQR) {
+          const img = ctx.getImageData(0, 0, cvs.width, cvs.height);
+          const code = window.jsQR(img.data, img.width, img.height);
+          if (code && code.data) {
+            onScan(normalizeRaw(code.data));
+            return;
+          }
+        }
+        
+        requestAnimationFrame(tick);
+      }
+
+      function onScan(raw) {
+        const now = Date.now();
+        if (raw === lastScan && (now - lastAt) < 3000) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        lastScan = raw;
+        lastAt = now;
+        
+        stopScanner();
+        beep();
+        
+        // Redirigir a la URL con los parámetros del QR escaneado
+        const baseUrl = window.location.origin + window.location.pathname;
+        window.location.href = baseUrl + '?event=' + raw;
+      }
+
+      // Event listener para el botón de scanner
+      if (btnScan) {
+        btnScan.addEventListener('click', async function() {
+          if (running) {
+            stopScanner();
+          } else {
+            await ensureJsQR();
+            await startScanner();
+          }
+        });
+      }
+
       // ========== INICIALIZACIÓN ==========
       
       function init() {
@@ -278,7 +467,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
             welcomeSection.style.display = 'none';
             loadScannedTicketData();
           } else {
-            // Hay sesión pero NO hay QR -> mostrar bienvenida
+            // Hay sesión pero NO hay QR -> mostrar bienvenida con scanner
             authSection.style.display = 'none';
             welcomeSection.style.display = 'block';
             resultSection.style.display = 'none';
