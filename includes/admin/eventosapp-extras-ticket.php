@@ -19,6 +19,9 @@ add_action('add_meta_boxes', function () {
 /**
  * ÚNICA definición (unificada) del render del metabox
  */
+/**
+ * ÚNICA definición (unificada) del render del metabox
+ */
 function eventosapp_render_metabox_extras_ticket($post) {
     // Recupera valores (por defecto OFF)
     $pdf         = get_post_meta($post->ID, '_eventosapp_ticket_pdf', true);
@@ -29,6 +32,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
 
     // NUEVO: envío auto para registro público
     $auto_public = get_post_meta($post->ID, '_eventosapp_ticket_auto_email_public', true);
+
+    // NUEVO: envío auto para registro manual
+    $auto_manual = get_post_meta($post->ID, '_eventosapp_ticket_auto_email_manual', true);
 
     // NUEVO: flag "usar QR preimpreso"
     $use_preprinted = get_post_meta($post->ID, '_eventosapp_ticket_use_preprinted_qr', true);
@@ -67,7 +73,15 @@ function eventosapp_render_metabox_extras_ticket($post) {
         <strong>Enviar ticket automáticamente en el registro público</strong>
     </label>
     <br>
-    <small style="color:#666">No afecta el envío manual desde el panel del staff/organizador.</small>
+    <small style="color:#666">Aplica cuando los asistentes se registran ellos mismos desde el formulario público.</small>
+
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_auto_email_manual" value="1" <?php checked($auto_manual, '1'); ?>>
+        <strong>Enviar ticket automáticamente en el registro manual</strong>
+    </label>
+    <br>
+    <small style="color:#666">Aplica cuando el staff/organizador registra asistentes manualmente desde el panel frontal.</small>
 
     <hr>
     <label>
@@ -105,6 +119,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
 /**
  * Guardar metadatos del metabox de extras
  */
+/**
+ * Guardar metadatos del metabox de extras
+ */
 add_action('save_post_eventosapp_event', function($post_id){
     // Evitar autosaves y revisiones
     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
@@ -127,6 +144,10 @@ add_action('save_post_eventosapp_event', function($post_id){
 
     // NUEVO: solo para registro público
     update_post_meta($post_id, '_eventosapp_ticket_auto_email_public',  isset($_POST['eventosapp_ticket_auto_email_public']) ? '1' : '0');
+    
+    // NUEVO: solo para registro manual (staff/organizador)
+    update_post_meta($post_id, '_eventosapp_ticket_auto_email_manual',  isset($_POST['eventosapp_ticket_auto_email_manual']) ? '1' : '0');
+    
     // NUEVO: usar QR preimpreso (por evento)
     update_post_meta($post_id, '_eventosapp_ticket_use_preprinted_qr', isset($_POST['eventosapp_ticket_use_preprinted_qr']) ? '1' : '0');
     
