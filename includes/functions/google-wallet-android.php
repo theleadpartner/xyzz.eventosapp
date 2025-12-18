@@ -457,9 +457,41 @@ function eventosapp_generar_enlace_wallet_android($ticket_id, $debug = false) {
     $asistente_apellido = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
     $asistente_email    = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
     $localidad          = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
-    $codigo_qr          = get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: $ticket_id;
-    $fecha              = get_post_meta($evento_id, '_eventosapp_fecha_unica', true);
-    $log("Evento: $nombre_evento | Asistente: $asistente_nombre $asistente_apellido | Email:$asistente_email | Localidad:$localidad | QR:$codigo_qr | Fecha:$fecha");
+    
+    // === OBTENER QR DEL QR MANAGER ===
+    $log("Obteniendo QR de Google Wallet desde QR Manager...");
+    $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+    
+    // Verificar si existe el QR de google_wallet
+    if (!is_array($all_qr_codes) || !isset($all_qr_codes['google_wallet']) || empty($all_qr_codes['google_wallet']['content'])) {
+        $log("QR de Google Wallet no encontrado. Generando QR usando QR Manager...");
+        
+        // Intentar inicializar el QR Manager y generar el QR
+        if (class_exists('EventosApp_QR_Manager')) {
+            $qr_manager = new EventosApp_QR_Manager();
+            $qr_result = $qr_manager->generate_qr_code($ticket_id, 'google_wallet');
+            
+            if ($qr_result && isset($qr_result['content'])) {
+                $codigo_qr = $qr_result['content'];
+                $log("QR generado exitosamente por QR Manager. Content length: " . strlen($codigo_qr));
+            } else {
+                // Fallback al sistema antiguo si falla el QR Manager
+                $codigo_qr = get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: $ticket_id;
+                $log("ADVERTENCIA: No se pudo generar QR con QR Manager. Usando fallback: $codigo_qr");
+            }
+        } else {
+            // Fallback al sistema antiguo si no existe la clase QR Manager
+            $codigo_qr = get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: $ticket_id;
+            $log("ADVERTENCIA: Clase EventosApp_QR_Manager no disponible. Usando fallback: $codigo_qr");
+        }
+    } else {
+        // Usar el QR existente del QR Manager
+        $codigo_qr = $all_qr_codes['google_wallet']['content'];
+        $log("QR de Google Wallet obtenido desde QR Manager. Content length: " . strlen($codigo_qr));
+    }
+    
+    $fecha = get_post_meta($evento_id, '_eventosapp_fecha_unica', true);
+    $log("Evento: $nombre_evento | Asistente: $asistente_nombre $asistente_apellido | Email:$asistente_email | Localidad:$localidad | QR content obtenido | Fecha:$fecha");
 
     // 4) Branding / class_id
     $wallet_custom_enable = get_post_meta($evento_id, '_eventosapp_wallet_custom_enable', true) === '1';
