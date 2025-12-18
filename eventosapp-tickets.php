@@ -1215,13 +1215,30 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         update_post_meta($post_id, 'eventosapp_ticket_preprintedID', $num);
     }
 
-    // 14) Regenerar PDF / ICS si corresponde
-    if (function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
+    // 14) Regenerar ICS si corresponde
+    // NOTA: El PDF se genera en un hook separado (prioridad 30) para asegurar que los QR codes ya estén generados
     if (function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($post_id);
 
     // Canal de creación por defecto si no existe aún: manual (editor del admin)
     if (!get_post_meta($post_id, '_eventosapp_creation_channel', true)) {
         update_post_meta($post_id, '_eventosapp_creation_channel', 'manual');
+    }
+}
+
+/**
+ * Hook separado para generar el PDF DESPUÉS de que los QR codes estén creados
+ * Se ejecuta con prioridad 30, después del QR Manager (prioridad 20)
+ */
+add_action('save_post_eventosapp_ticket', 'eventosapp_generate_pdf_after_qr', 30, 3);
+function eventosapp_generate_pdf_after_qr($post_id, $post, $update) {
+    // Protecciones básicas
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    if (wp_is_post_revision($post_id)) return;
+    if ($post->post_type !== 'eventosapp_ticket') return;
+    
+    // Generar PDF si la función existe
+    if (function_exists('eventosapp_ticket_generar_pdf')) {
+        eventosapp_ticket_generar_pdf($post_id);
     }
 }
 
