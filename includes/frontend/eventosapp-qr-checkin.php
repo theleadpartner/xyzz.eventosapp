@@ -1076,40 +1076,58 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
 
     global $wpdb;
 
-    // ¿El evento usa QR preimpreso?
-    $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
-
-    // Meta a consultar y normalización del valor escaneado
-    $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
-    if ( $use_preprinted ) {
-        $scan_val = preg_replace('/\D+/', '', $scanned); // solo dígitos
-        if ($scan_val === '') {
-            wp_send_json_error(['error' => 'QR inválido: se esperaba un número.']);
-        }
-    } else {
-        $scan_val = $scanned;
-    }
-
-    // Busca TODOS los posibles y luego filtra por evento (evita colisiones entre eventos)
-    $ids = $wpdb->get_col( $wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
-        $meta_key, $scan_val
-    ) );
-
     $ticket_post_id = 0;
-    if ($ids) {
-        foreach ($ids as $cand) {
-            if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id) {
-                $ticket_post_id = (int) $cand;
-                break;
+
+    // === PASO 1: Intentar con el NUEVO sistema de QR (EventosApp_QR_Manager) ===
+    if (class_exists('EventosApp_QR_Manager')) {
+        $validation = EventosApp_QR_Manager::validate_qr($scanned);
+        
+        if (isset($validation['valid']) && $validation['valid'] === true && !empty($validation['ticket_id'])) {
+            $candidate_id = (int) $validation['ticket_id'];
+            
+            // Verificar que el ticket pertenece al evento activo
+            $ticket_event = (int) get_post_meta($candidate_id, '_eventosapp_ticket_evento_id', true);
+            if ($ticket_event === (int) $event_id) {
+                $ticket_post_id = $candidate_id;
             }
         }
     }
 
+    // === PASO 2: Si no se encontró con el sistema nuevo, intentar con sistema LEGACY ===
+    if (!$ticket_post_id) {
+        // ¿El evento usa QR preimpreso?
+        $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
+
+        // Meta a consultar y normalización del valor escaneado
+        $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
+        if ( $use_preprinted ) {
+            $scan_val = preg_replace('/\D+/', '', $scanned); // solo dígitos
+            if ($scan_val === '') {
+                wp_send_json_error(['error' => 'QR inválido: se esperaba un número.']);
+            }
+        } else {
+            $scan_val = $scanned;
+        }
+
+        // Busca TODOS los posibles y luego filtra por evento (evita colisiones entre eventos)
+        $ids = $wpdb->get_col( $wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
+            $meta_key, $scan_val
+        ) );
+
+        if ($ids) {
+            foreach ($ids as $cand) {
+                if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id) {
+                    $ticket_post_id = (int) $cand;
+                    break;
+                }
+            }
+        }
+    }
+
+    // === VALIDACIÓN FINAL ===
     if ( ! $ticket_post_id ) {
-        wp_send_json_error(['error' => $use_preprinted
-            ? 'Ticket no encontrado para este evento (ID preimpreso).'
-            : 'Ticket no encontrado']);
+        wp_send_json_error(['error' => 'Ticket no encontrado para este evento.']);
     }
 
     // Seguridad extra (una sola vez)
@@ -1604,32 +1622,54 @@ add_action('wp_ajax_eventosapp_qr_sesion_lookup', function(){
 
     global $wpdb;
 
-    // ¿Evento usa QR preimpreso?
-    $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
-    $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
-    if ($use_preprinted) {
-        $scan_val = preg_replace('/\D+/', '', $scanned);
-        if ($scan_val === '') wp_send_json_error(['error'=>'QR inválido: se esperaba un número.']);
-    } else {
-        $scan_val = $scanned;
-    }
-
-    $ids = $wpdb->get_col( $wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
-        $meta_key, $scan_val
-    ) );
-
     $ticket_post_id = 0;
-    if ($ids) {
-        foreach ($ids as $cand) {
-            if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id) {
-                $ticket_post_id = (int) $cand; break;
+
+    // === PASO 1: Intentar con el NUEVO sistema de QR (EventosApp_QR_Manager) ===
+    if (class_exists('EventosApp_QR_Manager')) {
+        $validation = EventosApp_QR_Manager::validate_qr($scanned);
+        
+        if (isset($validation['valid']) && $validation['valid'] === true && !empty($validation['ticket_id'])) {
+            $candidate_id = (int) $validation['ticket_id'];
+            
+            // Verificar que el ticket pertenece al evento activo
+            $ticket_event = (int) get_post_meta($candidate_id, '_eventosapp_ticket_evento_id', true);
+            if ($ticket_event === (int) $event_id) {
+                $ticket_post_id = $candidate_id;
             }
         }
     }
-    if ( ! $ticket_post_id ) {
-        wp_send_json_error(['error'=> $use_preprinted ? 'Ticket no encontrado para este evento (ID preimpreso).' : 'Ticket no encontrado']);
+
+    // === PASO 2: Si no se encontró con el sistema nuevo, intentar con sistema LEGACY ===
+    if (!$ticket_post_id) {
+        // ¿Evento usa QR preimpreso?
+        $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
+        $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
+        if ($use_preprinted) {
+            $scan_val = preg_replace('/\D+/', '', $scanned);
+            if ($scan_val === '') wp_send_json_error(['error'=>'QR inválido: se esperaba un número.']);
+        } else {
+            $scan_val = $scanned;
+        }
+
+        $ids = $wpdb->get_col( $wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
+            $meta_key, $scan_val
+        ) );
+
+        if ($ids) {
+            foreach ($ids as $cand) {
+                if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id) {
+                    $ticket_post_id = (int) $cand; break;
+                }
+            }
+        }
     }
+
+    // === VALIDACIÓN FINAL ===
+    if ( ! $ticket_post_id ) {
+        wp_send_json_error(['error'=> 'Ticket no encontrado para este evento.']);
+    }
+
     // Seguridad extra
     if ((int) get_post_meta($ticket_post_id, '_eventosapp_ticket_evento_id', true) !== (int) $event_id) {
         wp_send_json_error(['error'=>'El ticket no pertenece al evento activo']);
