@@ -524,12 +524,27 @@ if ($qr_image) {
         return false;
     }
 
-    /**
-     * Genera un código de ticket único
+/**
+     * Genera o recupera el código único del ticket (eventosapp_ticketID)
+     * Este código debe ser persistente y único por ticket
      */
     private function generate_ticket_code($ticket_id) {
-        $code = 'TKT-' . strtoupper(substr(md5($ticket_id . time()), 0, 10));
-        update_post_meta($ticket_id, '_ticket_code', $code);
+        // Primero intentar obtener el eventosapp_ticketID existente
+        $existing_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+        
+        if (!empty($existing_code)) {
+            error_log("EventosApp QR Manager: Usando eventosapp_ticketID existente para ticket $ticket_id: $existing_code");
+            return $existing_code;
+        }
+        
+        // Si no existe, generar uno nuevo
+        $code = 'TKT-' . strtoupper(substr(md5($ticket_id . microtime(true)), 0, 10));
+        
+        // Guardarlo en eventosapp_ticketID (el campo que usa el check-in)
+        update_post_meta($ticket_id, 'eventosapp_ticketID', $code);
+        
+        error_log("EventosApp QR Manager: Generado nuevo eventosapp_ticketID para ticket $ticket_id: $code");
+        
         return $code;
     }
 
