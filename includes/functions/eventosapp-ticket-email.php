@@ -507,7 +507,17 @@ function eventosapp_build_ticket_email_html($ticket_id) {
     $localidad        = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
 
     // Recursos
-    $qr_url  = $ticket_code ? eventosapp_get_ticket_qr_url($ticket_code) : '';
+    // Obtener QR específico para Email del QR Manager
+    $qr_url = '';
+    $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+    if (is_array($all_qr_codes) && isset($all_qr_codes['email']) && isset($all_qr_codes['email']['url'])) {
+        // Usar el QR tipo "Email" del QR Manager
+        $qr_url = $all_qr_codes['email']['url'];
+    } else {
+        // Fallback: usar QR legacy para compatibilidad con tickets antiguos
+        $qr_url = $ticket_code ? eventosapp_get_ticket_qr_url($ticket_code) : '';
+    }
+    
     $pdf_url = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
     $ics_url = get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true);
 
