@@ -504,7 +504,58 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
             }
         }
     }
-    
+
+
+	// === NUEVO: Detectar formato especial de Google Wallet (GWALLET:ticketID:qr_id) ===
+    if (!$ticket_post_id && strpos($scanned, 'GWALLET:') === 0) {
+        // Formato: GWALLET:ABC123DEF:12345678
+        $parts = explode(':', $scanned);
+        
+        if (count($parts) >= 3) {
+            $prefix = $parts[0]; // GWALLET
+            $unique_ticket_id = $parts[1]; // ticketID único
+            $qr_id_short = $parts[2]; // últimos 8 caracteres del qr_id
+            
+            // Buscar el ticket por eventosapp_ticketID
+            $found_post_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT post_id FROM {$wpdb->postmeta} 
+                WHERE meta_key = 'eventosapp_ticketID' 
+                AND meta_value = %s 
+                LIMIT 1",
+                $unique_ticket_id
+            ));
+            
+            if ($found_post_id && get_post_type($found_post_id) === 'eventosapp_ticket') {
+                // Validar que el ticket pertenece al evento
+                $found_ticket_event = (int) get_post_meta($found_post_id, '_eventosapp_ticket_evento_id', true);
+                
+                if ($found_ticket_event === $event_id) {
+                    // Validar el QR ID (últimos 8 caracteres)
+                    $stored_qr_id = get_post_meta($found_post_id, '_eventosapp_qr_google_wallet', true);
+                    
+                    if (!empty($stored_qr_id)) {
+                        $stored_qr_id_short = substr($stored_qr_id, -8);
+                        
+                        if ($stored_qr_id_short === $qr_id_short) {
+                            // QR válido
+                            $ticket_post_id = (int) $found_post_id;
+                            $qr_type = 'google_wallet';
+                            $qr_type_label = 'Google Wallet';
+                        } else {
+                            wp_send_json_error(['error' => 'QR de Google Wallet no válido o revocado']);
+                        }
+                    } else {
+                        wp_send_json_error(['error' => 'QR de Google Wallet no encontrado en el sistema']);
+                    }
+                } else {
+                    wp_send_json_error(['error' => 'El QR de Google Wallet no corresponde a este evento']);
+                }
+            } else {
+                wp_send_json_error(['error' => 'Ticket de Google Wallet no encontrado (ID: ' . $unique_ticket_id . ')']);
+            }
+        }
+    }
+	
     // === Si no es URL, intentar decodificar como QR del sistema multi-medio (base64) ===
     if (!$ticket_post_id) {
         $decoded = base64_decode($scanned, true);
@@ -534,6 +585,47 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
                 } else {
                     $ticket_post_id = 0; // Ticket no válido
                 }
+    // === NUEVO: Detectar formato especial de Google Wallet (GWALLET:ticketID:qr_id) ===
+    if (strpos($qr_code, 'GWALLET:') === 0) {
+        // Formato: GWALLET:ABC123DEF:12345678
+        $parts = explode(':', $qr_code);
+        
+        if (count($parts) >= 3) {
+            $unique_ticket_id = $parts[1]; // ticketID único
+            $qr_id_short = $parts[2]; // últimos 8 caracteres del qr_id
+            
+            global $wpdb;
+            
+            // Buscar el ticket por eventosapp_ticketID
+            $found_post_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT post_id FROM {$wpdb->postmeta} 
+                WHERE meta_key = 'eventosapp_ticketID' 
+                AND meta_value = %s 
+                LIMIT 1",
+                $unique_ticket_id
+            ));
+            
+            if ($found_post_id && get_post_type($found_post_id) === 'eventosapp_ticket') {
+                // Validar que el ticket pertenece al evento
+                $found_ticket_event = (int) get_post_meta($found_post_id, '_eventosapp_ticket_evento_id', true);
+                
+                if ($found_ticket_event === (int) $event_id) {
+                    // Validar el QR ID (últimos 8 caracteres)
+                    $stored_qr_id = get_post_meta($found_post_id, '_eventosapp_qr_google_wallet', true);
+                    
+                    if (!empty($stored_qr_id)) {
+                        $stored_qr_id_short = substr($stored_qr_id, -8);
+                        
+                        if ($stored_qr_id_short === $qr_id_short) {
+                            // QR válido
+                            $ticket_id = (int) $found_post_id;
+                        }
+                    }
+                }
+            }
+        }
+    }
+				
             }
         }
     }
