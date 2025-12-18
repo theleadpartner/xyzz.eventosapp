@@ -280,13 +280,44 @@ class EventosApp_QR_Manager {
         return $security_code;
     }
 
-    /**
+/**
      * Valida que el contenido del QR sea compatible con el sistema de check-in
+     * MODIFICADO: Añade validación para formato GWALLET de Google Wallet
      */
     private function validate_qr_content($content, $type) {
-        // Si es badge (URL), no validar estructura JSON
+        // Si es badge (URL), validar que sea una URL
         if ($type === 'badge') {
             return strpos($content, 'http') === 0;
+        }
+        
+        // Si es Google Wallet, validar formato GWALLET:ticketID:qr_id
+        if ($type === 'google_wallet') {
+            // Debe empezar con GWALLET:
+            if (strpos($content, 'GWALLET:') !== 0) {
+                error_log("EventosApp QR Manager: QR de Google Wallet no tiene formato GWALLET:");
+                return false;
+            }
+            
+            // Debe tener al menos 3 partes separadas por :
+            $parts = explode(':', $content);
+            if (count($parts) < 3) {
+                error_log("EventosApp QR Manager: QR de Google Wallet no tiene suficientes partes (formato: GWALLET:ticketID:qr_id)");
+                return false;
+            }
+            
+            // Validar que el ticketID no esté vacío
+            if (empty($parts[1])) {
+                error_log("EventosApp QR Manager: QR de Google Wallet tiene ticketID vacío");
+                return false;
+            }
+            
+            // Validar que el qr_id corto no esté vacío
+            if (empty($parts[2])) {
+                error_log("EventosApp QR Manager: QR de Google Wallet tiene qr_id vacío");
+                return false;
+            }
+            
+            return true;
         }
         
         // Para otros tipos, validar estructura base64 + JSON
