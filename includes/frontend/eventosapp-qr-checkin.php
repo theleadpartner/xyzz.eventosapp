@@ -220,6 +220,11 @@ if ( function_exists('eventosapp_require_feature') ) {
 
   function normalizeRaw(raw){
     let s = String(raw||'').trim();
+    // Si es una URL completa (badge/escarapela), devolverla sin modificar
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      return s;
+    }
+    // Para otros casos, aplicar normalización
     if (s.includes('/')) s = s.split('/').pop();
     s = s.replace(/\.(png|jpg|jpeg|pdf)$/i,'').replace(/-tn$/i,'').replace(/^#/, '');
     return s;
@@ -1377,6 +1382,11 @@ if ( function_exists('eventosapp_require_feature') ) {
   function row(label, value){ return `<div><b>${label}:</b></div><div>${value || '-'}</div>`; }
   function normalizeRaw(raw){
     let s = String(raw||'').trim();
+    // Si es una URL completa (badge/escarapela), devolverla sin modificar
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      return s;
+    }
+    // Para otros casos, aplicar normalización
     if (s.includes('/')) s = s.split('/').pop();
     s = s.replace(/\.(png|jpg|jpeg|pdf)$/i,'').replace(/-tn$/i,'').replace(/^#/, '');
     return s;
@@ -1882,7 +1892,15 @@ add_shortcode('eventosapp_qr_contacto', function($atts){
       function beep(){ try{const a=new Audio(); a.src='data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAWGlinZwAAAA8AAAACAAACcQAA'; a.play().catch(()=>{});}catch(e){} if(navigator.vibrate) navigator.vibrate(60); }
       function setOutput(html){ out.innerHTML = html; }
       function row(label,value){ return `<div><b>${label}:</b></div><div>${value || '-'}</div>`; }
-      function normalizeRaw(raw){ let s=String(raw||'').trim(); if(s.includes('/')) s = s.split('/').pop(); s = s.replace(/\.(png|jpg|jpeg|pdf)$/i,'').replace(/-tn$/i,'').replace(/^#/,''); return s; }
+      function normalizeRaw(raw){ 
+        let s=String(raw||'').trim(); 
+        // Si es una URL completa (badge/escarapela), devolverla sin modificar
+        if(s.startsWith('http://') || s.startsWith('https://')) return s;
+        // Para otros casos, aplicar normalización
+        if(s.includes('/')) s = s.split('/').pop(); 
+        s = s.replace(/\.(png|jpg|jpeg|pdf)$/i,'').replace(/-tn$/i,'').replace(/^#/,''); 
+        return s; 
+      }
 
       function stop(){
         running=false;
