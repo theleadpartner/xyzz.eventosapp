@@ -396,6 +396,9 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
  * - $debug: si true, devuelve logs en vez del enlace directo (opcional)
  */
 function eventosapp_generar_enlace_wallet_android($ticket_id, $debug = false) {
+    // Hook para permitir acciones antes de generar el wallet (como generar QR)
+    do_action('eventosapp_before_generate_wallet_android', $ticket_id);
+    
     $logs = [];
     $log  = function($msg) use (&$logs, $ticket_id) {
         $line = '['.date('Y-m-d H:i:s')."] $msg";
@@ -404,7 +407,7 @@ function eventosapp_generar_enlace_wallet_android($ticket_id, $debug = false) {
     };
 
     $log('Inicio generación de enlace Wallet Android');
-
+	
     if (!function_exists('wp_remote_post')) {
         $log('wp_remote_post no existe (cargando fuera de WP?)');
         update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log', implode("\n", $logs));
@@ -529,10 +532,7 @@ function eventosapp_generar_enlace_wallet_android($ticket_id, $debug = false) {
             $log("- ADVERTENCIA: El QR no es base64 válido");
         }
     }
-    
-    $fecha = get_post_meta($evento_id, '_eventosapp_fecha_unica', true);
-    $log("Evento: $nombre_evento | Asistente: $asistente_nombre $asistente_apellido | Email:$asistente_email | Localidad:$localidad | QR content obtenido | Fecha:$fecha");
-    
+        
     $fecha = get_post_meta($evento_id, '_eventosapp_fecha_unica', true);
     $log("Evento: $nombre_evento | Asistente: $asistente_nombre $asistente_apellido | Email:$asistente_email | Localidad:$localidad | QR content obtenido | Fecha:$fecha");
 
