@@ -1045,6 +1045,101 @@ if ( ! function_exists('eventosapp_net2_record_interaction') ) {
     }
 }
 
+/**
+ * Registrar interacción directa (sin escanear QR)
+ * Función wrapper para networking-global que recibe directamente los IDs de tickets
+ * 
+ * @param int $event_id ID del evento
+ * @param int $reader_ticket_id ID del ticket del lector
+ * @param int $read_ticket_id ID del ticket leído
+ * @return bool True si se registró correctamente, false si ya existía
+ */
+if ( ! function_exists('eventosapp_net2_log_interaction') ) {
+    function eventosapp_net2_log_interaction($event_id, $reader_ticket_id, $read_ticket_id){
+        global $wpdb;
+        
+        // Validar parámetros
+        $event_id = (int) $event_id;
+        $reader_ticket_id = (int) $reader_ticket_id;
+        $read_ticket_id = (int) $read_ticket_id;
+        
+        if (!$event_id || !$reader_ticket_id || !$read_ticket_id) {
+            return false;
+        }
+        
+        // Validar que no sea auto-escaneo
+        if ($reader_ticket_id === $read_ticket_id) {
+            return false;
+        }
+        
+        // Validar que ambos tickets existan y pertenezcan al evento
+        $reader_event = (int) get_post_meta($reader_ticket_id, '_eventosapp_ticket_evento_id', true);
+        $read_event = (int) get_post_meta($read_ticket_id, '_eventosapp_ticket_evento_id', true);
+        
+        if ($reader_event !== $event_id || $read_event !== $event_id) {
+            return false;
+        }
+        
+        // Asegurar que la tabla existe
+        eventosapp_net2_maybe_create_table();
+        
+        // Obtener nombre de la tabla
+        if (!function_exists('eventosapp_net2_table_name_internal')) {
+            return false;
+        }
+        $table = eventosapp_net2_table_name_internal();
+        
+        // Verificar si ya existe una interacción reciente (últimos 10 segundos)
+        $recent = $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM {$table}
+             WHERE event_id=%d AND reader_ticket_id=%d AND read_ticket_id=%d
+               AND created_at > (NOW() - INTERVAL 10 SECOND)
+             LIMIT 1",
+            $event_id, $reader_ticket_id, $read_ticket_id
+        ) );
+        
+        // Si ya existe, retornar false
+        if ($recent) {
+            return false;
+        }
+        
+        // Obtener localidades
+        $reader_localidad = get_post_meta($reader_ticket_id, '_eventosapp_asistente_localidad', true);
+        $read_localidad = get_post_meta($read_ticket_id, '_eventosapp_asistente_localidad', true);
+        
+        // Obtener IP y User Agent
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : '';
+        $ua = isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field($_SERVER['HTTP_USER_AGENT']) : '';
+        
+        // Insertar la interacción
+        $inserted = $wpdb->insert($table, [
+            'event_id'         => $event_id,
+            'reader_ticket_id' => $reader_ticket_id,
+            'read_ticket_id'   => $read_ticket_id,
+            'reader_localidad' => $reader_localidad,
+            'read_localidad'   => $read_localidad,
+            'ip'               => substr($ip, 0, 45),
+            'ua'               => substr($ua, 0, 255),
+        ], ['%d','%d','%d','%s','%s','%s','%s']);
+        
+        // Si se insertó correctamente
+        if ($inserted) {
+            // Marcar que ambos tickets usaron networking
+            update_post_meta($reader_ticket_id, '_eventosapp_networking_used', 1);
+            update_post_meta($read_ticket_id, '_eventosapp_networking_used', 1);
+            
+            // Programar envío de digest si existe la función
+            if (function_exists('eventosapp_net2_maybe_schedule_event_digest')) {
+                eventosapp_net2_maybe_schedule_event_digest($event_id);
+            }
+            
+            return true;
+        }
+        
+        return false;
+    }
+}
+
 
 /* ===================  DIGEST Y MÉTRICAS (PROTEGIDAS CONTRA DUPLICADOS) =================== */
 
