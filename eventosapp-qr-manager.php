@@ -281,6 +281,36 @@ class EventosApp_QR_Manager {
     }
 
     /**
+     * Valida que el contenido del QR sea compatible con el sistema de check-in
+     */
+    private function validate_qr_content($content, $type) {
+        // Si es badge (URL), no validar estructura JSON
+        if ($type === 'badge') {
+            return strpos($content, 'http') === 0;
+        }
+        
+        // Para otros tipos, validar estructura base64 + JSON
+        $decoded = base64_decode($content, true);
+        if ($decoded === false) {
+            error_log("EventosApp QR Manager: QR tipo $type no es base64 válido");
+            return false;
+        }
+        
+        $data = @json_decode($decoded, true);
+        if (!is_array($data) || !isset($data['ticket_id']) || !isset($data['qr_id']) || !isset($data['type'])) {
+            error_log("EventosApp QR Manager: QR tipo $type no contiene estructura JSON válida");
+            return false;
+        }
+        
+        if ($data['type'] !== $type) {
+            error_log("EventosApp QR Manager: Tipo en JSON ({$data['type']}) no coincide con tipo esperado ($type)");
+            return false;
+        }
+        
+        return true;
+    }
+
+    /**
      * Genera un código QR específico para un ticket y tipo
      */
     public function generate_qr_code($ticket_id, $type) {
@@ -313,7 +343,13 @@ class EventosApp_QR_Manager {
         // Generar la imagen del QR
         $qr_image = $this->create_qr_image($qr_content, $qr_id);
         
-        if ($qr_image) {
+if ($qr_image) {
+            // Validar el contenido del QR antes de guardarlo
+            if (!$this->validate_qr_content($qr_content, $type)) {
+                error_log("EventosApp QR Manager: Error de validación para QR tipo $type del ticket $ticket_id");
+                // Continuar de todas formas, pero registrar el error
+            }
+            
             // Guardar información del QR
             $qr_data = array(
                 'qr_id' => $qr_id,
@@ -321,7 +357,8 @@ class EventosApp_QR_Manager {
                 'content' => $qr_content,
                 'url' => $qr_image['url'],
                 'path' => $qr_image['path'],
-                'created_date' => current_time('mysql')
+                'created_date' => current_time('mysql'),
+                'validated' => $this->validate_qr_content($qr_content, $type)
             );
             
             // Si es badge, guardar también la URL del badge
@@ -343,6 +380,9 @@ class EventosApp_QR_Manager {
             
             // También guardar el QR ID individualmente para fácil acceso
             update_post_meta($ticket_id, '_eventosapp_qr_' . $type, $qr_id);
+            
+            // Log de éxito
+            error_log("EventosApp QR Manager: QR tipo $type generado exitosamente para ticket $ticket_id (QR ID: $qr_id)");
             
             return $qr_data;
         }
