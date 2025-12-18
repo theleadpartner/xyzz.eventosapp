@@ -390,9 +390,12 @@ if ($qr_image) {
         return false;
     }
 
-    /**
+/**
      * Prepara el contenido del código QR
-     * MODIFICADO: Para tipo "badge" genera URL con eventosapp_ticketID (ID único) en lugar de Post ID
+     * MODIFICADO: 
+     * - Para tipo "badge" genera URL con eventosapp_ticketID
+     * - Para tipo "google_wallet" genera formato corto: GWALLET:{ticketID}
+     * - Para otros tipos usa base64(JSON)
      */
     private function prepare_qr_content($ticket_id, $type, $qr_id) {
         // Si es QR de badge (escarapela), generar URL
@@ -400,7 +403,7 @@ if ($qr_image) {
             $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
             $security_code = get_post_meta($ticket_id, '_eventosapp_badge_security_code', true);
             
-            // CORRECCIÓN: Obtener el eventosapp_ticketID (ID único) en lugar del Post ID
+            // Obtener el eventosapp_ticketID (ID único) en lugar del Post ID
             $unique_ticket_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
             
             // Si no existe el ID único, generarlo
@@ -413,6 +416,23 @@ if ($qr_image) {
             $badge_url = $site_url . '/networking/global/?event=' . $evento_id . '-ticketid=' . $unique_ticket_id . '-' . $security_code;
             
             return $badge_url;
+        }
+        
+        // Si es QR de Google Wallet, usar formato corto
+        if ($type === 'google_wallet') {
+            // Obtener el ticketID único
+            $unique_ticket_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+            
+            // Si no existe, generarlo
+            if (empty($unique_ticket_id)) {
+                $unique_ticket_id = $this->generate_ticket_code($ticket_id);
+            }
+            
+            // Formato corto: GWALLET:{ticketID}:{qr_id_corto}
+            // Usamos solo los primeros 8 caracteres del qr_id para mantenerlo corto
+            $qr_id_short = substr($qr_id, -8);
+            
+            return 'GWALLET:' . $unique_ticket_id . ':' . $qr_id_short;
         }
         
         // Para otros tipos, usar el método tradicional (base64)
