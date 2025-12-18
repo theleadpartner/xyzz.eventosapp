@@ -904,9 +904,25 @@ function eventosapp_process_event_reminder_queue_cb($evento_id){
 add_action('save_post_eventosapp_ticket', function($post_id, $post, $update){
     if ( wp_is_post_revision($post_id) ) return;
 
-    // Solo tickets marcados como creados desde el front
+    // Obtener canal de creación y evento asociado
     $channel = get_post_meta($post_id, '_eventosapp_creation_channel', true);
-    if ( $channel !== 'public' ) return;
+    $evento_id = get_post_meta($post_id, '_eventosapp_ticket_evento_id', true);
+    
+    // Verificar configuración del evento según el canal
+    $should_send = false;
+    
+    if ( $channel === 'public' ) {
+        // Para registro público, verificar flag correspondiente
+        $auto_public = get_post_meta($evento_id, '_eventosapp_ticket_auto_email_public', true);
+        $should_send = ($auto_public === '1');
+    } elseif ( $channel === 'manual' ) {
+        // Para registro manual (staff/organizador), verificar el nuevo flag
+        $auto_manual = get_post_meta($evento_id, '_eventosapp_ticket_auto_email_manual', true);
+        $should_send = ($auto_manual === '1');
+    }
+    
+    // Si no debe enviar según configuración, salir
+    if ( ! $should_send ) return;
 
     // Evita duplicados
     if ( get_post_meta($post_id, '_eventosapp_ticket_email_sent', true) ) return;
