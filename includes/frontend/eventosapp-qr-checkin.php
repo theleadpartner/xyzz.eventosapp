@@ -432,6 +432,10 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
 
     if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos']);
 
+// === LOGGING PARA DEBUG ===
+    error_log("EventosApp Check-in: QR escaneado = " . $scanned);
+    error_log("EventosApp Check-in: Evento ID = " . $event_id);
+	
     global $wpdb;
     
     // === Variables iniciales ===
