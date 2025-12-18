@@ -956,8 +956,17 @@ function eventosapp_ticket_generar_pdf($ticket_id) {
     $localidad        = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
     $ticket_code      = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
 
-    // QR como imagen base64
-    $qr_path = eventosapp_get_ticket_qr_url($ticket_code);
+    // QR como imagen base64 - Obtener QR específico para PDF del QR Manager
+    $qr_path = '';
+    $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+    if (is_array($all_qr_codes) && isset($all_qr_codes['pdf']) && isset($all_qr_codes['pdf']['url'])) {
+        // Usar el QR tipo "PDF" del QR Manager
+        $qr_path = $all_qr_codes['pdf']['url'];
+    } else {
+        // Fallback: usar QR legacy para compatibilidad con tickets antiguos
+        $qr_path = eventosapp_get_ticket_qr_url($ticket_code);
+    }
+    
     $qr_img = '';
     if ($qr_path) {
         $qr_file = str_replace(wp_upload_dir()['baseurl'], wp_upload_dir()['basedir'], strtok($qr_path, '?'));
