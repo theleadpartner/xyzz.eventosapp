@@ -447,36 +447,55 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
             parse_str($url_parts['query'], $params);
             
             if (isset($params['event'])) {
-                // Formato esperado: event=123-ticketid=456-7890
+                // Formato esperado: event=123-ticketid=ABC123-7890
                 $parts = explode('-', $params['event']);
                 
                 if (count($parts) >= 3) {
-                    // Extraer event_id
+                    // Extraer event_id del primer segmento
                     $url_event_id = intval($parts[0]);
                     
-                    // Extraer ticket_id
+                    // Extraer unique_ticket_id del segundo segmento (después de "ticketid=")
                     $ticket_part = isset($parts[1]) ? $parts[1] : '';
+                    $unique_ticket_id = '';
                     if (strpos($ticket_part, 'ticketid=') === 0) {
-                        $url_ticket_id = intval(str_replace('ticketid=', '', $ticket_part));
+                        $unique_ticket_id = str_replace('ticketid=', '', $ticket_part);
                     }
                     
-                    // Código de seguridad
+                    // Código de seguridad (último segmento)
                     $url_security_code = isset($parts[2]) ? $parts[2] : '';
                     
-                    // Validar que el evento coincide
-                    if ($url_event_id === $event_id && $url_ticket_id > 0) {
-                        // Validar código de seguridad
-                        $stored_security_code = get_post_meta($url_ticket_id, '_eventosapp_badge_security_code', true);
+                    // Validar que el evento coincide con el evento activo
+                    if ($url_event_id === $event_id && !empty($unique_ticket_id)) {
+                        // Buscar el Post ID usando el eventosapp_ticketID
+                        $found_post_id = $wpdb->get_var($wpdb->prepare(
+                            "SELECT post_id FROM {$wpdb->postmeta} 
+                            WHERE meta_key = 'eventosapp_ticketID' 
+                            AND meta_value = %s 
+                            LIMIT 1",
+                            $unique_ticket_id
+                        ));
                         
-                        if (!empty($stored_security_code) && $stored_security_code === $url_security_code) {
-                            // Validar que el ticket existe
-                            if (get_post_type($url_ticket_id) === 'eventosapp_ticket') {
-                                $ticket_post_id = $url_ticket_id;
-                                $qr_type = 'badge';
-                                $qr_type_label = 'Escarapela Impresa (URL)';
+                        if ($found_post_id && get_post_type($found_post_id) === 'eventosapp_ticket') {
+                            // Validar que el ticket pertenece al evento
+                            $found_ticket_event = (int) get_post_meta($found_post_id, '_eventosapp_ticket_evento_id', true);
+                            
+                            if ($found_ticket_event === $event_id) {
+                                // Validar código de seguridad
+                                $stored_security_code = get_post_meta($found_post_id, '_eventosapp_badge_security_code', true);
+                                
+                                if (!empty($stored_security_code) && $stored_security_code === $url_security_code) {
+                                    // Todo válido
+                                    $ticket_post_id = (int) $found_post_id;
+                                    $qr_type = 'badge';
+                                    $qr_type_label = 'Escarapela Impresa (URL)';
+                                } else {
+                                    wp_send_json_error(['error' => 'Código de seguridad del badge inválido']);
+                                }
+                            } else {
+                                wp_send_json_error(['error' => 'El QR del badge no corresponde a este evento']);
                             }
                         } else {
-                            wp_send_json_error(['error' => 'Código de seguridad del badge inválido']);
+                            wp_send_json_error(['error' => 'Ticket del badge no encontrado (ID: ' . $unique_ticket_id . ')']);
                         }
                     } else {
                         wp_send_json_error(['error' => 'El QR del badge no corresponde a este evento']);
