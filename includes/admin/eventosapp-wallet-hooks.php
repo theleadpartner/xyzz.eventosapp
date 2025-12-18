@@ -26,6 +26,52 @@ if ( ! function_exists('eventosapp_sync_wallet_class') ) {
     if ( file_exists($gw_path) ) require_once $gw_path;
 }
 
+/**
+ * Hook: Cuando se genera/actualiza un ticket de Google Wallet,
+ * asegurar que también se genere el QR correspondiente en el QR Manager
+ */
+add_action('eventosapp_before_generate_wallet_android', 'eventosapp_ensure_wallet_qr_generated', 10, 1);
+function eventosapp_ensure_wallet_qr_generated($ticket_id) {
+    if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+        return;
+    }
+    
+    // Verificar si existe la clase QR Manager
+    if (!class_exists('EventosApp_QR_Manager')) {
+        error_log("EventosApp Wallet Hooks: QR Manager no disponible para ticket $ticket_id");
+        return;
+    }
+    
+    // Verificar si ya existe el QR de google_wallet
+    $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+    
+    if (is_array($all_qr_codes) && isset($all_qr_codes['google_wallet']) && !empty($all_qr_codes['google_wallet']['content'])) {
+        error_log("EventosApp Wallet Hooks: QR de Google Wallet ya existe para ticket $ticket_id");
+        return; // Ya existe, no regenerar
+    }
+    
+    // Generar el QR de Google Wallet
+    error_log("EventosApp Wallet Hooks: Generando QR de Google Wallet para ticket $ticket_id");
+    
+    $qr_manager = new EventosApp_QR_Manager();
+    
+    // Asegurar código de seguridad
+    $security_code = get_post_meta($ticket_id, '_eventosapp_badge_security_code', true);
+    if (empty($security_code)) {
+        $security_code = str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
+        update_post_meta($ticket_id, '_eventosapp_badge_security_code', $security_code);
+    }
+    
+    // Generar QR
+    $result = $qr_manager->generate_qr_code($ticket_id, 'google_wallet');
+    
+    if ($result && isset($result['content'])) {
+        error_log("EventosApp Wallet Hooks: QR de Google Wallet generado exitosamente para ticket $ticket_id");
+    } else {
+        error_log("EventosApp Wallet Hooks: ERROR al generar QR de Google Wallet para ticket $ticket_id");
+    }
+}
+
 /* ============================================================
  * ================== HELPERS DEBUG/CONSOLE ===================
  * ============================================================ */
