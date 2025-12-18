@@ -296,6 +296,11 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
 
   function normalizeRaw(raw){
     let s = String(raw||'').trim();
+    // Si es una URL completa (badge/escarapela), devolverla sin modificar
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      return s;
+    }
+    // Para otros casos, aplicar normalización
     if (s.includes('/')) s = s.split('/').pop();
     s = s.replace(/\.(png|jpg|jpeg|pdf)$/i,'').replace(/-tn$/i,'').replace(/^#/, '');
     return s;
