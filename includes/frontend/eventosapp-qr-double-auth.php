@@ -590,34 +590,56 @@ function eventosapp_ajax_search_ticket_by_qr() {
         wp_send_json_error( 'Datos incompletos' );
     }
     
-    // Verificar si el evento usa QR preimpreso
-    $use_preprinted = get_post_meta( $event_id, '_eventosapp_ticket_use_preprinted_qr', true ) === '1';
-    $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
+    $ticket_id = 0;
     
-    // Buscar ticket
-    $tickets = get_posts([
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'publish',
-        'posts_per_page' => 1,
-        'meta_query'     => [
-            'relation' => 'AND',
-            [
-                'key'   => $meta_key,
-                'value' => $qr_code,
-            ],
-            [
-                'key'   => '_eventosapp_ticket_evento_id',
-                'value' => $event_id,
-            ],
-        ],
-    ]);
-    
-    if ( empty( $tickets ) ) {
-        wp_send_json_error( 'Ticket no encontrado o no pertenece a este evento' );
+    // === PASO 1: Intentar con el NUEVO sistema de QR (EventosApp_QR_Manager) ===
+    if ( class_exists( 'EventosApp_QR_Manager' ) ) {
+        $validation = EventosApp_QR_Manager::validate_qr( $qr_code );
+        
+        if ( isset( $validation['valid'] ) && $validation['valid'] === true && ! empty( $validation['ticket_id'] ) ) {
+            $candidate_id = (int) $validation['ticket_id'];
+            
+            // Verificar que el ticket pertenece al evento activo
+            $ticket_event = (int) get_post_meta( $candidate_id, '_eventosapp_ticket_evento_id', true );
+            if ( $ticket_event === (int) $event_id ) {
+                $ticket_id = $candidate_id;
+            }
+        }
     }
     
-    $ticket = $tickets[0];
-    $ticket_id = $ticket->ID;
+    // === PASO 2: Si no se encontró con el sistema nuevo, intentar con sistema LEGACY ===
+    if ( ! $ticket_id ) {
+        // Verificar si el evento usa QR preimpreso
+        $use_preprinted = get_post_meta( $event_id, '_eventosapp_ticket_use_preprinted_qr', true ) === '1';
+        $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
+        
+        // Buscar ticket
+        $tickets = get_posts([
+            'post_type'      => 'eventosapp_ticket',
+            'post_status'    => 'publish',
+            'posts_per_page' => 1,
+            'meta_query'     => [
+                'relation' => 'AND',
+                [
+                    'key'   => $meta_key,
+                    'value' => $qr_code,
+                ],
+                [
+                    'key'   => '_eventosapp_ticket_evento_id',
+                    'value' => $event_id,
+                ],
+            ],
+        ]);
+        
+        if ( ! empty( $tickets ) ) {
+            $ticket_id = $tickets[0]->ID;
+        }
+    }
+    
+    // === VALIDACIÓN FINAL ===
+    if ( ! $ticket_id ) {
+        wp_send_json_error( 'Ticket no encontrado o no pertenece a este evento' );
+    }
     
     // Obtener zona horaria del evento para determinar "hoy"
     $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
