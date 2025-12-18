@@ -458,26 +458,50 @@ function eventosapp_generar_enlace_wallet_android($ticket_id, $debug = false) {
     $asistente_email    = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
     $localidad          = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
     
-    // === OBTENER QR DEL QR MANAGER ===
+// === OBTENER O GENERAR QR DEL QR MANAGER ===
     $log("Obteniendo QR de Google Wallet desde QR Manager...");
     $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
     
     // Verificar si existe el QR de google_wallet
     if (!is_array($all_qr_codes) || !isset($all_qr_codes['google_wallet']) || empty($all_qr_codes['google_wallet']['content'])) {
-        $log("QR de Google Wallet no encontrado. Generando QR usando QR Manager...");
+        $log("QR de Google Wallet no encontrado en meta. Generando QR usando QR Manager...");
         
         // Intentar inicializar el QR Manager y generar el QR
         if (class_exists('EventosApp_QR_Manager')) {
+            // Crear instancia del QR Manager
             $qr_manager = new EventosApp_QR_Manager();
+            
+            // Asegurar que existe el código de seguridad
+            $security_code = get_post_meta($ticket_id, '_eventosapp_badge_security_code', true);
+            if (empty($security_code)) {
+                $security_code = str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
+                update_post_meta($ticket_id, '_eventosapp_badge_security_code', $security_code);
+                $log("Código de seguridad generado: $security_code");
+            }
+            
+            // Generar el QR de tipo google_wallet
             $qr_result = $qr_manager->generate_qr_code($ticket_id, 'google_wallet');
             
-            if ($qr_result && isset($qr_result['content'])) {
+            if ($qr_result && is_array($qr_result) && isset($qr_result['content'])) {
                 $codigo_qr = $qr_result['content'];
-                $log("QR generado exitosamente por QR Manager. Content length: " . strlen($codigo_qr));
+                $log("QR generado exitosamente por QR Manager.");
+                $log("- QR ID: " . ($qr_result['qr_id'] ?? 'N/A'));
+                $log("- Content length: " . strlen($codigo_qr));
+                $log("- Type: google_wallet");
+                
+                // Verificar que el contenido es base64 y contiene JSON
+                $test_decode = base64_decode($codigo_qr, true);
+                if ($test_decode !== false) {
+                    $test_json = @json_decode($test_decode, true);
+                    if (is_array($test_json)) {
+                        $log("- Validación: QR contiene JSON válido con ticket_id=" . ($test_json['ticket_id'] ?? 'N/A'));
+                    }
+                }
             } else {
                 // Fallback al sistema antiguo si falla el QR Manager
                 $codigo_qr = get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: $ticket_id;
                 $log("ADVERTENCIA: No se pudo generar QR con QR Manager. Usando fallback: $codigo_qr");
+                $log("- Detalle del error: QR Manager no retornó estructura válida");
             }
         } else {
             // Fallback al sistema antiguo si no existe la clase QR Manager
@@ -487,8 +511,27 @@ function eventosapp_generar_enlace_wallet_android($ticket_id, $debug = false) {
     } else {
         // Usar el QR existente del QR Manager
         $codigo_qr = $all_qr_codes['google_wallet']['content'];
-        $log("QR de Google Wallet obtenido desde QR Manager. Content length: " . strlen($codigo_qr));
+        $log("QR de Google Wallet obtenido desde QR Manager (ya existía en meta).");
+        $log("- QR ID: " . ($all_qr_codes['google_wallet']['qr_id'] ?? 'N/A'));
+        $log("- Content length: " . strlen($codigo_qr));
+        $log("- Created: " . ($all_qr_codes['google_wallet']['created_date'] ?? 'N/A'));
+        
+        // Verificar integridad del QR
+        $test_decode = base64_decode($codigo_qr, true);
+        if ($test_decode !== false) {
+            $test_json = @json_decode($test_decode, true);
+            if (is_array($test_json)) {
+                $log("- Validación: QR contiene JSON válido con ticket_id=" . ($test_json['ticket_id'] ?? 'N/A'));
+            } else {
+                $log("- ADVERTENCIA: El QR no contiene JSON válido");
+            }
+        } else {
+            $log("- ADVERTENCIA: El QR no es base64 válido");
+        }
     }
+    
+    $fecha = get_post_meta($evento_id, '_eventosapp_fecha_unica', true);
+    $log("Evento: $nombre_evento | Asistente: $asistente_nombre $asistente_apellido | Email:$asistente_email | Localidad:$localidad | QR content obtenido | Fecha:$fecha");
     
     $fecha = get_post_meta($evento_id, '_eventosapp_fecha_unica', true);
     $log("Evento: $nombre_evento | Asistente: $asistente_nombre $asistente_apellido | Email:$asistente_email | Localidad:$localidad | QR content obtenido | Fecha:$fecha");
