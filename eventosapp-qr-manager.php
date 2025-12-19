@@ -446,7 +446,7 @@ class EventosApp_QR_Manager {
     
     /**
      * Genera el QR para badge (mantiene el sistema especial de URL)
-     * Esta función NO se modifica - el badge ya funciona bien
+     * CORREGIDO: Apunta a la página de networking global
      */
     private function generate_badge_qr($ticket_id) {
         // Asegurar código de seguridad
@@ -467,13 +467,13 @@ class EventosApp_QR_Manager {
             return false;
         }
         
-        // Construir URL del QR (formato especial para badge)
+        // Construir URL del QR - CORREGIDO: Apunta a /networking/global/
         $site_url = get_site_url();
         $qr_badge_url = add_query_arg(
             array(
                 'event' => $evento_id . '-ticketid=' . $unique_ticket_id . '-' . $security_code
             ),
-            trailingslashit($site_url) . 'verificar-badge'
+            trailingslashit($site_url) . 'networking/global'
         );
         
         // Generar imagen del QR
