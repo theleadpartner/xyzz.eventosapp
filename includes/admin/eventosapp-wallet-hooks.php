@@ -1016,7 +1016,7 @@ function eventosapp_generar_enlace_wallet_apple($ticket_id){
         return false;
     }
 
-    // Payload pass.json
+// Payload pass.json
     $payload = [
         'formatVersion'      => 1,
         'passTypeIdentifier' => $pass_type,
@@ -1042,7 +1042,7 @@ function eventosapp_generar_enlace_wallet_apple($ticket_id){
         ],
         'barcode' => [
             'format'          => 'PKBarcodeFormatQR',
-            'message'         => (string)$codigo_qr,
+            'message'         => $codigo_qr . '-awallet',
             'messageEncoding' => 'utf-8',
             'altText'         => 'Código de ingreso'
         ],
