@@ -595,9 +595,13 @@ function eventosapp_ajax_search_ticket_by_qr() {
         wp_send_json_error( 'Datos incompletos' );
     }
     
+if ( ! $qr_code || ! $event_id ) {
+        wp_send_json_error( 'Datos incompletos' );
+    }
+    
     $ticket_id = 0;
     
-    // === PASO 1: Intentar con el NUEVO sistema de QR (EventosApp_QR_Manager) ===
+    // === PASO 1: Intentar con el NUEVO sistema simplificado (EventosApp_QR_Manager) ===
     if ( class_exists( 'EventosApp_QR_Manager' ) ) {
         $validation = EventosApp_QR_Manager::validate_qr( $qr_code );
         
@@ -617,6 +621,11 @@ function eventosapp_ajax_search_ticket_by_qr() {
         // Verificar si el evento usa QR preimpreso
         $use_preprinted = get_post_meta( $event_id, '_eventosapp_ticket_use_preprinted_qr', true ) === '1';
         $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
+        
+        // Normalizar valor según el tipo
+        if ( $use_preprinted ) {
+            $qr_code = preg_replace( '/\D+/', '', $qr_code );
+        }
         
         // Buscar ticket
         $tickets = get_posts([
@@ -639,6 +648,11 @@ function eventosapp_ajax_search_ticket_by_qr() {
         if ( ! empty( $tickets ) ) {
             $ticket_id = $tickets[0]->ID;
         }
+    }
+    
+    // === VALIDACIÓN FINAL ===
+    if ( ! $ticket_id ) {
+        wp_send_json_error( 'Ticket no encontrado o no pertenece a este evento' );
     }
     
     // === VALIDACIÓN FINAL ===
