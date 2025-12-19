@@ -458,7 +458,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
         requestAnimationFrame(tick);
       }
 
-      function onScan(raw) {
+function onScan(raw) {
         const now = Date.now();
         if (raw === lastScan && (now - lastAt) < 3000) {
           requestAnimationFrame(tick);
@@ -473,9 +473,145 @@ add_shortcode('eventosapp_networking_global', function($atts){
         console.log('QR escaneado (normalizado):', raw);
         
         // raw ya viene limpio: "14564-ticketid=ABC123-5389"
-        // Construir URL correctamente
-        const baseUrl = window.location.origin + window.location.pathname;
-        window.location.href = baseUrl + '?event=' + raw;
+        
+        // NUEVO: Si ya tenemos sesión activa, decodificar sin redirigir
+        if (readerTicketId && eventID) {
+          decodeQRAndLoadData(raw);
+        } else {
+          // No hay sesión, redirigir para autenticarse
+          const baseUrl = window.location.origin + window.location.pathname;
+          window.location.href = baseUrl + '?event=' + raw;
+        }
+      }
+
+        // ========== DECODIFICAR QR Y CARGAR DATOS SIN REDIRIGIR ==========
+      
+      function decodeQRAndLoadData(qrContent) {
+        resultBox.innerHTML = '<div class="evapp-netglobal-help">⏳ Validando código QR...</div>';
+        smoothScrollTo(resultBox);
+        
+        fetch(ajaxURL, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({
+            action: 'eventosapp_netglobal_decode_qr',
+            _wpnonce: authNonce,
+            qr_content: qrContent
+          })
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            const scannedTicket = data.data.ticket_id;
+            
+            // Cargar datos del ticket
+            fetch(ajaxURL, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+              body: new URLSearchParams({
+                action: 'eventosapp_netglobal_get_ticket_data',
+                _wpnonce: authNonce,
+                ticket_id: scannedTicket
+              })
+            })
+            .then(r => r.json())
+            .then(ticketData => {
+              if (ticketData.success) {
+                const info = ticketData.data;
+                displayTicketDataDirect(info, scannedTicket);
+                logInteractionDirect(scannedTicket);
+                resultBox.innerHTML = ''; // Limpiar mensaje de carga
+              } else {
+                resultBox.innerHTML = '<div class="evapp-netglobal-bad">❌ Error al cargar datos del ticket</div>';
+              }
+            })
+            .catch(() => {
+              resultBox.innerHTML = '<div class="evapp-netglobal-bad">❌ Error de conexión al cargar datos</div>';
+            });
+          } else {
+            resultBox.innerHTML = '<div class="evapp-netglobal-bad">❌ ' + (data.data?.message || 'QR inválido') + '</div>';
+            smoothScrollTo(resultBox);
+            
+            // Reactivar scanner después de 3 segundos
+            setTimeout(() => {
+              resultBox.innerHTML = '';
+            }, 3000);
+          }
+        })
+        .catch(() => {
+          resultBox.innerHTML = '<div class="evapp-netglobal-bad">❌ Error de conexión al validar QR</div>';
+          smoothScrollTo(resultBox);
+          
+          setTimeout(() => {
+            resultBox.innerHTML = '';
+          }, 3000);
+        });
+      }
+      
+      function displayTicketDataDirect(info, ticketId){
+        let html = '';
+        
+        // Avatar si existe
+        if (info.foto_url) {
+          html += '<img src="' + escapeHtml(info.foto_url) + '" alt="Foto" class="evapp-netglobal-avatar">';
+        }
+        
+        // Nombre completo
+        html += '<h2 class="evapp-netglobal-name">' + escapeHtml(info.full_name) + '</h2>';
+        
+        // Cargo y empresa
+        if (info.designation || info.company) {
+          let role = '';
+          if (info.designation) role += escapeHtml(info.designation);
+          if (info.company) role += (role ? ' en ' : '') + escapeHtml(info.company);
+          html += '<p class="evapp-netglobal-role">' + role + '</p>';
+        }
+        
+        // Grid de información
+        html += '<div class="evapp-netglobal-grid">';
+        
+        if (info.email) {
+          html += '<div class="evapp-netglobal-grid-item"><b>✉️ Email</b><span>' + escapeHtml(info.email) + '</span></div>';
+        }
+        
+        if (info.phone) {
+          html += '<div class="evapp-netglobal-grid-item"><b>📱 Teléfono</b><span>' + escapeHtml(info.phone) + '</span></div>';
+        }
+        
+        if (info.localidad) {
+          html += '<div class="evapp-netglobal-grid-item"><b>🎫 Localidad</b><span>' + escapeHtml(info.localidad) + '</span></div>';
+        }
+        
+        html += '</div>';
+        
+        // Botones de acción
+        html += '<div class="evapp-netglobal-actions">';
+        html += '<button type="button" class="evapp-netglobal-btn evapp-netglobal-download" onclick="evappDownloadVCard(' + ticketId + ')">📥 Descargar contacto (vCard)</button>';
+        html += '<button type="button" class="evapp-netglobal-btn evapp-netglobal-back" onclick="evappScanAnotherDirect()">📱 Escanear otro QR</button>';
+        html += '</div>';
+        
+        resultSection.innerHTML = html;
+        authSection.style.display = 'none';
+        scanSection.style.display = 'none';
+        resultSection.style.display = 'block';
+        
+        smoothScrollTo(resultSection);
+      }
+      
+      function logInteractionDirect(scannedTicket){
+        if (!readerTicketId || !scannedTicket) return;
+
+        fetch(ajaxURL, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({
+            action: 'eventosapp_netglobal_log_interaction',
+            _wpnonce: logNonce,
+            event_id: eventID,
+            reader_ticket_id: readerTicketId,
+            read_ticket_id: scannedTicket
+          })
+        });
       }
 
       // Event listener para el botón de scanner
@@ -755,6 +891,13 @@ add_shortcode('eventosapp_networking_global', function($atts){
         window.location.href = baseUrl;
       };
 
+        // Función global para escanear otro QR sin perder la sesión (no redirige)
+      window.evappScanAnotherDirect = function(){
+        resultSection.style.display = 'none';
+        scanSection.style.display = 'block';
+        smoothScrollTo(scanSection);
+      };
+
       // ========== INICIAR ==========
       init();
 
@@ -957,4 +1100,77 @@ function eventosapp_netglobal_download_vcard_handler(){
     
     echo $vcard;
     exit;
+
+    /**
+ * AJAX: Decodificar QR y obtener ticket ID
+ */
+add_action('wp_ajax_eventosapp_netglobal_decode_qr', 'eventosapp_netglobal_decode_qr_handler');
+add_action('wp_ajax_nopriv_eventosapp_netglobal_decode_qr', 'eventosapp_netglobal_decode_qr_handler');
+
+function eventosapp_netglobal_decode_qr_handler(){
+    check_ajax_referer('eventosapp_netglobal_auth');
+    global $wpdb;
+
+    $qr_content = isset($_POST['qr_content']) ? sanitize_text_field($_POST['qr_content']) : '';
+
+    if (empty($qr_content)) {
+        wp_send_json_error(['message' => 'Contenido QR vacío']);
+    }
+
+    // Parsear el contenido del QR: "14564-ticketid=ABC123-5389"
+    $parts = explode('-', $qr_content);
+    
+    if (count($parts) < 3) {
+        wp_send_json_error(['message' => 'Formato de QR inválido']);
+    }
+
+    $event_id = intval($parts[0]);
+    
+    // El segundo elemento tiene formato "ticketid=ABC123"
+    $ticket_part = isset($parts[1]) ? $parts[1] : '';
+    $unique_ticket_id = '';
+    if (strpos($ticket_part, 'ticketid=') === 0) {
+        $unique_ticket_id = str_replace('ticketid=', '', $ticket_part);
+    }
+    
+    $security_code = isset($parts[2]) ? $parts[2] : '';
+
+    if (empty($unique_ticket_id)) {
+        wp_send_json_error(['message' => 'Ticket ID no encontrado en QR']);
+    }
+
+    // Buscar el Post ID usando el eventosapp_ticketID
+    $scanned_ticket_post_id = $wpdb->get_var($wpdb->prepare(
+        "SELECT post_id FROM {$wpdb->postmeta} 
+        WHERE meta_key = 'eventosapp_ticketID' 
+        AND meta_value = %s 
+        LIMIT 1",
+        $unique_ticket_id
+    ));
+
+    // Validar que el ticket existe
+    if (!$scanned_ticket_post_id || get_post_type($scanned_ticket_post_id) !== 'eventosapp_ticket') {
+        wp_send_json_error(['message' => 'Ticket no encontrado']);
+    }
+
+    // Validar código de seguridad
+    $stored_security_code = get_post_meta($scanned_ticket_post_id, '_eventosapp_badge_security_code', true);
+    
+    if (empty($stored_security_code) || $stored_security_code !== $security_code) {
+        wp_send_json_error(['message' => 'Código de seguridad inválido']);
+    }
+
+    // Validar que el ticket pertenece al evento
+    $ticket_event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
+    if ($ticket_event_id !== $event_id) {
+        wp_send_json_error(['message' => 'Este ticket no pertenece al evento indicado']);
+    }
+
+    wp_send_json_success([
+        'ticket_id' => $scanned_ticket_post_id,
+        'event_id' => $event_id,
+        'message' => 'QR validado exitosamente'
+    ]);
+}
+    
 }
