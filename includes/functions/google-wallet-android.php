@@ -732,7 +732,35 @@ $logf("LUGAR -> direccion=\"{$direccion}\" | coords=\"{$coords}\" | lat=" . var_
 
 
     // 6) Payload del objeto
-    $object_id = $issuer_id . '.ticket_' . $ticket_id;
+    // === GENERAR OBJECT_ID USANDO eventosapp_ticketID ===
+// Obtener el ticket ID único
+$unique_ticket_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+
+if (empty($unique_ticket_id)) {
+    $log("ERROR CRÍTICO: No se encontró eventosapp_ticketID para el ticket $ticket_id");
+    update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log', implode("\n", $logs));
+    return $debug ? implode("<br>", array_map('esc_html', $logs)) : '';
+}
+
+// Construir object_id usando el ticketID único (sin prefijo 'ticket_')
+// Formato: issuerID.uniqueTicketID (ejemplo: 123456789.tkkoN5NsBdvhXQQ)
+$object_id = $issuer_id . '.' . $unique_ticket_id;
+
+$log("=== OBJECT ID GENERADO ===");
+$log("issuer_id: $issuer_id");
+$log("class_id: $class_id");
+$log("unique_ticket_id (eventosapp_ticketID): $unique_ticket_id");
+$log("object_id final: $object_id");
+$log("QR content (debe coincidir con ticketID): $qr_content_for_validation");
+
+// Validar que el object_id y el QR content son consistentes
+if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
+    $log("⚠️ ADVERTENCIA: El QR content no comienza con el unique_ticket_id");
+    $log("   - unique_ticket_id: $unique_ticket_id");
+    $log("   - QR content: $qr_content_for_validation");
+} else {
+    $log("✅ Validación OK: Object ID y QR content son consistentes");
+}
     $log("issuer_id=$issuer_id | class_id=$class_id | object_id=$object_id");
 
     // ----- Construye textModulesData (unimos Fecha + Horario para que entre en el top-4) -----
