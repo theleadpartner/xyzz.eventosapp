@@ -445,8 +445,7 @@ class EventosApp_QR_Manager {
     }
     
 /**
-     * Genera el QR para badge (mantiene el sistema especial de URL)
-     * Esta función NO se modifica - el badge ya funciona bien
+     * Genera el QR para badge con URL correcta a networking/global
      */
     private function generate_badge_qr($ticket_id) {
         // Asegurar código de seguridad
@@ -468,7 +467,7 @@ class EventosApp_QR_Manager {
         }
         
         // Construir URL del QR (formato especial para badge)
-        // CORREGIDO: Ahora apunta a networking/global en lugar de verificar-badge
+        // CORREGIDO: Apunta a networking/global donde está el shortcode
         $site_url = get_site_url();
         $qr_badge_url = add_query_arg(
             array(
@@ -518,12 +517,13 @@ class EventosApp_QR_Manager {
         // Guardar en meta
         update_post_meta($ticket_id, '_eventosapp_qr_badge', $qr_id);
         
+        // CORREGIDO: Variable $all_qr_codes (no $all_qr_data)
         $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
         if (!is_array($all_qr_codes)) {
             $all_qr_codes = array();
         }
         $all_qr_codes['badge'] = $qr_data;
-        update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_data);
+        update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_codes);
         
         error_log("EventosApp QR Manager: QR Badge generado exitosamente - Ticket: $ticket_id, URL: $qr_badge_url");
         
