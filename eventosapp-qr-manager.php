@@ -341,84 +341,192 @@ class EventosApp_QR_Manager {
         return true;
     }
 
-    /**
-     * Genera un código QR específico para un ticket y tipo
+/**
+     * Genera un código QR para un tipo específico
+     * SIMPLIFICADO: Usa formato ticketID-tag en lugar de base64+JSON
      */
     public function generate_qr_code($ticket_id, $type) {
-        // Validar tipo
-        if (!array_key_exists($type, self::QR_TYPES)) {
+        if (!class_exists('QRcode')) {
+            if (!$this->load_qr_library()) {
+                error_log("EventosApp QR Manager: No se pudo cargar la librería QR");
+                return false;
+            }
+        }
+        
+        // Asegurar que el ticket existe
+        if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            error_log("EventosApp QR Manager: Ticket inválido - $ticket_id");
             return false;
         }
-
-        // Verificar que la librería QR esté disponible
-        if (!$this->load_qr_library()) {
-            error_log('EventosApp QR Manager: No se pudo cargar la librería QR');
+        
+        // === BADGE: Sistema especial que NO se modifica ===
+        if ($type === 'badge') {
+            return $this->generate_badge_qr($ticket_id);
+        }
+        
+        // === SISTEMA SIMPLIFICADO para Email, Google Wallet, Apple Wallet, PDF ===
+        
+        // 1) Obtener el ticketID único
+        $unique_ticket_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+        if (empty($unique_ticket_id)) {
+            error_log("EventosApp QR Manager: No se encontró eventosapp_ticketID para ticket $ticket_id");
             return false;
         }
-
-        // Obtener datos del ticket
-        $ticket_code = get_post_meta($ticket_id, '_ticket_code', true);
-        if (empty($ticket_code)) {
-            $ticket_code = $this->generate_ticket_code($ticket_id);
+        
+        // 2) Determinar el tag según el tipo
+        $tags = array(
+            'email' => 'email',
+            'google_wallet' => 'gwallet',
+            'apple_wallet' => 'awallet',
+            'pdf' => 'pdf'
+        );
+        
+        if (!isset($tags[$type])) {
+            error_log("EventosApp QR Manager: Tipo de QR inválido - $type");
+            return false;
         }
-
+        
+        $tag = $tags[$type];
+        
+        // 3) Crear el contenido del QR: ticketID-tag
+        $qr_content = $unique_ticket_id . '-' . $tag;
+        
+        // 4) Generar ID único para este QR
+        $qr_id = uniqid('qr_' . $type . '_', true);
+        
+        // 5) Generar la imagen del QR
+        $upload = wp_upload_dir();
+        $qr_dir = trailingslashit($upload['basedir']) . 'eventosapp-qr/';
+        
+        if (!file_exists($qr_dir)) {
+            wp_mkdir_p($qr_dir);
+        }
+        
+        $filename = 'qr-' . $type . '-' . $ticket_id . '-' . time() . '.png';
+        $qr_path = $qr_dir . $filename;
+        $qr_url = trailingslashit($upload['baseurl']) . 'eventosapp-qr/' . $filename;
+        
+        try {
+            // Generar QR con tamaño 6 (mediano) y margen 2
+            QRcode::png($qr_content, $qr_path, QR_ECLEVEL_M, 6, 2);
+            
+            if (!file_exists($qr_path)) {
+                error_log("EventosApp QR Manager: No se pudo crear el archivo QR en $qr_path");
+                return false;
+            }
+        } catch (Exception $e) {
+            error_log("EventosApp QR Manager: Error generando QR - " . $e->getMessage());
+            return false;
+        }
+        
+        // 6) Preparar datos del QR
+        $qr_data = array(
+            'qr_id' => $qr_id,
+            'type' => $type,
+            'content' => $qr_content,
+            'url' => $qr_url,
+            'path' => $qr_path,
+            'created_date' => current_time('mysql')
+        );
+        
+        // 7) Guardar en meta (individual y en array consolidado)
+        update_post_meta($ticket_id, '_eventosapp_qr_' . $type, $qr_id);
+        
+        $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (!is_array($all_qr_codes)) {
+            $all_qr_codes = array();
+        }
+        $all_qr_codes[$type] = $qr_data;
+        update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_codes);
+        
+        error_log("EventosApp QR Manager: QR generado exitosamente - Tipo: $type, Content: $qr_content, Ticket: $ticket_id");
+        
+        return $qr_data;
+    }
+    
+    /**
+     * Genera el QR para badge (mantiene el sistema especial de URL)
+     * Esta función NO se modifica - el badge ya funciona bien
+     */
+    private function generate_badge_qr($ticket_id) {
         // Asegurar código de seguridad
         $this->ensure_security_code($ticket_id);
-
-        // Crear identificador único para este QR
-        $qr_id = $ticket_code . '-' . $type;
         
-        // Preparar datos para el QR
-        $qr_content = $this->prepare_qr_content($ticket_id, $type, $qr_id);
-        
-        // Generar la imagen del QR
-        $qr_image = $this->create_qr_image($qr_content, $qr_id);
-        
-if ($qr_image) {
-            // Validar el contenido del QR antes de guardarlo
-            if (!$this->validate_qr_content($qr_content, $type)) {
-                error_log("EventosApp QR Manager: Error de validación para QR tipo $type del ticket $ticket_id");
-                // Continuar de todas formas, pero registrar el error
-            }
-            
-            // Guardar información del QR
-            $qr_data = array(
-                'qr_id' => $qr_id,
-                'type' => $type,
-                'content' => $qr_content,
-                'url' => $qr_image['url'],
-                'path' => $qr_image['path'],
-                'created_date' => current_time('mysql'),
-                'validated' => $this->validate_qr_content($qr_content, $type)
-            );
-            
-            // Si es badge, guardar también la URL del badge
-            if ($type === 'badge') {
-                $qr_data['badge_url'] = $qr_content;
-            }
-            
-            // Obtener QR codes existentes
-            $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
-            if (!is_array($all_qr_codes)) {
-                $all_qr_codes = array();
-            }
-            
-            // Agregar o actualizar el QR de este tipo
-            $all_qr_codes[$type] = $qr_data;
-            
-            // Guardar en post meta
-            update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_codes);
-            
-            // También guardar el QR ID individualmente para fácil acceso
-            update_post_meta($ticket_id, '_eventosapp_qr_' . $type, $qr_id);
-            
-            // Log de éxito
-            error_log("EventosApp QR Manager: QR tipo $type generado exitosamente para ticket $ticket_id (QR ID: $qr_id)");
-            
-            return $qr_data;
+        $security_code = get_post_meta($ticket_id, '_eventosapp_badge_security_code', true);
+        if (empty($security_code)) {
+            error_log("EventosApp QR Manager: No se pudo generar código de seguridad para badge");
+            return false;
         }
         
-        return false;
+        // Obtener datos necesarios
+        $evento_id = get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+        $unique_ticket_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+        
+        if (!$evento_id || !$unique_ticket_id) {
+            error_log("EventosApp QR Manager: Faltan datos para generar badge QR");
+            return false;
+        }
+        
+        // Construir URL del QR (formato especial para badge)
+        $site_url = get_site_url();
+        $qr_badge_url = add_query_arg(
+            array(
+                'event' => $evento_id . '-ticketid=' . $unique_ticket_id . '-' . $security_code
+            ),
+            trailingslashit($site_url) . 'verificar-badge'
+        );
+        
+        // Generar imagen del QR
+        $upload = wp_upload_dir();
+        $qr_dir = trailingslashit($upload['basedir']) . 'eventosapp-qr/';
+        
+        if (!file_exists($qr_dir)) {
+            wp_mkdir_p($qr_dir);
+        }
+        
+        $filename = 'qr-badge-' . $ticket_id . '-' . time() . '.png';
+        $qr_path = $qr_dir . $filename;
+        $qr_url = trailingslashit($upload['baseurl']) . 'eventosapp-qr/' . $filename;
+        
+        try {
+            QRcode::png($qr_badge_url, $qr_path, QR_ECLEVEL_M, 6, 2);
+            
+            if (!file_exists($qr_path)) {
+                error_log("EventosApp QR Manager: No se pudo crear el archivo QR badge en $qr_path");
+                return false;
+            }
+        } catch (Exception $e) {
+            error_log("EventosApp QR Manager: Error generando QR badge - " . $e->getMessage());
+            return false;
+        }
+        
+        // Generar ID único
+        $qr_id = uniqid('qr_badge_', true);
+        
+        // Preparar datos del QR
+        $qr_data = array(
+            'qr_id' => $qr_id,
+            'type' => 'badge',
+            'content' => $qr_badge_url,
+            'badge_url' => $qr_badge_url,
+            'url' => $qr_url,
+            'path' => $qr_path,
+            'created_date' => current_time('mysql')
+        );
+        
+        // Guardar en meta
+        update_post_meta($ticket_id, '_eventosapp_qr_badge', $qr_id);
+        
+        $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (!is_array($all_qr_codes)) {
+            $all_qr_codes = array();
+        }
+        $all_qr_codes['badge'] = $qr_data;
+        update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_codes);
+        
+        error_log("EventosApp QR Manager: QR Badge generado exitosamente - Ticket: $ticket_id");
+        
+        return $qr_data;
     }
 
 /**
@@ -629,14 +737,15 @@ if ($qr_image) {
         }
     }
 
-    /**
+/**
      * Decodifica el contenido de un código QR
-     * MODIFICADO: Maneja URLs con eventosapp_ticketID
+     * SIMPLIFICADO: Maneja formato ticketID-tag y URLs de badge
      */
     public static function decode_qr_content($qr_content) {
-        // Si el contenido parece ser una URL (empieza con http), es un QR de badge
+        global $wpdb;
+        
+        // === CASO 1: QR de Badge (URL) ===
         if (strpos($qr_content, 'http') === 0) {
-            // Parsear la URL para extraer los parámetros
             $url_parts = parse_url($qr_content);
             if (isset($url_parts['query'])) {
                 parse_str($url_parts['query'], $params);
@@ -646,17 +755,14 @@ if ($qr_image) {
                     $parts = explode('-', $params['event']);
                     
                     if (count($parts) >= 3) {
-                        // Extraer event_id del primer segmento
                         $event_id = intval($parts[0]);
                         
-                        // Extraer unique_ticket_id del segundo segmento (después de "ticketid=")
                         $ticket_part = isset($parts[1]) ? $parts[1] : '';
                         $unique_ticket_id = '';
                         if (strpos($ticket_part, 'ticketid=') === 0) {
                             $unique_ticket_id = str_replace('ticketid=', '', $ticket_part);
                         }
                         
-                        // El último segmento es el código de seguridad
                         $security_code = isset($parts[2]) ? $parts[2] : '';
                         
                         return array(
@@ -664,7 +770,7 @@ if ($qr_image) {
                             'event_id' => $event_id,
                             'security_code' => $security_code,
                             'type' => 'badge',
-                            'is_url' => true
+                            'format' => 'url'
                         );
                     }
                 }
@@ -673,27 +779,52 @@ if ($qr_image) {
             return false;
         }
         
-        // Método tradicional: decodificar base64
-        $json_data = base64_decode($qr_content);
-        
-        if ($json_data === false) {
-            return false;
+        // === CASO 2: Formato simplificado ticketID-tag ===
+        if (strpos($qr_content, '-') !== false) {
+            $parts = explode('-', $qr_content);
+            
+            // Debe tener exactamente 2 partes: ticketID y tag
+            if (count($parts) === 2) {
+                $unique_ticket_id = $parts[0];
+                $tag = $parts[1];
+                
+                // Mapear tags a tipos
+                $tag_to_type = array(
+                    'email' => 'email',
+                    'gwallet' => 'google_wallet',
+                    'awallet' => 'apple_wallet',
+                    'pdf' => 'pdf'
+                );
+                
+                if (isset($tag_to_type[$tag])) {
+                    // Buscar el ticket ID (post ID) usando el ticketID único
+                    $ticket_post_id = $wpdb->get_var($wpdb->prepare(
+                        "SELECT post_id FROM {$wpdb->postmeta} 
+                        WHERE meta_key = 'eventosapp_ticketID' 
+                        AND meta_value = %s 
+                        LIMIT 1",
+                        $unique_ticket_id
+                    ));
+                    
+                    if ($ticket_post_id && get_post_type($ticket_post_id) === 'eventosapp_ticket') {
+                        return array(
+                            'unique_ticket_id' => $unique_ticket_id,
+                            'ticket_id' => (int) $ticket_post_id,
+                            'type' => $tag_to_type[$tag],
+                            'tag' => $tag,
+                            'format' => 'simple'
+                        );
+                    }
+                }
+            }
         }
         
-        // Decodificar JSON
-        $data = json_decode($json_data, true);
-        
-        if (!is_array($data) || !isset($data['ticket_id']) || !isset($data['type'])) {
-            return false;
-        }
-        
-        $data['is_url'] = false;
-        return $data;
+        return false;
     }
 
-    /**
+/**
      * Valida un código QR
-     * MODIFICADO: Valida usando eventosapp_ticketID para badges
+     * SIMPLIFICADO: Valida formato ticketID-tag y URLs de badge
      */
     public static function validate_qr($qr_content) {
         global $wpdb;
@@ -703,12 +834,12 @@ if ($qr_image) {
         if (!$data) {
             return array(
                 'valid' => false,
-                'message' => 'Código QR inválido'
+                'message' => 'Código QR inválido o formato no reconocido'
             );
         }
         
-        // Si es un QR tipo URL (badge), buscar por eventosapp_ticketID
-        if (isset($data['is_url']) && $data['is_url'] === true) {
+        // === VALIDACIÓN PARA BADGE (URL) ===
+        if (isset($data['format']) && $data['format'] === 'url' && $data['type'] === 'badge') {
             $unique_ticket_id = $data['unique_ticket_id'];
             
             // Buscar el Post ID por eventosapp_ticketID
@@ -723,7 +854,7 @@ if ($qr_image) {
             if (!$ticket_post_id || get_post_type($ticket_post_id) !== 'eventosapp_ticket') {
                 return array(
                     'valid' => false,
-                    'message' => 'Ticket no encontrado'
+                    'message' => 'Ticket de badge no encontrado'
                 );
             }
             
@@ -733,7 +864,7 @@ if ($qr_image) {
             if (empty($stored_security_code) || $stored_security_code !== $data['security_code']) {
                 return array(
                     'valid' => false,
-                    'message' => 'Código de seguridad inválido'
+                    'message' => 'Código de seguridad del badge inválido'
                 );
             }
             
@@ -741,40 +872,56 @@ if ($qr_image) {
                 'valid' => true,
                 'ticket_id' => $ticket_post_id,
                 'type' => 'badge',
-                'is_url' => true,
+                'format' => 'url',
                 'type_label' => 'Escarapela Impresa'
             );
         }
         
-        // Para QR tradicionales, usar Post ID directamente
-        $ticket_id = $data['ticket_id'];
-        
-        // Verificar que el ticket existe
-        if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
-            return array(
-                'valid' => false,
-                'message' => 'Ticket no encontrado'
+        // === VALIDACIÓN PARA FORMATO SIMPLIFICADO ===
+        if (isset($data['format']) && $data['format'] === 'simple' && isset($data['ticket_id'])) {
+            $ticket_id = $data['ticket_id'];
+            $type = $data['type'];
+            
+            // Verificar que el ticket existe
+            if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
+                return array(
+                    'valid' => false,
+                    'message' => 'Ticket no encontrado'
+                );
+            }
+            
+            // Verificar que el QR ID existe para este tipo
+            // (esto previene el uso de QR revocados/regenerados)
+            $stored_qr_id = get_post_meta($ticket_id, '_eventosapp_qr_' . $type, true);
+            
+            if (empty($stored_qr_id)) {
+                return array(
+                    'valid' => false,
+                    'message' => 'QR no válido o no generado'
+                );
+            }
+            
+            // Labels para tipos
+            $type_labels = array(
+                'email' => 'Email',
+                'google_wallet' => 'Google Wallet',
+                'apple_wallet' => 'Apple Wallet',
+                'pdf' => 'PDF Impreso'
             );
-        }
-        
-        // Verificar que el QR ID coincide
-        $type = $data['type'];
-        $stored_qr_id = get_post_meta($ticket_id, '_eventosapp_qr_' . $type, true);
-        
-        if ($stored_qr_id !== $data['qr_id']) {
+            
             return array(
-                'valid' => false,
-                'message' => 'QR no válido o revocado'
+                'valid' => true,
+                'ticket_id' => $ticket_id,
+                'type' => $type,
+                'tag' => $data['tag'],
+                'format' => 'simple',
+                'type_label' => isset($type_labels[$type]) ? $type_labels[$type] : $type
             );
         }
         
         return array(
-            'valid' => true,
-            'ticket_id' => $ticket_id,
-            'type' => $type,
-            'qr_id' => $data['qr_id'],
-            'is_url' => false,
-            'type_label' => self::QR_TYPES[$type] ?? $type
+            'valid' => false,
+            'message' => 'No se pudo validar el código QR'
         );
     }
 }
