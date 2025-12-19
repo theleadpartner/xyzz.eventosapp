@@ -444,7 +444,7 @@ class EventosApp_QR_Manager {
         return $qr_data;
     }
     
-    /**
+/**
      * Genera el QR para badge (mantiene el sistema especial de URL)
      * Esta función NO se modifica - el badge ya funciona bien
      */
@@ -468,12 +468,13 @@ class EventosApp_QR_Manager {
         }
         
         // Construir URL del QR (formato especial para badge)
+        // CORREGIDO: Ahora apunta a networking/global en lugar de verificar-badge
         $site_url = get_site_url();
         $qr_badge_url = add_query_arg(
             array(
                 'event' => $evento_id . '-ticketid=' . $unique_ticket_id . '-' . $security_code
             ),
-            trailingslashit($site_url) . 'verificar-badge'
+            trailingslashit($site_url) . 'networking/global'
         );
         
         // Generar imagen del QR
@@ -522,9 +523,9 @@ class EventosApp_QR_Manager {
             $all_qr_codes = array();
         }
         $all_qr_codes['badge'] = $qr_data;
-        update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_codes);
+        update_post_meta($ticket_id, '_eventosapp_qr_codes', $all_qr_data);
         
-        error_log("EventosApp QR Manager: QR Badge generado exitosamente - Ticket: $ticket_id");
+        error_log("EventosApp QR Manager: QR Badge generado exitosamente - Ticket: $ticket_id, URL: $qr_badge_url");
         
         return $qr_data;
     }
