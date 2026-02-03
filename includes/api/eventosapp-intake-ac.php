@@ -390,6 +390,27 @@ if ($existing) {
     if ($accesos) update_post_meta($post_id, '_eventosapp_ticket_sesiones_acceso', $accesos);
   }
 
+  // ============================================================================
+  // NUEVO SISTEMA DE QR - Generar todos los códigos QR con el sistema moderno
+  // ============================================================================
+  if (class_exists('EventosApp_QR_Manager')) {
+    // Instanciar el QR Manager y generar todos los QR codes
+    $qr_manager = new EventosApp_QR_Manager();
+    
+    // Forzar la generación eliminando cualquier QR existente primero (por si acaso)
+    delete_post_meta($post_id, '_eventosapp_qr_codes');
+    
+    // Generar todos los QR codes del nuevo sistema
+    $qr_manager->generate_all_qr_codes($post_id);
+    
+    error_log('[EventosApp] Webhook CREATE: Nuevos QR codes generados para ticket '.$post_id);
+  } else {
+    error_log('[EventosApp] Webhook CREATE: ADVERTENCIA - EventosApp_QR_Manager no disponible para ticket '.$post_id);
+  }
+
+  // ============================================================================
+  // FUNCIONES LEGACY - Mantener compatibilidad con archivos antiguos
+  // ============================================================================
   // Generar adjuntos/archivos según flags del evento (opcional; el helper de email también genera si están ON)
   $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
   $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
