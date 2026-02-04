@@ -925,6 +925,83 @@ class EventosApp_QR_Manager {
             'message' => 'No se pudo validar el código QR'
         );
     }
+
+/**
+     * Elimina todos los códigos QR de un ticket (método público para batch)
+     * 
+     * @param int $ticket_id ID del ticket
+     * @return bool True si se eliminaron, false si hubo error
+     */
+    public function delete_all_qr_codes_public($ticket_id) {
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return false;
+        }
+
+        // Eliminar archivos físicos
+        $old_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (is_array($old_qr_codes)) {
+            foreach ($old_qr_codes as $type => $qr_data) {
+                if (isset($qr_data['path']) && file_exists($qr_data['path'])) {
+                    @unlink($qr_data['path']);
+                }
+            }
+        }
+        
+        // Eliminar metadatos
+        delete_post_meta($ticket_id, '_eventosapp_qr_codes');
+        foreach (self::QR_TYPES as $type => $label) {
+            delete_post_meta($ticket_id, '_eventosapp_qr_' . $type);
+        }
+
+        return true;
+    }
+
+    /**
+     * Regenera todos los códigos QR de un ticket (forzado, sin verificación de existencia)
+     * 
+     * @param int $ticket_id ID del ticket
+     * @param bool $force Si true, elimina los existentes antes de regenerar
+     * @return int Cantidad de QR generados exitosamente
+     */
+    public function regenerate_all_qr_codes_forced($ticket_id, $force = true) {
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return 0;
+        }
+
+        // Si force = true, eliminar QR existentes
+        if ($force) {
+            $this->delete_all_qr_codes_public($ticket_id);
+        }
+
+        // Asegurar código de seguridad
+        $this->ensure_security_code($ticket_id);
+
+        // Regenerar QR codes para cada tipo
+        $generated = 0;
+        foreach (self::QR_TYPES as $type => $label) {
+            if ($this->generate_qr_code($ticket_id, $type)) {
+                $generated++;
+            }
+        }
+
+        return $generated;
+    }
+
+    /**
+     * Obtiene la instancia singleton de la clase (para uso en batch)
+     * 
+     * @return EventosApp_QR_Manager|null
+     */
+    public static function get_instance() {
+        global $eventosapp_qr_manager_instance;
+        
+        if (!isset($eventosapp_qr_manager_instance) || !($eventosapp_qr_manager_instance instanceof self)) {
+            $eventosapp_qr_manager_instance = new self();
+        }
+        
+        return $eventosapp_qr_manager_instance;
+    }
+
 }
 
 // Inicializar la clase
