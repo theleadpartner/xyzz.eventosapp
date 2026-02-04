@@ -4,7 +4,7 @@
  * Sistema de actualización por lote en segundo plano
  * 
  * @package EventosApp
- * @version 3.0
+ * @version 3.0.2 - CORREGIDO
  */
 
 if (!defined('ABSPATH')) exit;
@@ -31,7 +31,7 @@ class EventosApp_Batch_Processor {
      * Constructor
      */
     private function __construct() {
-        add_action('admin_menu', [$this, 'add_admin_menu'], 10); // Prioridad 10 para ejecutar después del menú principal (prioridad 9)
+        add_action('admin_menu', [$this, 'add_admin_menu'], 10);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_scripts']);
         
         // AJAX Handlers
@@ -46,12 +46,12 @@ class EventosApp_Batch_Processor {
      */
     public function add_admin_menu() {
         add_submenu_page(
-            'eventosapp_dashboard',          // Parent slug del menú principal de EventosApp
-            'Actualización por Lote',        // Page title
-            'Actualización por Lote',        // Menu title
-            'manage_options',                // Capability
-            'eventosapp-batch-update',       // Menu slug
-            [$this, 'render_admin_page']    // Callback
+            'eventosapp_dashboard',
+            'Actualización por Lote',
+            'Actualización por Lote',
+            'manage_options',
+            'eventosapp-batch-update',
+            [$this, 'render_admin_page']
         );
     }
     
@@ -59,37 +59,11 @@ class EventosApp_Batch_Processor {
      * Encolar scripts y estilos
      */
     public function enqueue_scripts($hook) {
-        // El hook de la página será: eventosapp_dashboard_page_eventosapp-batch-update
         if ($hook !== 'eventosapp_dashboard_page_eventosapp-batch-update') {
             return;
         }
         
-        wp_enqueue_style(
-            'eventosapp-batch-processor',
-            plugin_dir_url(__FILE__) . 'css/batch-processor.css',
-            [],
-            '3.0.0'
-        );
-        
-        wp_enqueue_script(
-            'eventosapp-batch-processor',
-            plugin_dir_url(__FILE__) . 'js/batch-processor.js',
-            ['jquery'],
-            '3.0.0',
-            true
-        );
-        
-        wp_localize_script('eventosapp-batch-processor', 'eventosappBatch', [
-            'ajaxUrl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('eventosapp_batch_processor'),
-            'strings' => [
-                'confirmCancel' => '¿Estás seguro de cancelar el proceso? El progreso se perderá.',
-                'processing' => 'Procesando...',
-                'completed' => 'Completado',
-                'cancelled' => 'Cancelado',
-                'error' => 'Error'
-            ]
-        ]);
+        wp_enqueue_script('jquery');
     }
     
     /**
@@ -111,6 +85,10 @@ class EventosApp_Batch_Processor {
         
         // Verificar si hay un proceso en curso
         $current_process = $this->get_current_process();
+        
+        // Crear nonce
+        $nonce = wp_create_nonce('eventosapp_batch_processor');
+        $ajax_url = admin_url('admin-ajax.php');
         
         ?>
         <div class="wrap eventosapp-batch-wrapper">
@@ -559,7 +537,6 @@ class EventosApp_Batch_Processor {
             font-weight: bold;
         }
         
-        /* Scrollbar personalizado para el log */
         .log-container::-webkit-scrollbar {
             width: 8px;
         }
@@ -580,51 +557,73 @@ class EventosApp_Batch_Processor {
         
         <script>
         jQuery(document).ready(function($) {
+            console.log('EventosApp Batch Processor - Iniciando...');
+            
             // Variables globales
             let currentProcess = null;
             let autoScroll = true;
             let startTime = null;
             let timerInterval = null;
             
+            const ajaxUrl = <?php echo json_encode($ajax_url); ?>;
+            const nonce = <?php echo json_encode($nonce); ?>;
+            
+            console.log('AJAX URL:', ajaxUrl);
+            console.log('Nonce:', nonce);
+            
             // Verificar si hay un proceso en curso al cargar
             <?php if ($current_process): ?>
+            console.log('Proceso existente encontrado:', <?php echo json_encode($current_process); ?>);
             loadCurrentProcess(<?php echo json_encode($current_process); ?>);
             <?php endif; ?>
             
             // Evento: Seleccionar evento
             $('#batch-event-select').on('change', function() {
                 const eventId = $(this).val();
+                console.log('Evento seleccionado:', eventId);
+                
                 if (!eventId) {
                     $('#ticket-count-info').hide();
                     return;
                 }
                 
                 // Obtener cantidad de tickets
-                $.post(eventosappBatch.ajaxUrl, {
+                $.post(ajaxUrl, {
                     action: 'eventosapp_batch_status',
-                    nonce: eventosappBatch.nonce,
+                    nonce: nonce,
                     task: 'count_tickets',
                     event_id: eventId
                 }, function(response) {
+                    console.log('Respuesta count tickets:', response);
                     if (response.success) {
                         $('#ticket-count-number').text(response.data.count);
                         $('#ticket-count-info').show();
                     }
+                }).fail(function(xhr, status, error) {
+                    console.error('Error contando tickets:', error);
+                    addLog('error', 'Error al contar tickets: ' + error);
                 });
             });
             
             // Evento: Iniciar proceso
             $('#batch-start-btn').on('click', function() {
+                console.log('Click en Iniciar Actualización');
+                
                 const eventId = $('#batch-event-select').val();
                 const mode = $('input[name="batch_mode"]:checked').val();
                 const batchSize = $('#batch-size-select').val();
+                
+                console.log('Parámetros:', { eventId, mode, batchSize });
                 
                 if (!eventId) {
                     alert('Por favor selecciona un evento');
                     return;
                 }
                 
-                if (!confirm('¿Iniciar actualización por lote?\n\nEvento seleccionado: ' + $('#batch-event-select option:selected').text() + '\nModo: ' + (mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes'))) {
+                const eventName = $('#batch-event-select option:selected').text();
+                const modeName = mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes';
+                
+                if (!confirm('¿Iniciar actualización por lote?\n\nEvento: ' + eventName + '\nModo: ' + modeName)) {
                     return;
                 }
                 
@@ -633,7 +632,7 @@ class EventosApp_Batch_Processor {
             
             // Evento: Cancelar proceso
             $('#batch-cancel-btn').on('click', function() {
-                if (!confirm(eventosappBatch.strings.confirmCancel)) {
+                if (!confirm('¿Estás seguro de cancelar el proceso? El progreso se perderá.')) {
                     return;
                 }
                 
@@ -657,34 +656,63 @@ class EventosApp_Batch_Processor {
              * Iniciar proceso de actualización por lote
              */
             function startBatchProcess(eventId, mode, batchSize) {
+                console.log('=== INICIANDO PROCESO ===');
+                console.log('Event ID:', eventId);
+                console.log('Mode:', mode);
+                console.log('Batch Size:', batchSize);
+                
                 addLog('batch', '═══════════════════════════════════════════════════');
                 addLog('batch', 'INICIANDO PROCESO DE ACTUALIZACIÓN POR LOTE');
                 addLog('batch', '═══════════════════════════════════════════════════');
                 
-                $.post(eventosappBatch.ajaxUrl, {
-                    action: 'eventosapp_batch_start',
-                    nonce: eventosappBatch.nonce,
-                    event_id: eventId,
-                    mode: mode,
-                    batch_size: batchSize
-                }, function(response) {
-                    if (response.success) {
-                        currentProcess = response.data;
-                        startTime = new Date();
+                // Deshabilitar botón mientras procesa
+                $('#batch-start-btn').prop('disabled', true).text('Iniciando...');
+                
+                $.ajax({
+                    url: ajaxUrl,
+                    type: 'POST',
+                    dataType: 'json',
+                    data: {
+                        action: 'eventosapp_batch_start',
+                        nonce: nonce,
+                        event_id: eventId,
+                        mode: mode,
+                        batch_size: batchSize
+                    },
+                    success: function(response) {
+                        console.log('Respuesta de inicio:', response);
                         
-                        addLog('success', 'Proceso iniciado correctamente');
-                        addLog('info', 'Evento: ' + $('#batch-event-select option:selected').text());
-                        addLog('info', 'Modo: ' + (mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes'));
-                        addLog('info', 'Total de tickets: ' + currentProcess.total);
-                        addLog('info', 'Tamaño de lote: ' + batchSize);
+                        if (response.success) {
+                            currentProcess = response.data;
+                            startTime = new Date();
+                            
+                            addLog('success', 'Proceso iniciado correctamente');
+                            addLog('info', 'Evento: ' + $('#batch-event-select option:selected').text());
+                            addLog('info', 'Modo: ' + (mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes'));
+                            addLog('info', 'Total de tickets: ' + currentProcess.total);
+                            addLog('info', 'Tamaño de lote: ' + batchSize);
+                            
+                            console.log('Mostrando UI y comenzando proceso...');
+                            updateUI();
+                            
+                            // Pequeña pausa antes de comenzar el primer lote
+                            setTimeout(function() {
+                                processNextBatch();
+                            }, 500);
+                        } else {
+                            addLog('error', 'Error al iniciar: ' + (response.data && response.data.message ? response.data.message : 'Desconocido'));
+                            $('#batch-start-btn').prop('disabled', false).html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('Error AJAX al iniciar:', error);
+                        console.error('XHR:', xhr);
+                        console.error('Status:', status);
+                        console.error('Response Text:', xhr.responseText);
                         
-                        updateUI();
-                        processNextBatch();
-                    } else {
-                        addLog('error', 'Error al iniciar: ' + (response.data ? response.data.message : 'Desconocido'));
+                        addLog('error', 'Error de conexión al iniciar el proceso: ' + error);
+                        $('#batch-start-btn').prop('disabled', false).html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
                     }
-                }).fail(function() {
-                    addLog('error', 'Error de conexión al iniciar el proceso');
                 });
             }
             
@@ -692,47 +720,66 @@ class EventosApp_Batch_Processor {
              * Procesar siguiente lote
              */
             function processNextBatch() {
-                if (!currentProcess) return;
+                if (!currentProcess) {
+                    console.error('No hay proceso activo');
+                    return;
+                }
                 
                 const batchNumber = Math.floor(currentProcess.processed / currentProcess.batch_size) + 1;
+                console.log('Procesando lote ' + batchNumber);
                 addLog('batch', '--- Procesando lote ' + batchNumber + ' ---');
                 
-                $.post(eventosappBatch.ajaxUrl, {
-                    action: 'eventosapp_batch_process',
-                    nonce: eventosappBatch.nonce,
-                    process_id: currentProcess.id
-                }, function(response) {
-                    if (response.success) {
-                        currentProcess = response.data;
+                $.ajax({
+                    url: ajaxUrl,
+                    type: 'POST',
+                    dataType: 'json',
+                    data: {
+                        action: 'eventosapp_batch_process',
+                        nonce: nonce,
+                        process_id: currentProcess.id
+                    },
+                    success: function(response) {
+                        console.log('Respuesta de lote:', response);
                         
-                        // Actualizar estadísticas
-                        updateProgress();
-                        
-                        // Logs del lote
-                        if (response.data.batch_log && response.data.batch_log.length > 0) {
-                            response.data.batch_log.forEach(function(log) {
-                                addLog(log.type, log.message);
-                            });
+                        if (response.success) {
+                            currentProcess = response.data;
+                            
+                            // Actualizar estadísticas
+                            updateProgress();
+                            
+                            // Logs del lote
+                            if (response.data.batch_log && response.data.batch_log.length > 0) {
+                                response.data.batch_log.forEach(function(log) {
+                                    addLog(log.type, log.message);
+                                });
+                            }
+                            
+                            addLog('success', 'Lote ' + batchNumber + ' completado: ' + response.data.last_batch_processed + ' tickets procesados');
+                            
+                            // Continuar o finalizar
+                            if (currentProcess.status === 'completed') {
+                                console.log('Proceso completado');
+                                finishProcess();
+                            } else if (currentProcess.status === 'processing') {
+                                // Pequeña pausa entre lotes para no saturar
+                                setTimeout(processNextBatch, 500);
+                            }
+                        } else {
+                            addLog('error', 'Error procesando lote: ' + (response.data && response.data.message ? response.data.message : 'Desconocido'));
+                            currentProcess.status = 'error';
+                            updateUI();
                         }
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('Error AJAX procesando lote:', error);
+                        console.error('Response Text:', xhr.responseText);
                         
-                        addLog('success', 'Lote ' + batchNumber + ' completado: ' + response.data.last_batch_processed + ' tickets procesados');
-                        
-                        // Continuar o finalizar
-                        if (currentProcess.status === 'completed') {
-                            finishProcess();
-                        } else if (currentProcess.status === 'processing') {
-                            // Pequeña pausa entre lotes para no saturar
-                            setTimeout(processNextBatch, 500);
+                        addLog('error', 'Error de conexión durante el procesamiento: ' + error);
+                        if (currentProcess) {
+                            currentProcess.status = 'error';
+                            updateUI();
                         }
-                    } else {
-                        addLog('error', 'Error procesando lote: ' + (response.data ? response.data.message : 'Desconocido'));
-                        currentProcess.status = 'error';
-                        updateUI();
                     }
-                }).fail(function() {
-                    addLog('error', 'Error de conexión durante el procesamiento');
-                    currentProcess.status = 'error';
-                    updateUI();
                 });
             }
             
@@ -742,11 +789,12 @@ class EventosApp_Batch_Processor {
             function cancelBatchProcess() {
                 if (!currentProcess) return;
                 
+                console.log('Cancelando proceso...');
                 addLog('warning', 'Cancelando proceso...');
                 
-                $.post(eventosappBatch.ajaxUrl, {
+                $.post(ajaxUrl, {
                     action: 'eventosapp_batch_cancel',
-                    nonce: eventosappBatch.nonce,
+                    nonce: nonce,
                     process_id: currentProcess.id
                 }, function(response) {
                     if (response.success) {
@@ -764,6 +812,8 @@ class EventosApp_Batch_Processor {
              * Finalizar proceso
              */
             function finishProcess() {
+                console.log('Finalizando proceso...');
+                
                 if (timerInterval) {
                     clearInterval(timerInterval);
                 }
@@ -788,6 +838,7 @@ class EventosApp_Batch_Processor {
              * Cargar proceso en curso
              */
             function loadCurrentProcess(process) {
+                console.log('Cargando proceso existente:', process);
                 currentProcess = process;
                 startTime = new Date(process.start_time * 1000);
                 updateUI();
@@ -802,11 +853,15 @@ class EventosApp_Batch_Processor {
              * Actualizar UI
              */
             function updateUI() {
+                console.log('Actualizando UI. Proceso actual:', currentProcess);
+                
                 if (currentProcess) {
+                    console.log('Mostrando panel de progreso');
+                    
                     // Deshabilitar configuración
                     $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn').prop('disabled', true);
                     $('#batch-cancel-btn').show();
-                    $('#batch-progress-panel').show();
+                    $('#batch-progress-panel').show(); // FORZAR mostrar el panel
                     
                     // Actualizar información del evento
                     $('#progress-event-name').text($('#batch-event-select option:selected').text());
@@ -827,8 +882,11 @@ class EventosApp_Batch_Processor {
                         statusBadge.addClass('status-error').text('Error');
                     }
                 } else {
+                    console.log('Ocultando panel de progreso');
+                    
                     // Habilitar configuración
                     $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn').prop('disabled', false);
+                    $('#batch-start-btn').html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
                     $('#batch-cancel-btn').hide();
                     
                     // Resetear progreso
@@ -843,6 +901,8 @@ class EventosApp_Batch_Processor {
              */
             function updateProgress() {
                 if (!currentProcess) return;
+                
+                console.log('Actualizando progreso:', currentProcess.processed + '/' + currentProcess.total);
                 
                 const percentage = currentProcess.total > 0 ? Math.round((currentProcess.processed / currentProcess.total) * 100) : 0;
                 
@@ -905,6 +965,8 @@ class EventosApp_Batch_Processor {
                     container.scrollTop = container.scrollHeight;
                 }
             }
+            
+            console.log('EventosApp Batch Processor - Listo');
         });
         </script>
         <?php
@@ -1092,6 +1154,10 @@ class EventosApp_Batch_Processor {
      * Contar tickets por evento
      */
     private function count_tickets_by_event($event_id) {
+        if (function_exists('eventosapp_count_tickets_by_event')) {
+            return eventosapp_count_tickets_by_event($event_id);
+        }
+        
         global $wpdb;
         
         $count = $wpdb->get_var($wpdb->prepare("
