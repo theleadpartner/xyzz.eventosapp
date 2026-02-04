@@ -277,28 +277,37 @@ function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0, $mode = 'comp
     // MODO QR_ONLY: Solo regenera QR Manager y actualiza PDF/Wallets
     // ========================================================================
     if ($mode === 'qr_only') {
-        // 1) Regenerar TODOS los QR del QR Manager
+        $qr_generated = 0;
+        
+        // 1) Regenerar TODOS los QR del QR Manager usando la instancia singleton
         if ( class_exists('EventosApp_QR_Manager') ) {
             try {
-                $qr_manager = new EventosApp_QR_Manager();
+                $qr_manager = EventosApp_QR_Manager::get_instance();
                 
-                // Eliminar QR existentes para forzar regeneración
-                $qr_manager->delete_all_qr_codes($ticket_id);
-                
-                // Regenerar cada tipo de QR
-                $qr_types = ['email', 'google_wallet', 'apple_wallet', 'pdf', 'badge'];
-                foreach ($qr_types as $qr_type) {
-                    $qr_manager->generate_qr_code($ticket_id, $qr_type);
+                if ($qr_manager && method_exists($qr_manager, 'regenerate_all_qr_codes_forced')) {
+                    // Forzar regeneración completa (elimina y crea de nuevo)
+                    $qr_generated = $qr_manager->regenerate_all_qr_codes_forced($ticket_id, true);
+                    
+                    error_log("EventosApp Batch QR: Regenerados {$qr_generated} QR para ticket {$ticket_id}");
+                } else {
+                    error_log("EventosApp Batch QR: Método regenerate_all_qr_codes_forced no disponible");
                 }
             } catch (\Throwable $e) {
                 error_log("EventosApp Batch QR: Error regenerando QR Manager para ticket {$ticket_id}: " . $e->getMessage());
             }
+        } else {
+            error_log("EventosApp Batch QR: Clase EventosApp_QR_Manager no disponible");
         }
 
         // 2) Regenerar PDF (incluye el nuevo QR)
         if ( function_exists('eventosapp_ticket_generar_pdf') ) {
             try { 
-                eventosapp_ticket_generar_pdf($ticket_id); 
+                // Eliminar PDF anterior para forzar regeneración
+                delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+                delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_path');
+                
+                eventosapp_ticket_generar_pdf($ticket_id);
+                error_log("EventosApp Batch QR: PDF regenerado para ticket {$ticket_id}");
             } catch (\Throwable $e) {
                 error_log("EventosApp Batch QR: Error regenerando PDF para ticket {$ticket_id}: " . $e->getMessage());
             }
@@ -312,8 +321,10 @@ function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0, $mode = 'comp
                     // Eliminar enlace anterior para forzar regeneración
                     delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
                     delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log');
                     
-                    eventosapp_generar_enlace_wallet_android($ticket_id, false); 
+                    eventosapp_generar_enlace_wallet_android($ticket_id, false);
+                    error_log("EventosApp Batch QR: Google Wallet regenerado para ticket {$ticket_id}");
                 } catch (\Throwable $e) {
                     error_log("EventosApp Batch QR: Error regenerando Google Wallet para ticket {$ticket_id}: " . $e->getMessage());
                 }
@@ -330,7 +341,8 @@ function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0, $mode = 'comp
                     delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
                     delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
                     
-                    eventosapp_apple_generate_pass($ticket_id); 
+                    eventosapp_apple_generate_pass($ticket_id);
+                    error_log("EventosApp Batch QR: Apple Wallet regenerado para ticket {$ticket_id}");
                 } catch (\Throwable $e) {
                     error_log("EventosApp Batch QR: Error regenerando Apple Wallet para ticket {$ticket_id}: " . $e->getMessage());
                 }
@@ -340,7 +352,8 @@ function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0, $mode = 'comp
                     delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
                     delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
                     
-                    eventosapp_generar_enlace_wallet_apple($ticket_id); 
+                    eventosapp_generar_enlace_wallet_apple($ticket_id);
+                    error_log("EventosApp Batch QR: Apple Wallet (fallback) regenerado para ticket {$ticket_id}");
                 } catch (\Throwable $e) {
                     error_log("EventosApp Batch QR: Error regenerando Apple Wallet (fallback) para ticket {$ticket_id}: " . $e->getMessage());
                 }
@@ -350,6 +363,7 @@ function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0, $mode = 'comp
         // Marca de última actualización (modo QR)
         update_post_meta($ticket_id, '_eventosapp_last_batch_refresh', current_time('mysql'));
         update_post_meta($ticket_id, '_eventosapp_last_batch_mode', 'qr_only');
+        update_post_meta($ticket_id, '_eventosapp_last_batch_qr_count', $qr_generated);
 
         return true;
     }
