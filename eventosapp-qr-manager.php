@@ -1002,6 +1002,117 @@ class EventosApp_QR_Manager {
         return $eventosapp_qr_manager_instance;
     }
 
+/**
+     * Verifica si un ticket tiene todos los QR nuevos generados
+     * 
+     * @param int $ticket_id ID del ticket
+     * @return bool True si tiene todos los QR, false si falta alguno
+     */
+    public function has_all_new_qr_codes($ticket_id) {
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return false;
+        }
+
+        $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        
+        if (!is_array($all_qr_codes) || empty($all_qr_codes)) {
+            return false;
+        }
+
+        // Verificar que existan los 5 tipos de QR
+        foreach (self::QR_TYPES as $type => $label) {
+            if (!isset($all_qr_codes[$type]) || empty($all_qr_codes[$type]['content'])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Genera solo los QR faltantes (no regenera los existentes)
+     * 
+     * @param int $ticket_id ID del ticket
+     * @return array ['generated' => int, 'skipped' => int, 'failed' => int]
+     */
+    public function generate_missing_qr_codes($ticket_id) {
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return ['generated' => 0, 'skipped' => 0, 'failed' => 0];
+        }
+
+        $stats = ['generated' => 0, 'skipped' => 0, 'failed' => 0];
+        
+        // Asegurar código de seguridad
+        $this->ensure_security_code($ticket_id);
+
+        // Obtener QR existentes
+        $existing_qrs = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (!is_array($existing_qrs)) {
+            $existing_qrs = [];
+        }
+
+        // Generar solo los QR que faltan
+        foreach (self::QR_TYPES as $type => $label) {
+            // Verificar si ya existe este tipo de QR
+            if (isset($existing_qrs[$type]) && !empty($existing_qrs[$type]['content'])) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            // No existe, generarlo
+            $result = $this->generate_qr_code($ticket_id, $type);
+            
+            if ($result && is_array($result)) {
+                $stats['generated']++;
+            } else {
+                $stats['failed']++;
+            }
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Regenera TODOS los QR (forzado completo, incluyendo los existentes)
+     * 
+     * @param int $ticket_id ID del ticket
+     * @return int Cantidad de QR generados exitosamente
+     */
+    public function regenerate_all_qr_codes_complete($ticket_id) {
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return 0;
+        }
+
+        // Eliminar QR existentes físicamente
+        $old_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (is_array($old_qr_codes)) {
+            foreach ($old_qr_codes as $type => $qr_data) {
+                if (isset($qr_data['path']) && file_exists($qr_data['path'])) {
+                    @unlink($qr_data['path']);
+                }
+            }
+        }
+        
+        // Eliminar metadatos
+        delete_post_meta($ticket_id, '_eventosapp_qr_codes');
+        foreach (self::QR_TYPES as $type => $label) {
+            delete_post_meta($ticket_id, '_eventosapp_qr_' . $type);
+        }
+
+        // Asegurar código de seguridad
+        $this->ensure_security_code($ticket_id);
+
+        // Regenerar todos los QR
+        $generated = 0;
+        foreach (self::QR_TYPES as $type => $label) {
+            if ($this->generate_qr_code($ticket_id, $type)) {
+                $generated++;
+            }
+        }
+
+        return $generated;
+    }
+    
 }
 
 // Inicializar la clase
