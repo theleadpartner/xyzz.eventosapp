@@ -31,7 +31,7 @@ class EventosApp_Batch_Processor {
      * Constructor
      */
     private function __construct() {
-        add_action('admin_menu', [$this, 'add_admin_menu']);
+        add_action('admin_menu', [$this, 'add_admin_menu'], 10); // Prioridad 10 para ejecutar después del menú principal (prioridad 9)
         add_action('admin_enqueue_scripts', [$this, 'enqueue_scripts']);
         
         // AJAX Handlers
@@ -46,12 +46,12 @@ class EventosApp_Batch_Processor {
      */
     public function add_admin_menu() {
         add_submenu_page(
-            'edit.php?post_type=eventosapp_event',
-            'Actualización por Lote',
-            'Actualización por Lote',
-            'manage_options',
-            'eventosapp-batch-update',
-            [$this, 'render_admin_page']
+            'eventosapp_dashboard',          // Parent slug del menú principal de EventosApp
+            'Actualización por Lote',        // Page title
+            'Actualización por Lote',        // Menu title
+            'manage_options',                // Capability
+            'eventosapp-batch-update',       // Menu slug
+            [$this, 'render_admin_page']    // Callback
         );
     }
     
@@ -59,7 +59,8 @@ class EventosApp_Batch_Processor {
      * Encolar scripts y estilos
      */
     public function enqueue_scripts($hook) {
-        if ($hook !== 'eventosapp_event_page_eventosapp-batch-update') {
+        // El hook de la página será: eventosapp_dashboard_page_eventosapp-batch-update
+        if ($hook !== 'eventosapp_dashboard_page_eventosapp-batch-update') {
             return;
         }
         
