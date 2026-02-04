@@ -1006,6 +1006,12 @@ class EventosApp_QR_Manager {
 
 // Inicializar la clase
 function eventosapp_qr_manager_init() {
-    new EventosApp_QR_Manager();
+    global $eventosapp_qr_manager_instance;
+    
+    if (!isset($eventosapp_qr_manager_instance)) {
+        $eventosapp_qr_manager_instance = new EventosApp_QR_Manager();
+    }
+    
+    return $eventosapp_qr_manager_instance;
 }
 add_action('plugins_loaded', 'eventosapp_qr_manager_init');
