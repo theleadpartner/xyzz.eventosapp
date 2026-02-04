@@ -191,6 +191,11 @@ class EventosApp_Batch_Processor {
                                 <span class="dashicons dashicons-no"></span>
                                 Cancelar Proceso
                             </button>
+                            
+                            <button type="button" id="batch-new-btn" class="button button-primary button-hero" style="display: none;">
+                                <span class="dashicons dashicons-update"></span>
+                                Procesar Nuevo Evento
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -639,6 +644,12 @@ class EventosApp_Batch_Processor {
                 cancelBatchProcess();
             });
             
+            // Evento: Procesar Nuevo Evento
+            $('#batch-new-btn').on('click', function() {
+                console.log('Click en Procesar Nuevo Evento');
+                resetProcess();
+            });
+            
             // Evento: Limpiar log
             $('#log-clear-btn').on('click', function() {
                 $('#batch-log-container').empty();
@@ -809,6 +820,63 @@ class EventosApp_Batch_Processor {
             }
             
             /**
+             * Resetear proceso para comenzar uno nuevo
+             */
+            function resetProcess() {
+                console.log('Reseteando proceso para iniciar uno nuevo...');
+                
+                // Cancelar proceso actual en el servidor
+                if (currentProcess && currentProcess.id) {
+                    $.post(ajaxUrl, {
+                        action: 'eventosapp_batch_cancel',
+                        nonce: nonce,
+                        process_id: currentProcess.id
+                    });
+                }
+                
+                // Limpiar timer si existe
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+                
+                // Resetear variables
+                currentProcess = null;
+                startTime = null;
+                
+                // Limpiar selección de evento
+                $('#batch-event-select').val('').trigger('change');
+                $('#ticket-count-info').hide();
+                
+                // Resetear modo a completo
+                $('#mode-complete').prop('checked', true);
+                
+                // Resetear tamaño de lote al recomendado
+                $('#batch-size-select').val('50');
+                
+                // Limpiar log
+                $('#batch-log-container').empty();
+                addLog('info', 'Sistema reseteado. Listo para procesar un nuevo evento.');
+                
+                // Ocultar panel de progreso con animación suave
+                $('#batch-progress-panel').fadeOut(300, function() {
+                    // Resetear valores del progreso
+                    $('#progress-bar').css('width', '0%');
+                    $('#progress-percentage').text('0%');
+                    $('#progress-current, #progress-total, #progress-success, #progress-skipped, #progress-failed').text('0');
+                    $('#elapsed-time').text('00:00');
+                    $('#estimated-time').text('Calculando...');
+                    $('#progress-event-name').text('-');
+                    $('#progress-mode').text('-');
+                });
+                
+                // Actualizar UI para mostrar estado inicial
+                updateUI();
+                
+                console.log('Reset completado');
+            }
+            
+            /**
              * Finalizar proceso
              */
             function finishProcess() {
@@ -856,30 +924,41 @@ class EventosApp_Batch_Processor {
                 console.log('Actualizando UI. Proceso actual:', currentProcess);
                 
                 if (currentProcess) {
-                    console.log('Mostrando panel de progreso');
+                    console.log('Mostrando panel de progreso. Estado:', currentProcess.status);
                     
                     // Deshabilitar configuración
                     $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn').prop('disabled', true);
-                    $('#batch-cancel-btn').show();
                     $('#batch-progress-panel').show(); // FORZAR mostrar el panel
                     
                     // Actualizar información del evento
                     $('#progress-event-name').text($('#batch-event-select option:selected').text());
                     $('#progress-mode').text(currentProcess.mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes');
                     
-                    // Estado
+                    // Estado y manejo de botones según estado del proceso
                     const statusBadge = $('#progress-status');
                     statusBadge.removeClass('status-running status-completed status-cancelled status-error');
                     
                     if (currentProcess.status === 'processing') {
+                        // PROCESANDO: Mostrar botón cancelar, ocultar botón nuevo
                         statusBadge.addClass('status-running').text('Procesando');
+                        $('#batch-cancel-btn').show();
+                        $('#batch-new-btn').hide();
                         startTimer();
                     } else if (currentProcess.status === 'completed') {
+                        // COMPLETADO: Ocultar botón cancelar, mostrar botón nuevo
                         statusBadge.addClass('status-completed').text('Completado');
+                        $('#batch-cancel-btn').hide();
+                        $('#batch-new-btn').show();
                     } else if (currentProcess.status === 'cancelled') {
+                        // CANCELADO: Ocultar botón cancelar, mostrar botón nuevo
                         statusBadge.addClass('status-cancelled').text('Cancelado');
+                        $('#batch-cancel-btn').hide();
+                        $('#batch-new-btn').show();
                     } else if (currentProcess.status === 'error') {
+                        // ERROR: Ocultar botón cancelar, mostrar botón nuevo
                         statusBadge.addClass('status-error').text('Error');
+                        $('#batch-cancel-btn').hide();
+                        $('#batch-new-btn').show();
                     }
                 } else {
                     console.log('Ocultando panel de progreso');
@@ -888,6 +967,7 @@ class EventosApp_Batch_Processor {
                     $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn').prop('disabled', false);
                     $('#batch-start-btn').html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
                     $('#batch-cancel-btn').hide();
+                    $('#batch-new-btn').hide();
                     
                     // Resetear progreso
                     $('#progress-bar').css('width', '0%');
