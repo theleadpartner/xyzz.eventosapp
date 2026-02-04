@@ -5,8 +5,12 @@ if ( ! defined('ABSPATH') ) exit;
  * Metabox en CPT Evento para refrescar (en batches) los tickets asociados,
  * regenerando assets/derivados (Wallets, PDF, ICS, search blob, etc.)
  *
+ * VERSION 2.0 - Dos modos de actualización:
+ * - Modo Completo: Regenera todo (Wallets, PDF, ICS, search blob)
+ * - Modo QR Nuevos: Solo regenera QR del QR Manager y actualiza PDF/Wallets
+ *
  * Flujo:
- *  - Metabox con selector de tamaño de lote y botón "Actualizar tickets de este evento"
+ *  - Metabox con selector de tamaño de lote, modo de actualización y botón
  *  - Disparo vía GET a admin-post.php?action=eventosapp_refresh_tickets_batch
  *  - Handler procesa "page" de tickets (per_page configurable) y redirige a la siguiente
  *  - Al finalizar, elimina el lock y vuelve al editor del evento con un aviso
@@ -47,13 +51,32 @@ function eventosapp_render_refresh_tickets_batch_metabox($post) {
 
     ?>
     <div style="font-size:12px; line-height:1.45">
-        <p>Ejecuta una actualización **ordenada por lotes** de todos los tickets de este evento, regenerando Wallet, PDF, ICS y el índice de búsqueda.</p>
+        <p>Ejecuta una actualización <strong>ordenada por lotes</strong> de todos los tickets de este evento.</p>
 
         <?php if ($locked): ?>
             <div style="background:#fff8e5;border:1px solid #eac54f;padding:8px;border-radius:4px;margin-bottom:8px">
                 <strong>Proceso en curso:</strong> ya hay una ejecución activa para este evento. Espera a que finalice o vuelve a intentarlo más tarde.
             </div>
         <?php endif; ?>
+
+        <!-- Selector de Modo de Actualización -->
+        <div style="margin-bottom:15px;padding:10px;background:#f0f0f1;border-radius:4px;">
+            <label style="display:block;margin-bottom:8px;"><strong>🎯 Modo de Actualización</strong></label>
+            
+            <label style="display:block;margin-bottom:6px;cursor:pointer;">
+                <input type="radio" name="evapp_refresh_mode" value="complete" checked style="margin-right:5px;">
+                <strong>Completo</strong> - Regenera todo (Wallets, PDF, ICS, búsqueda)
+            </label>
+            
+            <label style="display:block;cursor:pointer;">
+                <input type="radio" name="evapp_refresh_mode" value="qr_only" style="margin-right:5px;">
+                <strong>Solo QR Nuevos</strong> - Regenera QR Manager y actualiza PDF/Wallets
+            </label>
+            
+            <p class="description" style="margin:8px 0 0 0;font-size:11px;color:#666;">
+                📌 <strong>QR Nuevos:</strong> Ideal cuando solo necesitas regenerar los códigos QR del sistema QR Manager sin tocar ICS ni índice de búsqueda.
+            </p>
+        </div>
 
         <label for="evapp_refresh_batch_size"><strong>Tickets por lote</strong></label><br>
         <select id="evapp_refresh_batch_size" style="width:100%;margin:4px 0 10px;">
@@ -64,7 +87,7 @@ function eventosapp_render_refresh_tickets_batch_metabox($post) {
         </select>
 
         <button type="button" id="evapp-btn-refresh-batch" class="button button-primary" style="width:100%;" <?php disabled($locked, true); ?>>
-            Actualizar tickets de este evento
+            🔄 Actualizar tickets de este evento
         </button>
 
         <p class="description" style="margin-top:8px;">El proceso usa lock por evento y redirecciones entre lotes para proteger el servidor.</p>
@@ -80,10 +103,16 @@ function eventosapp_render_refresh_tickets_batch_metabox($post) {
             if (btn) {
                 btn.addEventListener('click', function(e){
                     e.preventDefault();
+                    
+                    // Obtener modo seleccionado
+                    var modeRadio = document.querySelector('input[name="evapp_refresh_mode"]:checked');
+                    var mode = modeRadio ? modeRadio.value : 'complete';
+                    
                     var size = sel ? sel.value : '<?php echo (int)$per_page; ?>';
                     var url  = base + '?action=eventosapp_refresh_tickets_batch'
                                      + '&evento_id=' + encodeURIComponent(eid)
                                      + '&per_page='  + encodeURIComponent(size)
+                                     + '&mode='      + encodeURIComponent(mode)
                                      + '&page=1'
                                      + '&_wpnonce='  + encodeURIComponent(nonce);
                     window.location.href = url;
@@ -107,6 +136,7 @@ function eventosapp_refresh_tickets_batch_handler() {
     $evento_id = isset($_REQUEST['evento_id']) ? (int) $_REQUEST['evento_id'] : 0;
     $per_page  = isset($_REQUEST['per_page'])  ? (int) $_REQUEST['per_page']  : EVAPP_REFRESH_DEFAULT_PER_PAGE;
     $page      = isset($_REQUEST['page'])      ? (int) $_REQUEST['page']      : 1;
+    $mode      = isset($_REQUEST['mode'])      ? sanitize_text_field($_REQUEST['mode']) : 'complete';
 
     if (!$evento_id) wp_die('Solicitud inválida', 400);
 
@@ -115,6 +145,9 @@ function eventosapp_refresh_tickets_batch_handler() {
 
     if (!in_array($per_page, [10,25,50,100], true)) $per_page = EVAPP_REFRESH_DEFAULT_PER_PAGE;
     if ($page < 1) $page = 1;
+    
+    // Validar modo
+    if (!in_array($mode, ['complete', 'qr_only'], true)) $mode = 'complete';
 
     // Lock anti-concurrencia
     $lock_key = eventosapp_refresh_lock_key($evento_id);
@@ -138,18 +171,19 @@ function eventosapp_refresh_tickets_batch_handler() {
     }
 
     // Obtener lote (page actual)
-    $processed = eventosapp_refresh_tickets_batch_do($evento_id, $page, $per_page);
+    $processed = eventosapp_refresh_tickets_batch_do($evento_id, $page, $per_page, $mode);
 
     // Si no hubo tickets en este batch, hemos terminado
     if ($processed === 0) {
         delete_transient($lock_key);
         delete_option('eventosapp_refresh_total_'.$evento_id);
 
+        $mode_label = ($mode === 'qr_only') ? 'QR Nuevos' : 'Completa';
         $back = add_query_arg([
             'post'        => $evento_id,
             'action'      => 'edit',
             'evapp_rf'    => 'done',
-            'evapp_msg'   => rawurlencode('Actualización completada.'),
+            'evapp_msg'   => rawurlencode("Actualización {$mode_label} completada."),
         ], admin_url('post.php'));
         wp_safe_redirect($back);
         exit;
@@ -163,6 +197,7 @@ function eventosapp_refresh_tickets_batch_handler() {
         'action'    => 'eventosapp_refresh_tickets_batch',
         'evento_id' => $evento_id,
         'per_page'  => $per_page,
+        'mode'      => $mode,
         'page'      => $next_page,
         '_wpnonce'  => $_REQUEST['_wpnonce'],
         'continue'  => 1, // indica que es la misma ejecución
@@ -179,7 +214,7 @@ function eventosapp_refresh_tickets_batch_handler() {
 /**
  * Procesa un batch de tickets: retorna cuántos tickets se procesaron en esta página.
  */
-function eventosapp_refresh_tickets_batch_do($evento_id, $page, $per_page) {
+function eventosapp_refresh_tickets_batch_do($evento_id, $page, $per_page, $mode = 'complete') {
     $offset = ($page - 1) * $per_page;
 
     // Query light: solo IDs, no_found_rows para no calcular total en SQL
@@ -207,7 +242,7 @@ function eventosapp_refresh_tickets_batch_do($evento_id, $page, $per_page) {
     if ( function_exists('wp_defer_comment_counting') ) wp_defer_comment_counting(true);
 
     foreach ($q->posts as $ticket_id) {
-        eventosapp_refresh_one_ticket($ticket_id, $evento_id);
+        eventosapp_refresh_one_ticket($ticket_id, $evento_id, $mode);
     }
 
     if ( function_exists('wp_defer_term_counting') ) wp_defer_term_counting(false);
@@ -222,10 +257,14 @@ function eventosapp_refresh_tickets_batch_do($evento_id, $page, $per_page) {
 }
 
 /**
- * Refresca un ticket: regenera derivados como si “actualizaras” el ticket,
+ * Refresca un ticket: regenera derivados como si "actualizaras" el ticket,
  * pero sin depender del nonce del editor.
+ * 
+ * @param int    $ticket_id  ID del ticket
+ * @param int    $evento_id  ID del evento (opcional, se obtiene si no se pasa)
+ * @param string $mode       Modo de actualización: 'complete' o 'qr_only'
  */
-function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0) {
+function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0, $mode = 'complete') {
     $ticket_id = (int)$ticket_id;
     if ($ticket_id <= 0) return false;
 
@@ -233,6 +272,91 @@ function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0) {
         $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
         if (!$evento_id) return false;
     }
+
+    // ========================================================================
+    // MODO QR_ONLY: Solo regenera QR Manager y actualiza PDF/Wallets
+    // ========================================================================
+    if ($mode === 'qr_only') {
+        // 1) Regenerar TODOS los QR del QR Manager
+        if ( class_exists('EventosApp_QR_Manager') ) {
+            try {
+                $qr_manager = new EventosApp_QR_Manager();
+                
+                // Eliminar QR existentes para forzar regeneración
+                $qr_manager->delete_all_qr_codes($ticket_id);
+                
+                // Regenerar cada tipo de QR
+                $qr_types = ['email', 'google_wallet', 'apple_wallet', 'pdf', 'badge'];
+                foreach ($qr_types as $qr_type) {
+                    $qr_manager->generate_qr_code($ticket_id, $qr_type);
+                }
+            } catch (\Throwable $e) {
+                error_log("EventosApp Batch QR: Error regenerando QR Manager para ticket {$ticket_id}: " . $e->getMessage());
+            }
+        }
+
+        // 2) Regenerar PDF (incluye el nuevo QR)
+        if ( function_exists('eventosapp_ticket_generar_pdf') ) {
+            try { 
+                eventosapp_ticket_generar_pdf($ticket_id); 
+            } catch (\Throwable $e) {
+                error_log("EventosApp Batch QR: Error regenerando PDF para ticket {$ticket_id}: " . $e->getMessage());
+            }
+        }
+
+        // 3) Regenerar Google Wallet (incluye el nuevo QR)
+        $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
+        if ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) {
+            if ( function_exists('eventosapp_generar_enlace_wallet_android') ) {
+                try { 
+                    // Eliminar enlace anterior para forzar regeneración
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
+                    
+                    eventosapp_generar_enlace_wallet_android($ticket_id, false); 
+                } catch (\Throwable $e) {
+                    error_log("EventosApp Batch QR: Error regenerando Google Wallet para ticket {$ticket_id}: " . $e->getMessage());
+                }
+            }
+        }
+
+        // 4) Regenerar Apple Wallet (incluye el nuevo QR)
+        $wallet_ios_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true);
+        if ($wallet_ios_on === '1' || $wallet_ios_on === 1 || $wallet_ios_on === true) {
+            if ( function_exists('eventosapp_apple_generate_pass') ) {
+                try { 
+                    // Eliminar pases anteriores para forzar regeneración
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+                    
+                    eventosapp_apple_generate_pass($ticket_id); 
+                } catch (\Throwable $e) {
+                    error_log("EventosApp Batch QR: Error regenerando Apple Wallet para ticket {$ticket_id}: " . $e->getMessage());
+                }
+            } elseif ( function_exists('eventosapp_generar_enlace_wallet_apple') ) {
+                try { 
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
+                    delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+                    
+                    eventosapp_generar_enlace_wallet_apple($ticket_id); 
+                } catch (\Throwable $e) {
+                    error_log("EventosApp Batch QR: Error regenerando Apple Wallet (fallback) para ticket {$ticket_id}: " . $e->getMessage());
+                }
+            }
+        }
+
+        // Marca de última actualización (modo QR)
+        update_post_meta($ticket_id, '_eventosapp_last_batch_refresh', current_time('mysql'));
+        update_post_meta($ticket_id, '_eventosapp_last_batch_mode', 'qr_only');
+
+        return true;
+    }
+
+    // ========================================================================
+    // MODO COMPLETE: Regenera TODO (comportamiento original)
+    // ========================================================================
 
     // 1) Wallet Android ON/OFF por evento
     $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
@@ -277,8 +401,9 @@ function eventosapp_refresh_one_ticket($ticket_id, $evento_id = 0) {
         try { eventosapp_ticket_build_search_blob($ticket_id); } catch (\Throwable $e) {}
     }
 
-    // 6) Marca de “última actualización batch” (auditoría opcional)
+    // 6) Marca de "última actualización batch" (auditoría opcional)
     update_post_meta($ticket_id, '_eventosapp_last_batch_refresh', current_time('mysql'));
+    update_post_meta($ticket_id, '_eventosapp_last_batch_mode', 'complete');
 
     return true;
 }
