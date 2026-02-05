@@ -360,12 +360,21 @@ if ( function_exists('eventosapp_require_feature') ) {
           smoothScrollTo(out);
           return;
         }
-        const d = resp.data || {};
+const d = resp.data || {};
         const statusHtml = d.already
           ? '<span class="evapp-qr-warn">✔ Ticket ya estaba Checked In</span>'
           : '<span class="evapp-qr-ok">✔ Check In confirmado</span>';
 
-        let html = statusHtml + '<div class="evapp-qr-grid">';
+        let html = statusHtml;
+        
+        // NUEVO: Agregar mensaje de pago si existe
+        if (d.payment_message && d.payment_message !== '') {
+          html += '<div style="margin-top:8px;padding:8px;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:6px;color:#7CFF8D;font-size:0.9rem;">';
+          html += '💳 ' + d.payment_message;
+          html += '</div>';
+        }
+        
+        html += '<div class="evapp-qr-grid">';
         html += row('Nombre', d.full_name);
         html += row('Evento', d.event_name);
         html += row('Fecha del check-in', d.checkin_date_label || d.checkin_date);
@@ -405,10 +414,6 @@ if ( function_exists('eventosapp_require_feature') ) {
 
 
 
-//
-// === AJAX: marcar Check-In del ticket para el EVENTO ACTIVO ===
-// MODIFICADO: Agrega soporte para QR tipo URL (badge)
-//
 add_action('wp_ajax_eventosapp_qr_checkin_toggle', function(){
 // 🔒 Seguridad por rol (feature: qr)
 if ( ! is_user_logged_in() ) {
@@ -431,7 +436,6 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     }
 
     if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos']);
-if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos']);
 
     // === LOGGING PARA DEBUG ===
     error_log("EventosApp Check-in: QR escaneado = " . $scanned);
@@ -515,52 +519,42 @@ if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos
     if ( $ticket_event !== (int) $event_id ) {
         wp_send_json_error(['error'=>'El ticket no pertenece al evento activo']);
     }
+
+    // ============================================================================
+    // NUEVO: VALIDACIÓN DE CONTROL DE PAGO
+    // ============================================================================
+    // Verificar si el evento tiene activado el control de pago
+    $control_pago_activo = (get_post_meta($event_id, '_eventosapp_ticket_control_pago', true) === '1');
     
-    // === Si tampoco es del nuevo sistema, usar el método legacy (tradicional) ===
-    if (!$ticket_post_id) {
-        // ¿El evento usa QR preimpreso?
-        $use_preprinted = (get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1');
-
-        // Meta a consultar y normalización del valor escaneado
-        $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
-        if ( $use_preprinted ) {
-            $scan_val = preg_replace('/\D+/', '', $scanned); // solo dígitos
-            if ($scan_val === '') {
-                wp_send_json_error(['error' => 'QR inválido: se esperaba un número.']);
-            }
-        } else {
-            $scan_val = $scanned;
-        }
-
-        // Busca TODOS los posibles y luego filtra por evento (evita colisiones entre eventos)
-        $ids = $wpdb->get_col( $wpdb->prepare(
-            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s",
-            $meta_key, $scan_val
-        ) );
-
-        if ($ids) {
-            foreach ($ids as $cand) {
-                if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id) {
-                    $ticket_post_id = (int) $cand;
-                    break;
-                }
-            }
+    // Variable para el mensaje de estado de pago
+    $mensaje_pago = '';
+    
+    if ($control_pago_activo) {
+        // Obtener el estado de pago del ticket
+        $estado_pago = get_post_meta($ticket_post_id, '_eventosapp_estado_pago', true);
+        
+        // Si no tiene estado de pago definido, considerar como 'no_pagado'
+        if (empty($estado_pago)) {
+            $estado_pago = 'no_pagado';
         }
         
-        // Marcar como QR legacy
-        $qr_type = 'legacy';
-        $qr_type_label = $use_preprinted ? 'QR Preimpreso' : 'QR Legacy';
+        // Si el ticket NO está pagado, rechazar el check-in
+        if ($estado_pago === 'no_pagado') {
+            error_log("EventosApp Check-in: Check-in rechazado - Ticket ID $ticket_post_id no está pagado");
+            wp_send_json_error([
+                'error' => '❌ El Check-In no se puede realizar debido a que el ticket no ha sido pagado. Por favor, realice el pago correspondiente para proceder.',
+                'payment_required' => true,
+                'ticket_id' => $ticket_post_id
+            ]);
+        }
+        
+        // Si está pagado, preparar mensaje para incluir en la respuesta
+        $mensaje_pago = '💳 El ticket está en modo Pagado';
+        error_log("EventosApp Check-in: Ticket ID $ticket_post_id verificado como PAGADO");
     }
-
-    if ( ! $ticket_post_id ) {
-        wp_send_json_error(['error' => 'Ticket no encontrado']);
-    }
-
-    // Seguridad extra (una sola vez)
-    $ticket_event = (int) get_post_meta($ticket_post_id, '_eventosapp_ticket_evento_id', true);
-    if ( $ticket_event !== (int) $event_id ) {
-        wp_send_json_error(['error'=>'El ticket no pertenece al evento activo']);
-    }
+    // ============================================================================
+    // FIN VALIDACIÓN DE CONTROL DE PAGO
+    // ============================================================================
 
     // ===== Reglas de fecha =====
     // 1) Obtener zona horaria del evento (o la del sitio)
@@ -629,16 +623,17 @@ if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos
     $loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
 
     wp_send_json_success([
-        'already'     => $already,
-        'full_name'   => trim($first.' '.$last),
-        'company'     => $comp,
-        'designation' => $role,
-        'localidad'   => $loc,
-        'event_name'  => get_the_title($event_id),
-        'ticket_id'   => $ticket_post_id,
+        'already'            => $already,
+        'full_name'          => trim($first.' '.$last),
+        'company'            => $comp,
+        'designation'        => $role,
+        'localidad'          => $loc,
+        'event_name'         => get_the_title($event_id),
+        'ticket_id'          => $ticket_post_id,
         'checkin_date'       => $today,
         'checkin_date_label' => date_i18n('D, d M Y', strtotime($today)),
-        'qr_type_label'      => $qr_type_label  // NUEVO: Enviar tipo de QR al frontend
+        'qr_type_label'      => $qr_type_label,  // NUEVO: Enviar tipo de QR al frontend
+        'payment_message'    => $mensaje_pago    // NUEVO: Mensaje de estado de pago
     ]);
 });
 
