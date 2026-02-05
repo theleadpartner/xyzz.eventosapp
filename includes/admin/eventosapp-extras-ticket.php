@@ -113,6 +113,17 @@ function eventosapp_render_metabox_extras_ticket($post) {
         Agrega una capa extra de seguridad contra tickets robados o compartidos.
     </small>
 
+<hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_control_pago" value="1" <?php checked(get_post_meta($post->ID, '_eventosapp_ticket_control_pago', true), '1'); ?>>
+        <strong>💳 Activar Control de Pago</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Requiere que los tickets estén en estado "Pagado" para poder realizar check-in.
+        Los tickets en estado "No Pagado" mostrarán un mensaje de error al intentar hacer check-in.
+    </small>
+
     <?php
 }
 
@@ -163,6 +174,13 @@ add_action('save_post_eventosapp_event', function($post_id){
         $post_id,
         '_eventosapp_ticket_double_auth_enabled',
         isset($_POST['eventosapp_ticket_double_auth_enabled']) ? '1' : '0'
+    );
+
+// NUEVO: Activar Control de Pago
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_control_pago',
+        isset($_POST['eventosapp_ticket_control_pago']) ? '1' : '0'
     );
     
 }, 25); // prioridad > 20 para correr después del guardado base
