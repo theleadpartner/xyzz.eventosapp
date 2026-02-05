@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) exit;
  *     - Criterios de búsqueda (uno o varios) con lógica AND/OR
  *     - Campos a actualizar (con política: sobrescribir / solo si vacío)
  *  3) Previsualizar (10 filas) con coincidencias 0/1/múltiples y diffs
- *  4) Procesar en lotes de 100 hasta completar
+ *  4) Procesar de forma completa y ordenada con barra de progreso y logs
  */
 
 // =====================
@@ -31,7 +31,7 @@ add_action('admin_menu', function(){
     );
 }, 20);
 
-// Enlace “Edición Masiva” en la fila del evento
+// Enlace "Edición Masiva" en la fila del evento
 add_filter('post_row_actions', function($actions, $post){
     if ($post->post_type === 'eventosapp_event' && current_user_can('manage_options')) {
         $url = add_query_arg([
@@ -145,6 +145,7 @@ function evapp_edit_field_to_meta($field_key){
 }
 
 // Construir argumentos WP_Query según criterios y lógica AND/OR
+// MODIFICADO: Ahora obtiene TODOS los tickets que coincidan
 function evapp_edit_build_query_args($event_id, $criteria_map, $row, $logic = 'AND'){
     $logic = (strtoupper($logic)==='OR') ? 'OR' : 'AND';
     $meta = [
@@ -182,7 +183,7 @@ function evapp_edit_build_query_args($event_id, $criteria_map, $row, $logic = 'A
     return [
         'post_type'      => 'eventosapp_ticket',
         'post_status'    => 'any',
-        'posts_per_page' => 2, // nos basta saber si hay 0, 1 o >1
+        'posts_per_page' => -1, // MODIFICADO: obtener TODOS los que coincidan
         'fields'         => 'ids',
         'no_found_rows'  => true,
         'meta_query'     => $meta,
@@ -209,463 +210,420 @@ function evapp_edit_event_picker_bar($current_event_id = 0){
     echo '<option value="">— Selecciona un evento —</option>';
     foreach ($events as $eid){
         $t = get_the_title($eid);
-        $sel = selected($eid, $current_event_id, false);
-        echo '<option value="'.esc_attr($eid).'" '.$sel.'>'.esc_html($t.' ['.$eid.']').'</option>';
+        if (!$t) $t = '(sin título)';
+        $sel = ($eid == $current_event_id) ? ' selected' : '';
+        echo '<option value="'.(int)$eid.'"'.$sel.'>'.esc_html($t).' (ID: '.(int)$eid.')</option>';
     }
     echo '</select>';
-
-    if ($current_event_id){
-        $edit = get_edit_post_link($current_event_id);
-        if ($edit){
-            echo '<a class="button" href="'.esc_url($edit).'">Editar evento</a>';
-        }
-    }
-    echo '</div>';
-
-    ?>
-    <script>
-    (function(){
-      var sel = document.getElementById('evapp_event_picker');
-      if (!sel) return;
-      sel.addEventListener('change', function(){
-        var v = this.value;
-        var url = new URL(window.location.href);
-        url.searchParams.set('page','eventosapp_bulk_edit');
-        if (v) {
-          url.searchParams.set('event_id', v);
-          url.searchParams.set('step', '1');
-          url.searchParams.delete('hash');
-        } else {
-          url.searchParams.delete('event_id');
-          url.searchParams.set('step','1');
-          url.searchParams.delete('hash');
-        }
-        window.location = url.toString();
+    echo ' <button class="button" id="evapp_go_picker">Ir</button>';
+    echo '<script>
+      document.getElementById("evapp_go_picker").addEventListener("click",function(){
+        const v = document.getElementById("evapp_event_picker").value;
+        if (!v) return alert("Selecciona un evento");
+        location.href = "'.admin_url('admin.php?page=eventosapp_bulk_edit').'&event_id="+v;
       });
-    })();
-    </script>
-    <?php
+    </script>';
+    echo '</div>';
 }
 
 
 // =====================
-// Render principal
+// Función de renderizado principal
 // =====================
 function eventosapp_bulk_edit_render(){
-    if (!current_user_can('manage_options')) wp_die('No autorizado', '', 403);
-
-    $event_id = intval($_GET['event_id'] ?? 0);
-    $step     = intval($_GET['step'] ?? 1);
-    if ($step < 1 || $step > 4) $step = 1;
-
-    echo '<div class="wrap" style="max-width:1100px">';
-    echo '<h1>Edición Masiva de Tickets</h1>';
-
-    evapp_edit_event_picker_bar($event_id);
-
-    if (!$event_id || get_post_type($event_id) !== 'eventosapp_event') {
-        echo '<p>Elige un evento para iniciar el asistente de edición.</p>';
-        echo '</div>';
+    if (!current_user_can('manage_options')) {
+        echo '<div class="wrap"><h1>Edición Masiva</h1><p>No autorizado.</p></div>';
         return;
     }
 
-    $event = get_post($event_id);
-    $nonce = wp_create_nonce('evapp_edit_'.$event_id);
+    $event_id = intval($_GET['event_id'] ?? 0);
+    $step     = intval($_GET['step'] ?? 1);
 
-    $progress = evapp_edit_get_latest_progress($event_id);
-
-    echo '<div class="wrap" style="max-width:1100px">';
-    echo '<h1>Edición Masiva — <span style="color:#555">'.esc_html($event->post_title).' ['.$event_id.']</span></h1>';
-
-    echo '<h2 class="nav-tab-wrapper" style="margin-top:20px">';
-    $tabs = ['1'=>'Subir CSV','2'=>'Mapear','3'=>'Confirmar','4'=>'Actualizar'];
-    foreach($tabs as $i=>$label){
-        $cls = ($step===$i*1) ? ' nav-tab-active' : '';
-        $url = add_query_arg(['page'=>'eventosapp_bulk_edit','event_id'=>$event_id,'step'=>$i], admin_url('admin.php'));
-        echo '<a class="nav-tab'.$cls.'" href="'.esc_url($url).'">'.esc_html($label).'</a>';
+    // Solo STEP 1, 2, 3 se muestran. STEP 4 usa admin_notices
+    if ($step === 4) {
+        // El paso 4 se maneja con admin_notices (ver más abajo)
+        return;
     }
-    echo '</h2>';
 
-    if ($progress) {
-        echo '<div style="background:#fff8e1;border:1px solid #ffe58f;padding:10px 12px;border-radius:8px;margin:8px 0 16px">';
-        echo '<b>Edición previa detectada:</b> archivo <code>'.esc_html($progress['filename']).'</code> ';
-        echo '(hash <code>'.esc_html(substr($progress['file_hash'],0,10)).'…</code>) — filas procesadas: <b>'.intval($progress['offset']).'</b>.';
-        echo ' Puedes re-subir el <i>mismo</i> archivo para continuar o ir directo al paso 4.';
-        echo '</div>';
-    }
+    echo '<div class="wrap" style="max-width:1200px">';
+    echo '<h1>Edición Masiva de Tickets</h1>';
 
     if ($step === 1) {
-        echo '<div class="card" style="padding:18px">';
-        echo '<p>Sube un <b>CSV</b> con las columnas que usarás para <b>buscar</b> los tickets y las columnas con los <b>datos nuevos</b> a aplicar.</p>';
-        echo '<form method="post" enctype="multipart/form-data" action="'.esc_url(admin_url('admin-ajax.php')).'">';
-        echo '<input type="hidden" name="action" value="eventosapp_edit_upload">';
-        echo '<input type="hidden" name="event_id" value="'.esc_attr($event_id).'">';
-        echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
-        echo '<p><label><b>Elige tu CSV:</b><br>';
-        echo '<input type="file" name="csv" accept=".csv,text/csv" required></label></p>';
-        echo '<p><button class="button button-primary">Continuar</button></p>';
-        echo '</form>';
-        echo '</div>';
+        evapp_edit_step_1($event_id);
+    } elseif ($step === 2) {
+        evapp_edit_step_2($event_id);
+    } elseif ($step === 3) {
+        evapp_edit_step_3($event_id);
     }
 
-    echo '</div>'; // wrap
+    echo '</div>';
 }
 
 
 // =====================
-// AJAX Paso 1 → subir
+// STEP 1: Seleccionar evento + subir CSV
 // =====================
-add_action('wp_ajax_eventosapp_edit_upload', function(){
-    if (!current_user_can('manage_options')) wp_die('No autorizado', '', 403);
+function evapp_edit_step_1($event_id){
+    evapp_edit_event_picker_bar($event_id);
+
+    if (!$event_id) {
+        echo '<p style="color:#666">Selecciona un evento de la lista para continuar.</p>';
+        return;
+    }
+
+    $evt_title = get_the_title($event_id);
+    if (!$evt_title) $evt_title = '(sin título)';
+
+    echo '<h3>Paso 1: Subir CSV — <code>'.esc_html($evt_title).'</code></h3>';
+    echo '<form method="post" enctype="multipart/form-data" action="'.esc_url(admin_url('admin-post.php')).'">';
+    wp_nonce_field('evapp_edit_upload','evapp_edit_nonce');
+    echo '<input type="hidden" name="action" value="eventosapp_edit_upload_csv">';
+    echo '<input type="hidden" name="event_id" value="'.intval($event_id).'">';
+    echo '<p><input type="file" name="csv_file" accept=".csv" required></p>';
+    echo '<p><button class="button button-primary">Subir CSV y continuar</button></p>';
+    echo '</form>';
+
+    // Mostrar si hay algún proceso previo en curso
+    $last = evapp_edit_get_latest_progress($event_id);
+    if ($last) {
+        echo '<hr style="margin-top:30px">';
+        echo '<p style="color:#888">Hay un proceso previo. Progreso: '.intval($last['offset']).' de '.intval($last['total_rows']).' — ';
+        $hash = $last['hash'] ?? '';
+        if ($hash) {
+            $url4 = add_query_arg(['page'=>'eventosapp_bulk_edit','event_id'=>$event_id,'step'=>4,'hash'=>$hash], admin_url('admin.php'));
+            echo '<a href="'.esc_url($url4).'">Continuar</a>';
+        }
+        echo '</p>';
+    }
+}
+
+
+// =====================
+// STEP 2: Mapear columnas
+// =====================
+function evapp_edit_step_2($event_id){
+    evapp_edit_event_picker_bar($event_id);
+
+    if (!$event_id) {
+        echo '<p>Evento no especificado.</p>';
+        return;
+    }
+
+    $hash = sanitize_text_field($_GET['hash'] ?? '');
+    if (!$hash) {
+        echo '<p>Falta el parámetro hash.</p>';
+        return;
+    }
+
+    $state = get_option( evapp_edit_state_key($event_id, $hash) );
+    if (!$state) {
+        echo '<p>Estado no encontrado. Vuelve a subir el CSV.</p>';
+        return;
+    }
+
+    $evt_title = get_the_title($event_id);
+    if (!$evt_title) $evt_title = '(sin título)';
+
+    echo '<h3>Paso 2: Mapear — <code>'.esc_html($evt_title).'</code></h3>';
+    echo '<p>Archivo: <code>'.esc_html($state['filename']).'</code> &nbsp;|&nbsp; ';
+    echo 'Columnas: <b>'.count($state['headers']).'</b> &nbsp;|&nbsp; ';
+    echo 'Filas: <b>'.intval($state['total_rows']).'</b></p>';
+
+    $catalog = evapp_edit_field_catalog($event_id);
+
+    echo '<form method="post" action="'.esc_url(admin_url('admin-post.php')).'">';
+    wp_nonce_field('evapp_edit_map','evapp_edit_nonce');
+    echo '<input type="hidden" name="action" value="eventosapp_edit_map_columns">';
+    echo '<input type="hidden" name="event_id" value="'.intval($event_id).'">';
+    echo '<input type="hidden" name="hash" value="'.esc_attr($hash).'">';
+
+    echo '<table class="widefat" style="margin:20px 0;max-width:900px">';
+    echo '<thead><tr><th style="width:30%">Columna CSV</th><th>Usar como</th><th>Política</th></tr></thead>';
+    echo '<tbody>';
+    foreach ($state['headers'] as $i => $col) {
+        $coltxt = esc_html($col ? $col : '(vacía)');
+        echo '<tr>';
+        echo '<td><strong>#'.($i+1).' — '.$coltxt.'</strong></td>';
+        echo '<td style="display:flex;gap:10px;align-items:center">';
+        // Búsqueda
+        echo '<div>';
+        echo '<label style="font-size:11px;font-weight:600;text-transform:uppercase;color:#666">Búsqueda</label><br>';
+        echo '<select name="map_search['.$i.']" style="min-width:200px">';
+        echo '<option value="">— No usar —</option>';
+        foreach ($catalog as $k => $lbl) {
+            echo '<option value="'.esc_attr($k).'">'.esc_html($lbl).'</option>';
+        }
+        echo '</select>';
+        echo '</div>';
+        // Actualización
+        echo '<div>';
+        echo '<label style="font-size:11px;font-weight:600;text-transform:uppercase;color:#666">Actualizar</label><br>';
+        echo '<select name="map_update['.$i.']" style="min-width:200px">';
+        echo '<option value="">— No actualizar —</option>';
+        foreach ($catalog as $k => $lbl) {
+            echo '<option value="'.esc_attr($k).'">'.esc_html($lbl).'</option>';
+        }
+        echo '</select>';
+        echo '</div>';
+        echo '</td>';
+        // Política (solo afecta campos de actualización)
+        echo '<td>';
+        echo '<select name="policy['.$i.']" style="min-width:160px">';
+        echo '<option value="overwrite">Sobrescribir siempre</option>';
+        echo '<option value="if_empty">Solo si vacío</option>';
+        echo '</select>';
+        echo '</td>';
+        echo '</tr>';
+    }
+    echo '</tbody></table>';
+
+    echo '<p style="margin-top:20px">';
+    echo '<label><strong>Lógica de búsqueda:</strong></label><br>';
+    echo '<label><input type="radio" name="search_logic" value="AND" checked> AND (deben coincidir TODOS los criterios)</label><br>';
+    echo '<label><input type="radio" name="search_logic" value="OR"> OR (basta que coincida UNO)</label>';
+    echo '</p>';
+
+    echo '<p><button class="button button-primary">Continuar</button></p>';
+    echo '</form>';
+}
+
+
+// =====================
+// STEP 3: Previsualizar
+// =====================
+function evapp_edit_step_3($event_id){
+    evapp_edit_event_picker_bar($event_id);
+
+    if (!$event_id) {
+        echo '<p>Evento no especificado.</p>';
+        return;
+    }
+
+    $hash = sanitize_text_field($_GET['hash'] ?? '');
+    if (!$hash) {
+        echo '<p>Falta el parámetro hash.</p>';
+        return;
+    }
+
+    $state = get_option( evapp_edit_state_key($event_id, $hash) );
+    if (!$state) {
+        echo '<p>Estado no encontrado. Vuelve a subir el CSV.</p>';
+        return;
+    }
+
+    $evt_title = get_the_title($event_id);
+    if (!$evt_title) $evt_title = '(sin título)';
+
+    echo '<h3>Paso 3: Previsualizar — <code>'.esc_html($evt_title).'</code></h3>';
+    echo '<p>Archivo: <code>'.esc_html($state['filename']).'</code> &nbsp;|&nbsp; ';
+    echo 'Filas a procesar: <b>'.intval($state['total_rows']).'</b></p>';
+
+    $mapS = $state['map_search'];
+    $mapU = $state['map_update'];
+    $pols = $state['policies'];
+    $logic = $state['search_logic'] ?? 'AND';
+
+    echo '<p><strong>Resumen de configuración:</strong></p>';
+    echo '<ul>';
+    echo '<li>Lógica de búsqueda: <b>'.esc_html($logic).'</b></li>';
+    $cat = evapp_edit_field_catalog($event_id);
+    $cS = []; foreach($mapS as $k=>$v) if($v) $cS[]=$cat[$v]??$v;
+    echo '<li>Criterios de búsqueda: '.($cS?esc_html(implode(', ',$cS)):'(ninguno)').'</li>';
+    $cU = []; foreach($mapU as $k=>$v) if($v) $cU[]=$cat[$v]??$v;
+    echo '<li>Campos a actualizar: '.($cU?esc_html(implode(', ',$cU)):'(ninguno)').'</li>';
+    echo '</ul>';
+
+    // Previsualizar 10 filas
+    $fh = fopen($state['file'],'r');
+    if (!$fh) {
+        echo '<p>No se pudo abrir el archivo CSV.</p>';
+        return;
+    }
+    $hdr = fgetcsv($fh);
+    $preview = [];
+    $line = 0;
+    while($line < 10 && ($row = fgetcsv($fh)) !== false){
+        $line++;
+        // Buscar coincidencias
+        $args = evapp_edit_build_query_args($event_id, $mapS, $row, $logic);
+        $ids = get_posts($args);
+        $count = count($ids);
+
+        $diffs = [];
+        if ($count === 1) {
+            $pid = (int)$ids[0];
+            foreach ($mapU as $i=>$fk){
+                if (!$fk) continue;
+                $spec = evapp_edit_field_to_meta($fk);
+                if (!$spec) continue;
+                $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
+                if ($fk === 'email') $new = sanitize_email($new);
+                $cur = get_post_meta($pid, $spec['key'], true);
+                if ($new !== $cur) {
+                    $diffs[] = [$cat[$fk]??$fk, $cur, $new];
+                }
+            }
+        } elseif ($count > 1) {
+            // NUEVO: Mostrar diffs para todos los tickets coincidentes
+            foreach ($ids as $pid) {
+                $ticket_seq = get_post_meta($pid, '_eventosapp_ticket_seq', true);
+                $ticket_label = 'Ticket #' . $ticket_seq . ' (ID: ' . $pid . ')';
+                foreach ($mapU as $i=>$fk){
+                    if (!$fk) continue;
+                    $spec = evapp_edit_field_to_meta($fk);
+                    if (!$spec) continue;
+                    $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
+                    if ($fk === 'email') $new = sanitize_email($new);
+                    $cur = get_post_meta($pid, $spec['key'], true);
+                    if ($new !== $cur) {
+                        $diffs[] = [$ticket_label . ' - ' . ($cat[$fk]??$fk), $cur, $new];
+                    }
+                }
+            }
+        }
+
+        $preview[] = ['line'=>$line, 'row'=>$row, 'count'=>$count, 'diffs'=>$diffs];
+    }
+    fclose($fh);
+
+    echo '<table class="widefat" style="margin:20px 0;max-width:1200px">';
+    echo '<thead><tr><th style="width:80px">Fila</th><th>Datos CSV</th><th>Coincidencias</th><th>Cambios a aplicar</th></tr></thead>';
+    echo '<tbody>';
+    foreach ($preview as $p) {
+        $rc = ($p['count'] === 0) ? 'background:#fff3cd;' : (($p['count'] > 1) ? 'background:#cce5ff;' : 'background:#d4edda;');
+        echo '<tr style="'.$rc.'">';
+        echo '<td><strong>'.intval($p['line']).'</strong></td>';
+        echo '<td><small>'.esc_html(implode(' | ', array_slice($p['row'], 0, 5))).'</small></td>';
+        
+        // Mostrar coincidencias
+        if ($p['count'] === 0) {
+            echo '<td style="color:#856404"><strong>0 tickets</strong></td>';
+        } elseif ($p['count'] === 1) {
+            echo '<td style="color:#155724"><strong>1 ticket</strong></td>';
+        } else {
+            echo '<td style="color:#004085"><strong>'.$p['count'].' tickets</strong> (se actualizarán TODOS)</td>';
+        }
+        
+        // Mostrar diffs
+        echo '<td>';
+        if ($p['diffs']) {
+            echo '<ul style="margin:0;padding-left:18px;font-size:12px">';
+            foreach ($p['diffs'] as $d) {
+                echo '<li><b>'.esc_html($d[0]).':</b> <code>'.esc_html($d[1]).'</code> → <code>'.esc_html($d[2]).'</code></li>';
+            }
+            echo '</ul>';
+        } else {
+            echo '<span style="color:#999">Sin cambios</span>';
+        }
+        echo '</td>';
+        echo '</tr>';
+    }
+    echo '</tbody></table>';
+
+    echo '<p style="margin-top:20px;padding:10px;background:#f0f0f0;border-left:4px solid #2271b1">';
+    echo '<strong>Nota:</strong> Cuando hay múltiples coincidencias (mismo email, cédula, etc.), ';
+    echo '<strong>TODOS los tickets que coincidan serán actualizados</strong> con los datos del CSV.';
+    echo '</p>';
+
+    $url4 = add_query_arg(['page'=>'eventosapp_bulk_edit','event_id'=>$event_id,'step'=>4,'hash'=>$hash], admin_url('admin.php'));
+    echo '<p><a href="'.esc_url($url4).'" class="button button-primary button-large">Proceder con la actualización completa</a></p>';
+}
+
+
+// =====================
+// Procesar subida CSV
+// =====================
+add_action('admin_post_eventosapp_edit_upload_csv', function(){
+    if (!current_user_can('manage_options')) wp_die('No autorizado');
+    if (!isset($_POST['evapp_edit_nonce']) || !wp_verify_nonce($_POST['evapp_edit_nonce'],'evapp_edit_upload')) wp_die('Nonce inválido');
 
     $event_id = intval($_POST['event_id'] ?? 0);
-    $nonce    = $_POST['_wpnonce'] ?? '';
-    if (!$event_id || !wp_verify_nonce($nonce, 'evapp_edit_'.$event_id)) wp_die('Solicitud inválida', '', 400);
+    if (!$event_id) wp_die('Evento inválido');
 
-    if (empty($_FILES['csv']['tmp_name']) || !is_uploaded_file($_FILES['csv']['tmp_name'])) {
-        wp_die('Archivo CSV requerido', '', 400);
-    }
+    if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) wp_die('Error al subir archivo');
 
-    // Mover a uploads
-    [$dir, $baseurl] = evapp_edit_upload_dir();
-    $orig_name = sanitize_file_name($_FILES['csv']['name']);
-    $tmp = $_FILES['csv']['tmp_name'];
-    $dest = $dir . uniqid('evedit_') . '_' . $orig_name;
-    if (!move_uploaded_file($tmp, $dest)) wp_die('No se pudo mover el archivo', '', 500);
-    $url = $baseurl . basename($dest);
+    list($dir, $url) = evapp_edit_upload_dir();
+    $hash = md5(uniqid('', true));
+    $fname = 'bulk_edit_'.$event_id.'_'.$hash.'.csv';
+    $dest = $dir.$fname;
 
-    // Hash
-    $hash = sha1_file($dest);
+    if (!move_uploaded_file($_FILES['csv_file']['tmp_name'], $dest)) wp_die('No se pudo guardar el archivo');
 
-    // Leer cabeceras
-    $fh = fopen($dest, 'r');
-    if (!$fh) wp_die('No se pudo abrir el CSV', '', 500);
+    // Leer cabeceras + contar filas
+    $fh = fopen($dest,'r');
+    if (!$fh) wp_die('No se pudo abrir el CSV guardado');
     $headers = fgetcsv($fh);
+    if (!$headers) {
+        fclose($fh);
+        wp_die('CSV sin cabeceras');
+    }
+    $total_rows = 0;
+    while (fgetcsv($fh) !== false) $total_rows++;
     fclose($fh);
-    if (!is_array($headers) || !$headers) wp_die('CSV sin cabeceras', '', 400);
-
-    $headers_norm = [];
-    foreach ($headers as $h) { $headers_norm[] = evapp_edit_sanitize_header_key($h); }
-
-    $key = evapp_edit_state_key($event_id, $hash);
-    $existing = get_option($key);
 
     $state = [
-        'file'        => $dest,
-        'url'         => $url,
-        'filename'    => $orig_name,
-        'file_hash'   => $hash,
-        'headers'     => ['original'=>$headers, 'norm'=>$headers_norm],
-        'event_id'    => $event_id,
-        'map_search'  => [], // csv index => field_key (criterios)
-        'map_update'  => [], // csv index => field_key (actualizar)
-        'policies'    => [], // field_key => 'overwrite'|'if_empty'
-        'search_logic'=> 'AND',
-        'offset'      => 0, // filas procesadas (sin contar cabecera)
-        'updated_count'       => 0,
-        'unchanged_count'     => 0,
-        'no_match_count'      => 0,
-        'multi_match_count'   => 0,
-        'error_count'         => 0,
+        'event_id'   => $event_id,
+        'hash'       => $hash,
+        'file'       => $dest,
+        'filename'   => $_FILES['csv_file']['name'],
+        'headers'    => $headers,
+        'total_rows' => $total_rows,
+        'offset'     => 0,
+        'updated_count'     => 0,
+        'unchanged_count'   => 0,
+        'no_match_count'    => 0,
+        'multi_match_count' => 0,
+        'error_count'       => 0,
     ];
+    update_option( evapp_edit_state_key($event_id, $hash), $state, false );
 
-    if (is_array($existing)) {
-        foreach (['map_search','map_update','policies','search_logic','offset','updated_count','unchanged_count','no_match_count','multi_match_count','error_count'] as $k) {
-            if (isset($existing[$k])) $state[$k] = $existing[$k];
-        }
-    }
-
-    update_option($key, $state, false);
-
-    // Ir a mapeo
-    $url2 = add_query_arg([
-        'page'     => 'eventosapp_bulk_edit',
-        'event_id' => $event_id,
-        'step'     => 2,
-        'hash'     => $hash,
-    ], admin_url('admin.php'));
+    $url2 = add_query_arg(['page'=>'eventosapp_bulk_edit','event_id'=>$event_id,'step'=>2,'hash'=>$hash], admin_url('admin.php'));
     wp_safe_redirect($url2);
     exit;
 });
 
 
 // =====================
-// STEP 2: Mapeo
+// Procesar mapeo (guardar config)
 // =====================
-add_action('admin_init', function(){
-    if (!is_admin() || !isset($_GET['page']) || $_GET['page']!=='eventosapp_bulk_edit') return;
-    if (intval($_GET['step'] ?? 0) !== 2) return;
-
-    $event_id = intval($_GET['event_id'] ?? 0);
-    $hash     = sanitize_text_field($_GET['hash'] ?? '');
-    if (!$event_id || !$hash) return;
-
-    $state = get_option( evapp_edit_state_key($event_id, $hash) );
-    if (!$state) return;
-
-    add_action('admin_notices', function() use ($state, $event_id, $hash){
-        $headers = $state['headers']['original'];
-        $headers_norm = $state['headers']['norm'];
-        $nonce = wp_create_nonce('evapp_edit_'.$event_id);
-
-        $catalog = evapp_edit_field_catalog($event_id);
-
-        echo '<div class="wrap" style="max-width:1100px">';
-        echo '<h2>Mapear columnas — archivo <code>'.esc_html($state['filename']).'</code></h2>';
-        echo '<form method="post" action="'.esc_url(admin_url('admin-ajax.php')).'">';
-        echo '<input type="hidden" name="action" value="eventosapp_edit_save_map">';
-        echo '<input type="hidden" name="event_id" value="'.esc_attr($event_id).'">';
-        echo '<input type="hidden" name="hash" value="'.esc_attr($hash).'">';
-        echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
-
-        echo '<p><b>Lógica de búsqueda:</b> ';
-        $logic = $state['search_logic'] ?? 'AND';
-        echo '<label style="margin-right:12px"><input type="radio" name="search_logic" value="AND" '.checked($logic,'AND',false).'> AND (coinciden todos)</label>';
-        echo '<label><input type="radio" name="search_logic" value="OR" '.checked($logic,'OR',false).'> OR (coincide cualquiera)</label>';
-        echo '</p>';
-
-        echo '<table class="widefat striped" style="margin-top:12px"><thead><tr><th>#</th><th>Columna CSV</th><th>Normalizada</th><th>Usar como criterio</th><th>Actualizar a</th><th>Política</th></tr></thead><tbody>';
-        foreach ($headers as $i=>$raw){
-            echo '<tr>';
-            echo '<td>'.intval($i+1).'</td>';
-            echo '<td>'.esc_html($raw).'</td>';
-            echo '<td><code>'.esc_html($headers_norm[$i]).'</code></td>';
-
-            // Criterio
-            $selCrit = $state['map_search'][$i] ?? '';
-            echo '<td><select name="map_search['.$i.']">';
-            echo '<option value="">— Ninguno —</option>';
-            foreach ($catalog as $k=>$label){
-                echo '<option value="'.esc_attr($k).'" '.selected($selCrit,$k,false).'>'.esc_html($label.' ['.$k.']').'</option>';
-            }
-            echo '</select></td>';
-
-            // Actualizar
-            $selUpd = $state['map_update'][$i] ?? '';
-            echo '<td><select name="map_update['.$i.']">';
-            echo '<option value="">— No actualizar —</option>';
-            foreach ($catalog as $k=>$label){
-                echo '<option value="'.esc_attr($k).'" '.selected($selUpd,$k,false).'>'.esc_html($label.' ['.$k.']').'</option>';
-            }
-            echo '</select></td>';
-
-            // Política
-            $policy_key = $selUpd ?: '__none__';
-            $policy_val = $state['policies'][$policy_key] ?? 'overwrite';
-            echo '<td>';
-            echo '<select name="policy['.$i.']">';
-            echo '<option value="overwrite" '.selected($policy_val,'overwrite',false).'>Sobrescribir</option>';
-            echo '<option value="if_empty" '.selected($policy_val,'if_empty',false).'>Solo si está vacío</option>';
-            echo '</select>';
-            echo '</td>';
-
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
-
-        echo '<p class="description" style="margin-top:10px">Consejo: define <b>al menos un criterio</b> y <b>al menos un campo a actualizar</b>. Para <i>extras</i>, usa las entradas "Extra: …".</p>';
-        echo '<p><button class="button button-primary">Continuar</button></p>';
-        echo '</form>';
-        echo '</div>';
-    });
-});
-
-// Guardar mapeo → paso 3
-add_action('wp_ajax_eventosapp_edit_save_map', function(){
-    if (!current_user_can('manage_options')) wp_die('No autorizado', '', 403);
+add_action('admin_post_eventosapp_edit_map_columns', function(){
+    if (!current_user_can('manage_options')) wp_die('No autorizado');
+    if (!isset($_POST['evapp_edit_nonce']) || !wp_verify_nonce($_POST['evapp_edit_nonce'],'evapp_edit_map')) wp_die('Nonce inválido');
 
     $event_id = intval($_POST['event_id'] ?? 0);
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
-    $nonce    = $_POST['_wpnonce'] ?? '';
-    if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_edit_'.$event_id)) wp_die('Solicitud inválida', '', 400);
+    if (!$event_id || !$hash) wp_die('Parámetros inválidos');
 
     $state = get_option( evapp_edit_state_key($event_id, $hash) );
-    if (!$state) wp_die('Estado no encontrado', '', 404);
+    if (!$state) wp_die('Estado no encontrado');
 
-    $map_search = isset($_POST['map_search']) && is_array($_POST['map_search']) ? array_map('sanitize_text_field', $_POST['map_search']) : [];
-    $map_update = isset($_POST['map_update']) && is_array($_POST['map_update']) ? array_map('sanitize_text_field', $_POST['map_update']) : [];
-    $policy_in  = isset($_POST['policy']) && is_array($_POST['policy']) ? $_POST['policy'] : [];
-    $logic      = strtoupper(sanitize_text_field($_POST['search_logic'] ?? 'AND'));
-    if ($logic !== 'OR') $logic = 'AND';
+    $mapS = $_POST['map_search'] ?? [];
+    $mapU = $_POST['map_update'] ?? [];
+    $pols = $_POST['policy'] ?? [];
+    $logic = sanitize_text_field($_POST['search_logic'] ?? 'AND');
 
-    // Construir policies por field_key (usa el field mapeado en update para esa fila)
-    $policies = [];
-    foreach ($policy_in as $i=>$pol) {
-        $fk = $map_update[$i] ?? '';
-        if ($fk) $policies[$fk] = ($pol === 'if_empty') ? 'if_empty' : 'overwrite';
+    // Construir políticas por campo
+    $policiesMap = [];
+    foreach ($mapU as $i => $fk) {
+        if ($fk) {
+            $policiesMap[$fk] = ($pols[$i] ?? 'overwrite');
+        }
     }
 
-    $state['map_search']   = $map_search;
-    $state['map_update']   = $map_update;
-    $state['policies']     = $policies;
-    $state['search_logic'] = $logic;
-
+    $state['map_search']    = $mapS;
+    $state['map_update']    = $mapU;
+    $state['policies']      = $policiesMap;
+    $state['search_logic']  = $logic;
     update_option( evapp_edit_state_key($event_id, $hash), $state, false );
 
-    $url3 = add_query_arg([
-        'page'=>'eventosapp_bulk_edit','event_id'=>$event_id,'step'=>3,'hash'=>$hash
-    ], admin_url('admin.php'));
+    $url3 = add_query_arg(['page'=>'eventosapp_bulk_edit','event_id'=>$event_id,'step'=>3,'hash'=>$hash], admin_url('admin.php'));
     wp_safe_redirect($url3);
     exit;
 });
 
 
 // =====================
-// STEP 3: Previsualizar
-// =====================
-add_action('admin_init', function(){
-    if (!is_admin() || !isset($_GET['page']) || $_GET['page']!=='eventosapp_bulk_edit') return;
-    if (intval($_GET['step'] ?? 0) !== 3) return;
-
-    $event_id = intval($_GET['event_id'] ?? 0);
-    $hash     = sanitize_text_field($_GET['hash'] ?? '');
-    if (!$event_id || !$hash) return;
-
-    $state = get_option( evapp_edit_state_key($event_id, $hash) );
-    if (!$state) return;
-
-    add_action('admin_notices', function() use ($state, $event_id, $hash){
-        $nonce = wp_create_nonce('evapp_edit_'.$event_id);
-        $headers = $state['headers']['original'];
-        $mapS = $state['map_search']; // criterios
-        $mapU = $state['map_update']; // actualizaciones
-        $logic = $state['search_logic'] ?? 'AND';
-
-        // Validaciones mínimas
-        $has_criteria = false;
-        foreach ($mapS as $k=>$v){ if ($v) { $has_criteria = true; break; } }
-        $has_updates = false;
-        foreach ($mapU as $k=>$v){ if ($v) { $has_updates = true; break; } }
-
-        echo '<div class="wrap" style="max-width:1100px">';
-        echo '<h2>Confirmar edición</h2>';
-
-        if (!$has_criteria || !$has_updates) {
-            echo '<div class="notice notice-error"><p>';
-            if (!$has_criteria) echo 'Debes definir al menos <b>un criterio</b> de búsqueda. ';
-            if (!$has_updates)  echo 'Debes seleccionar al menos <b>un campo a actualizar</b>.';
-            echo '</p></div>';
-            $back = add_query_arg(['step'=>2], remove_query_arg([]));
-            echo '<p><a class="button" href="'.esc_url($back).'">Volver al mapeo</a></p>';
-            echo '</div>';
-            return;
-        }
-
-        // Leer 10 filas de vista previa desde offset actual
-        $fh = fopen($state['file'], 'r');
-        $hdr = fgetcsv($fh);
-        $line = 1;
-
-        $offset_now = intval($state['offset'] ?? 0);
-        $skipped = 0;
-        while ($skipped < $offset_now && ($row = fgetcsv($fh)) !== false) { $skipped++; $line++; }
-
-        $preview = [];
-        while (($row = fgetcsv($fh)) !== false && count($preview) < 10) {
-            $line++;
-            // consulta
-            $args = evapp_edit_build_query_args($event_id, $mapS, $row, $logic);
-            $ids = get_posts($args);
-            $status = count($ids) === 1 ? 'match1' : (count($ids) === 0 ? 'nomatch' : 'multi');
-
-            $diffs = [];
-            if ($status === 'match1') {
-                $pid = (int) $ids[0];
-                foreach ($mapU as $i=>$field_key){
-                    if (!$field_key) continue;
-                    $spec = evapp_edit_field_to_meta($field_key);
-                    if (!$spec) continue;
-                    $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
-                    if ($field_key === 'email') $new = sanitize_email($new);
-                    $cur = get_post_meta($pid, $spec['key'], true);
-
-                    // Normalización de extras si aplica
-                    if (strpos($field_key,'extra__')===0 && function_exists('eventosapp_normalize_extra_value')) {
-                        $ek = substr($field_key,7);
-                        $schema = function_exists('eventosapp_get_event_extra_fields') ? eventosapp_get_event_extra_fields($event_id) : [];
-                        $bykey = [];
-                        foreach ($schema as $f){ $bykey[$f['key']] = $f; }
-                        if (isset($bykey[$ek])) $new = eventosapp_normalize_extra_value($bykey[$ek], $new);
-                    }
-
-                    $policy = $state['policies'][$field_key] ?? 'overwrite';
-                    $should = false;
-                    if ($policy === 'overwrite') {
-                        $should = ($new !== '' && $new !== $cur);
-                    } else { // if_empty
-                        $should = ($new !== '' && ($cur === '' || $cur === null));
-                    }
-                    if ($should) {
-                        $diffs[] = [
-                            'field'=>$field_key,
-                            'meta' =>$spec['key'],
-                            'from' =>$cur,
-                            'to'   =>$new,
-                        ];
-                    }
-                }
-            }
-
-            $preview[] = [
-                'line'   => $line,
-                'status' => $status,
-                'diffs'  => $diffs,
-            ];
-        }
-        fclose($fh);
-
-        echo '<p>Archivo: <code>'.esc_html($state['filename']).'</code> — lógica: <b>'.esc_html($logic).'</b> — columnas mapeadas (criterios/actualizaciones) listas.</p>';
-        echo '<table class="widefat striped"><thead><tr><th>#</th><th>Estado</th><th>Cambios previstos</th></tr></thead><tbody>';
-        foreach ($preview as $it){
-            echo '<tr>';
-            echo '<td>'.intval($it['line']).'</td>';
-            $s = $it['status']==='match1' ? '1 coincidencia' : ($it['status']==='nomatch' ? 'sin coincidencia' : 'múltiples coincidencias');
-            $color = $it['status']==='match1' ? '#0a0' : ($it['status']==='nomatch' ? '#b00' : '#b60');
-            echo '<td style="color:'.$color.'">'.esc_html($s).'</td>';
-
-            if ($it['diffs']) {
-                echo '<td>';
-                foreach ($it['diffs'] as $d) {
-                    echo '<div><code>'.esc_html($d['field']).'</code>: <span style="color:#b00">'.esc_html(mb_strimwidth((string)$d['from'],0,60,'…')).'</span> → <span style="color:#0a0">'.esc_html(mb_strimwidth((string)$d['to'],0,60,'…')).'</span></div>';
-                }
-                echo '</td>';
-            } else {
-                echo '<td><em>Sin cambios</em></td>';
-            }
-
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
-
-        echo '<form method="post" action="'.esc_url(admin_url('admin-ajax.php')).'" style="margin-top:12px">';
-        echo '<input type="hidden" name="action" value="eventosapp_edit_confirm">';
-        echo '<input type="hidden" name="event_id" value="'.esc_attr($event_id).'">';
-        echo '<input type="hidden" name="hash" value="'.esc_attr($hash).'">';
-        echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
-        echo '<p><button class="button button-primary">Empezar actualización</button></p>';
-        echo '</form>';
-
-        echo '</div>';
-    });
-});
-
-// Confirmar → paso 4 UI
-add_action('wp_ajax_eventosapp_edit_confirm', function(){
-    if (!current_user_can('manage_options')) wp_die('No autorizado', '', 403);
-    $event_id = intval($_POST['event_id'] ?? 0);
-    $hash     = sanitize_text_field($_POST['hash'] ?? '');
-    $nonce    = $_POST['_wpnonce'] ?? '';
-    if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_edit_'.$event_id)) wp_die('Solicitud inválida', '', 400);
-
-    // Nada más que redirigir al step 4 (progreso)
-    $url4 = add_query_arg(['page'=>'eventosapp_bulk_edit','event_id'=>$event_id,'step'=>4,'hash'=>$hash], admin_url('admin.php'));
-    wp_safe_redirect($url4);
-    exit;
-});
-
-
-// =====================
-// STEP 4: Progreso + botón
+// STEP 4: Progreso + botón automático
 // =====================
 add_action('admin_init', function(){
     if (!is_admin() || !isset($_GET['page']) || $_GET['page']!=='eventosapp_bulk_edit') return;
@@ -680,63 +638,142 @@ add_action('admin_init', function(){
 
     add_action('admin_notices', function() use ($state, $event_id, $hash){
         $nonce = wp_create_nonce('evapp_edit_'.$event_id);
+        $total_rows = intval($state['total_rows']);
 
-        echo '<div class="wrap" style="max-width:900px">';
-        echo '<h2>Actualizar — progreso</h2>';
-        echo '<p>Archivo: <code>'.esc_html($state['filename']).'</code></p>';
-        echo '<p>Procesadas: <b id="ev_cnt">'.intval($state['offset']).'</b> &nbsp;|&nbsp; ';
-        echo 'Actualizadas: <b id="ev_upd">'.intval($state['updated_count']).'</b> &nbsp;|&nbsp; ';
-        echo 'Sin cambio: <b id="ev_same">'.intval($state['unchanged_count']).'</b> &nbsp;|&nbsp; ';
-        echo 'Sin match: <b id="ev_nom">'.intval($state['no_match_count']).'</b> &nbsp;|&nbsp; ';
-        echo 'Múltiples: <b id="ev_mul">'.intval($state['multi_match_count']).'</b> &nbsp;|&nbsp; ';
-        echo 'Errores: <b id="ev_err">'.intval($state['error_count']).'</b></p>';
+        echo '<div class="wrap" style="max-width:1000px">';
+        echo '<h2>Actualización Masiva — Procesamiento Completo</h2>';
+        echo '<p>Archivo: <code>'.esc_html($state['filename']).'</code> &nbsp;|&nbsp; Total de filas: <b>'.$total_rows.'</b></p>';
+        
+        echo '<div style="margin:20px 0">';
+        echo '<div style="background:#f0f0f0;border-radius:8px;height:30px;position:relative;overflow:hidden">';
+        echo '<div id="ev_progress_bar" style="background:linear-gradient(90deg, #2271b1, #72aee6);height:100%;width:0%;transition:width 0.3s"></div>';
+        echo '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-weight:600;color:#000" id="ev_progress_text">0%</div>';
+        echo '</div>';
+        echo '</div>';
 
-        echo '<div id="ev_log" style="background:#0b1020;color:#eaf1ff;padding:8px;border-radius:8px;min-height:140px;max-height:300px;overflow:auto;font-family:monospace;font-size:12px"></div>';
-        echo '<p style="margin-top:10px"><button class="button" id="ev_btn_next">Procesar siguiente lote (100)</button></p>';
+        echo '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin:20px 0">';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Procesadas</div>';
+        echo '<div style="font-size:28px;font-weight:700" id="ev_cnt">'.intval($state['offset']).'</div>';
+        echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Actualizadas</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#0a8043" id="ev_upd">'.intval($state['updated_count']).'</div>';
+        echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Sin cambios</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#666" id="ev_same">'.intval($state['unchanged_count']).'</div>';
+        echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Sin coincidencia</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#f9a825" id="ev_nom">'.intval($state['no_match_count']).'</div>';
+        echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Múltiples (actualizados)</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#0277bd" id="ev_mul">'.intval($state['multi_match_count']).'</div>';
+        echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Errores</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#c62828" id="ev_err">'.intval($state['error_count']).'</div>';
+        echo '</div>';
+        echo '</div>';
+
+        echo '<div id="ev_log" style="background:#0b1020;color:#eaf1ff;padding:12px;border-radius:8px;min-height:200px;max-height:400px;overflow:auto;font-family:\'Courier New\',monospace;font-size:12px;line-height:1.6"></div>';
+        
+        echo '<div id="ev_status" style="margin-top:15px;padding:12px;background:#e3f2fd;border-radius:6px;display:none">';
+        echo '<div style="font-weight:600;color:#0277bd">Estado: <span id="ev_status_text">Preparando...</span></div>';
+        echo '</div>';
 
         echo '<script>
 (function(){
-  const btn = document.getElementById("ev_btn_next");
+  const totalRows = '.intval($total_rows).';
+  const progressBar = document.getElementById("ev_progress_bar");
+  const progressText = document.getElementById("ev_progress_text");
   const log = document.getElementById("ev_log");
+  const status = document.getElementById("ev_status");
+  const statusText = document.getElementById("ev_status_text");
   const c   = document.getElementById("ev_cnt");
   const u   = document.getElementById("ev_upd");
   const s   = document.getElementById("ev_same");
   const nm  = document.getElementById("ev_nom");
   const mm  = document.getElementById("ev_mul");
   const er  = document.getElementById("ev_err");
+  
   let busy = false;
+  let isDone = false;
 
-  function add(msg){ log.innerHTML += msg + "<br>"; log.scrollTop = log.scrollHeight; }
+  function updateProgress(current) {
+    const percent = Math.min(100, Math.round((current / totalRows) * 100));
+    progressBar.style.width = percent + "%";
+    progressText.textContent = percent + "%";
+  }
 
-  async function tick(){
-    if (busy) return;
+  function add(msg, isError = false){ 
+    const color = isError ? "#ff5252" : "#eaf1ff";
+    log.innerHTML += "<span style=\"color:" + color + "\">" + msg + "</span><br>"; 
+    log.scrollTop = log.scrollHeight; 
+  }
+
+  function setStatus(msg, show = true) {
+    statusText.textContent = msg;
+    status.style.display = show ? "block" : "none";
+  }
+
+  async function processChunk(){
+    if (busy || isDone) return;
     busy = true;
-    btn.disabled = true;
+    
     try{
+      setStatus("Procesando filas...");
+      
       const fd = new FormData();
       fd.append("action","eventosapp_edit_process");
       fd.append("event_id","'.intval($event_id).'");
       fd.append("hash","'.esc_js($hash).'");
       fd.append("_wpnonce","'.esc_js($nonce).'");
+      
       const resp = await fetch(ajaxurl,{method:"POST",body:fd,credentials:"same-origin"});
       const j = await resp.json();
-      if (!j || !j.success) throw new Error(j && j.data ? j.data : "Error");
+      
+      if (!j || !j.success) throw new Error(j && j.data ? j.data : "Error desconocido");
+      
+      // Actualizar contadores
       c.textContent  = j.data.offset;
       u.textContent  = j.data.updated_count;
       s.textContent  = j.data.unchanged_count;
       nm.textContent = j.data.no_match_count;
       mm.textContent = j.data.multi_match_count;
       er.textContent = j.data.error_count;
+      
+      // Actualizar barra de progreso
+      updateProgress(j.data.offset);
+      
+      // Agregar mensaje al log
       add(j.data.msg);
+      
       if (j.data.done){
-        add("✔ Actualización finalizada.");
-        btn.remove();
+        isDone = true;
+        add("✅ ¡Actualización completada exitosamente!", false);
+        add("📊 Resumen final: " + j.data.updated_count + " actualizadas, " + j.data.unchanged_count + " sin cambios, " + j.data.no_match_count + " sin coincidencia, " + j.data.multi_match_count + " múltiples, " + j.data.error_count + " errores", false);
+        setStatus("Proceso finalizado", true);
+        setTimeout(() => setStatus("", false), 5000);
+      } else {
+        // Continuar procesando automáticamente
+        setTimeout(processChunk, 100); // 100ms entre chunks para no saturar
       }
-    } catch(e){ add("❌ "+e.message); }
-    finally { busy = false; btn.disabled = false; }
+    } catch(e){ 
+      add("❌ Error: " + e.message, true); 
+      isDone = true;
+      setStatus("Error en el proceso", true);
+    }
+    finally { busy = false; }
   }
 
-  btn.addEventListener("click", tick);
+  // Iniciar procesamiento automático
+  add("🚀 Iniciando procesamiento completo de " + totalRows + " filas...");
+  add("⏳ El proceso se ejecutará de forma continua hasta completar todas las filas");
+  add("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  setTimeout(processChunk, 500);
 })();
         </script>';
 
@@ -746,7 +783,7 @@ add_action('admin_init', function(){
 
 
 // =====================
-// Procesar lote (100)
+// Procesar chunk (MODIFICADO para procesar múltiples coincidencias)
 // =====================
 add_action('wp_ajax_eventosapp_edit_process', function(){
     if (!current_user_can('manage_options')) wp_send_json_error('No autorizado', 403);
@@ -759,7 +796,8 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
     $state = get_option( evapp_edit_state_key($event_id, $hash) );
     if (!$state) wp_send_json_error('Estado no encontrado', 404);
 
-    $CHUNK = 100;
+    // NUEVO: Procesar chunks de 50 filas a la vez para mantener estabilidad
+    $CHUNK = 50;
     $offset  = intval($state['offset']);
     $updated = intval($state['updated_count']);
     $same    = intval($state['unchanged_count']);
@@ -787,62 +825,97 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
         $line++;
         $processed++;
         try {
-            // 1) Buscar ticket(s)
+            // 1) Buscar ticket(s) - MODIFICADO: ahora obtiene TODOS
             $args = evapp_edit_build_query_args($event_id, $mapS, $row, $logic);
             $ids = get_posts($args);
 
-            if (!$ids) { $nomatch++; $offset++; continue; }
-            if (count($ids) > 1) { $multi++; $offset++; continue; }
+            if (!$ids) { 
+                $nomatch++; 
+                $offset++; 
+                continue; 
+            }
 
-            $pid = (int)$ids[0];
-            $changes = 0;
+            // NUEVO: Procesar TODOS los tickets que coincidan
+            $tickets_count = count($ids);
+            if ($tickets_count > 1) {
+                $multi += $tickets_count; // Contar todos los tickets múltiples
+            }
 
-            // 2) Aplicar actualizaciones
-            foreach ($mapU as $i=>$field_key){
-                if (!$field_key) continue;
-                $spec = evapp_edit_field_to_meta($field_key);
-                if (!$spec) continue;
+            $total_changes = 0;
+            $tickets_updated = 0;
 
-                $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
-                if ($field_key === 'email') $new = sanitize_email($new);
+            // Iterar sobre TODOS los tickets encontrados
+            foreach ($ids as $pid) {
+                $pid = (int)$pid;
+                $changes = 0;
 
-                // Normaliza extras si aplica
-                if (strpos($field_key,'extra__')===0 && function_exists('eventosapp_normalize_extra_value')) {
-                    $ek = substr($field_key,7);
-                    $schema = function_exists('eventosapp_get_event_extra_fields') ? eventosapp_get_event_extra_fields($event_id) : [];
-                    $bykey = [];
-                    foreach ($schema as $f){ $bykey[$f['key']] = $f; }
-                    if (isset($bykey[$ek])) $new = eventosapp_normalize_extra_value($bykey[$ek], $new);
+                // 2) Aplicar actualizaciones
+                foreach ($mapU as $i=>$field_key){
+                    if (!$field_key) continue;
+                    $spec = evapp_edit_field_to_meta($field_key);
+                    if (!$spec) continue;
+
+                    $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
+                    if ($field_key === 'email') $new = sanitize_email($new);
+
+                    // Normaliza extras si aplica
+                    if (strpos($field_key,'extra__')===0 && function_exists('eventosapp_normalize_extra_value')) {
+                        $ek = substr($field_key,7);
+                        $schema = function_exists('eventosapp_get_event_extra_fields') ? eventosapp_get_event_extra_fields($event_id) : [];
+                        $bykey = [];
+                        foreach ($schema as $f){ $bykey[$f['key']] = $f; }
+                        if (isset($bykey[$ek])) $new = eventosapp_normalize_extra_value($bykey[$ek], $new);
+                    }
+
+                    $cur = get_post_meta($pid, $spec['key'], true);
+                    $policy = $pols[$field_key] ?? 'overwrite';
+
+                    $should = false;
+                    if ($policy === 'overwrite') {
+                        $should = ($new !== '' && $new !== $cur);
+                    } else { // if_empty
+                        $should = ($new !== '' && ($cur === '' || $cur === null));
+                    }
+
+                    if ($should) {
+                        update_post_meta($pid, $spec['key'], $new);
+                        $changes++;
+                    }
                 }
 
-                $cur = get_post_meta($pid, $spec['key'], true);
-                $policy = $pols[$field_key] ?? 'overwrite';
-
-                $should = false;
-                if ($policy === 'overwrite') {
-                    $should = ($new !== '' && $new !== $cur);
-                } else { // if_empty
-                    $should = ($new !== '' && ($cur === '' || $cur === null));
-                }
-
-                if ($should) {
-                    update_post_meta($pid, $spec['key'], $new);
-                    $changes++;
+                // Reindexar si hubo cambios
+                if ($changes > 0) {
+                    if (function_exists('eventosapp_ticket_build_search_blob')) {
+                        eventosapp_ticket_build_search_blob($pid);
+                    }
+                    $tickets_updated++;
+                    $total_changes += $changes;
                 }
             }
 
-            // Reindexar si hubo cambios
-            if ($changes > 0 && function_exists('eventosapp_ticket_build_search_blob')) {
-                eventosapp_ticket_build_search_blob($pid);
+            // Actualizar contadores
+            if ($tickets_updated > 0) {
+                $updated += $tickets_updated;
+            } else {
+                $same++;
             }
 
-            if ($changes > 0) $updated++; else $same++;
+            // Log detallado para múltiples coincidencias
+            if ($tickets_count > 1 && $tickets_updated > 0) {
+                $log_msgs[] = 'L'.$line.': '.$tickets_count.' tickets actualizados ('.$total_changes.' cambios totales)';
+            }
+
         } catch (\Throwable $e) {
             $errs++;
-            $log_msgs[] = 'L'.intval($line).': '.$e->getMessage();
+            $log_msgs[] = 'L'.intval($line).': ❌ '.$e->getMessage();
         }
 
         $offset++;
+        
+        // NUEVO: Pequeña pausa cada 10 registros para evitar saturación
+        if ($processed % 10 === 0) {
+            usleep(5000); // 5ms de pausa
+        }
     }
 
     $done = feof($fh);
@@ -857,6 +930,13 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
     $state['error_count']       = $errs;
     update_option( evapp_edit_state_key($event_id, $hash), $state, false );
 
+    // Construir mensaje del log
+    $msg = '📝 Chunk '.$offset.'/'.$state['total_rows'].' - Procesadas: '.$processed.' | Actualizadas: '.$updated.' | Sin cambios: '.$same.' | Sin match: '.$nomatch.' | Múltiples: '.$multi.' | Errores: '.$errs;
+    
+    if ($log_msgs) {
+        $msg .= ' | ' . implode(' | ', array_slice($log_msgs, 0, 5));
+    }
+
     wp_send_json_success([
         'offset'            => $offset,
         'updated_count'     => $updated,
@@ -864,7 +944,7 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
         'no_match_count'    => $nomatch,
         'multi_match_count' => $multi,
         'error_count'       => $errs,
-        'msg'               => 'Lote: '.$processed.' filas — upd: '.$updated.', same: '.$same.', no-match: '.$nomatch.', multi: '.$multi.', err: '.$errs.( $log_msgs ? ' | '.implode(' | ', array_slice($log_msgs,0,3)) : '' ),
+        'msg'               => $msg,
         'done'              => $done ? 1 : 0,
     ]);
 });
