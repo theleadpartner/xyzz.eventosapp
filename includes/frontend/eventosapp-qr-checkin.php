@@ -477,13 +477,8 @@ const d = resp.data || {};
     await start();
     setOutput('<div class="evapp-qr-help">Tip: coloca el QR dentro del marco. La lectura vibra/emite sonido al capturar.</div>');
   });
-})();
-</script>
-    <?php
-    return ob_get_clean();
-});
 
-// NUEVA FUNCIÓN: Enviar recordatorio de pago
+  // NUEVA FUNCIÓN: Enviar recordatorio de pago
   function sendPaymentReminder(ticketId) {
     const btnReminder = document.getElementById('evappSendPaymentReminder');
     const statusDiv = document.getElementById('evappPaymentReminderStatus');
@@ -548,8 +543,11 @@ const d = resp.data || {};
         }
       });
   }
-
-
+})();
+</script>
+    <?php
+    return ob_get_clean();
+});
 
 
 add_action('wp_ajax_eventosapp_qr_checkin_toggle', function(){
