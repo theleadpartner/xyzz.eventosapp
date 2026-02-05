@@ -768,7 +768,22 @@ if (function_exists('eventosapp_get_event_extra_fields') && $evento_id) {
 }
 ?>
 
-				
+		<!-- SECCIÓN ESTADO DE PAGO -->
+<div class="eventosapp-ticket-section">
+    <h3>Estado de Pago</h3>
+    <label for="eventosapp_estado_pago">Estado de Pago del Ticket:</label>
+    <?php
+    $estado_pago = get_post_meta($post->ID, '_eventosapp_estado_pago', true) ?: 'no_pagado';
+    ?>
+    <select name="eventosapp_estado_pago" id="eventosapp_estado_pago" class="eventosapp-input-wide">
+        <option value="no_pagado" <?php selected($estado_pago, 'no_pagado'); ?>>No Pagado</option>
+        <option value="pagado" <?php selected($estado_pago, 'pagado'); ?>>Pagado</option>
+    </select>
+    <small style="color:#666;display:block;margin-top:4px;">
+        Este campo controla si el ticket ha sido pagado. Si el evento tiene activado el "Control de Pago", 
+        solo los tickets en estado "Pagado" podrán realizar check-in.
+    </small>
+</div>		
 
             </div>
         </div>
@@ -1056,6 +1071,13 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     update_post_meta($post_id, '_eventosapp_asistente_ciudad',   sanitize_text_field($_POST['eventosapp_asistente_ciudad']   ?? ''));
     update_post_meta($post_id, '_eventosapp_asistente_pais',     sanitize_text_field($_POST['eventosapp_asistente_pais']     ?? 'Colombia'));
     update_post_meta($post_id, '_eventosapp_asistente_localidad',sanitize_text_field($_POST['eventosapp_asistente_localidad'] ?? ''));
+
+	// NUEVO: Estado de Pago
+    $estado_pago = isset($_POST['eventosapp_estado_pago']) ? sanitize_text_field($_POST['eventosapp_estado_pago']) : 'no_pagado';
+    if (!in_array($estado_pago, ['pagado', 'no_pagado'])) {
+        $estado_pago = 'no_pagado';
+    }
+    update_post_meta($post_id, '_eventosapp_estado_pago', $estado_pago);
 
     // 5) Guardar CAMPOS EXTRA por evento (estaba en lugar incorrecto)
     if (function_exists('eventosapp_get_event_extra_fields')) {
