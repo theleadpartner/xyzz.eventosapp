@@ -123,6 +123,44 @@ if ( function_exists('eventosapp_require_feature') ) {
       height: calc(100vh - var(--evapp-offset, 56px));
       width: 100%;
     }
+
+/* === NUEVO: Estilos para botón de recordatorio de pago === */
+    .evapp-payment-reminder-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 14px;
+      width: 100%;
+      background: #4f7cff;
+      color: #fff;
+      border: 0;
+      border-radius: 10px;
+      padding: .85rem 1rem;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all .2s ease;
+      box-shadow: 0 2px 8px rgba(79, 124, 255, 0.3);
+    }
+    .evapp-payment-reminder-btn:hover:not(:disabled) {
+      background: #3d68e8;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(79, 124, 255, 0.4);
+    }
+    .evapp-payment-reminder-btn:active:not(:disabled) {
+      transform: translateY(0);
+    }
+    .evapp-payment-reminder-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    /* Animación de spinner */
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+		
     </style>
 
     <div class="evapp-qr-shell" data-event="<?php echo esc_attr($active_event); ?>">
@@ -353,9 +391,43 @@ if ( function_exists('eventosapp_require_feature') ) {
     fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
       .then(r=>r.json())
       .then(resp=>{
-        if (!resp || !resp.success){
+if (!resp || !resp.success){
           const msg = (resp && resp.data && resp.data.error) ? resp.data.error : 'Error desconocido';
-          setOutput('<div class="evapp-qr-bad">'+ msg +'</div>');
+          
+          // NUEVO: Verificar si es un error de pago no realizado
+          if (resp && resp.data && resp.data.payment_required === true) {
+            const ticketId = resp.data.ticket_id || 0;
+            
+            let html = '<div class="evapp-qr-bad">'+ msg +'</div>';
+            
+            // Agregar botón para enviar recordatorio de pago
+            if (ticketId > 0) {
+              html += '<button class="evapp-payment-reminder-btn" id="evappSendPaymentReminder" data-ticket-id="'+ticketId+'" type="button">';
+              html += '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-right:6px;">';
+              html += '<path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+              html += '</svg>';
+              html += 'Enviar enlace de pago por correo';
+              html += '</button>';
+              html += '<div id="evappPaymentReminderStatus" style="margin-top:10px;"></div>';
+            }
+            
+            setOutput(html);
+            
+            // Agregar event listener al botón
+            setTimeout(() => {
+              const btnReminder = document.getElementById('evappSendPaymentReminder');
+              if (btnReminder) {
+                btnReminder.addEventListener('click', function() {
+                  const ticketId = this.getAttribute('data-ticket-id');
+                  sendPaymentReminder(ticketId);
+                });
+              }
+            }, 100);
+          } else {
+            // Error normal (no relacionado con pago)
+            setOutput('<div class="evapp-qr-bad">'+ msg +'</div>');
+          }
+          
           injectScanAgainButton();
           smoothScrollTo(out);
           return;
@@ -410,6 +482,72 @@ const d = resp.data || {};
     <?php
     return ob_get_clean();
 });
+
+// NUEVA FUNCIÓN: Enviar recordatorio de pago
+  function sendPaymentReminder(ticketId) {
+    const btnReminder = document.getElementById('evappSendPaymentReminder');
+    const statusDiv = document.getElementById('evappPaymentReminderStatus');
+    
+    if (!ticketId || ticketId <= 0) {
+      if (statusDiv) {
+        statusDiv.innerHTML = '<div style="color:#ff6b6b;font-size:0.9rem;">❌ Error: ID de ticket inválido</div>';
+      }
+      return;
+    }
+    
+    // Deshabilitar botón mientras se procesa
+    if (btnReminder) {
+      btnReminder.disabled = true;
+      btnReminder.style.opacity = '0.6';
+      btnReminder.style.cursor = 'not-allowed';
+      btnReminder.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-right:6px;animation:spin 1s linear infinite;"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" opacity="0.25"/><path d="M12 2a10 10 0 0110 10" stroke="currentColor" stroke-width="4" fill="none"/></svg>Enviando correo...';
+    }
+    
+    if (statusDiv) {
+      statusDiv.innerHTML = '<div style="color:#a9b6d3;font-size:0.9rem;">📧 Enviando recordatorio de pago...</div>';
+    }
+    
+    const fd = new FormData();
+    fd.append('action', 'eventosapp_send_payment_reminder');
+    fd.append('security', ajaxNonce);
+    fd.append('ticket_id', ticketId);
+    
+    fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
+      .then(r => r.json())
+      .then(resp => {
+        if (resp && resp.success) {
+          if (statusDiv) {
+            statusDiv.innerHTML = '<div style="color:#7CFF8D;font-size:0.9rem;padding:8px;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:6px;">✅ Correo enviado exitosamente a: <strong>' + (resp.data.email || '') + '</strong></div>';
+          }
+          if (btnReminder) {
+            btnReminder.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-right:6px;"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Correo enviado';
+            btnReminder.style.background = '#22c55e';
+          }
+        } else {
+          const errorMsg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Error al enviar el correo';
+          if (statusDiv) {
+            statusDiv.innerHTML = '<div style="color:#ff6b6b;font-size:0.9rem;">❌ ' + errorMsg + '</div>';
+          }
+          if (btnReminder) {
+            btnReminder.disabled = false;
+            btnReminder.style.opacity = '1';
+            btnReminder.style.cursor = 'pointer';
+            btnReminder.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-right:6px;"><path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Reintentar envío';
+          }
+        }
+      })
+      .catch(err => {
+        if (statusDiv) {
+          statusDiv.innerHTML = '<div style="color:#ff6b6b;font-size:0.9rem;">❌ Error de conexión al enviar el correo</div>';
+        }
+        if (btnReminder) {
+          btnReminder.disabled = false;
+          btnReminder.style.opacity = '1';
+          btnReminder.style.cursor = 'pointer';
+          btnReminder.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-right:6px;"><path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Reintentar envío';
+        }
+      });
+  }
 
 
 
@@ -2132,4 +2270,178 @@ function eventosapp_qr_contact_lookup_cb(){
         'email'       => $email,
         'phone'       => $phone,
     ]);
+}
+
+/**
+ * ========================================================================
+ * FUNCIÓN AJAX: Enviar recordatorio de pago por correo
+ * ========================================================================
+ * 
+ * UBICACIÓN: Al final del archivo eventosapp-qr-checkin.php
+ * JUSTO ANTES del cierre: ?>
+ */
+add_action('wp_ajax_eventosapp_send_payment_reminder', 'eventosapp_send_payment_reminder_callback');
+function eventosapp_send_payment_reminder_callback() {
+    // Verificar nonce
+    check_ajax_referer('eventosapp_qr_checkin', 'security');
+    
+    // Verificar que el usuario tenga permisos
+    if (!is_user_logged_in()) {
+        wp_send_json_error(['message' => 'Debes iniciar sesión.'], 401);
+    }
+    
+    if (!function_exists('eventosapp_role_can') || !eventosapp_role_can('qr')) {
+        wp_send_json_error(['message' => 'Permisos insuficientes.'], 403);
+    }
+    
+    // Obtener ticket ID
+    $ticket_id = isset($_POST['ticket_id']) ? absint($_POST['ticket_id']) : 0;
+    
+    if (!$ticket_id) {
+        wp_send_json_error(['message' => 'ID de ticket no válido.']);
+    }
+    
+    // Verificar que el ticket existe
+    $ticket = get_post($ticket_id);
+    if (!$ticket || $ticket->post_type !== 'eventosapp_ticket') {
+        wp_send_json_error(['message' => 'Ticket no encontrado.']);
+    }
+    
+    // Obtener datos del ticket
+    $asistente_email = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
+    $asistente_nombre = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
+    $asistente_apellido = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
+    $nombre_completo = trim($asistente_nombre . ' ' . $asistente_apellido);
+    
+    if (!$asistente_email || !is_email($asistente_email)) {
+        wp_send_json_error(['message' => 'El ticket no tiene un correo electrónico válido.']);
+    }
+    
+    // Obtener datos del evento
+    $evento_id = get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+    $evento_nombre = $evento_id ? get_the_title($evento_id) : 'tu evento';
+    
+    // Preparar el correo
+    $to = $asistente_email;
+    $subject = '💳 Recordatorio de Pago - ' . $evento_nombre;
+    
+    // Construir el cuerpo del correo en HTML
+    $message = '
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Recordatorio de Pago</title>
+    </head>
+    <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,\'Helvetica Neue\',Arial,sans-serif;background-color:#f5f5f5;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f5f5f5;padding:20px 0;">
+            <tr>
+                <td align="center">
+                    <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.1);overflow:hidden;">
+                        <!-- Header -->
+                        <tr>
+                            <td style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);padding:30px 40px;text-align:center;">
+                                <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">💳 Recordatorio de Pago</h1>
+                            </td>
+                        </tr>
+                        
+                        <!-- Body -->
+                        <tr>
+                            <td style="padding:40px;">
+                                <p style="margin:0 0 20px;color:#333333;font-size:16px;line-height:1.6;">
+                                    Hola <strong>' . esc_html($nombre_completo) . '</strong>,
+                                </p>
+                                
+                                <p style="margin:0 0 20px;color:#555555;font-size:15px;line-height:1.6;">
+                                    Hemos detectado que tu ticket para <strong>' . esc_html($evento_nombre) . '</strong> aún no ha sido pagado.
+                                </p>
+                                
+                                <p style="margin:0 0 30px;color:#555555;font-size:15px;line-height:1.6;">
+                                    Para completar tu registro y poder realizar el check-in en el evento, es necesario que realices el pago de tu ticket.
+                                </p>
+                                
+                                <!-- Botón de Pago -->
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td align="center" style="padding:10px 0 30px;">
+                                            <a href="https://www.pse.com.co/persona" 
+                                               style="display:inline-block;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:#ffffff;text-decoration:none;padding:16px 40px;border-radius:8px;font-weight:700;font-size:16px;box-shadow:0 4px 12px rgba(102,126,234,0.3);">
+                                                💳 Realizar Pago con PSE
+                                            </a>
+                                        </td>
+                                    </tr>
+                                </table>
+                                
+                                <div style="background-color:#f8f9fa;border-left:4px solid #667eea;padding:16px 20px;margin:20px 0;border-radius:4px;">
+                                    <p style="margin:0;color:#555555;font-size:14px;line-height:1.5;">
+                                        <strong>Nota importante:</strong> Una vez completado el pago, tu ticket será actualizado automáticamente y podrás realizar el check-in sin inconvenientes.
+                                    </p>
+                                </div>
+                                
+                                <p style="margin:20px 0 0;color:#555555;font-size:14px;line-height:1.6;">
+                                    Si tienes alguna pregunta o necesitas asistencia, no dudes en contactarnos.
+                                </p>
+                            </td>
+                        </tr>
+                        
+                        <!-- Footer -->
+                        <tr>
+                            <td style="background-color:#f8f9fa;padding:24px 40px;text-align:center;border-top:1px solid #e9ecef;">
+                                <p style="margin:0 0 8px;color:#6c757d;font-size:13px;">
+                                    Este es un correo automático, por favor no respondas a este mensaje.
+                                </p>
+                                <p style="margin:0;color:#6c757d;font-size:12px;">
+                                    © ' . date('Y') . ' EventosApp. Todos los derechos reservados.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    ';
+    
+    // Headers para HTML
+    $headers = array(
+        'Content-Type: text/html; charset=UTF-8',
+        'From: EventosApp <noreply@eventosapp.com>'
+    );
+    
+    // Intentar enviar el correo
+    $sent = wp_mail($to, $subject, $message, $headers);
+    
+    if ($sent) {
+        // Registrar el envío en el log del ticket
+        $log = get_post_meta($ticket_id, '_eventosapp_payment_reminder_log', true);
+        if (!is_array($log)) {
+            $log = array();
+        }
+        
+        $user = wp_get_current_user();
+        $log[] = array(
+            'fecha' => current_time('mysql'),
+            'email' => $asistente_email,
+            'enviado_por' => $user && $user->exists() ? $user->display_name : 'Sistema',
+            'usuario_id' => $user && $user->exists() ? $user->ID : 0
+        );
+        
+        update_post_meta($ticket_id, '_eventosapp_payment_reminder_log', $log);
+        
+        error_log("EventosApp: Recordatorio de pago enviado al ticket ID $ticket_id - Email: $asistente_email");
+        
+        wp_send_json_success([
+            'message' => 'Correo enviado exitosamente',
+            'email' => $asistente_email,
+            'ticket_id' => $ticket_id
+        ]);
+    } else {
+        error_log("EventosApp: Error al enviar recordatorio de pago al ticket ID $ticket_id - Email: $asistente_email");
+        
+        wp_send_json_error([
+            'message' => 'No se pudo enviar el correo. Por favor, intenta nuevamente.'
+        ]);
+    }
 }
