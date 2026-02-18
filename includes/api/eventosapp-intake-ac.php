@@ -713,8 +713,15 @@ if ( ! function_exists('eventosapp_update_ticket_from_payload') ) {
  * @param array $entry Datos de la entrada: trigger, changed_fields, before, after, etc.
  */
 if ( ! function_exists('eventosapp_add_ticket_audit_log') ) {
+  /**
+   * Agrega una entrada al log de auditoría del ticket.
+   * Guarda un historial de máximo 50 entradas en el meta _eventosapp_ticket_audit_log.
+   *
+   * @param int   $ticket_id
+   * @param array $entry Datos de la entrada: trigger, changed_fields, before, after, etc.
+   */
   function eventosapp_add_ticket_audit_log(int $ticket_id, array $entry) {
-    $entry['timestamp'] = current_time('mysql');
+    $entry['timestamp']     = current_time('mysql');
     $entry['timestamp_gmt'] = current_time('mysql', 1);
 
     $log = get_post_meta($ticket_id, '_eventosapp_ticket_audit_log', true);
