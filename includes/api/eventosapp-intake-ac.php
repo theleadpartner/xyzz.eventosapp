@@ -116,6 +116,33 @@ if (!function_exists('evapp_boolish')) {
 }
 
 /** ---------------------------------------------------------------------------
+ * Agrega una entrada al log de auditoría del ticket.
+ * Guarda un historial de máximo 50 entradas en el meta _eventosapp_ticket_audit_log.
+ *
+ * @param int   $ticket_id
+ * @param array $entry Datos de la entrada: trigger, changed_fields, before, after, etc.
+ * ------------------------------------------------------------------------- */
+if ( ! function_exists('eventosapp_add_ticket_audit_log') ) {
+  function eventosapp_add_ticket_audit_log(int $ticket_id, array $entry) {
+    $entry['timestamp']     = current_time('mysql');
+    $entry['timestamp_gmt'] = current_time('mysql', 1);
+
+    $log = get_post_meta($ticket_id, '_eventosapp_ticket_audit_log', true);
+    if (!is_array($log)) $log = [];
+
+    // Insertar al inicio (más reciente primero)
+    array_unshift($log, $entry);
+
+    // Máximo 50 entradas para no inflar la BD
+    if (count($log) > 50) {
+      $log = array_slice($log, 0, 50);
+    }
+
+    update_post_meta($ticket_id, '_eventosapp_ticket_audit_log', $log);
+  }
+}
+
+/** ---------------------------------------------------------------------------
  * Rutas REST (alias genérico + ruta histórica /ac-webhook)
  * ------------------------------------------------------------------------- */
 add_action('rest_api_init', function () {
@@ -657,86 +684,20 @@ function eventosapp_update_ticket_from_payload($post_id, array $flat, array $dat
     }
   }
 
+  // Recalcular accesos por localidad si hay esquema de sesiones
+  $sesiones_upd = get_post_meta((int)$evento_id, '_eventosapp_sesiones_internas', true);
+  if (is_array($sesiones_upd) && !empty($localidad)) {
+    $accesos_upd = [];
+    foreach ($sesiones_upd as $s) {
+      if (!empty($s['nombre']) && !empty($s['localidades']) && is_array($s['localidades'])) {
+        if (in_array($localidad, $s['localidades'], true)) $accesos_upd[] = $s['nombre'];
+      }
+    }
+    update_post_meta($post_id, '_eventosapp_ticket_sesiones_acceso', $accesos_upd);
+  }
+
   // Reindexar búsqueda si aplica
   if (function_exists('eventosapp_ticket_build_search_blob')) {
     eventosapp_ticket_build_search_blob($post_id);
   }
-}
-
-
-if ( ! function_exists('eventosapp_update_ticket_from_payload') ) {
-  function eventosapp_update_ticket_from_payload($ticket_id, $core, $all = []) {
-    // metas base
-    update_post_meta($ticket_id, '_eventosapp_ticket_evento_id', (int)($core['evento_id'] ?? 0));
-    update_post_meta($ticket_id, '_eventosapp_asistente_email',    sanitize_email($core['email']      ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_nombre',   sanitize_text_field($core['first_name'] ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_apellido', sanitize_text_field($core['last_name']  ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_tel',      sanitize_text_field($core['phone']      ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_empresa',  sanitize_text_field($core['company']    ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_cc',       sanitize_text_field($core['cc']         ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_nit',      sanitize_text_field($core['nit']        ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_cargo',    sanitize_text_field($core['cargo']      ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_ciudad',   sanitize_text_field($core['city']       ?? ''));
-    update_post_meta($ticket_id, '_eventosapp_asistente_pais',     sanitize_text_field($core['country']    ?? 'Colombia'));
-    update_post_meta($ticket_id, '_eventosapp_asistente_localidad',sanitize_text_field($core['localidad']  ?? ''));
-
-    // ID externo (para idempotencia)
-    if (!empty($core['external_id'])) {
-      update_post_meta($ticket_id, '_eventosapp_external_id', sanitize_text_field($core['external_id']));
-    }
-
-    // Recalcular accesos por localidad si hay esquema de sesiones
-    $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
-    $localidad = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
-    $sesiones  = get_post_meta($evento_id, '_eventosapp_sesiones_internas', true);
-    if (is_array($sesiones)) {
-      $accesos = [];
-      foreach ($sesiones as $s) {
-        if (!empty($s['nombre']) && !empty($s['localidades']) && is_array($s['localidades'])) {
-          if ($localidad && in_array($localidad, $s['localidades'], true)) $accesos[] = $s['nombre'];
-        }
-      }
-      update_post_meta($ticket_id, '_eventosapp_ticket_sesiones_acceso', $accesos);
-    }
-
-    // Reindexar
-    if (function_exists('eventosapp_ticket_build_search_blob')) {
-      eventosapp_ticket_build_search_blob($ticket_id);
-    }
-  }
-
-  /**
- * Agrega una entrada al log de auditoría del ticket.
- * Guarda un historial de máximo 50 entradas en el meta _eventosapp_ticket_audit_log.
- *
- * @param int   $ticket_id
- * @param array $entry Datos de la entrada: trigger, changed_fields, before, after, etc.
- */
-if ( ! function_exists('eventosapp_add_ticket_audit_log') ) {
-  /**
-   * Agrega una entrada al log de auditoría del ticket.
-   * Guarda un historial de máximo 50 entradas en el meta _eventosapp_ticket_audit_log.
-   *
-   * @param int   $ticket_id
-   * @param array $entry Datos de la entrada: trigger, changed_fields, before, after, etc.
-   */
-  function eventosapp_add_ticket_audit_log(int $ticket_id, array $entry) {
-    $entry['timestamp']     = current_time('mysql');
-    $entry['timestamp_gmt'] = current_time('mysql', 1);
-
-    $log = get_post_meta($ticket_id, '_eventosapp_ticket_audit_log', true);
-    if (!is_array($log)) $log = [];
-
-    // Insertar al inicio (más reciente primero)
-    array_unshift($log, $entry);
-
-    // Máximo 50 entradas para no inflar la BD
-    if (count($log) > 50) {
-      $log = array_slice($log, 0, 50);
-    }
-
-    update_post_meta($ticket_id, '_eventosapp_ticket_audit_log', $log);
-  }
-}
-
 }
