@@ -245,11 +245,36 @@ function eventosapp_ac_webhook_handler(\WP_REST_Request $req){
 
 // ======================================================================
 // Si existe, ACTUALIZA y:
-// - Si nunca se ha enviado correo por webhook -> lo envía ahora (idempotente).
-// - Si viene resend/force_send -> reenvía aunque ya se haya enviado.
+// - Siempre reenvía correo (el ticket fue modificado con nueva info)
+// - Registra log de auditoría con campos que cambiaron
 // ======================================================================
 if ($existing) {
   $ticket_id = (int) $existing[0];
+
+  // ---- CAPTURAR ESTADO PREVIO PARA AUDITORÍA ----
+  $before_snapshot = [
+    'nombre'    => get_post_meta($ticket_id, '_eventosapp_asistente_nombre',   true),
+    'apellido'  => get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true),
+    'email'     => get_post_meta($ticket_id, '_eventosapp_asistente_email',    true),
+    'tel'       => get_post_meta($ticket_id, '_eventosapp_asistente_tel',      true),
+    'empresa'   => get_post_meta($ticket_id, '_eventosapp_asistente_empresa',  true),
+    'cc'        => get_post_meta($ticket_id, '_eventosapp_asistente_cc',       true),
+    'nit'       => get_post_meta($ticket_id, '_eventosapp_asistente_nit',      true),
+    'cargo'     => get_post_meta($ticket_id, '_eventosapp_asistente_cargo',    true),
+    'ciudad'    => get_post_meta($ticket_id, '_eventosapp_asistente_ciudad',   true),
+    'pais'      => get_post_meta($ticket_id, '_eventosapp_asistente_pais',     true),
+    'localidad' => get_post_meta($ticket_id, '_eventosapp_asistente_localidad',true),
+  ];
+
+  // Si hay campos extras del evento, capturarlos también
+  if (function_exists('eventosapp_get_event_extra_fields')) {
+    $schema_before = (array) eventosapp_get_event_extra_fields($evento_id);
+    foreach ($schema_before as $fld) {
+      if (empty($fld['key'])) continue;
+      $before_snapshot['extra_' . $fld['key']] = get_post_meta($ticket_id, '_eventosapp_extra_' . $fld['key'], true);
+    }
+  }
+  // ---- FIN CAPTURA PREVIA ----
 
   eventosapp_update_ticket_from_payload($ticket_id, compact(
     'evento_id','email','first_name','last_name','phone','company','cc','nit','cargo','city','country','localidad','external_id'
@@ -259,7 +284,6 @@ if ($existing) {
   $webhook_author = (int) evapp_webhook_author_id();
   $current_author = (int) get_post_field('post_author', $ticket_id);
 
-  // Si no tiene autor (0) lo fijamos al usuario del webhook
   if ($current_author <= 0) {
     wp_update_post([
       'ID'          => $ticket_id,
@@ -267,47 +291,124 @@ if ($existing) {
     ]);
   }
 
-  // Reflejar también en el meta interno si está vacío
   $meta_uid = (int) get_post_meta($ticket_id, '_eventosapp_ticket_user_id', true);
   if ($meta_uid <= 0) {
     update_post_meta($ticket_id, '_eventosapp_ticket_user_id', $webhook_author);
   }
   // ⬆️ fin asegurar autor
 
-  // 2.3 Webhook (marca como webhook)
-  // Solo si aún no tiene canal de creación, lo marcamos como 'webhook'
   if ( ! get_post_meta($ticket_id, '_eventosapp_creation_channel', true) ) {
       update_post_meta($ticket_id, '_eventosapp_creation_channel', 'webhook');
   }
 
+  // ---- CAPTURAR ESTADO POSTERIOR Y GUARDAR AUDITORÍA ----
+  $after_snapshot = [
+    'nombre'    => get_post_meta($ticket_id, '_eventosapp_asistente_nombre',   true),
+    'apellido'  => get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true),
+    'email'     => get_post_meta($ticket_id, '_eventosapp_asistente_email',    true),
+    'tel'       => get_post_meta($ticket_id, '_eventosapp_asistente_tel',      true),
+    'empresa'   => get_post_meta($ticket_id, '_eventosapp_asistente_empresa',  true),
+    'cc'        => get_post_meta($ticket_id, '_eventosapp_asistente_cc',       true),
+    'nit'       => get_post_meta($ticket_id, '_eventosapp_asistente_nit',      true),
+    'cargo'     => get_post_meta($ticket_id, '_eventosapp_asistente_cargo',    true),
+    'ciudad'    => get_post_meta($ticket_id, '_eventosapp_asistente_ciudad',   true),
+    'pais'      => get_post_meta($ticket_id, '_eventosapp_asistente_pais',     true),
+    'localidad' => get_post_meta($ticket_id, '_eventosapp_asistente_localidad',true),
+  ];
+
+  if (function_exists('eventosapp_get_event_extra_fields')) {
+    $schema_after = (array) eventosapp_get_event_extra_fields($evento_id);
+    foreach ($schema_after as $fld) {
+      if (empty($fld['key'])) continue;
+      $after_snapshot['extra_' . $fld['key']] = get_post_meta($ticket_id, '_eventosapp_extra_' . $fld['key'], true);
+    }
+  }
+
+  // Determinar qué campos cambiaron
+  $changed_fields = [];
+  foreach ($after_snapshot as $field => $new_val) {
+    $old_val = isset($before_snapshot[$field]) ? $before_snapshot[$field] : '';
+    if ((string)$old_val !== (string)$new_val) {
+      $changed_fields[$field] = ['before' => $old_val, 'after' => $new_val];
+    }
+  }
+
+  // Guardar entrada de auditoría solo si algo cambió
+  if (!empty($changed_fields)) {
+    eventosapp_add_ticket_audit_log($ticket_id, [
+      'trigger'         => 'webhook_update',
+      'dedupe_by'       => $dedupe_pref,
+      'external_id'     => $external_id,
+      'changed_fields'  => $changed_fields,
+      'before'          => $before_snapshot,
+      'after'           => $after_snapshot,
+      'ip'              => isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : '',
+    ]);
+  }
+  // ---- FIN AUDITORÍA ----
+
+  // ---- ENVÍO DE CORREO (siempre en actualización por CC) ----
   $email_result = ['email_sent' => false, 'email_msg' => ''];
 
+  // En actualización por CC: SIEMPRE reenviar (el asistente tiene datos nuevos)
+  // Solo se puede omitir si el payload explícitamente dice resend=false
+  $resend_explicitly_false = (strtolower((string)($req->get_param('resend') ?? '')) === 'false');
+  $should_send = !$resend_explicitly_false;
 
-  $already_sent = get_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_sent', true);
-  $should_send  = $force_send_on_update || empty($already_sent);
+  // Si hay condicionales del webhook, evaluarlas también en update
+  $conditional_result_upd = null;
+  if ($should_send && function_exists('eventosapp_evaluate_webhook_conditionals')) {
+    $conditional_result_upd = eventosapp_evaluate_webhook_conditionals($ticket_id, $evento_id);
+    if (is_array($conditional_result_upd) && isset($conditional_result_upd['send_email'])) {
+      $should_send = !empty($conditional_result_upd['send_email']);
+    }
+  }
 
   if ($should_send && function_exists('eventosapp_send_ticket_email_now')) {
     $args = [
       'source'    => 'webhook',
       'recipient' => $email,
+      'force'     => true, // siempre forzar en update para ignorar idempotencia
     ];
-    if ($force_send_on_update) {
-      $args['force'] = true; // ignora idempotencia a propósito
+
+    // Si condicional indicó plantilla específica
+    $email_template_upd = null;
+    if (is_array($conditional_result_upd) && !empty($conditional_result_upd['template'])) {
+      $email_template_upd = $conditional_result_upd['template'];
+      $original_template_upd = get_post_meta($evento_id, '_eventosapp_email_tpl', true);
+      update_post_meta($evento_id, '_eventosapp_email_tpl', $email_template_upd);
     }
 
     list($sent, $msg) = eventosapp_send_ticket_email_now($ticket_id, $args);
 
+    // Restaurar plantilla si fue modificada
+    if ($email_template_upd) {
+      if ($original_template_upd === '' || $original_template_upd === false) {
+        delete_post_meta($evento_id, '_eventosapp_email_tpl');
+      } else {
+        update_post_meta($evento_id, '_eventosapp_email_tpl', $original_template_upd);
+      }
+    }
+
     update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_result', $sent ? 'sent' : 'failed');
     update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_msg', $msg);
+    update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_sent', current_time('mysql'));
 
     $email_result = ['email_sent' => (bool) $sent, 'email_msg' => $msg];
 
-    error_log('[EventosApp] webhook UPDATE mail ticket '.$ticket_id.' -> '.($sent ? 'SENT' : 'FAILED').' | '.$msg.( $force_send_on_update ? ' (forced)' : ''));
-  } else {
-    error_log('[EventosApp] webhook UPDATE ticket '.$ticket_id.' (sin envío: '.( $already_sent ? 'ya enviado' : 'resend/force_send no solicitado' ).')');
+    error_log('[EventosApp] webhook UPDATE mail ticket ' . $ticket_id . ' -> ' . ($sent ? 'SENT' : 'FAILED') . ' | ' . $msg . ' (forced resend on CC update)');
+  } elseif (!$should_send) {
+    $email_result = ['email_sent' => false, 'email_msg' => 'Correo no enviado: ' . ($resend_explicitly_false ? 'resend=false en payload' : 'regla condicional')];
+    error_log('[EventosApp] webhook UPDATE ticket ' . $ticket_id . ' -> email SKIPPED');
   }
 
-  return array_merge(['ok'=>true, 'ticket_id'=>$ticket_id, 'updated'=>true], $email_result);
+  return array_merge([
+    'ok'         => true,
+    'ticket_id'  => $ticket_id,
+    'updated'    => true,
+    'fields_changed' => array_keys($changed_fields),
+    'audit_logged'   => !empty($changed_fields),
+  ], $email_result);
 }
 
 
@@ -603,4 +704,32 @@ if ( ! function_exists('eventosapp_update_ticket_from_payload') ) {
       eventosapp_ticket_build_search_blob($ticket_id);
     }
   }
+
+  /**
+ * Agrega una entrada al log de auditoría del ticket.
+ * Guarda un historial de máximo 50 entradas en el meta _eventosapp_ticket_audit_log.
+ *
+ * @param int   $ticket_id
+ * @param array $entry Datos de la entrada: trigger, changed_fields, before, after, etc.
+ */
+if ( ! function_exists('eventosapp_add_ticket_audit_log') ) {
+  function eventosapp_add_ticket_audit_log(int $ticket_id, array $entry) {
+    $entry['timestamp'] = current_time('mysql');
+    $entry['timestamp_gmt'] = current_time('mysql', 1);
+
+    $log = get_post_meta($ticket_id, '_eventosapp_ticket_audit_log', true);
+    if (!is_array($log)) $log = [];
+
+    // Insertar al inicio (más reciente primero)
+    array_unshift($log, $entry);
+
+    // Máximo 50 entradas para no inflar la BD
+    if (count($log) > 50) {
+      $log = array_slice($log, 0, 50);
+    }
+
+    update_post_meta($ticket_id, '_eventosapp_ticket_audit_log', $log);
+  }
+}
+
 }
