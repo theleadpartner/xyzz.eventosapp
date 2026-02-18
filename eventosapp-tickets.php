@@ -138,6 +138,115 @@ add_action('add_meta_boxes', function() {
 	
 });
 
+/**
+ * Meta box: Historial de Auditoría del Ticket
+ * Muestra el log de cambios cuando el ticket es actualizado vía webhook por CC
+ */
+add_action('add_meta_boxes', function() {
+    add_meta_box(
+        'eventosapp_ticket_audit_log',
+        '🔍 Historial de Modificaciones (Auditoría)',
+        'eventosapp_render_ticket_audit_log_metabox',
+        'eventosapp_ticket',
+        'normal',
+        'default'
+    );
+});
+
+function eventosapp_render_ticket_audit_log_metabox($post) {
+    $log = get_post_meta($post->ID, '_eventosapp_ticket_audit_log', true);
+
+    // Labels legibles para los campos
+    $field_labels = [
+        'nombre'    => 'Nombre',
+        'apellido'  => 'Apellido',
+        'email'     => 'Email',
+        'tel'       => 'Teléfono',
+        'empresa'   => 'Empresa',
+        'cc'        => 'Cédula (CC)',
+        'nit'       => 'NIT',
+        'cargo'     => 'Cargo',
+        'ciudad'    => 'Ciudad',
+        'pais'      => 'País',
+        'localidad' => 'Localidad',
+    ];
+
+    if (empty($log) || !is_array($log)) {
+        echo '<p style="color:#888; padding: 8px 0;">Este ticket no tiene historial de modificaciones. Solo se registra cuando un asistente se reinscribe con la misma cédula.</p>';
+        return;
+    }
+
+    echo '<style>
+    .evapp-audit-log { margin: 0; padding: 0; }
+    .evapp-audit-entry { border: 1px solid #ddd; border-radius: 4px; margin-bottom: 12px; overflow: hidden; }
+    .evapp-audit-entry-header { background: #f0f6fc; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; }
+    .evapp-audit-entry-header strong { font-size: 13px; }
+    .evapp-audit-entry-header span { font-size: 12px; color: #555; }
+    .evapp-audit-entry-body { padding: 10px 12px; }
+    .evapp-audit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .evapp-audit-table th { text-align: left; padding: 5px 8px; background: #f9f9f9; border-bottom: 1px solid #eee; color: #333; font-weight: 600; width: 20%; }
+    .evapp-audit-table td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: top; word-break: break-all; }
+    .evapp-audit-table td.before { color: #c0392b; text-decoration: line-through; width: 35%; }
+    .evapp-audit-table td.after  { color: #27ae60; font-weight: 500; width: 35%; }
+    .evapp-audit-badge { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #e8f4fd; color: #0073aa; margin-left: 8px; }
+    .evapp-audit-ip { font-size: 11px; color: #999; margin-top: 6px; }
+    </style>';
+
+    echo '<div class="evapp-audit-log">';
+
+    foreach ($log as $i => $entry) {
+        if (!is_array($entry)) continue;
+
+        $timestamp = isset($entry['timestamp']) ? esc_html($entry['timestamp']) : '—';
+        $trigger   = isset($entry['trigger']) ? esc_html($entry['trigger']) : 'webhook_update';
+        $dedupe_by = isset($entry['dedupe_by']) ? esc_html($entry['dedupe_by']) : '';
+        $ext_id    = isset($entry['external_id']) ? esc_html($entry['external_id']) : '';
+        $changed   = isset($entry['changed_fields']) && is_array($entry['changed_fields']) ? $entry['changed_fields'] : [];
+        $ip        = isset($entry['ip']) ? esc_html($entry['ip']) : '';
+
+        $entry_num = count($log) - $i;
+
+        echo '<div class="evapp-audit-entry">';
+        echo '<div class="evapp-audit-entry-header">';
+        echo '<strong>📝 Modificación #' . $entry_num . '</strong>';
+        echo '<span>' . $timestamp . '</span>';
+        if ($ext_id) echo '<span class="evapp-audit-badge">CC/ID: ' . $ext_id . '</span>';
+        echo '</div>';
+
+        echo '<div class="evapp-audit-entry-body">';
+
+        if (empty($changed)) {
+            echo '<p style="color:#888; margin:0; font-size:12px;">Sin cambios registrados en este evento.</p>';
+        } else {
+            echo '<table class="evapp-audit-table">';
+            echo '<thead><tr><th>Campo</th><th>Valor anterior</th><th>Valor nuevo</th></tr></thead><tbody>';
+            foreach ($changed as $field_key => $diff) {
+                $label = isset($field_labels[$field_key])
+                    ? $field_labels[$field_key]
+                    : (strpos($field_key, 'extra_') === 0
+                        ? 'Extra: ' . str_replace('extra_', '', $field_key)
+                        : $field_key);
+
+                $before_val = isset($diff['before']) ? esc_html($diff['before']) : '<em>vacío</em>';
+                $after_val  = isset($diff['after'])  ? esc_html($diff['after'])  : '<em>vacío</em>';
+
+                echo '<tr>';
+                echo '<th>' . esc_html($label) . '</th>';
+                echo '<td class="before">' . $before_val . '</td>';
+                echo '<td class="after">'  . $after_val  . '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
+
+        if ($ip) echo '<p class="evapp-audit-ip">IP de origen: ' . $ip . '</p>';
+
+        echo '</div></div>'; // entry-body + entry
+    }
+
+    echo '</div>'; // audit-log
+}
+
 
 // Render
 function eventosapp_ticket_networking_digest_metabox_render($post){
