@@ -151,6 +151,16 @@ add_action( 'add_meta_boxes', function () {
         'high'
     );
 
+    // --- Metabox: Eventos Asociados ---
+    add_meta_box(
+        'eventosapp_cliente_eventos',
+        '📅 Eventos Asociados',
+        'eventosapp_cliente_eventos_metabox',
+        'eventosapp_cliente',
+        'normal',
+        'default'
+    );
+
 } );
 
 // ============================================================
@@ -458,6 +468,109 @@ function eventosapp_cliente_logo_metabox( $post ) {
     })();
     </script>
     <?php
+}
+
+// ============================================================
+// 4.3 RENDER: Metabox Eventos Asociados al Cliente
+// ============================================================
+
+function eventosapp_cliente_eventos_metabox( $post ) {
+    $cliente_id = $post->ID;
+
+    // Buscar eventos vinculados a este cliente
+    $eventos = get_posts( [
+        'post_type'      => 'eventosapp_event',
+        'post_status'    => [ 'publish', 'draft', 'private' ],
+        'posts_per_page' => -1,
+        'orderby'        => 'title',
+        'order'          => 'ASC',
+        'meta_query'     => [
+            [
+                'key'     => '_eventosapp_cliente_id',
+                'value'   => $cliente_id,
+                'compare' => '=',
+                'type'    => 'NUMERIC',
+            ],
+        ],
+        'fields' => 'ids',
+    ] );
+
+    if ( empty( $eventos ) ) {
+        echo '<p style="color:#888;margin:8px 0;">No hay eventos asociados a este cliente todavía.</p>';
+        echo '<p style="margin:4px 0;"><a href="' . esc_url( admin_url( 'post-new.php?post_type=eventosapp_event' ) ) . '" class="button button-small">+ Crear nuevo evento</a></p>';
+        return;
+    }
+
+    echo '<style>
+        .evapp-eventos-table { width:100%; border-collapse:collapse; font-size:13px; }
+        .evapp-eventos-table th { text-align:left; padding:6px 10px; background:#f0f0f1; border-bottom:1px solid #dcdcde; font-weight:600; }
+        .evapp-eventos-table td { padding:7px 10px; border-bottom:1px solid #f0f0f1; vertical-align:middle; }
+        .evapp-eventos-table tr:last-child td { border-bottom:none; }
+        .evapp-eventos-table tr:hover td { background:#fafafa; }
+        .evapp-evento-status { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+        .evapp-evento-status.publish { background:#d1fae5; color:#065f46; }
+        .evapp-evento-status.draft   { background:#fef3c7; color:#92400e; }
+        .evapp-evento-status.private { background:#e0e7ff; color:#3730a3; }
+    </style>';
+
+    echo '<table class="evapp-eventos-table">';
+    echo '<thead><tr>
+        <th>Evento</th>
+        <th>Estado</th>
+        <th>Fecha</th>
+        <th>Acción</th>
+    </tr></thead><tbody>';
+
+    foreach ( $eventos as $eid ) {
+        $titulo    = get_the_title( $eid ) ?: '(Sin título)';
+        $estado    = get_post_status( $eid );
+        $edit_url  = get_edit_post_link( $eid );
+
+        // Obtener fecha del evento
+        $tipo_fecha  = get_post_meta( $eid, '_eventosapp_tipo_fecha', true ) ?: 'unica';
+        if ( $tipo_fecha === 'unica' ) {
+            $fecha_raw = get_post_meta( $eid, '_eventosapp_fecha_unica', true );
+            $fecha_str = $fecha_raw ? date_i18n( 'd/m/Y', strtotime( $fecha_raw ) ) : '—';
+        } elseif ( $tipo_fecha === 'consecutiva' ) {
+            $fi = get_post_meta( $eid, '_eventosapp_fecha_inicio', true );
+            $ff = get_post_meta( $eid, '_eventosapp_fecha_fin', true );
+            $fecha_str = ( $fi && $ff )
+                ? date_i18n( 'd/m/Y', strtotime( $fi ) ) . ' → ' . date_i18n( 'd/m/Y', strtotime( $ff ) )
+                : '—';
+        } else {
+            $fnoco = get_post_meta( $eid, '_eventosapp_fechas_noco', true );
+            if ( is_array( $fnoco ) && ! empty( $fnoco ) ) {
+                $fecha_str = date_i18n( 'd/m/Y', strtotime( $fnoco[0] ) ) . ( count( $fnoco ) > 1 ? ' (+' . ( count( $fnoco ) - 1 ) . ')' : '' );
+            } else {
+                $fecha_str = '—';
+            }
+        }
+
+        // Label de estado
+        $estado_labels = [
+            'publish' => 'Publicado',
+            'draft'   => 'Borrador',
+            'private' => 'Privado',
+        ];
+        $estado_label = $estado_labels[ $estado ] ?? ucfirst( $estado );
+
+        printf(
+            '<tr>
+                <td><strong>%s</strong></td>
+                <td><span class="evapp-evento-status %s">%s</span></td>
+                <td>%s</td>
+                <td><a href="%s" class="button button-small">Ir al Evento</a></td>
+            </tr>',
+            esc_html( $titulo ),
+            esc_attr( $estado ),
+            esc_html( $estado_label ),
+            esc_html( $fecha_str ),
+            esc_url( $edit_url )
+        );
+    }
+
+    echo '</tbody></table>';
+    echo '<p style="margin:10px 0 4px;"><a href="' . esc_url( admin_url( 'post-new.php?post_type=eventosapp_event' ) ) . '" class="button button-small">+ Crear nuevo evento</a></p>';
 }
 
 // ============================================================
