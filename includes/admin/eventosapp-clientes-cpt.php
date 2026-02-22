@@ -47,7 +47,7 @@ add_action( 'init', function () {
         'has_archive'     => false,
         'rewrite'         => false,
         'show_in_rest'    => false,
-        'show_in_menu'    => 'eventosapp_menu', // Se integra al menú principal de EventosApp si existe; si no, crea el suyo
+        'show_in_menu'    => false, // El menú lo gestiona eventosapp.php via add_submenu_page
         'capability_type' => 'post',
         'map_meta_cap'    => true,
     ] );
