@@ -202,6 +202,15 @@ add_action('admin_menu', function() {
         'manage_options',
         'edit.php?post_type=eventosapp_cliente'
     );
+
+    // Submenú "Asistentes"
+    add_submenu_page(
+        'eventosapp_dashboard',
+        'Asistentes',
+        'Asistentes',
+        'manage_options',
+        'edit.php?post_type=eventosapp_asistente'
+    );
 }, 9);
 
 
@@ -210,7 +219,12 @@ add_action('admin_menu', function() {
  */
 add_filter('parent_file', function($parent_file) {
     global $current_screen;
-    if (isset($current_screen->post_type) && in_array($current_screen->post_type, ['eventosapp_event', 'eventosapp_ticket', 'eventosapp_cliente'])) {
+    if (isset($current_screen->post_type) && in_array($current_screen->post_type, [
+        'eventosapp_event',
+        'eventosapp_ticket',
+        'eventosapp_cliente',
+        'eventosapp_asistente',
+    ])) {
         return 'eventosapp_dashboard';
     }
     return $parent_file;
