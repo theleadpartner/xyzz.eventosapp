@@ -40,16 +40,18 @@ add_action( 'init', function () {
             'menu_name'          => 'Clientes',
             'all_items'          => 'Todos los Clientes',
         ],
-        'public'          => false,
-        'show_ui'         => true,
-        'menu_icon'       => 'dashicons-building',
-        'supports'        => [ 'title' ],
-        'has_archive'     => false,
-        'rewrite'         => false,
-        'show_in_rest'    => false,
-        'show_in_menu'    => false, // El menú lo gestiona eventosapp.php via add_submenu_page
-        'capability_type' => 'post',
-        'map_meta_cap'    => true,
+        'public'              => false,
+        'publicly_queryable'  => false,   // Evita el warning en class-wp-comments-list-table.php
+        'exclude_from_search' => true,    // No aparece en búsquedas del sitio
+        'show_ui'             => true,
+        'menu_icon'           => 'dashicons-building',
+        'supports'            => [ 'title' ],
+        'has_archive'         => false,
+        'rewrite'             => false,
+        'show_in_rest'        => false,
+        'show_in_menu'        => false,   // El menú lo gestiona eventosapp.php via add_submenu_page
+        'capability_type'     => 'post',
+        'map_meta_cap'        => true,
     ] );
 } );
 
@@ -67,7 +69,7 @@ add_action( 'admin_head', function () {
 } );
 
 // ============================================================
-// 3. SINCRONIZAR TÍTULO CON NOMBRE DE EMPRESA AL GUARDAR
+// 3. GUARDAR CAMPOS Y SINCRONIZAR TÍTULO AL GUARDAR
 // ============================================================
 
 add_action( 'save_post_eventosapp_cliente', function ( $post_id ) {
@@ -75,20 +77,7 @@ add_action( 'save_post_eventosapp_cliente', function ( $post_id ) {
     if ( ! isset( $_POST['_cliente_nonce'] ) || ! wp_verify_nonce( $_POST['_cliente_nonce'], 'eventosapp_cliente_guardar' ) ) return;
     if ( ! current_user_can( 'edit_post', $post_id ) ) return;
 
-    $nombre = isset( $_POST['_cliente_nombre_empresa'] ) ? sanitize_text_field( $_POST['_cliente_nombre_empresa'] ) : '';
-
-    // Sincronizar post_title con el nombre de empresa para que la búsqueda en admin funcione
-    if ( $nombre ) {
-        remove_action( 'save_post_eventosapp_cliente', __FUNCTION__ );
-        wp_update_post( [
-            'ID'         => $post_id,
-            'post_title' => $nombre,
-            'post_name'  => sanitize_title( $nombre ),
-        ] );
-        add_action( 'save_post_eventosapp_cliente', __FUNCTION__ );
-    }
-
-    // Guardar todos los campos
+    // Guardar todos los campos meta
     $campos = [
         '_cliente_nombre_empresa' => 'sanitize_text_field',
         '_cliente_razon_social'   => 'sanitize_text_field',
@@ -106,6 +95,33 @@ add_action( 'save_post_eventosapp_cliente', function ( $post_id ) {
         if ( isset( $_POST[ $key ] ) ) {
             update_post_meta( $post_id, $key, $sanitizer( $_POST[ $key ] ) );
         }
+    }
+
+    // Sincronizar post_title y post_name con el nombre de empresa usando
+    // una query directa ($wpdb) en lugar de wp_update_post() para evitar
+    // disparar el ciclo completo de hooks de WordPress y agotar el servidor (503).
+    $nombre = isset( $_POST['_cliente_nombre_empresa'] ) ? sanitize_text_field( $_POST['_cliente_nombre_empresa'] ) : '';
+
+    if ( $nombre ) {
+        global $wpdb;
+        $wpdb->update(
+            $wpdb->posts,
+            [
+                'post_title' => $nombre,
+                'post_name'  => wp_unique_post_slug(
+                    sanitize_title( $nombre ),
+                    $post_id,
+                    get_post_status( $post_id ),
+                    'eventosapp_cliente',
+                    0
+                ),
+            ],
+            [ 'ID' => $post_id ],
+            [ '%s', '%s' ],
+            [ '%d' ]
+        );
+        // Limpiar la caché del post para que WordPress lea el título actualizado
+        clean_post_cache( $post_id );
     }
 }, 20 );
 
