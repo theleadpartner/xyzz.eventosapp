@@ -75,10 +75,43 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
     if ( ! isset( $_POST['_asistente_nonce'] ) || ! wp_verify_nonce( $_POST['_asistente_nonce'], 'eventosapp_asistente_guardar' ) ) return;
     if ( ! current_user_can( 'edit_post', $post_id ) ) return;
 
+    // ── Validar unicidad de cédula ANTES de guardar ──────────────────────────
+    $cedula_nueva = isset( $_POST['_asistente_cedula'] ) ? sanitize_text_field( $_POST['_asistente_cedula'] ) : '';
+    $cedula_error = false;
+
+    if ( $cedula_nueva !== '' ) {
+        global $wpdb;
+        $duplicado_id = (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT pm.post_id
+               FROM {$wpdb->postmeta} pm
+               JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+              WHERE pm.meta_key   = '_asistente_cedula'
+                AND pm.meta_value = %s
+                AND p.post_type   = 'eventosapp_asistente'
+                AND p.post_status != 'trash'
+                AND pm.post_id   != %d
+              LIMIT 1",
+            $cedula_nueva,
+            $post_id
+        ) );
+
+        if ( $duplicado_id ) {
+            $cedula_error = true;
+            // Guardar el error en un transient para mostrarlo en admin_notices
+            set_transient(
+                'evapp_asistente_cedula_error_' . get_current_user_id(),
+                [
+                    'cedula'      => $cedula_nueva,
+                    'duplicado_id'=> $duplicado_id,
+                ],
+                60
+            );
+        }
+    }
+
     $campos = [
         '_asistente_nombres'   => 'sanitize_text_field',
         '_asistente_apellidos' => 'sanitize_text_field',
-        '_asistente_cedula'    => 'sanitize_text_field',
         '_asistente_email'     => 'sanitize_email',
         '_asistente_telefono'  => 'sanitize_text_field',
         '_asistente_empresa'   => 'sanitize_text_field',
@@ -94,6 +127,12 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
         }
     }
 
+    // Solo actualizar cédula si NO hay duplicado
+    if ( ! $cedula_error ) {
+        update_post_meta( $post_id, '_asistente_cedula', $cedula_nueva );
+    }
+    // Si hay duplicado, conservar la cédula anterior (no la sobreescribimos)
+
     // Sincronizar post_title con Nombres + Apellidos usando wpdb directo
     // para evitar bucle de hooks y posibles errores 503.
     $nombres   = isset( $_POST['_asistente_nombres'] )   ? sanitize_text_field( $_POST['_asistente_nombres'] )   : '';
@@ -101,7 +140,6 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
     $titulo    = trim( $nombres . ' ' . $apellidos );
 
     if ( $titulo ) {
-        global $wpdb;
         $wpdb->update(
             $wpdb->posts,
             [
@@ -121,6 +159,75 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
         clean_post_cache( $post_id );
     }
 }, 20 );
+
+// ============================================================
+// 3.1 ADMIN NOTICE: Cédula duplicada
+// ============================================================
+
+add_action( 'admin_notices', function () {
+    $screen = get_current_screen();
+    if ( ! $screen || $screen->post_type !== 'eventosapp_asistente' ) return;
+
+    $error = get_transient( 'evapp_asistente_cedula_error_' . get_current_user_id() );
+    if ( ! $error ) return;
+
+    delete_transient( 'evapp_asistente_cedula_error_' . get_current_user_id() );
+
+    $duplicado_url  = get_edit_post_link( $error['duplicado_id'] );
+    $cedula_escapada = esc_html( $error['cedula'] );
+    ?>
+    <div class="notice notice-error is-dismissible">
+        <p>
+            <strong>⚠️ Cédula duplicada:</strong>
+            La cédula <strong><?php echo $cedula_escapada; ?></strong> ya está registrada en
+            <a href="<?php echo esc_url( $duplicado_url ); ?>" target="_blank">otro asistente</a>.
+            <br>La cédula <strong>no fue actualizada</strong>. Corrija el valor e intente de nuevo.
+        </p>
+    </div>
+    <?php
+} );
+
+// ============================================================
+// 3.2 AJAX: Verificar unicidad de cédula en tiempo real
+// ============================================================
+
+add_action( 'wp_ajax_evapp_verificar_cedula', function () {
+    check_ajax_referer( 'evapp_verificar_cedula_nonce', 'nonce' );
+
+    $cedula    = sanitize_text_field( $_POST['cedula'] ?? '' );
+    $post_id   = absint( $_POST['post_id'] ?? 0 );
+
+    if ( ! $cedula ) {
+        wp_send_json_success( [ 'disponible' => true ] );
+    }
+
+    global $wpdb;
+    $duplicado_id = (int) $wpdb->get_var( $wpdb->prepare(
+        "SELECT pm.post_id
+           FROM {$wpdb->postmeta} pm
+           JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+          WHERE pm.meta_key   = '_asistente_cedula'
+            AND pm.meta_value = %s
+            AND p.post_type   = 'eventosapp_asistente'
+            AND p.post_status != 'trash'
+            AND pm.post_id   != %d
+          LIMIT 1",
+        $cedula,
+        $post_id
+    ) );
+
+    if ( $duplicado_id ) {
+        $nombre_dup = get_the_title( $duplicado_id );
+        wp_send_json_success( [
+            'disponible'  => false,
+            'duplicado_id'=> $duplicado_id,
+            'nombre'      => $nombre_dup,
+            'edit_url'    => get_edit_post_link( $duplicado_id ),
+        ] );
+    }
+
+    wp_send_json_success( [ 'disponible' => true ] );
+} );
 
 // ============================================================
 // 4. METABOXES
@@ -219,6 +326,23 @@ function eventosapp_asistente_datos_metabox( $post ) {
             margin: 16px 0 4px;
             grid-column: 1 / -1;
         }
+        /* Estados del campo cédula */
+        #_asistente_cedula.evapp-cedula-ok {
+            border-color: #00a32a !important;
+            box-shadow: 0 0 0 1px #00a32a !important;
+        }
+        #_asistente_cedula.evapp-cedula-error {
+            border-color: #d63638 !important;
+            box-shadow: 0 0 0 1px #d63638 !important;
+        }
+        #evapp-cedula-feedback {
+            margin-top: 5px;
+            font-size: 12px;
+            min-height: 18px;
+        }
+        #evapp-cedula-feedback.ok   { color: #00a32a; }
+        #evapp-cedula-feedback.error{ color: #d63638; }
+        #evapp-cedula-feedback.checking { color: #646970; font-style: italic; }
     </style>
 
     <div class="evapp-asistente-grid">
@@ -239,9 +363,14 @@ function eventosapp_asistente_datos_metabox( $post ) {
         </div>
 
         <div>
-            <label for="_asistente_cedula">Cédula de Ciudadanía</label>
+            <label for="_asistente_cedula">
+                Cédula de Ciudadanía <span style="color:#d63638">*</span>
+                <span style="font-weight:400;color:#646970;font-size:11px;">(identificador único)</span>
+            </label>
             <input type="text" id="_asistente_cedula" name="_asistente_cedula"
-                   value="<?php echo esc_attr( $cedula ); ?>" placeholder="Ej: 1234567890" />
+                   value="<?php echo esc_attr( $cedula ); ?>" placeholder="Ej: 1234567890"
+                   autocomplete="off" />
+            <div id="evapp-cedula-feedback"></div>
         </div>
 
         <!-- Sección: Contacto -->
@@ -296,6 +425,73 @@ function eventosapp_asistente_datos_metabox( $post ) {
         </div>
 
     </div>
+
+    <script>
+    (function($){
+        var cedulaTimer  = null;
+        var cedulaActual = <?php echo json_encode( $cedula ); ?>;
+        var postId       = <?php echo (int) $post->ID; ?>;
+        var nonce        = <?php echo json_encode( wp_create_nonce( 'evapp_verificar_cedula_nonce' ) ); ?>;
+
+        var $campo    = $('#_asistente_cedula');
+        var $feedback = $('#evapp-cedula-feedback');
+
+        function verificarCedula( valor ) {
+            if ( ! valor ) {
+                $campo.removeClass('evapp-cedula-ok evapp-cedula-error');
+                $feedback.text('').removeClass('ok error checking');
+                return;
+            }
+
+            // Si es la misma cédula que ya tenía el asistente, no verificar
+            if ( valor === cedulaActual ) {
+                $campo.removeClass('evapp-cedula-ok evapp-cedula-error').addClass('evapp-cedula-ok');
+                $feedback.text('✔ Cédula actual del asistente.').removeClass('error checking').addClass('ok');
+                return;
+            }
+
+            $campo.removeClass('evapp-cedula-ok evapp-cedula-error');
+            $feedback.text('Verificando disponibilidad…').removeClass('ok error').addClass('checking');
+
+            $.post( ajaxurl, {
+                action : 'evapp_verificar_cedula',
+                nonce  : nonce,
+                cedula : valor,
+                post_id: postId
+            }, function( res ) {
+                if ( ! res.success ) return;
+
+                if ( res.data.disponible ) {
+                    $campo.addClass('evapp-cedula-ok');
+                    $feedback.text('✔ Cédula disponible.').removeClass('error checking').addClass('ok');
+                } else {
+                    $campo.addClass('evapp-cedula-error');
+                    var msg = '✖ Esta cédula ya está registrada en: '
+                        + '<a href="' + res.data.edit_url + '" target="_blank">'
+                        + res.data.nombre + '</a>';
+                    $feedback.html( msg ).removeClass('ok checking').addClass('error');
+                }
+            } );
+        }
+
+        $campo.on('input', function(){
+            clearTimeout( cedulaTimer );
+            var val = $(this).val().trim();
+            cedulaTimer = setTimeout( function(){ verificarCedula( val ); }, 600 );
+        });
+
+        // Bloquear envío si hay cédula duplicada
+        $( '#post' ).on( 'submit', function(e){
+            if ( $campo.hasClass('evapp-cedula-error') ) {
+                e.preventDefault();
+                alert('⚠️ La cédula ingresada ya existe en otro asistente. Corrija el valor antes de guardar.');
+                $campo.focus();
+                return false;
+            }
+        });
+
+    })(jQuery);
+    </script>
     <?php
 }
 
