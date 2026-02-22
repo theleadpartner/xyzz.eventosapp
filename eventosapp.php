@@ -273,6 +273,9 @@ add_action('add_meta_boxes', function() {
 /**
  * Metabox: Detalles del Evento (INCLUYE Wallet por evento)
  */
+/**
+ * Metabox: Detalles del Evento (INCLUYE Wallet por evento)
+ */
 function eventosapp_render_metabox_evento($post) {
     // Recuperar valores guardados
     $tipo_fecha   = get_post_meta($post->ID, '_eventosapp_tipo_fecha', true) ?: 'unica';
@@ -290,6 +293,10 @@ function eventosapp_render_metabox_evento($post) {
     $organizador       = get_post_meta($post->ID, '_eventosapp_organizador', true) ?: '';
     $organizador_email = get_post_meta($post->ID, '_eventosapp_organizador_email', true) ?: '';
     $organizador_tel   = get_post_meta($post->ID, '_eventosapp_organizador_tel', true) ?: '';
+
+    // === VINCULACIÓN CON CLIENTE ===
+    $usar_cliente = get_post_meta($post->ID, '_eventosapp_usar_cliente', true) === '1' ? '1' : '0';
+    $cliente_id   = (int) get_post_meta($post->ID, '_eventosapp_cliente_id', true);
 
     if (!is_array($fechas_noco)) {
         $fechas_noco = is_string($fechas_noco) && $fechas_noco ? explode(',', $fechas_noco) : [];
@@ -313,8 +320,18 @@ function eventosapp_render_metabox_evento($post) {
     $readonly = ($wallet_custom_enable === '1' && $wallet_class_id) ? 'readonly' : '';
     $note = ($readonly
         ? '<span class="muted">Este ID fue generado automáticamente y no es editable.</span>'
-        : '<span class="muted">Si no incluye “.”, se antepone el Issuer ID.</span>'
+        : '<span class="muted">Si no incluye ".", se antepone el Issuer ID.</span>'
     );
+
+    // Obtener lista de clientes para el dropdown
+    $clientes = get_posts([
+        'post_type'      => 'eventosapp_cliente',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'orderby'        => 'title',
+        'order'          => 'ASC',
+        'fields'         => 'ids',
+    ]);
 
     wp_nonce_field('eventosapp_detalles_evento', 'eventosapp_nonce');
     ?>
@@ -324,6 +341,8 @@ function eventosapp_render_metabox_evento($post) {
     .eventosapp-wallet-toggle .desc { font-size:12px; color:#666; display:block; margin-top:2px; }
     .eventosapp-wallet-grid { border:1px solid #e5e5e5; padding:10px; margin-top:6px; background:#fafafa; }
     .muted { color:#666; font-size:12px; }
+    .evapp-org-toggle-wrap { margin-bottom:6px; }
+    .evapp-org-toggle-wrap label { font-weight:400; cursor:pointer; }
     </style>
 
     <!-- Tipo de fecha -->
@@ -390,8 +409,44 @@ function eventosapp_render_metabox_evento($post) {
     <input type="text" class="eventosapp-input-wide" name="eventosapp_coordenadas" value="<?php echo esc_attr($coordenadas); ?>" placeholder="Ej: 11.0041,-74.8067"><br>
     <span class="muted">Puedes obtenerlas desde <a href="https://www.google.com/maps" target="_blank" rel="noopener">Google Maps</a></span><br><br>
 
+    <!-- === NOMBRE DEL ORGANIZADOR (con opción de vincular cliente) === -->
     <label><strong>Nombre del Organizador:</strong></label><br>
-    <input type="text" class="eventosapp-input-wide" name="eventosapp_organizador" value="<?php echo esc_attr($organizador); ?>"><br><br>
+
+    <div class="evapp-org-toggle-wrap">
+        <label>
+            <input type="checkbox" id="evapp_usar_cliente_cb" name="eventosapp_usar_cliente" value="1" <?php checked($usar_cliente, '1'); ?>>
+            Organizador está creado (seleccionar desde Clientes)
+        </label>
+    </div>
+
+    <!-- Campo texto libre (por defecto) -->
+    <div id="evapp_org_texto_wrap" style="display:<?php echo ($usar_cliente === '1' ? 'none' : 'block'); ?>;">
+        <input type="text" class="eventosapp-input-wide" name="eventosapp_organizador" id="evapp_organizador_texto" value="<?php echo esc_attr($organizador); ?>">
+    </div>
+
+    <!-- Dropdown de clientes (cuando checkbox activo) -->
+    <div id="evapp_org_cliente_wrap" style="display:<?php echo ($usar_cliente === '1' ? 'block' : 'none'); ?>;">
+        <?php if (empty($clientes)): ?>
+            <p class="muted">⚠️ No hay clientes creados aún. <a href="<?php echo admin_url('post-new.php?post_type=eventosapp_cliente'); ?>" target="_blank">Crear cliente</a></p>
+        <?php else: ?>
+            <select name="eventosapp_cliente_id" id="evapp_cliente_select" class="eventosapp-input-wide">
+                <option value="">— Seleccionar cliente —</option>
+                <?php foreach ($clientes as $cid):
+                    $cnombre = get_post_meta($cid, '_cliente_nombre_empresa', true) ?: get_the_title($cid);
+                ?>
+                    <option value="<?php echo esc_attr($cid); ?>" <?php selected($cliente_id, $cid); ?>>
+                        <?php echo esc_html($cnombre); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <?php if ($cliente_id):
+                $edit_url = get_edit_post_link($cliente_id);
+            ?>
+                <span class="muted" id="evapp_cliente_link_wrap"> → <a href="<?php echo esc_url($edit_url); ?>" target="_blank">Ver ficha del cliente</a></span>
+            <?php endif; ?>
+        <?php endif; ?>
+    </div>
+    <br>
 
     <label><strong>Correo Electrónico del Organizador:</strong></label><br>
     <input type="email" class="eventosapp-input-wide" name="eventosapp_organizador_email" value="<?php echo esc_attr($organizador_email); ?>"><br><br>
@@ -490,6 +545,33 @@ function eventosapp_render_metabox_evento($post) {
               $('#eventosapp_wallet_custom_fields').slideDown(120);
           } else {
               $('#eventosapp_wallet_custom_fields').slideUp(120);
+          }
+      });
+
+      // === Toggle Organizador: texto libre vs cliente ===
+      $('#evapp_usar_cliente_cb').on('change', function(){
+          if ($(this).is(':checked')) {
+              $('#evapp_org_texto_wrap').hide();
+              $('#evapp_org_cliente_wrap').show();
+          } else {
+              $('#evapp_org_cliente_wrap').hide();
+              $('#evapp_org_texto_wrap').show();
+          }
+      });
+
+      // Actualizar enlace "Ver ficha del cliente" al cambiar el select
+      $('#evapp_cliente_select').on('change', function(){
+          var cid = $(this).val();
+          var $linkWrap = $('#evapp_cliente_link_wrap');
+          if (!cid) {
+              $linkWrap.hide();
+              return;
+          }
+          // Construir URL de edición dinámicamente
+          var editBase = '<?php echo esc_js(admin_url('post.php?action=edit&post=')); ?>';
+          if ($linkWrap.length) {
+              $linkWrap.find('a').attr('href', editBase + cid);
+              $linkWrap.show();
           }
       });
     })(jQuery);
@@ -602,9 +684,33 @@ add_action('save_post_eventosapp_event', function($post_id) {
 
     update_post_meta($post_id, '_eventosapp_direccion', sanitize_text_field($_POST['eventosapp_direccion'] ?? ''));
     update_post_meta($post_id, '_eventosapp_coordenadas', sanitize_text_field($_POST['eventosapp_coordenadas'] ?? ''));
-    update_post_meta($post_id, '_eventosapp_organizador', sanitize_text_field($_POST['eventosapp_organizador'] ?? ''));
     update_post_meta($post_id, '_eventosapp_organizador_email', sanitize_email($_POST['eventosapp_organizador_email'] ?? ''));
     update_post_meta($post_id, '_eventosapp_organizador_tel', sanitize_text_field($_POST['eventosapp_organizador_tel'] ?? ''));
+
+    // === VINCULACIÓN CON CLIENTE ===
+    $usar_cliente = isset($_POST['eventosapp_usar_cliente']) ? '1' : '0';
+    update_post_meta($post_id, '_eventosapp_usar_cliente', $usar_cliente);
+
+    if ($usar_cliente === '1') {
+        $cliente_id = absint($_POST['eventosapp_cliente_id'] ?? 0);
+        update_post_meta($post_id, '_eventosapp_cliente_id', $cliente_id);
+
+        // Derivar nombre del organizador desde el cliente seleccionado
+        if ($cliente_id) {
+            $nombre_cliente = get_post_meta($cliente_id, '_cliente_nombre_empresa', true);
+            if (!$nombre_cliente) {
+                $nombre_cliente = get_the_title($cliente_id);
+            }
+            update_post_meta($post_id, '_eventosapp_organizador', sanitize_text_field($nombre_cliente));
+        } else {
+            // Si no eligió cliente, dejamos el organizador vacío o como estaba
+            update_post_meta($post_id, '_eventosapp_organizador', '');
+        }
+    } else {
+        // Modo texto libre
+        update_post_meta($post_id, '_eventosapp_cliente_id', 0);
+        update_post_meta($post_id, '_eventosapp_organizador', sanitize_text_field($_POST['eventosapp_organizador'] ?? ''));
+    }
 
     if (isset($_POST['eventosapp_localidades_nonce']) && wp_verify_nonce($_POST['eventosapp_localidades_nonce'], 'eventosapp_localidades_guardar')) {
         $localidades = [];
