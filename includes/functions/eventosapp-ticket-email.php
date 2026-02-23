@@ -367,7 +367,7 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
     $from_name = eventosapp_event_from_name($evento_id);
 
     $organizador_email = $evento_id ? (get_post_meta($evento_id, '_eventosapp_organizador_email', true) ?: '') : '';
-    $organizador_name  = $evento_id ? (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') : '';
+    $organizador_name  = $evento_id ? ( function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($evento_id) : (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') ) : '';
 
     $base_headers = [
         'Content-Type: text/html; charset=UTF-8',
@@ -470,7 +470,7 @@ function eventosapp_build_ticket_email_html($ticket_id) {
 
     // Datos evento
     $evento_nombre = $evento_id ? get_the_title($evento_id) : '';
-    $organizador   = $evento_id ? (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') : '';
+    $organizador   = $evento_id ? ( function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($evento_id) : (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') ) : '';
     $lugar_evento  = $evento_id ? (get_post_meta($evento_id, '_eventosapp_direccion', true) ?: '') : '';
 
     // Fecha legible
@@ -521,7 +521,7 @@ function eventosapp_build_ticket_email_html($ticket_id) {
     $pdf_url = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
     $ics_url = get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true);
 
-    // === Wallet URLs (con generación “just in time” si están activos) ===
+    // === Wallet URLs (con generación "just in time" si están activos) ===
     // Android
     $wallet_android_url = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', true);
     if (!$wallet_android_url) {
