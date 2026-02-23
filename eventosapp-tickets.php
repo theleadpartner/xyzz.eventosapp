@@ -1958,3 +1958,40 @@ add_action('wp_ajax_eventosapp_reindex_tickets_all', function(){
     wp_die('Reindex OK. Tickets procesados: '.$count);
 	
 });
+
+// ============================================================
+// HELPER GLOBAL: Buscar ticket existente por (evento + cédula)
+// Usado por todos los canales de creación de tickets para deduplicar.
+// ============================================================
+
+if ( ! function_exists( 'evapp_find_ticket_by_cedula_evento' ) ) {
+    function evapp_find_ticket_by_cedula_evento( $cedula, $evento_id ) {
+        $cedula    = sanitize_text_field( $cedula );
+        $evento_id = (int) $evento_id;
+        if ( ! $cedula || ! $evento_id ) return false;
+
+        $q = new WP_Query( [
+            'post_type'      => 'eventosapp_ticket',
+            'post_status'    => 'any',
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                'relation' => 'AND',
+                [
+                    'key'     => '_eventosapp_ticket_evento_id',
+                    'value'   => $evento_id,
+                    'type'    => 'NUMERIC',
+                    'compare' => '=',
+                ],
+                [
+                    'key'     => '_eventosapp_asistente_cc',
+                    'value'   => $cedula,
+                    'compare' => '=',
+                ],
+            ],
+        ] );
+
+        return ! empty( $q->posts ) ? (int) $q->posts[0] : false;
+    }
+}
