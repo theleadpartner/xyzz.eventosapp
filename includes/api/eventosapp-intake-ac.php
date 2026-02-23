@@ -429,6 +429,16 @@ if ($existing) {
     error_log('[EventosApp] webhook UPDATE ticket ' . $ticket_id . ' -> email SKIPPED');
   }
 
+/**
+   * Hook de extensión: ticket actualizado vía webhook.
+   * Se dispara después de que todos los metas han sido escritos
+   * y el correo ha sido procesado.
+   *
+   * @param int   $ticket_id
+   * @param array $data Payload raw (sanitizado/parseado)
+   */
+  do_action( 'eventosapp_ticket_updated_via_webhook', $ticket_id, $data );
+
   return array_merge([
     'ok'         => true,
     'ticket_id'  => $ticket_id,
