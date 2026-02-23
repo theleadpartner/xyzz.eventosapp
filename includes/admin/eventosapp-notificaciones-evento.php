@@ -286,7 +286,7 @@ function evapp_collect_snapshot($post_id){
 
     // Lugar / contacto
     $dir       = get_post_meta($post_id, '_eventosapp_direccion', true) ?: '';
-    $org       = get_post_meta($post_id, '_eventosapp_organizador', true) ?: '';
+    $org       = function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($post_id) : (get_post_meta($post_id, '_eventosapp_organizador', true) ?: '');
 
     // Productor / Operador (nombres; los correos no se resaltan)
     $prod_n    = get_post_meta($post_id, '_evapp_prod_nombre', true) ?: '';
