@@ -30,19 +30,22 @@ function eventosapp_render_metabox_extras_ticket($post) {
     $walleti     = get_post_meta($post->ID, '_eventosapp_ticket_wallet_apple', true);
     $verify      = get_post_meta($post->ID, '_eventosapp_ticket_verify_email', true);
 
-    // NUEVO: envío auto para registro público
+    // Envío auto para registro público
     $auto_public = get_post_meta($post->ID, '_eventosapp_ticket_auto_email_public', true);
 
-    // NUEVO: envío auto para registro manual
+    // Envío auto para registro manual
     $auto_manual = get_post_meta($post->ID, '_eventosapp_ticket_auto_email_manual', true);
 
-    // NUEVO: flag "usar QR preimpreso"
+    // Flag "usar QR preimpreso"
     $use_preprinted = get_post_meta($post->ID, '_eventosapp_ticket_use_preprinted_qr', true);
-    // NUEVO: flag "usar QR preimpreso SOLO para Networking"
+    // Flag "usar QR preimpreso SOLO para Networking"
     $use_preprinted_net = get_post_meta($post->ID, '_eventosapp_ticket_use_preprinted_qr_networking', true);
 
-    // NUEVO: flag "Activar Doble Autenticación"
+    // Flag "Activar Doble Autenticación"
     $double_auth = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_enabled', true);
+
+    // NUEVO: Flag "Vincular ticket con CPT Asistente"
+    $vincular_asistente = get_post_meta($post->ID, '_eventosapp_ticket_vincular_asistente', true);
 
     wp_nonce_field('eventosapp_extras_ticket_guardar', 'eventosapp_extras_ticket_nonce');
     ?>
@@ -113,7 +116,7 @@ function eventosapp_render_metabox_extras_ticket($post) {
         Agrega una capa extra de seguridad contra tickets robados o compartidos.
     </small>
 
-<hr>
+    <hr>
     <label>
         <input type="checkbox" name="eventosapp_ticket_control_pago" value="1" <?php checked(get_post_meta($post->ID, '_eventosapp_ticket_control_pago', true), '1'); ?>>
         <strong>💳 Activar Control de Pago</strong>
@@ -124,12 +127,20 @@ function eventosapp_render_metabox_extras_ticket($post) {
         Los tickets en estado "No Pagado" mostrarán un mensaje de error al intentar hacer check-in.
     </small>
 
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_vincular_asistente" value="1" <?php checked($vincular_asistente, '1'); ?>>
+        <strong>👤 Vincular Tickets con CPT Asistentes</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Al crear un ticket, se asociará automáticamente al perfil del asistente según la cédula.
+        Si el asistente no existe, se creará. Los datos del perfil siempre se actualizarán con los del último ticket creado.
+    </small>
+
     <?php
 }
 
-/**
- * Guardar metadatos del metabox de extras
- */
 /**
  * Guardar metadatos del metabox de extras
  */
@@ -146,43 +157,50 @@ add_action('save_post_eventosapp_event', function($post_id){
         return;
     }
 
-    // Guardar flags
+    // Guardar flags existentes
     update_post_meta($post_id, '_eventosapp_ticket_pdf',                isset($_POST['eventosapp_ticket_pdf']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_ics',                isset($_POST['eventosapp_ticket_ics']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_wallet_android',     isset($_POST['eventosapp_ticket_wallet_android']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_wallet_apple',       isset($_POST['eventosapp_ticket_wallet_apple']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_verify_email',       isset($_POST['eventosapp_ticket_verify_email']) ? '1' : '0');
 
-    // NUEVO: solo para registro público
+    // Solo para registro público
     update_post_meta($post_id, '_eventosapp_ticket_auto_email_public',  isset($_POST['eventosapp_ticket_auto_email_public']) ? '1' : '0');
-    
-    // NUEVO: solo para registro manual (staff/organizador)
+
+    // Solo para registro manual (staff/organizador)
     update_post_meta($post_id, '_eventosapp_ticket_auto_email_manual',  isset($_POST['eventosapp_ticket_auto_email_manual']) ? '1' : '0');
-    
-    // NUEVO: usar QR preimpreso (por evento)
+
+    // Usar QR preimpreso (por evento)
     update_post_meta($post_id, '_eventosapp_ticket_use_preprinted_qr', isset($_POST['eventosapp_ticket_use_preprinted_qr']) ? '1' : '0');
-    
-    // NUEVO: usar QR preimpreso SOLO para networking
+
+    // Usar QR preimpreso SOLO para networking
     update_post_meta(
         $post_id,
         '_eventosapp_ticket_use_preprinted_qr_networking',
         isset($_POST['eventosapp_ticket_use_preprinted_qr_networking']) ? '1' : '0'
     );
 
-    // NUEVO: Activar Doble Autenticación
+    // Activar Doble Autenticación
     update_post_meta(
         $post_id,
         '_eventosapp_ticket_double_auth_enabled',
         isset($_POST['eventosapp_ticket_double_auth_enabled']) ? '1' : '0'
     );
 
-// NUEVO: Activar Control de Pago
+    // Activar Control de Pago
     update_post_meta(
         $post_id,
         '_eventosapp_ticket_control_pago',
         isset($_POST['eventosapp_ticket_control_pago']) ? '1' : '0'
     );
-    
+
+    // NUEVO: Vincular Tickets con CPT Asistentes
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_vincular_asistente',
+        isset($_POST['eventosapp_ticket_vincular_asistente']) ? '1' : '0'
+    );
+
 }, 25); // prioridad > 20 para correr después del guardado base
 
 
