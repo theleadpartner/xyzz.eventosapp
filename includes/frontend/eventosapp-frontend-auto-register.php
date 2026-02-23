@@ -303,16 +303,27 @@ function eventosapp_evauto_submit(){
     // Autor forzado
     $creator_id = eventosapp_get_autogestion_user_id();
 
-    // Crear Ticket
-    $post_id = wp_insert_post([
-        'post_type'   => 'eventosapp_ticket',
-        'post_status' => 'publish',
-        'post_title'  => 'tmp',
-        'post_author' => $creator_id,
-    ], true);
+// ── Deduplicar por (evento + cédula): reutilizar ticket si ya existe ──────
+    $existing_ticket_id = ($cc && function_exists('evapp_find_ticket_by_cedula_evento'))
+        ? evapp_find_ticket_by_cedula_evento($cc, $eid)
+        : false;
 
-    if ( is_wp_error($post_id) || ! $post_id ) {
-        wp_send_json_error(['message'=>'No se pudo crear el ticket. Intenta nuevamente.']);
+    if ($existing_ticket_id) {
+        $post_id = $existing_ticket_id;
+        // Actualizar status por si estaba en borrador
+        wp_update_post(['ID' => $post_id, 'post_status' => 'publish']);
+    } else {
+        // Crear Ticket nuevo
+        $post_id = wp_insert_post([
+            'post_type'   => 'eventosapp_ticket',
+            'post_status' => 'publish',
+            'post_title'  => 'tmp',
+            'post_author' => $creator_id,
+        ], true);
+
+        if ( is_wp_error($post_id) || ! $post_id ) {
+            wp_send_json_error(['message'=>'No se pudo crear el ticket. Intenta nuevamente.']);
+        }
     }
 
     // Payload para hooks centrales
