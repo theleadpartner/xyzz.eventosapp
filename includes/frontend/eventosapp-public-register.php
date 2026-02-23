@@ -236,8 +236,7 @@ add_shortcode('eventosapp_public_register', function( $atts ){
 
     // Metadatos de privacidad
     $priv_empresa  = trim((string) get_post_meta($event_id, '_eventosapp_priv_empresa', true));
-    if ($priv_empresa==='') $priv_empresa = get_post_meta($event_id, '_eventosapp_organizador', true) ?: get_bloginfo('name');
-    $priv_politica = esc_url( get_post_meta($event_id, '_eventosapp_priv_politica_url', true) );
+if ($priv_empresa==='') $priv_empresa = ( function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($event_id) : (get_post_meta($event_id, '_eventosapp_organizador', true) ?: '') ) ?: get_bloginfo('name');    $priv_politica = esc_url( get_post_meta($event_id, '_eventosapp_priv_politica_url', true) );
     $priv_aviso    = esc_url( get_post_meta($event_id, '_eventosapp_priv_aviso_url', true) );
 
     // Success por URL (compartible)
