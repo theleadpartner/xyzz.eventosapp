@@ -61,6 +61,33 @@ require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-doble-au
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-ticket-double-auth-metabox.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-double-auth.php';
 
+// === Helper: Resolver nombre del Organizador dinámicamente ===
+// Siempre retorna el nombre correcto sin importar si se usó texto libre o CPT Cliente.
+// Si el evento vincula un cliente, lee directamente del CPT cliente (siempre fresco).
+// Si es texto libre, lee el campo de texto del metabox.
+if ( ! function_exists('eventosapp_get_nombre_organizador') ) {
+    function eventosapp_get_nombre_organizador( $evento_id ) {
+        if ( ! $evento_id ) return '';
+
+        $usar_cliente = get_post_meta( $evento_id, '_eventosapp_usar_cliente', true );
+
+        if ( $usar_cliente === '1' ) {
+            $cliente_id = absint( get_post_meta( $evento_id, '_eventosapp_cliente_id', true ) );
+            if ( $cliente_id ) {
+                $nombre = get_post_meta( $cliente_id, '_cliente_nombre_empresa', true );
+                if ( ! $nombre ) {
+                    $nombre = get_the_title( $cliente_id );
+                }
+                return sanitize_text_field( $nombre );
+            }
+            // Checkbox marcado pero sin cliente seleccionado → fallback al campo de texto
+            return sanitize_text_field( get_post_meta( $evento_id, '_eventosapp_organizador', true ) ?: '' );
+        }
+
+        // Modo texto libre
+        return sanitize_text_field( get_post_meta( $evento_id, '_eventosapp_organizador', true ) ?: '' );
+    }
+}
 
 // === Debug de correo (solo si EVENTOSAPP_DEBUG_MAIL está habilitado) ===
 if (defined('EVENTOSAPP_DEBUG_MAIL') && EVENTOSAPP_DEBUG_MAIL) {
