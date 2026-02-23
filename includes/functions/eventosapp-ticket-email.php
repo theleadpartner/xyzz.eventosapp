@@ -180,7 +180,7 @@ function eventosapp_send_ticket_email_handler() {
     $from_name = eventosapp_event_from_name($evento_id);
 
     $organizador_email = $evento_id ? (get_post_meta($evento_id, '_eventosapp_organizador_email', true) ?: '') : '';
-    $organizador_name  = $evento_id ? (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') : '';
+    $organizador_name  = $evento_id ? ( function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($evento_id) : (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') ) : '';
 
     $base_headers = [
         'Content-Type: text/html; charset=UTF-8',
