@@ -1056,8 +1056,8 @@ function eventosapp_ticket_generar_pdf($ticket_id) {
 
     // 2. Cargar datos del evento y asistente
     $evento_nombre = get_the_title($evento_id);
-    $organizador = get_post_meta($evento_id, '_eventosapp_organizador', true);
-    $lugar_evento = get_post_meta($evento_id, '_eventosapp_direccion', true);
+    $organizador   = function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($evento_id) : (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '');
+    $lugar_evento  = get_post_meta($evento_id, '_eventosapp_direccion', true);
     // --- Fecha legible ---
     $tipo_fecha = get_post_meta($evento_id, '_eventosapp_tipo_fecha', true);
     if ($tipo_fecha === 'unica') {
