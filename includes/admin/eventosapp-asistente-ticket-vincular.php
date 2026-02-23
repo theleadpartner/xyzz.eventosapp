@@ -18,6 +18,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 // ============================================================
 // 1. HOOK: Vincular ticket con asistente al guardar un ticket
 //    Prioridad 40 → corre después del QR Manager (20) y el PDF (30)
+//    Cubre: creación/edición manual desde backend y frontend.
+//    El caso webhook se cubre via eventosapp_ticket_created_via_webhook
+//    y eventosapp_ticket_updated_via_webhook (ver sección 1b).
 // ============================================================
 
 add_action( 'save_post_eventosapp_ticket', 'evapp_vincular_ticket_a_asistente', 40, 3 );
@@ -29,96 +32,135 @@ function evapp_vincular_ticket_a_asistente( $ticket_id, $post, $update ) {
     if ( wp_is_post_revision( $ticket_id ) ) return;
     if ( $post->post_type !== 'eventosapp_ticket' ) return;
 
-    // ── Obtener el evento asociado al ticket ─────────────────────────────
-    $evento_id = (int) get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
-    if ( ! $evento_id ) return;
+    // Delegar a la función central
+    evapp_process_vincular_asistente( $ticket_id );
+}
 
-    // ── Verificar que la función está activa para este evento ─────────────
-    $vincular_activo = get_post_meta( $evento_id, '_eventosapp_ticket_vincular_asistente', true );
-    if ( $vincular_activo !== '1' ) return;
+// ============================================================
+// 1b. HOOKS: Vincular ticket con asistente desde canal webhook
+//     Se ejecutan DESPUÉS de que el webhook ha escrito todos los metas,
+//     por lo que los datos ya están disponibles correctamente.
+// ============================================================
 
-    // ── Obtener cédula del ticket ─────────────────────────────────────────
-    $cedula = sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_cc', true ) );
-    if ( ! $cedula ) return;
+// CREATE vía webhook
+add_action( 'eventosapp_ticket_created_via_webhook', 'evapp_vincular_desde_webhook', 10, 2 );
+function evapp_vincular_desde_webhook( $ticket_id, $data ) {
+    evapp_process_vincular_asistente( (int) $ticket_id );
+}
 
-    // ── Buscar o crear asistente ──────────────────────────────────────────
-    $asistente_id = function_exists( 'eventosapp_find_asistente_by_cedula' )
-        ? eventosapp_find_asistente_by_cedula( $cedula )
-        : evapp_find_asistente_by_cedula_local( $cedula );
+// UPDATE vía webhook
+add_action( 'eventosapp_ticket_updated_via_webhook', 'evapp_vincular_desde_webhook_update', 10, 2 );
+function evapp_vincular_desde_webhook_update( $ticket_id, $data ) {
+    evapp_process_vincular_asistente( (int) $ticket_id );
+}
 
-    if ( ! $asistente_id ) {
-        // Crear nuevo asistente
-        $asistente_id = evapp_crear_asistente_desde_ticket( $ticket_id, $cedula );
-        if ( ! $asistente_id || is_wp_error( $asistente_id ) ) return;
-    }
+// ============================================================
+// 1c. FUNCIÓN CENTRAL: Lógica de vinculación (reutilizable desde
+//     cualquier canal: save_post, webhook create, webhook update,
+//     edición masiva, etc.)
+// ============================================================
 
-    // ── Comparar datos actuales del asistente vs datos del ticket ─────────
-    $campos_map = evapp_get_campos_map();
-    $datos_anteriores = [];
-    $datos_nuevos     = [];
+if ( ! function_exists( 'evapp_process_vincular_asistente' ) ) {
+    function evapp_process_vincular_asistente( $ticket_id ) {
 
-    foreach ( $campos_map as $ticket_meta => $asistente_meta ) {
-        $val_ticket    = sanitize_text_field( get_post_meta( $ticket_id, $ticket_meta, true ) );
-        $val_asistente = get_post_meta( $asistente_id, $asistente_meta, true );
+        $ticket_id = (int) $ticket_id;
+        if ( ! $ticket_id ) return;
 
-        if ( $val_ticket !== '' && $val_ticket !== $val_asistente ) {
-            $datos_anteriores[ $asistente_meta ] = $val_asistente;
-            $datos_nuevos[ $asistente_meta ]     = $val_ticket;
+        // Verificar que el post existe y es del tipo correcto
+        $post = get_post( $ticket_id );
+        if ( ! $post || $post->post_type !== 'eventosapp_ticket' ) return;
+
+        // ── Obtener el evento asociado al ticket ─────────────────────────────
+        $evento_id = (int) get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
+        if ( ! $evento_id ) return;
+
+        // ── Verificar que la función está activa para este evento ─────────────
+        $vincular_activo = get_post_meta( $evento_id, '_eventosapp_ticket_vincular_asistente', true );
+        if ( $vincular_activo !== '1' ) return;
+
+        // ── Obtener cédula del ticket ─────────────────────────────────────────
+        $cedula = sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_cc', true ) );
+        if ( ! $cedula ) return;
+
+        // ── Buscar o crear asistente ──────────────────────────────────────────
+        $asistente_id = function_exists( 'eventosapp_find_asistente_by_cedula' )
+            ? eventosapp_find_asistente_by_cedula( $cedula )
+            : evapp_find_asistente_by_cedula_local( $cedula );
+
+        if ( ! $asistente_id ) {
+            // Crear nuevo asistente
+            $asistente_id = evapp_crear_asistente_desde_ticket( $ticket_id, $cedula );
+            if ( ! $asistente_id || is_wp_error( $asistente_id ) ) return;
         }
-    }
 
-    // ── Actualizar datos del asistente con los del ticket ─────────────────
-    foreach ( $datos_nuevos as $meta_key => $meta_val ) {
-        update_post_meta( $asistente_id, $meta_key, $meta_val );
-    }
+        // ── Comparar datos actuales del asistente vs datos del ticket ─────────
+        $campos_map = evapp_get_campos_map();
+        $datos_anteriores = [];
+        $datos_nuevos     = [];
 
-    // ── Sincronizar el post_title del asistente ───────────────────────────
-    $nombres   = get_post_meta( $asistente_id, '_asistente_nombres',   true );
-    $apellidos = get_post_meta( $asistente_id, '_asistente_apellidos', true );
-    $titulo    = trim( $nombres . ' ' . $apellidos );
+        foreach ( $campos_map as $ticket_meta => $asistente_meta ) {
+            $val_ticket    = sanitize_text_field( get_post_meta( $ticket_id, $ticket_meta, true ) );
+            $val_asistente = get_post_meta( $asistente_id, $asistente_meta, true );
 
-    if ( $titulo ) {
-        global $wpdb;
-        $wpdb->update(
-            $wpdb->posts,
-            [
-                'post_title' => $titulo,
-                'post_name'  => wp_unique_post_slug(
-                    sanitize_title( $titulo ),
-                    $asistente_id,
-                    get_post_status( $asistente_id ),
-                    'eventosapp_asistente',
-                    0
-                ),
-            ],
-            [ 'ID' => $asistente_id ],
-            [ '%s', '%s' ],
-            [ '%d' ]
-        );
-        clean_post_cache( $asistente_id );
-    }
+            if ( $val_ticket !== '' && $val_ticket !== $val_asistente ) {
+                $datos_anteriores[ $asistente_meta ] = $val_asistente;
+                $datos_nuevos[ $asistente_meta ]     = $val_ticket;
+            }
+        }
 
-    // ── Asociar el ticket al asistente (lista de tickets) ─────────────────
-    $tickets_asociados = get_post_meta( $asistente_id, '_asistente_tickets_asociados', true );
-    if ( ! is_array( $tickets_asociados ) ) $tickets_asociados = [];
+        // ── Actualizar datos del asistente con los del ticket ─────────────────
+        foreach ( $datos_nuevos as $meta_key => $meta_val ) {
+            update_post_meta( $asistente_id, $meta_key, $meta_val );
+        }
 
-    if ( ! in_array( $ticket_id, $tickets_asociados, true ) ) {
-        $tickets_asociados[] = $ticket_id;
-        update_post_meta( $asistente_id, '_asistente_tickets_asociados', $tickets_asociados );
-    }
+        // ── Sincronizar el post_title del asistente ───────────────────────────
+        $nombres   = get_post_meta( $asistente_id, '_asistente_nombres',   true );
+        $apellidos = get_post_meta( $asistente_id, '_asistente_apellidos', true );
+        $titulo    = trim( $nombres . ' ' . $apellidos );
 
-    // ── Guardar también el ID del asistente en el ticket ──────────────────
-    update_post_meta( $ticket_id, '_eventosapp_ticket_asistente_cpt_id', $asistente_id );
+        if ( $titulo ) {
+            global $wpdb;
+            $wpdb->update(
+                $wpdb->posts,
+                [
+                    'post_title' => $titulo,
+                    'post_name'  => wp_unique_post_slug(
+                        sanitize_title( $titulo ),
+                        $asistente_id,
+                        get_post_status( $asistente_id ),
+                        'eventosapp_asistente',
+                        0
+                    ),
+                ],
+                [ 'ID' => $asistente_id ],
+                [ '%s', '%s' ],
+                [ '%d' ]
+            );
+            clean_post_cache( $asistente_id );
+        }
 
-    // ── Registrar el changelog solo si hubo cambios ───────────────────────
-    if ( ! empty( $datos_nuevos ) ) {
-        evapp_registrar_changelog_asistente(
-            $asistente_id,
-            $ticket_id,
-            $evento_id,
-            $datos_anteriores,
-            $datos_nuevos
-        );
+        // ── Asociar el ticket al asistente (lista de tickets) ─────────────────
+        $tickets_asociados = get_post_meta( $asistente_id, '_asistente_tickets_asociados', true );
+        if ( ! is_array( $tickets_asociados ) ) $tickets_asociados = [];
+
+        if ( ! in_array( $ticket_id, $tickets_asociados, true ) ) {
+            $tickets_asociados[] = $ticket_id;
+            update_post_meta( $asistente_id, '_asistente_tickets_asociados', $tickets_asociados );
+        }
+
+        // ── Guardar también el ID del asistente en el ticket ──────────────────
+        update_post_meta( $ticket_id, '_eventosapp_ticket_asistente_cpt_id', $asistente_id );
+
+        // ── Registrar el changelog solo si hubo cambios ───────────────────────
+        if ( ! empty( $datos_nuevos ) ) {
+            evapp_registrar_changelog_asistente(
+                $asistente_id,
+                $ticket_id,
+                $evento_id,
+                $datos_anteriores,
+                $datos_nuevos
+            );
+        }
     }
 }
 
@@ -187,108 +229,119 @@ if ( ! function_exists( 'evapp_get_campos_map' ) ) {
         return [
             '_eventosapp_asistente_nombre'   => '_asistente_nombres',
             '_eventosapp_asistente_apellido' => '_asistente_apellidos',
-            '_eventosapp_asistente_cc'       => '_asistente_cedula',
             '_eventosapp_asistente_email'    => '_asistente_email',
             '_eventosapp_asistente_tel'      => '_asistente_telefono',
             '_eventosapp_asistente_empresa'  => '_asistente_empresa',
+            '_eventosapp_asistente_cc'       => '_asistente_cedula',
+            '_eventosapp_asistente_nit'      => '_asistente_nit',
             '_eventosapp_asistente_cargo'    => '_asistente_cargo',
             '_eventosapp_asistente_ciudad'   => '_asistente_ciudad',
             '_eventosapp_asistente_pais'     => '_asistente_pais',
+            '_eventosapp_asistente_localidad'=> '_asistente_localidad',
         ];
     }
 }
 
 // ============================================================
-// 5. FUNCIÓN: Registrar changelog en el asistente
+// 5. FUNCIÓN: Registrar changelog del asistente
 // ============================================================
 
 if ( ! function_exists( 'evapp_registrar_changelog_asistente' ) ) {
     function evapp_registrar_changelog_asistente( $asistente_id, $ticket_id, $evento_id, $datos_anteriores, $datos_nuevos ) {
 
-        $changelog = get_post_meta( $asistente_id, '_asistente_ticket_changelog', true );
-        if ( ! is_array( $changelog ) ) $changelog = [];
+        $evento_nombre = get_the_title( $evento_id );
+        $campos_log    = [];
 
-        // Labels legibles para los meta keys del asistente
-        $labels = [
-            '_asistente_nombres'   => 'Nombres',
-            '_asistente_apellidos' => 'Apellidos',
-            '_asistente_cedula'    => 'Cédula',
-            '_asistente_email'     => 'Email',
-            '_asistente_telefono'  => 'Teléfono',
-            '_asistente_empresa'   => 'Empresa',
-            '_asistente_cargo'     => 'Cargo',
-            '_asistente_ciudad'    => 'Ciudad',
-            '_asistente_pais'      => 'País',
-        ];
-
-        $campos_actualizados = [];
         foreach ( $datos_nuevos as $meta_key => $val_nuevo ) {
-            $campos_actualizados[] = [
-                'campo'    => isset( $labels[ $meta_key ] ) ? $labels[ $meta_key ] : $meta_key,
-                'anterior' => isset( $datos_anteriores[ $meta_key ] ) ? $datos_anteriores[ $meta_key ] : '',
+            $campos_log[] = [
+                'campo'    => $meta_key,
+                'anterior' => $datos_anteriores[ $meta_key ] ?? '',
                 'nuevo'    => $val_nuevo,
             ];
         }
 
-        try {
-            $now = new DateTime( 'now', wp_timezone() );
-        } catch ( Exception $e ) {
-            $now = new DateTime( 'now' );
-        }
-
         $entrada = [
-            'timestamp'           => $now->format( 'Y-m-d H:i:s' ),
-            'ticket_id'           => $ticket_id,
-            'evento_id'           => $evento_id,
-            'evento_nombre'       => get_the_title( $evento_id ),
-            'campos_actualizados' => $campos_actualizados,
+            'timestamp'          => current_time( 'mysql' ),
+            'ticket_id'          => $ticket_id,
+            'evento_id'          => $evento_id,
+            'evento_nombre'      => $evento_nombre,
+            'campos_actualizados'=> $campos_log,
         ];
+
+        $changelog = get_post_meta( $asistente_id, '_asistente_ticket_changelog', true );
+        if ( ! is_array( $changelog ) ) $changelog = [];
 
         // Insertar al inicio (más reciente primero)
         array_unshift( $changelog, $entrada );
+
+        // Limitar a 100 entradas
+        if ( count( $changelog ) > 100 ) {
+            $changelog = array_slice( $changelog, 0, 100 );
+        }
 
         update_post_meta( $asistente_id, '_asistente_ticket_changelog', $changelog );
     }
 }
 
 // ============================================================
-// 6. HELPER: Obtener fecha legible del evento
+// 6. COLUMNAS: En el listado de CPT eventosapp_asistente
+// ============================================================
+
+add_filter( 'manage_eventosapp_asistente_posts_columns', function ( $cols ) {
+    $new = [];
+    foreach ( $cols as $k => $v ) {
+        $new[ $k ] = $v;
+        if ( $k === 'title' ) {
+            $new['cedula']         = 'Cédula';
+            $new['email']          = 'Email';
+            $new['empresa']        = 'Empresa';
+            $new['tickets_count']  = 'Tickets';
+        }
+    }
+    return $new;
+} );
+
+add_action( 'manage_eventosapp_asistente_posts_custom_column', function ( $col, $post_id ) {
+    switch ( $col ) {
+        case 'cedula':
+            echo esc_html( get_post_meta( $post_id, '_asistente_cedula', true ) ?: '—' );
+            break;
+        case 'email':
+            echo esc_html( get_post_meta( $post_id, '_asistente_email', true ) ?: '—' );
+            break;
+        case 'empresa':
+            echo esc_html( get_post_meta( $post_id, '_asistente_empresa', true ) ?: '—' );
+            break;
+        case 'tickets_count':
+            $t = get_post_meta( $post_id, '_asistente_tickets_asociados', true );
+            echo is_array( $t ) ? count( $t ) : '0';
+            break;
+    }
+}, 10, 2 );
+
+// ============================================================
+// 7. HELPERS para el metabox de tickets asociados
 // ============================================================
 
 if ( ! function_exists( 'evapp_get_event_date_label' ) ) {
     function evapp_get_event_date_label( $evento_id ) {
-        $tipo = get_post_meta( $evento_id, '_eventosapp_tipo_fecha', true );
-        if ( $tipo === 'unica' ) {
-            $f = get_post_meta( $evento_id, '_eventosapp_fecha_unica', true );
-            return $f ? date_i18n( 'd/m/Y', strtotime( $f ) ) : '—';
-        } elseif ( $tipo === 'consecutiva' ) {
-            $ini = get_post_meta( $evento_id, '_eventosapp_fecha_inicio', true );
-            $fin = get_post_meta( $evento_id, '_eventosapp_fecha_fin',    true );
-            if ( $ini && $fin ) return date_i18n( 'd/m/Y', strtotime( $ini ) ) . ' → ' . date_i18n( 'd/m/Y', strtotime( $fin ) );
-            return $ini ? date_i18n( 'd/m/Y', strtotime( $ini ) ) : '—';
-        } elseif ( $tipo === 'noconsecutiva' ) {
-            $fechas = get_post_meta( $evento_id, '_eventosapp_fechas_noco', true );
-            if ( is_string( $fechas ) ) $fechas = @unserialize( $fechas );
-            if ( is_array( $fechas ) && $fechas ) {
-                return implode( ', ', array_map( function( $f ) { return date_i18n( 'd/m/Y', strtotime( $f ) ); }, $fechas ) );
-            }
-        }
-        return '—';
+        $fecha = get_post_meta( $evento_id, '_eventosapp_event_date', true );
+        if ( ! $fecha ) return '—';
+        $ts = strtotime( $fecha );
+        return $ts ? date_i18n( 'd/m/Y', $ts ) : esc_html( $fecha );
     }
 }
 
-// ============================================================
-// 7. HELPER: Obtener estado de checkin del ticket (simplificado)
-// ============================================================
-
 if ( ! function_exists( 'evapp_get_checkin_status_label' ) ) {
     function evapp_get_checkin_status_label( $ticket_id ) {
-        $status_arr = get_post_meta( $ticket_id, '_eventosapp_checkin_status', true );
-        if ( is_string( $status_arr ) ) $status_arr = @unserialize( $status_arr );
-        if ( ! is_array( $status_arr ) || empty( $status_arr ) ) {
-            return '<span style="color:#dc2626;">✗ No</span>';
-        }
-        foreach ( $status_arr as $day => $status ) {
+        $status = get_post_meta( $ticket_id, '_eventosapp_checkin_status', true );
+        if ( is_array( $status ) ) {
+            foreach ( $status as $day => $s ) {
+                if ( $s === 'checked_in' ) {
+                    return '<span style="color:#16a34a;">✓ Sí</span>';
+                }
+            }
+        } elseif ( is_string( $status ) ) {
             if ( $status === 'checked_in' ) {
                 return '<span style="color:#16a34a;">✓ Sí</span>';
             }
