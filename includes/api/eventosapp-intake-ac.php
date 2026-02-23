@@ -268,6 +268,18 @@ function eventosapp_ac_webhook_handler(\WP_REST_Request $req){
       ]);
       $existing = $q->posts;
     }
+
+    // 3) por (evento + cédula) — fallback universal que aplica en TODOS los modos
+    //    Garantiza deduplicación sin importar el canal de creación original.
+    if (!$existing && $cc) {
+      $found_by_cc = function_exists('evapp_find_ticket_by_cedula_evento')
+        ? evapp_find_ticket_by_cedula_evento($cc, $evento_id)
+        : false;
+      if ($found_by_cc) {
+        $existing = [$found_by_cc];
+        error_log('[EventosApp] Webhook dedupe by CC: ticket '.$found_by_cc.' reutilizado para cc='.$cc.' evento='.$evento_id);
+      }
+    }
   }
 
 // ======================================================================
