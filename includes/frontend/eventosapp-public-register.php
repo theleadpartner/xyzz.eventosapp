@@ -115,16 +115,26 @@ function eventosapp_pubreg_submit(){
     // Autor: si está logueado usarlo; si no, autogestion1
     $creator_id = is_user_logged_in() ? get_current_user_id() : eventosapp_get_autogestion_user_id();
 
-    // Crear ticket
-    $post_id = wp_insert_post([
-        'post_type'   => 'eventosapp_ticket',
-        'post_status' => 'publish',
-        'post_title'  => 'temporal',
-        'post_author' => $creator_id,
-    ], true);
+// ── Deduplicar por (evento + cédula): reutilizar ticket si ya existe ──────
+    $existing_ticket_id = ($cc && function_exists('evapp_find_ticket_by_cedula_evento'))
+        ? evapp_find_ticket_by_cedula_evento($cc, $event_id)
+        : false;
 
-    if ( is_wp_error($post_id) || ! $post_id ) {
-        wp_send_json_error(['message'=>'No se pudo crear el ticket. Inténtalo nuevamente.']);
+    // Crear ticket (o reutilizar existente)
+    if ($existing_ticket_id) {
+        $post_id = $existing_ticket_id;
+        wp_update_post(['ID' => $post_id, 'post_status' => 'publish']);
+    } else {
+        $post_id = wp_insert_post([
+            'post_type'   => 'eventosapp_ticket',
+            'post_status' => 'publish',
+            'post_title'  => 'temporal',
+            'post_author' => $creator_id,
+        ], true);
+
+        if ( is_wp_error($post_id) || ! $post_id ) {
+            wp_send_json_error(['message'=>'No se pudo crear el ticket. Inténtalo nuevamente.']);
+        }
     }
 
     // Metas base
