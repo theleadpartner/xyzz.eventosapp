@@ -173,16 +173,36 @@ function eventosapp_evreg_submit(){
         $_POST['eventosapp_extra'] = array_map('sanitize_text_field', array_map('wp_unslash', $extras_in));
     }
 
-    // Crear ticket
-    $post_id = wp_insert_post([
-        'post_type'    => 'eventosapp_ticket',
-        'post_status'  => 'publish',
-        'post_title'   => 'tmp',
-        'post_author'  => get_current_user_id(),
-    ], true);
+    // ── Deduplicar por (evento + cédula): reutilizar ticket si ya existe ──────
+    $existing_ticket_id = ($cc && function_exists('evapp_find_ticket_by_cedula_evento'))
+        ? evapp_find_ticket_by_cedula_evento($cc, $eid)
+        : false;
 
-    if ( is_wp_error($post_id) || ! $post_id ) {
-        wp_send_json_error(['message'=>'Error al crear el ticket. Inténtalo de nuevo.']);
+    if ($existing_ticket_id) {
+        // Actualizar ticket existente. save_post_eventosapp_ticket ya está configurado
+        // para leer $_POST, así que dispararlo con wp_update_post es suficiente.
+        remove_action('save_post_eventosapp_ticket', 'evapp_vincular_ticket_a_asistente', 40);
+        wp_update_post(['ID' => $existing_ticket_id, 'post_status' => 'publish']);
+        add_action('save_post_eventosapp_ticket', 'evapp_vincular_ticket_a_asistente', 40, 3);
+
+        // Llamar la vinculación con asistente directamente (metas ya actualizadas por save_post)
+        if (function_exists('evapp_process_vincular_asistente')) {
+            evapp_process_vincular_asistente($existing_ticket_id);
+        }
+
+        $post_id = $existing_ticket_id;
+    } else {
+        // Crear ticket nuevo
+        $post_id = wp_insert_post([
+            'post_type'    => 'eventosapp_ticket',
+            'post_status'  => 'publish',
+            'post_title'   => 'tmp',
+            'post_author'  => get_current_user_id(),
+        ], true);
+
+        if ( is_wp_error($post_id) || ! $post_id ) {
+            wp_send_json_error(['message'=>'Error al crear el ticket. Inténtalo de nuevo.']);
+        }
     }
 
     // ID público
