@@ -417,14 +417,13 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     }
 
     // Día actual en TZ del evento y validación contra días definidos
-	$today = eventosapp_get_today_in_event_tz($evento_id);
-	$days  = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
+    $today = eventosapp_get_today_in_event_tz($evento_id);
+    $days  = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
 
-	if ( empty($days) || !in_array($today, $days, true) ) {
-		// 200 OK para que llegue a .done() y podamos mostrar el mensaje de negocio
-		wp_send_json_error(['message' => 'El check-in solo está permitido en las fechas del evento. Hoy no corresponde.']);
-	}
-
+    if ( empty($days) || !in_array($today, $days, true) ) {
+        // 200 OK para que llegue a .done() y podamos mostrar el mensaje de negocio
+        wp_send_json_error(['message' => 'El check-in solo está permitido en las fechas del evento. Hoy no corresponde.']);
+    }
 
     // Estado actual y toggle
     $status_arr = get_post_meta($ticket_id, '_eventosapp_checkin_status', true);
@@ -436,7 +435,7 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     $status_arr[$today] = $new;
     update_post_meta($ticket_id, '_eventosapp_checkin_status', $status_arr);
 
-    // log
+    // Log
     $log = get_post_meta($ticket_id, '_eventosapp_checkin_log', true);
     if (is_string($log)) $log = @unserialize($log);
     if (!is_array($log)) $log = [];
@@ -450,21 +449,34 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     }
     $now = new DateTime('now', $tz);
 
-    $log[] = [
+    $log_entry = [
         'fecha'   => $now->format('Y-m-d'),
         'hora'    => $now->format('H:i:s'),
         'dia'     => $today,
         'status'  => $new,
         'usuario' => $user->display_name . ' (' . $user->user_email . ')',
-        'origen'  => 'frontend-search'
+        'origen'  => 'frontend-search',
     ];
+
+    // Registrar como tipo 'Counter' cuando se activa el check-in manualmente
+    if ( $new === 'checked_in' ) {
+        $log_entry['qr_type']       = 'counter';
+        $log_entry['qr_type_label'] = 'Counter';
+
+        // Actualizar estadísticas de uso por tipo (mismo mecanismo que QR check-in)
+        if ( function_exists('eventosapp_update_qr_usage_stats') ) {
+            eventosapp_update_qr_usage_stats($evento_id, 'counter');
+        }
+    }
+
+    $log[] = $log_entry;
     update_post_meta($ticket_id, '_eventosapp_checkin_log', $log);
 
-	wp_send_json_success([
-	  'today_status'  => $new,
-	  'today_allowed' => true,
-	  'message'       => 'Estado actualizado.'
-	]);
+    wp_send_json_success([
+        'today_status'  => $new,
+        'today_allowed' => true,
+        'message'       => 'Estado actualizado.'
+    ]);
 });
 
 /**
