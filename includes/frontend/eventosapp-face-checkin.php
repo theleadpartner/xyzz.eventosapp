@@ -6,8 +6,9 @@
  *
  * Flujo:
  *  1. Staff abre el módulo → se activa la cámara del dispositivo.
- *  2. Via AJAX se cargan todos los CPT eventosapp_asistente que tienen foto.
+ *  2. Via AJAX se cargan los CPT eventosapp_asistente del evento activo que tienen foto.
  *  3. face-api.js compara el rostro en vivo contra los descriptores cargados.
+ *     Los descriptores se cachean en IndexedDB del navegador para cargas posteriores instantáneas.
  *  4. Al encontrar coincidencia se extrae la cédula del asistente reconocido.
  *  5. Otro AJAX busca el ticket (cedula + evento activo) y ejecuta el check-in
  *     usando la misma lógica que el check-in por QR.
@@ -20,9 +21,6 @@
  *  - ssd_mobilenetv1_model-weights_manifest.json  + shards
  *  - face_landmark_68_model-weights_manifest.json + shards
  *  - face_recognition_model-weights_manifest.json + shards
- *
- * NOTA: Los modelos (~6 MB en total) se descargan desde el CDN de face-api.js
- *       automáticamente usando MODEL_URL definido en el JS del shortcode.
  *
  * @package EventosApp
  */
@@ -58,13 +56,12 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
     }
 
     // Nonces para las dos llamadas AJAX
-    $nonce_load  = wp_create_nonce( 'evapp_face_load_asistentes' );
+    $nonce_load    = wp_create_nonce( 'evapp_face_load_asistentes' );
     $nonce_checkin = wp_create_nonce( 'evapp_face_checkin_process' );
 
-    // URL de modelos face-api.js (CDN de justadudewhohacks)
-$models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
-    
-  
+    // URL de modelos face-api.js (local)
+    $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
+
     $event_name = esc_js( get_the_title( $active_event ) );
     $event_id   = (int) $active_event;
     $ajax_url   = esc_js( admin_url( 'admin-ajax.php' ) );
@@ -72,7 +69,6 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
     ob_start(); ?>
 <!-- face-api.js local -->
 <script src="<?php echo esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/js/face-api.min.js' ); ?>"></script>
-    
 
     <style>
     /* ── Contenedor general ─────────────────────────────────────── */
@@ -163,6 +159,26 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
     .evapp-face-btn:hover { filter: brightness(.92); }
     .evapp-face-btn.is-live { background: #e04f5f; }
     .evapp-face-btn:disabled { opacity: .6; cursor: not-allowed; }
+    /* Botón limpiar caché */
+    .evapp-face-btn-cache {
+        display: inline-flex;
+        align-items: center;
+        gap: .3rem;
+        border: 1px solid rgba(255,255,255,.2);
+        border-radius: 8px;
+        padding: .35rem .75rem;
+        font-size: .75rem;
+        font-weight: 600;
+        cursor: pointer;
+        background: transparent;
+        color: rgba(234,241,255,.6);
+        transition: all .15s ease;
+        margin-top: 8px;
+    }
+    .evapp-face-btn-cache:hover {
+        border-color: rgba(255,255,255,.45);
+        color: #eaf1ff;
+    }
     /* ── Ficha del asistente reconocido ──────────────────────────── */
     .evapp-face-result {
         margin-top: 14px;
@@ -238,6 +254,18 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
         color: #4f7cff;
         display: block;
     }
+    /* ── Badge caché ─────────────────────────────────────────────── */
+    .evapp-face-cache-badge {
+        display: inline-block;
+        background: rgba(46,204,113,.15);
+        color: #2ecc71;
+        border-radius: 6px;
+        padding: 2px 8px;
+        font-size: .7rem;
+        font-weight: 600;
+        margin-left: 6px;
+        vertical-align: middle;
+    }
     </style>
 
     <div class="evapp-face-shell">
@@ -282,6 +310,13 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
                 <span id="evapp-face-btn-label">Cargando modelos…</span>
             </button>
 
+            <!-- Botón limpiar caché (se muestra solo cuando hay caché activo) -->
+            <div style="text-align:center;display:none;" id="evapp-face-cache-row">
+                <button class="evapp-face-btn-cache" id="evapp-face-clear-cache">
+                    🔄 Forzar recarga de perfiles
+                </button>
+            </div>
+
             <!-- Estado / log -->
             <div class="evapp-face-status" id="evapp-face-status">Iniciando sistema de reconocimiento facial…</div>
 
@@ -324,6 +359,11 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
         /* Milisegundos mínimos entre detecciones para evitar spam */
         const DETECT_INTERVAL_MS = 1200;
 
+        /* IndexedDB: nombre y versión de la base de datos de caché */
+        const IDB_NAME    = 'EvappFaceCache';
+        const IDB_VERSION = 1;
+        const IDB_STORE   = 'descriptors';
+
         /* ── Estado ──────────────────────────────────────────────────── */
         let faceDB        = [];   // [{ cedula, nombre, descriptor: Float32Array }]
         let isLive        = false;
@@ -333,22 +373,25 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
         let lastCedulaTs  = 0;
         let checkinCount  = 0;
         let isProcessing  = false;
+        let activeCacheKey = null; // clave de caché actualmente usada
 
         /* ── DOM ─────────────────────────────────────────────────────── */
-        const video      = document.getElementById('evapp-face-video');
-        const canvas     = document.getElementById('evapp-face-canvas');
-        const camWrap    = document.getElementById('evapp-face-cam-wrap');
-        const toggleBtn  = document.getElementById('evapp-face-toggle-btn');
-        const btnLabel   = document.getElementById('evapp-face-btn-label');
-        const statusEl   = document.getElementById('evapp-face-status');
-        const resultEl   = document.getElementById('evapp-face-result');
-        const resultName = document.getElementById('evapp-face-result-name');
-        const resultMeta = document.getElementById('evapp-face-result-meta');
-        const camLabel   = document.getElementById('evapp-face-cam-label');
-        const dbCount    = document.getElementById('evapp-face-db-count');
-        const ciCount    = document.getElementById('evapp-face-checkin-count');
-        const progWrap   = document.getElementById('evapp-face-progress-wrap');
-        const progBar    = document.getElementById('evapp-face-progress-bar');
+        const video        = document.getElementById('evapp-face-video');
+        const canvas       = document.getElementById('evapp-face-canvas');
+        const camWrap      = document.getElementById('evapp-face-cam-wrap');
+        const toggleBtn    = document.getElementById('evapp-face-toggle-btn');
+        const btnLabel     = document.getElementById('evapp-face-btn-label');
+        const statusEl     = document.getElementById('evapp-face-status');
+        const resultEl     = document.getElementById('evapp-face-result');
+        const resultName   = document.getElementById('evapp-face-result-name');
+        const resultMeta   = document.getElementById('evapp-face-result-meta');
+        const camLabel     = document.getElementById('evapp-face-cam-label');
+        const dbCount      = document.getElementById('evapp-face-db-count');
+        const ciCount      = document.getElementById('evapp-face-checkin-count');
+        const progWrap     = document.getElementById('evapp-face-progress-wrap');
+        const progBar      = document.getElementById('evapp-face-progress-bar');
+        const cacheRow     = document.getElementById('evapp-face-cache-row');
+        const clearCacheBtn = document.getElementById('evapp-face-clear-cache');
 
         /* ── Helpers UI ──────────────────────────────────────────────── */
         function setStatus(msg, spin) {
@@ -372,6 +415,67 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
             }
         }
 
+        /* ── IndexedDB helpers ───────────────────────────────────────── */
+        function openCacheDB() {
+            return new Promise(function(resolve, reject) {
+                if (!window.indexedDB) { resolve(null); return; }
+                const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+                req.onupgradeneeded = function(e) {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(IDB_STORE)) {
+                        db.createObjectStore(IDB_STORE, { keyPath: 'key' });
+                    }
+                };
+                req.onsuccess = function(e) { resolve(e.target.result); };
+                req.onerror   = function()  { resolve(null); }; // falla silenciosamente
+            });
+        }
+
+        async function getCachedDescriptors(cacheKey) {
+            try {
+                const db = await openCacheDB();
+                if (!db) return null;
+                return new Promise(function(resolve) {
+                    const tx  = db.transaction(IDB_STORE, 'readonly');
+                    const req = tx.objectStore(IDB_STORE).get(cacheKey);
+                    req.onsuccess = function(e) {
+                        resolve(e.target.result ? e.target.result.data : null);
+                    };
+                    req.onerror = function() { resolve(null); };
+                });
+            } catch(e) { return null; }
+        }
+
+        async function saveCachedDescriptors(cacheKey, data) {
+            try {
+                const db = await openCacheDB();
+                if (!db) return;
+                return new Promise(function(resolve) {
+                    const tx = db.transaction(IDB_STORE, 'readwrite');
+                    tx.objectStore(IDB_STORE).put({
+                        key:       cacheKey,
+                        data:      data,
+                        timestamp: Date.now()
+                    });
+                    tx.oncomplete = function() { resolve(); };
+                    tx.onerror    = function() { resolve(); };
+                });
+            } catch(e) {}
+        }
+
+        async function deleteCachedDescriptors(cacheKey) {
+            try {
+                const db = await openCacheDB();
+                if (!db) return;
+                return new Promise(function(resolve) {
+                    const tx = db.transaction(IDB_STORE, 'readwrite');
+                    tx.objectStore(IDB_STORE).delete(cacheKey);
+                    tx.oncomplete = function() { resolve(); };
+                    tx.onerror    = function() { resolve(); };
+                });
+            } catch(e) {}
+        }
+
         /* ── 1. Cargar modelos face-api.js ───────────────────────────── */
         async function loadModels() {
             setStatus('Cargando modelos de reconocimiento facial (puede tomar unos segundos)…', true);
@@ -384,7 +488,7 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
                 await faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_URL);
                 setProgress(90);
                 setStatus('Modelos cargados. Cargando perfiles de asistentes…', true);
-                await loadAsistentes();
+                await loadAsistentes(false);
                 setProgress(100);
             } catch (e) {
                 setStatus('❌ Error cargando modelos: ' + e.message);
@@ -392,9 +496,10 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
             }
         }
 
-        /* ── 2. Cargar asistentes con foto vía AJAX ──────────────────── */
-        async function loadAsistentes() {
+        /* ── 2. Cargar asistentes del evento con caché IndexedDB ──────── */
+        async function loadAsistentes(forceReload) {
             try {
+                // Paso 1: obtener lista del servidor (solo metadatos, rápido)
                 const res = await fetch(AJAX_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -407,13 +512,44 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
                 const data = await res.json();
 
                 if (!data.success || !data.data.asistentes || !data.data.asistentes.length) {
-                    setStatus('⚠️ No se encontraron asistentes con foto registrada.');
+                    setStatus('⚠️ No se encontraron asistentes con foto registrada para este evento.');
                     enableButton();
                     return;
                 }
 
-                const lista = data.data.asistentes;
-                setStatus('Procesando ' + lista.length + ' fotos…', true);
+                const lista     = data.data.asistentes;
+                const total     = data.data.total;
+                const cacheVer  = data.data.cache_version; // hash de versión retornado por PHP
+
+                // Clave única: evento + versión (cambia si se agregan/quitan/actualizan fotos)
+                const cacheKey = 'evapp_e' + EVENT_ID + '_' + cacheVer;
+                activeCacheKey = cacheKey;
+
+                // Paso 2: intentar cargar desde caché (si no es recarga forzada)
+                if (!forceReload) {
+                    const cached = await getCachedDescriptors(cacheKey);
+                    if (cached && cached.length > 0) {
+                        faceDB = cached.map(function(c) {
+                            return {
+                                cedula:     c.cedula,
+                                nombre:     c.nombre,
+                                descriptor: new Float32Array(c.descriptor)
+                            };
+                        });
+                        dbCount.textContent = faceDB.length;
+                        setStatus(
+                            '✅ ' + faceDB.length + ' perfiles cargados ' +
+                            '<span class="evapp-face-cache-badge">⚡ caché</span>'
+                        );
+                        cacheRow.style.display = 'block';
+                        enableButton();
+                        return;
+                    }
+                }
+
+                // Paso 3: caché miss o recarga forzada → procesar imágenes
+                setStatus('Procesando ' + total + ' fotos del evento…', true);
+                faceDB = []; // limpiar antes de reprocesar
 
                 let procesados = 0;
                 for (const a of lista) {
@@ -435,7 +571,21 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
                         console.warn('[FaceCheckin] No se pudo procesar foto de:', a.nombre, imgErr);
                     }
                     procesados++;
-                    setStatus('Procesando ' + procesados + '/' + lista.length + ' fotos…', true);
+                    const pct = Math.round((procesados / total) * 100);
+                    setProgress(90 + (pct * 0.1)); // de 90% a 100%
+                    setStatus('Procesando ' + procesados + '/' + total + ' fotos…', true);
+                }
+
+                // Paso 4: guardar en caché si hubo descriptores válidos
+                if (faceDB.length > 0) {
+                    await saveCachedDescriptors(cacheKey, faceDB.map(function(f) {
+                        return {
+                            cedula:     f.cedula,
+                            nombre:     f.nombre,
+                            descriptor: Array.from(f.descriptor) // Float32Array → Array para IDB
+                        };
+                    }));
+                    cacheRow.style.display = 'block';
                 }
 
                 dbCount.textContent = faceDB.length;
@@ -459,6 +609,24 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
             toggleBtn.disabled = false;
             btnLabel.textContent = 'Activar Cámara';
         }
+
+        /* ── Botón limpiar caché ─────────────────────────────────────── */
+        clearCacheBtn.addEventListener('click', async function() {
+            if (isLive) {
+                alert('Detén la cámara antes de recargar los perfiles.');
+                return;
+            }
+            if (activeCacheKey) {
+                await deleteCachedDescriptors(activeCacheKey);
+            }
+            faceDB = [];
+            dbCount.textContent = 0;
+            cacheRow.style.display = 'none';
+            toggleBtn.disabled = true;
+            btnLabel.textContent = 'Cargando perfiles…';
+            setStatus('Recargando perfiles desde el servidor…', true);
+            await loadAsistentes(true);
+        });
 
         /* ── 3. Controlar cámara ─────────────────────────────────────── */
         toggleBtn.addEventListener('click', async function () {
@@ -567,7 +735,7 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
                         return;
                     }
 
-                    lastCedula  = cedula;
+                    lastCedula   = cedula;
                     lastCedulaTs = now;
 
                     const perfil = faceDB.find(f => f.cedula === cedula);
@@ -658,7 +826,9 @@ $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
 
 
 // ============================================================
-// 2. AJAX: Cargar asistentes con foto para el evento activo
+// 2. AJAX: Cargar asistentes con foto SOLO del evento activo
+//    NUEVO: filtra por cédulas de tickets del evento.
+//           Retorna cache_version para invalidación en IndexedDB.
 // ============================================================
 
 add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
@@ -683,53 +853,94 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
         }
     }
 
-    // Obtener TODOS los asistentes que tengan foto
-    $asistentes_query = new WP_Query( [
-        'post_type'      => 'eventosapp_asistente',
-        'post_status'    => 'publish',
-        'posts_per_page' => -1,
-        'fields'         => 'ids',
-        'no_found_rows'  => true,
-        'meta_query'     => [
-            [
-                'key'     => '_asistente_foto_id',
-                'value'   => '',
-                'compare' => '!=',
-            ],
-            [
-                'key'     => '_asistente_cedula',
-                'value'   => '',
-                'compare' => '!=',
-            ],
-        ],
-    ] );
+    if ( ! $event_id ) {
+        wp_send_json_error( ['error' => 'Evento no especificado.'] );
+    }
 
+    global $wpdb;
+
+    // ── Paso 1: Obtener cédulas registradas en tickets del evento ──────────
+    // Usa _eventosapp_asistente_cc (campo cédula en el ticket)
+    $cedulas_evento = $wpdb->get_col( $wpdb->prepare(
+        "SELECT DISTINCT pm_cc.meta_value
+           FROM {$wpdb->postmeta} pm_ev
+           JOIN {$wpdb->postmeta} pm_cc ON pm_cc.post_id = pm_ev.post_id
+                                       AND pm_cc.meta_key = '_eventosapp_asistente_cc'
+                                       AND pm_cc.meta_value != ''
+           JOIN {$wpdb->posts} p       ON p.ID = pm_ev.post_id
+          WHERE pm_ev.meta_key   = '_eventosapp_ticket_evento_id'
+            AND pm_ev.meta_value = %s
+            AND p.post_type      = 'eventosapp_ticket'
+            AND p.post_status   != 'trash'",
+        $event_id
+    ) );
+
+    if ( empty( $cedulas_evento ) ) {
+        wp_send_json_success( [
+            'asistentes'    => [],
+            'total'         => 0,
+            'cache_version' => 'empty',
+        ] );
+    }
+
+    // ── Paso 2: Buscar asistentes CPT que coincidan con esas cédulas y tengan foto ──
+    // Dividimos en lotes para no generar un IN() demasiado grande
     $resultado = [];
 
-    if ( ! empty( $asistentes_query->posts ) ) {
-        foreach ( $asistentes_query->posts as $asistente_id ) {
-            $cedula  = get_post_meta( $asistente_id, '_asistente_cedula', true );
-            $foto_id = (int) get_post_meta( $asistente_id, '_asistente_foto_id', true );
-            $nombres   = get_post_meta( $asistente_id, '_asistente_nombres', true );
-            $apellidos = get_post_meta( $asistente_id, '_asistente_apellidos', true );
+    $lotes = array_chunk( $cedulas_evento, 100 );
+    foreach ( $lotes as $lote ) {
+        $placeholders = implode( ', ', array_fill( 0, count( $lote ), '%s' ) );
 
-            if ( ! $cedula || ! $foto_id ) continue;
+        // Obtenemos los asistentes que coincidan con las cédulas del evento
+        // y que tengan foto asignada (_asistente_foto_id no vacío)
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT
+                p.ID            AS asistente_id,
+                pm_ced.meta_value  AS cedula,
+                pm_foto.meta_value AS foto_id,
+                pm_nom.meta_value  AS nombres,
+                pm_ape.meta_value  AS apellidos
+             FROM {$wpdb->posts} p
+             JOIN {$wpdb->postmeta} pm_ced  ON pm_ced.post_id  = p.ID AND pm_ced.meta_key  = '_asistente_cedula'
+             JOIN {$wpdb->postmeta} pm_foto ON pm_foto.post_id = p.ID AND pm_foto.meta_key = '_asistente_foto_id'
+                                           AND pm_foto.meta_value != ''
+             LEFT JOIN {$wpdb->postmeta} pm_nom ON pm_nom.post_id = p.ID AND pm_nom.meta_key = '_asistente_nombres'
+             LEFT JOIN {$wpdb->postmeta} pm_ape ON pm_ape.post_id = p.ID AND pm_ape.meta_key = '_asistente_apellidos'
+            WHERE p.post_type   = 'eventosapp_asistente'
+              AND p.post_status = 'publish'
+              AND pm_ced.meta_value IN ( $placeholders )",
+            ...$lote
+        ) );
 
-            $foto_url = wp_get_attachment_url( $foto_id );
-            if ( ! $foto_url ) continue;
+        if ( ! empty( $rows ) ) {
+            foreach ( $rows as $row ) {
+                $foto_id  = (int) $row->foto_id;
+                $foto_url = wp_get_attachment_url( $foto_id );
+                if ( ! $foto_url ) continue;
 
-            $resultado[] = [
-                'asistente_id' => $asistente_id,
-                'cedula'       => $cedula,
-                'nombre'       => trim( $nombres . ' ' . $apellidos ),
-                'foto_url'     => $foto_url,
-            ];
+                $resultado[] = [
+                    'asistente_id' => (int) $row->asistente_id,
+                    'cedula'       => $row->cedula,
+                    'nombre'       => trim( $row->nombres . ' ' . $row->apellidos ),
+                    'foto_url'     => $foto_url,
+                    'foto_id'      => $foto_id,
+                ];
+            }
         }
     }
 
+    // ── Paso 3: Generar cache_version basada en IDs y foto_ids ────────────
+    // Cambia si se agrega/quita un asistente o si cambia alguna foto
+    $version_data = array_map( function( $a ) {
+        return $a['asistente_id'] . '_' . $a['foto_id'];
+    }, $resultado );
+    sort( $version_data );
+    $cache_version = substr( md5( implode( '|', $version_data ) ), 0, 12 );
+
     wp_send_json_success( [
-        'asistentes' => $resultado,
-        'total'      => count( $resultado ),
+        'asistentes'    => $resultado,
+        'total'         => count( $resultado ),
+        'cache_version' => $cache_version,
     ] );
 } );
 
