@@ -8,6 +8,12 @@ Author: The Lead Partner
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// === Constantes del plugin ===
+if ( ! defined( 'EVENTOSAPP_PLUGIN_URL' ) ) {
+    define( 'EVENTOSAPP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );   // Con trailing slash
+    define( 'EVENTOSAPP_PLUGIN_PATH', plugin_dir_path( __FILE__ ) ); // Con trailing slash
+}
+
 require_once plugin_dir_path(__FILE__) . 'eventosapp-tickets.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-integraciones.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/google-wallet-android.php';
