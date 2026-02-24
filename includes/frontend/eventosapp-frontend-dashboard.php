@@ -228,17 +228,18 @@ add_shortcode('eventosapp_dashboard', function(){
 			eventosapp_active_event_bar();
 		}
 
-		// URLs desde Configuración
-		$url_metrics       = function_exists('eventosapp_get_metrics_url')               ? eventosapp_get_metrics_url()               : '#';
-		$url_search        = function_exists('eventosapp_get_search_url')                ? eventosapp_get_search_url()                : '#';
-		$url_register      = function_exists('eventosapp_get_register_url')              ? eventosapp_get_register_url()              : '#';
-		$url_qr            = function_exists('eventosapp_get_qr_url')                    ? eventosapp_get_qr_url()                    : '#';
-		$url_edit          = function_exists('eventosapp_get_edit_url')                  ? eventosapp_get_edit_url()                  : '#';
-		$url_qr_localidad  = function_exists('eventosapp_get_qr_localidad_url')          ? eventosapp_get_qr_localidad_url()          : '#';
-		$url_qr_sesion     = function_exists('eventosapp_get_qr_sesion_url')             ? eventosapp_get_qr_sesion_url()             : '#';
-		$url_checklist     = function_exists('eventosapp_get_checklist_url')             ? eventosapp_get_checklist_url()             : '#';
-		$url_net_ranking   = function_exists('eventosapp_get_networking_ranking_url')    ? eventosapp_get_networking_ranking_url()    : '#';
-		$url_qr_double_auth = function_exists('eventosapp_get_qr_double_auth_url')       ? eventosapp_get_qr_double_auth_url()        : '#'; // NUEVO
+// URLs desde Configuración
+		$url_metrics        = function_exists('eventosapp_get_metrics_url')               ? eventosapp_get_metrics_url()               : '#';
+		$url_search         = function_exists('eventosapp_get_search_url')                ? eventosapp_get_search_url()                : '#';
+		$url_register       = function_exists('eventosapp_get_register_url')              ? eventosapp_get_register_url()              : '#';
+		$url_qr             = function_exists('eventosapp_get_qr_url')                    ? eventosapp_get_qr_url()                    : '#';
+		$url_edit           = function_exists('eventosapp_get_edit_url')                  ? eventosapp_get_edit_url()                  : '#';
+		$url_qr_localidad   = function_exists('eventosapp_get_qr_localidad_url')          ? eventosapp_get_qr_localidad_url()          : '#';
+		$url_qr_sesion      = function_exists('eventosapp_get_qr_sesion_url')             ? eventosapp_get_qr_sesion_url()             : '#';
+		$url_checklist      = function_exists('eventosapp_get_checklist_url')             ? eventosapp_get_checklist_url()             : '#';
+		$url_net_ranking    = function_exists('eventosapp_get_networking_ranking_url')    ? eventosapp_get_networking_ranking_url()    : '#';
+		$url_qr_double_auth = function_exists('eventosapp_get_qr_double_auth_url')        ? eventosapp_get_qr_double_auth_url()        : '#';
+		$url_face_checkin   = function_exists('eventosapp_get_face_checkin_url')          ? eventosapp_get_face_checkin_url()          : '#';
 
 		?>
 		<div class="evapp-grid" role="navigation" aria-label="Panel de acciones del evento">
