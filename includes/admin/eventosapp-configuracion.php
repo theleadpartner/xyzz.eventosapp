@@ -32,7 +32,8 @@ function eventosapp_get_pages_config() {
         'qr_sesion_page_id'         => 0,
         'checklist_page_id'         => 0,
         'networking_ranking_page_id' => 0,
-        'qr_double_auth_page_id'    => 0, // AGREGAR ESTA LÍNEA
+        'qr_double_auth_page_id'    => 0,
+        'face_checkin_page_id'      => 0, // NUEVO
     ]);
 }
 
@@ -85,6 +86,11 @@ function eventosapp_get_networking_ranking_url() {
 // NUEVO: Getter para QR con Doble Autenticación
 function eventosapp_get_qr_double_auth_url() {
     return eventosapp_get_configured_page_url('qr_double_auth_page_id', '#');
+}
+
+// NUEVO: Getter para Check-In por Reconocimiento Facial
+function eventosapp_get_face_checkin_url() {
+    return eventosapp_get_configured_page_url('face_checkin_page_id', '#');
 }
 
 
@@ -222,6 +228,16 @@ add_settings_field(
         ['key'=>'qr_double_auth_page_id', 'desc'=>'Debe contener el shortcode: <code>[qr_checkin_doble_auth]</code>']
     );
 
+	// NUEVO: Página de Check-In por Reconocimiento Facial
+add_settings_field(
+    'face_checkin_page_id',
+    'Página de Check-In Facial',
+    'eventosapp_render_pages_field',
+    'eventosapp_configuracion',
+    'eventosapp_pages_section',
+    ['key'=>'face_checkin_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_face_checkin]</code>']
+);
+
 
 });
 
@@ -238,14 +254,14 @@ function eventosapp_sanitize_pages_option($input){
         'qr_sesion_page_id',
         'checklist_page_id',
         'networking_ranking_page_id',
-        'qr_double_auth_page_id', // AGREGAR ESTA LÍNEA
+        'qr_double_auth_page_id',
+        'face_checkin_page_id', // NUEVO
     ];
     foreach ($keys as $k) {
         $out[$k] = isset($input[$k]) ? absint($input[$k]) : 0;
     }
     return $out;
 }
-
 
 
 function eventosapp_render_pages_field($args){
@@ -292,12 +308,11 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_qr_checkin]</code> — Check-In con QR (lector de cámara).</li>
             <li><code>[eventosapp_front_edit]</code> — Edición de tickets.</li>
             <li><code>[eventosapp_qr_localidad]</code> — Validador de Localidad (solo lectura).</li>
-            <li><code>[eventosapp_qr_sesion]</code> — Control de acceso por sesión.</li> <!-- NUEVO -->
-			<li><code>[eventosapp_event_checklist]</code> — Checklist del evento (para coordinador).</li>
-			<li><code>[eventosapp_networking_ranking]</code> — Ranking Networking (Top lectores y leídos del día).</li>
-			<li><code>[qr_checkin_doble_auth]</code> — Check-In con QR y Doble Autenticación.</li>
-
-
+            <li><code>[eventosapp_qr_sesion]</code> — Control de acceso por sesión.</li>
+            <li><code>[eventosapp_event_checklist]</code> — Checklist del evento (para coordinador).</li>
+            <li><code>[eventosapp_networking_ranking]</code> — Ranking Networking (Top lectores y leídos del día).</li>
+            <li><code>[qr_checkin_doble_auth]</code> — Check-In con QR y Doble Autenticación.</li>
+            <li><code>[eventosapp_face_checkin]</code> — Check-In por Reconocimiento Facial.</li>
         </ul>
     </div>
 <?php }
@@ -319,7 +334,8 @@ function eventosapp_dashboard_features() {
         'qr_sesion'          => 'Control por Sesión',
         'checklist'          => 'Checklist de Evento',
         'networking_ranking' => 'Ranking Networking',
-        'qr_double_auth'     => 'Check-In QR Doble Autenticación', // AGREGAR ESTA LÍNEA
+        'qr_double_auth'     => 'Check-In QR Doble Autenticación',
+        'face_checkin'       => 'Check-In Facial', // NUEVO
     ];
 }
 }
@@ -540,7 +556,8 @@ function eventosapp_feature_page_map() {
         'qr_sesion'          => 'qr_sesion_page_id',
         'checklist'          => 'checklist_page_id',
         'networking_ranking' => 'networking_ranking_page_id',
-        'qr_double_auth'     => 'qr_double_auth_page_id', // AGREGAR ESTA LÍNEA
+        'qr_double_auth'     => 'qr_double_auth_page_id',
+        'face_checkin'       => 'face_checkin_page_id', // NUEVO
     ];
 }
 }
