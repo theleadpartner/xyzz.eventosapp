@@ -7,28 +7,28 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 if ( ! function_exists('eventosapp_dashboard_icon') ) {
 	function eventosapp_dashboard_icon( $name ) {
 		switch ($name) {
-			case 'metrics': // barras (métricas)
+			case 'metrics':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="10" width="4" height="10" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><rect x="17" y="7" width="4" height="13" rx="1"/></svg>';
 
-			case 'circle-user': // registro manual
+			case 'circle-user':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
 					<circle cx="12" cy="9" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
 					<path d="M6.5 17c1.2-2.4 3.6-3.5 5.5-3.5S16.8 14.6 18 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
-			case 'qrcode': // check-in con QR
+			case 'qrcode':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v2h-2zM16 18h2v2h-2zM20 18h2v2h-2z"/>
 				</svg>';
 
-			case 'calendar-check': // control de acceso a sesión
+			case 'calendar-check':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<rect x="3" y="5" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
 					<path d="M7 3v4M17 3v4M3 9h18M9 15l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>';
 
-			case 'id-badge': // check-in manual & escarapela
+			case 'id-badge':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<rect x="6" y="5" width="12" height="16" rx="2"/>
 					<rect x="10" y="2" width="4" height="3" rx="1"/>
@@ -36,34 +36,41 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<path d="M9 16h6a.8.8 0 0 1 .8.8V18H8.2v-1.2A.8.8 0 0 1 9 16Z"/>
 				</svg>';
 
-			case 'check-double': // validador de localidad
+			case 'check-double':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M3 13l3 3 5-6M12 13l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>';
 
-			case 'checklist': // checklist
+			case 'checklist':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
 					<path d="M8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 					<path d="M5 5l2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
-			case 'ticket': // edición de tickets (ticket)
+			case 'ticket':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M5 9V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
 					<rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
 				</svg>';
 
-			case 'trophy': // Ranking Networking
+			case 'trophy':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M4 5h16v2a5 5 0 0 1-5 5h-6a5 5 0 0 1-5-5V5Z" fill="none" stroke="currentColor" stroke-width="2"/>
 					<path d="M9 12v2a3 3 0 0 0 6 0v-2M8 21h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
-			case 'shield-check': // NUEVO: Doble Autenticación
+			case 'shield-check':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M12 2L4 6v6c0 5.5 3.8 10.7 8 12 4.2-1.3 8-6.5 8-12V6l-8-4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
 					<path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+				</svg>';
+
+			case 'face-scan': // NUEVO: Check-In Facial
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M3 8V6a2 2 0 0 1 2-2h2M3 16v2a2 2 0 0 0 2 2h2M21 8V6a2 2 0 0 0-2-2h-2M21 16v2a2 2 0 0 1-2 2h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<circle cx="12" cy="10" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+					<path d="M8 18c.8-2.3 2.2-3.5 4-3.5s3.2 1.2 4 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
 			default:
@@ -304,6 +311,13 @@ add_shortcode('eventosapp_dashboard', function(){
 					<span class="evapp-title">Check-In QR Doble Autenticación</span>
 				</a>
 			<?php endif; ?>
+
+			<?php if (eventosapp_role_can('face_checkin')): ?>
+    <a class="evapp-card" href="<?php echo esc_url($url_face_checkin); ?>" aria-label="Check-In Facial">
+        <?php echo eventosapp_dashboard_icon('face-scan'); ?>
+        <span class="evapp-title">Check-In Facial</span>
+    </a>
+<?php endif; ?>
 
 		</div>
 		<?php
