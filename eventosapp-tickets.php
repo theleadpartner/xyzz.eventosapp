@@ -1266,7 +1266,7 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         delete_post_meta($post_id, '_eventosapp_ticket_pkpass_url');
     }
 
-    // 9) Check-in multi-día + log (igual que tu lógica actual)
+// 9) Check-in multi-día + log (igual que tu lógica actual)
     $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
 
     $status_arr = get_post_meta($post_id, '_eventosapp_checkin_status', true);
@@ -1290,15 +1290,29 @@ function eventosapp_save_ticket($post_id, $post, $update) {
                 $status_arr[$day] = $nuevo;
                 $u = wp_get_current_user();
                 $usuario = ($u && $u->exists()) ? ($u->display_name.' ('.$u->user_email.')') : 'Sistema';
-                $log[] = [
-                    'fecha'   => $now->format('Y-m-d'),
-                    'hora'    => $now->format('H:i:s'),
-                    'dia'     => $day,
-                    'status'  => $nuevo,
-                    'usuario' => $usuario,
-                    'origen'  => 'manual',
-                    'previo'  => $prev,
+
+                $log_entry = [
+                    'fecha'         => $now->format('Y-m-d'),
+                    'hora'          => $now->format('H:i:s'),
+                    'dia'           => $day,
+                    'status'        => $nuevo,
+                    'usuario'       => $usuario,
+                    'origen'        => 'manual',
+                    'previo'        => $prev,
                 ];
+
+                // Registrar como tipo 'Counter' cuando se marca checked_in manualmente
+                if ($nuevo === 'checked_in') {
+                    $log_entry['qr_type']       = 'counter';
+                    $log_entry['qr_type_label']  = 'Counter';
+
+                    // Actualizar estadísticas de uso por tipo (mismo mecanismo que QR check-in)
+                    if (function_exists('eventosapp_update_qr_usage_stats')) {
+                        eventosapp_update_qr_usage_stats($evento_id, 'counter');
+                    }
+                }
+
+                $log[] = $log_entry;
             }
         }
         update_post_meta($post_id, '_eventosapp_checkin_status', $status_arr);
