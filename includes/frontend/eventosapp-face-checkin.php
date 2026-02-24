@@ -62,7 +62,8 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
     $nonce_checkin = wp_create_nonce( 'evapp_face_checkin_process' );
 
     // URL de modelos face-api.js (CDN de justadudewhohacks)
-$models_url = esc_url( plugins_url( 'assets/face-models', dirname(__FILE__, 2) ) );
+$models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
+    
   
     $event_name = esc_js( get_the_title( $active_event ) );
     $event_id   = (int) $active_event;
@@ -70,7 +71,8 @@ $models_url = esc_url( plugins_url( 'assets/face-models', dirname(__FILE__, 2) )
 
     ob_start(); ?>
 <!-- face-api.js local -->
-<script src="<?php echo esc_url( plugins_url( 'assets/js/face-api.min.js', dirname(__FILE__, 2) ) ); ?>"></script>
+<script src="<?php echo esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/js/face-api.min.js' ); ?>"></script>
+    
 
     <style>
     /* ── Contenedor general ─────────────────────────────────────── */
