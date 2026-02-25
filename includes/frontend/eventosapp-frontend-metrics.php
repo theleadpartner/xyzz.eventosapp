@@ -718,7 +718,7 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         }
     };
 
-    // Procesar tickets
+// Procesar tickets
     foreach ($ids as $tid) {
         $loc = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
         if ($loc === '' || $loc === null) $loc = '(Sin localidad)';
@@ -739,10 +739,13 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             $loc_checked[$loc]++;
         }
 
-        // Log para barras, sesiones únicas y NUEVO: tipos de QR
+        // Log para barras, sesiones únicas y tipos de QR
         $log = get_post_meta($tid, '_eventosapp_checkin_log', true);
         if (is_string($log)) $log = @unserialize($log);
         if (!is_array($log)) $log = [];
+
+        // FLAG: solo contar el primer check-in principal por ticket para estadísticas de QR
+        $qr_type_ya_contado = false;
 
         foreach ($log as $row) {
             $fecha = isset($row['fecha']) ? $row['fecha'] : '';
@@ -766,15 +769,33 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             if ($status === 'session_checked_in') {
                 $loc_ses_uniques[$loc][$tid] = true;
             }
-            
-            // NUEVO: Contar tipos de QR (solo para check-ins principales)
-            if ($status === 'checked_in' && isset($row['qr_type_label'])) {
-                $qr_label = $row['qr_type_label'];
+
+            // Contar tipos de QR: UNA SOLA VEZ por ticket (primer check-in principal)
+            // Esto garantiza que el total de QR sea igual al total de checked_in general
+            if ($status === 'checked_in' && !$qr_type_ya_contado) {
+                $qr_type_ya_contado = true;
+                if (isset($row['qr_type_label']) && $row['qr_type_label'] !== '') {
+                    $qr_label = $row['qr_type_label'];
+                } else {
+                    // Fallback para check-ins sin etiqueta de QR (registros legacy)
+                    $qr_label = 'Sin clasificar';
+                }
                 if (isset($qr_types_count[$qr_label])) {
                     $qr_types_count[$qr_label]++;
                 } else {
                     $qr_types_count[$qr_label] = 1;
                 }
+            }
+        }
+
+        // Si el ticket está checked_in pero el log no tiene ninguna entrada checked_in con qr_type
+        // (puede ocurrir en tickets migrados o con log vacío), igual lo contamos en QR stats
+        if ($any_checked && !$qr_type_ya_contado) {
+            $fallback_label = 'Sin clasificar';
+            if (isset($qr_types_count[$fallback_label])) {
+                $qr_types_count[$fallback_label]++;
+            } else {
+                $qr_types_count[$fallback_label] = 1;
             }
         }
     }
