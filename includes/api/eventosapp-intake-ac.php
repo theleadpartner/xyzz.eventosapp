@@ -1,725 +1,875 @@
 <?php
-// includes/api/eventosapp-intake-ac.php
+/**
+ * Archivo: includes/functions/eventosapp-webhook-conditionals.php
+ *
+ * Soporta reglas condicionales de envío de correo para tickets creados/actualizados por webhook.
+ *
+ * Compatibilidad:
+ * - Mantiene evaluación por orden: primera regla que coincide gana.
+ * - Mantiene compatibilidad con reglas antiguas de 1 solo criterio.
+ * - Agrega múltiples criterios por regla con relación AND / OR.
+ * - No requiere cambios en eventosapp.php porque ya se carga desde allí.
+ */
+
 if (!defined('ABSPATH')) exit;
 
+if (!defined('EVENTOSAPP_WEBHOOK_CONDITIONALS_META_ENABLED')) {
+    define('EVENTOSAPP_WEBHOOK_CONDITIONALS_META_ENABLED', '_eventosapp_webhook_conditionals_enabled');
+}
+if (!defined('EVENTOSAPP_WEBHOOK_CONDITIONALS_META_RULES')) {
+    define('EVENTOSAPP_WEBHOOK_CONDITIONALS_META_RULES', '_eventosapp_webhook_conditionals_rules');
+}
+if (!defined('EVENTOSAPP_WEBHOOK_CONDITIONALS_NONCE')) {
+    define('EVENTOSAPP_WEBHOOK_CONDITIONALS_NONCE', 'eventosapp_webhook_conditionals_nonce');
+}
+
 /**
- * Asegurar secreto del webhook aunque este archivo cargue antes que otros.
- * Puedes definirlo en wp-config.php como EVENTOSAPP_INTAKE_KEY;
- * si no existe, se generará y persistirá en la opción _eventosapp_intake_key.
+ * Metas legacy soportadas en lectura y escritura para no perder compatibilidad.
  */
-if (!defined('EVENTOSAPP_INTAKE_KEY')) {
-  if (!function_exists('evapp_random_token')) {
-    function evapp_random_token($bytes = 48){
-      try { $b = random_bytes($bytes); } catch (\Throwable $e) { $b = openssl_random_pseudo_bytes($bytes); }
-      return rtrim(strtr(base64_encode($b), '+/', '-_'), '=');
+if (!function_exists('eventosapp_webhook_conditionals_meta_enabled_candidates')) {
+    function eventosapp_webhook_conditionals_meta_enabled_candidates() {
+        return [
+            '_eventosapp_webhook_conditionals_enabled',
+            '_eventosapp_webhook_email_conditionals_enabled',
+            '_eventosapp_webhook_conditional_enabled',
+            '_eventosapp_webhook_rules_enabled',
+        ];
     }
-  }
-  $opt_key = '_eventosapp_intake_key';
-  $k = get_option($opt_key, '');
-  if (!$k) { $k = evapp_random_token(48); update_option($opt_key, $k, false); }
-  define('EVENTOSAPP_INTAKE_KEY', $k);
 }
 
-
-/** ---------------------------------------------------------------------------
- * Autor por defecto de los tickets creados vía webhook
- * ------------------------------------------------------------------------- */
-if ( ! function_exists('evapp_webhook_author_id') ) {
-  function evapp_webhook_author_id() : int {
-    // Permite sobreescribir por constante (opcional en wp-config.php)
-    if (defined('EVENTOSAPP_WEBHOOK_AUTHOR_ID')) {
-      return (int) EVENTOSAPP_WEBHOOK_AUTHOR_ID;
+if (!function_exists('eventosapp_webhook_conditionals_meta_rules_candidates')) {
+    function eventosapp_webhook_conditionals_meta_rules_candidates() {
+        return [
+            '_eventosapp_webhook_conditionals_rules',
+            '_eventosapp_webhook_email_conditionals_rules',
+            '_eventosapp_webhook_conditional_rules',
+            '_eventosapp_webhook_rules',
+        ];
     }
-    // Por defecto usamos el usuario solicitado
-    $fallback = 17; // emisor1
-    // Intento de resolución defensiva, por si cambia el ID
-    if (function_exists('get_user_by')) {
-      if ($u = get_user_by('login', 'emisor1')) return (int)$u->ID;
-      if ($u = get_user_by('email', 'emisor1@eventosapp.com')) return (int)$u->ID;
-      if ($u = get_user_by('id', 17)) return (int)$u->ID;
-    }
-    return $fallback;
-  }
 }
-
-
-/** ---------------------------------------------------------------------------
- * Helpers
- * ------------------------------------------------------------------------- */
 
 /**
- * Obtiene un valor de un arreglo permitiendo rutas tipo:
- *  - "contact.email"
- *  - "contact[email]"
- *  - mezcla de ambas ("contact[custom].email")
+ * Registro del metabox.
  */
-if (!function_exists('evapp_arr_get')) {
-  function evapp_arr_get($arr, $path) {
-    if (!is_array($arr)) return null;
-    $path = (string)$path;
-    if ($path === '') return null;
-    // separa por puntos y/o corchetes
-    $segs = preg_split('/[.\[\]]+/', trim($path, "[] \t\n\r\0\x0B"));
-    foreach ($segs as $s) {
-      if ($s === '') continue;
-      if (!is_array($arr) || !array_key_exists($s, $arr)) return null;
-      $arr = $arr[$s];
-    }
-    return $arr;
-  }
+add_action('add_meta_boxes', 'eventosapp_register_webhook_conditionals_metabox', 20);
+function eventosapp_register_webhook_conditionals_metabox() {
+    add_meta_box(
+        'eventosapp_webhook_conditionals',
+        'Webhook → Condicionales de envío de correo',
+        'eventosapp_render_webhook_conditionals_metabox',
+        'eventosapp_event',
+        'normal',
+        'default'
+    );
 }
-
-/** Devuelve el primer valor no vacío encontrado entre varias claves/rutas */
-if (!function_exists('evapp_pick_from')) {
-  function evapp_pick_from(array $data, array $keys, $default = '') {
-    foreach ($keys as $k) {
-      // 1) clave literal
-      if (isset($data[$k]) && $data[$k] !== '') return $data[$k];
-      // 2) ruta tipo dot/brackets
-      $v = evapp_arr_get($data, $k);
-      if ($v !== null && $v !== '') return $v;
-    }
-    return $default;
-  }
-}
-
-/** Busca un extra $k en múltiples ubicaciones convencionales */
-if (!function_exists('evapp_pick_extra')) {
-  function evapp_pick_extra(array $data, string $k) {
-    $candidates = [
-      "eventosapp_extra.$k",
-      "eventosapp_extra[$k]",
-      "extra.$k",
-      "extra[$k]",
-      "extras.$k",
-      "extras[$k]",
-      "custom_fields.$k",
-      "custom_fields[$k]",
-      "contact.custom_fields.$k",
-      "contact[custom_fields][$k]",
-      $k,
-      "extra_$k",
-    ];
-    return evapp_pick_from($data, $candidates, '');
-  }
-}
-
-/** Normaliza booleanos desde strings/números comunes */
-if (!function_exists('evapp_boolish')) {
-  function evapp_boolish($v) {
-    if (is_bool($v)) return $v;
-    if (is_numeric($v)) return (int)$v === 1;
-    if (!is_string($v)) return false;
-    $v = strtolower(trim($v));
-    return in_array($v, ['1','true','yes','si','sí','on','y'], true);
-  }
-}
-
-/** ---------------------------------------------------------------------------
- * Agrega una entrada al log de auditoría del ticket.
- * Guarda un historial de máximo 50 entradas en el meta _eventosapp_ticket_audit_log.
- *
- * @param int   $ticket_id
- * @param array $entry Datos de la entrada: trigger, changed_fields, before, after, etc.
- * ------------------------------------------------------------------------- */
-if ( ! function_exists('eventosapp_add_ticket_audit_log') ) {
-  function eventosapp_add_ticket_audit_log(int $ticket_id, array $entry) {
-    $entry['timestamp']     = current_time('mysql');
-    $entry['timestamp_gmt'] = current_time('mysql', 1);
-
-    $log = get_post_meta($ticket_id, '_eventosapp_ticket_audit_log', true);
-    if (!is_array($log)) $log = [];
-
-    // Insertar al inicio (más reciente primero)
-    array_unshift($log, $entry);
-
-    // Máximo 50 entradas para no inflar la BD
-    if (count($log) > 50) {
-      $log = array_slice($log, 0, 50);
-    }
-
-    update_post_meta($ticket_id, '_eventosapp_ticket_audit_log', $log);
-  }
-}
-
-/** ---------------------------------------------------------------------------
- * Rutas REST (alias genérico + ruta histórica /ac-webhook)
- * ------------------------------------------------------------------------- */
-add_action('rest_api_init', function () {
-  register_rest_route('eventosapp/v1', '/ac-webhook', [
-    'methods'  => 'POST',
-    'callback' => 'eventosapp_ac_webhook_handler',
-    'permission_callback' => '__return_true',
-  ]);
-
-  // Alias más genérico (idéntico callback)
-  register_rest_route('eventosapp/v1', '/webhook', [
-    'methods'  => 'POST',
-    'callback' => 'eventosapp_ac_webhook_handler',
-    'permission_callback' => '__return_true',
-  ]);
-});
 
 /**
- * Handler del webhook (agnóstico de plataforma).
- * Acepta secreto por:
- *  - query:        ?key=...
- *  - header:       X-Webhook-Secret: ...
- *  - header:       X-API-Key: ...
- *  - Authorization: Bearer ...
- * Payload: JSON o x-www-form-urlencoded (con fallback a raw JSON).
+ * Guardado del metabox.
  */
-function eventosapp_ac_webhook_handler(\WP_REST_Request $req){
-  // --- Autenticación por secreto ---
-  $key = $req->get_param('key')
-       ?: $req->get_header('x-webhook-secret')
-       ?: $req->get_header('X-Webhook-Secret')
-       ?: $req->get_header('x-api-key')
-       ?: $req->get_header('X-API-Key');
+add_action('save_post_eventosapp_event', 'eventosapp_save_webhook_conditionals_metabox', 20, 1);
+function eventosapp_save_webhook_conditionals_metabox($post_id) {
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    if (wp_is_post_revision($post_id)) return;
+    if (!current_user_can('edit_post', $post_id)) return;
 
-  if (!$key) {
-    $auth = $req->get_header('authorization');
-    if ($auth && preg_match('/^\s*Bearer\s+(\S+)\s*$/i', $auth, $m)) {
-      $key = $m[1];
-    }
-  }
-
-  if (!$key || !defined('EVENTOSAPP_INTAKE_KEY') || $key !== EVENTOSAPP_INTAKE_KEY) {
-    return new \WP_Error('forbidden','Token inválido', ['status'=>403]);
-  }
-
-  // --- Cargar datos (JSON robusto o x-www-form-urlencoded) ---
-  $data = $req->get_json_params();
-  if (!is_array($data) || !$data) {
-    // Si WP no parseó JSON, intenta con el raw body
-    $raw = method_exists($req, 'get_body') ? $req->get_body() : '';
-    if (is_string($raw) && trim($raw) !== '') {
-      $try = json_decode($raw, true);
-      if (is_array($try)) $data = $try;
-    }
-  }
-  if (!is_array($data) || !$data) {
-    $data = $req->get_body_params();
-  }
-  if (!is_array($data)) $data = [];
-
-  // Helper inline
-  $pick = function(array $keys, $default='') use ($data) {
-    return evapp_pick_from($data, $keys, $default);
-  };
-
-  // === Mapeo flexible ===
-  $evento_id  = absint($pick(['event_id','evento_id','ev_evento_id'], 0));
-  $email      = sanitize_email($pick(['email','correo','contact[email]','contact.email']));
-  $first_name = sanitize_text_field($pick(['first_name','firstname','nombre','contact[first_name]','contact.first_name']));
-  $last_name  = sanitize_text_field($pick(['last_name','lastname','apellido','contact[last_name]','contact.last_name']));
-  $phone      = sanitize_text_field($pick(['phone','telefono','celular','contact[phone]','contact.phone']));
-  $company    = sanitize_text_field($pick(['company','empresa']));
-  $cc         = sanitize_text_field($pick(['cc','cedula']));
-  $nit        = sanitize_text_field($pick(['nit']));
-  $cargo      = sanitize_text_field($pick(['cargo','job_title','position']));
-  $city       = sanitize_text_field($pick(['city','ciudad']));
-  $country    = sanitize_text_field($pick(['country','pais'], 'Colombia'));
-  $localidad  = sanitize_text_field($pick(['localidad','ticket_localidad']));
-
-  // Flags de control
-  $resend_param = $req->get_param('resend') ?? $pick(['resend','send_email','send','reenviar','force_send','send_email_on_update'], '');
-  $force_send_on_update = evapp_boolish($resend_param);
-
-  // NUEVO: control de deduplicación
-  // dedupe = 'external_id' (default), 'email', 'none'
-  $dedupe_pref = strtolower((string)($req->get_param('dedupe') ?? $pick(['dedupe','dedupe_mode'], 'external_id')));
-  if (!in_array($dedupe_pref, ['external_id','email','none'], true)) $dedupe_pref = 'external_id';
-  $force_new = evapp_boolish( $req->get_param('force_new') ?? $pick(['force_new','create_new','new'], '') );
-
-  // Para deduplicar opcionalmente por envío de la plataforma
-  $external_id = sanitize_text_field($pick(['submission_id','ac_submission_id','external_id','id','payload_id']));
-
-  if (!$evento_id)  return new \WP_Error('bad_request','Falta evento_id', ['status'=>400]);
-  if (!$email)      return new \WP_Error('bad_request','Falta email', ['status'=>400]);
-
-  // === Dedupe según preferencia/config ===
-  $existing = [];
-  if (!$force_new && $dedupe_pref !== 'none') {
-    // 1) por external_id (cuando aplica)
-    if ($external_id && $dedupe_pref !== 'email') {
-      $existing = get_posts([
-        'post_type'   => 'eventosapp_ticket',
-        'post_status' => 'any',
-        'meta_key'    => '_eventosapp_external_id',
-        'meta_value'  => $external_id,
-        'fields'      => 'ids',
-        'numberposts' => 1,
-      ]);
-    }
-    // 2) por (evento + email) SOLO si se pide explícitamente dedupe=email
-    if (!$existing && $dedupe_pref === 'email') {
-      $q = new WP_Query([
-        'post_type'       => 'eventosapp_ticket',
-        'post_status'     => 'any',
-        'fields'          => 'ids',
-        'posts_per_page'  => 1,
-        'meta_query'      => [
-          'relation' => 'AND',
-          [ 'key'=>'_eventosapp_ticket_evento_id', 'value'=>$evento_id ],
-          [ 'key'=>'_eventosapp_asistente_email',  'value'=>$email   ],
-        ],
-        'no_found_rows'   => true,
-      ]);
-      $existing = $q->posts;
+    if (
+        !isset($_POST[EVENTOSAPP_WEBHOOK_CONDITIONALS_NONCE]) ||
+        !wp_verify_nonce($_POST[EVENTOSAPP_WEBHOOK_CONDITIONALS_NONCE], 'eventosapp_save_webhook_conditionals')
+    ) {
+        return;
     }
 
-    // 3) por (evento + cédula) — fallback universal que aplica en TODOS los modos
-    //    Garantiza deduplicación sin importar el canal de creación original.
-    if (!$existing && $cc) {
-      $found_by_cc = function_exists('evapp_find_ticket_by_cedula_evento')
-        ? evapp_find_ticket_by_cedula_evento($cc, $evento_id)
-        : false;
-      if ($found_by_cc) {
-        $existing = [$found_by_cc];
-        error_log('[EventosApp] Webhook dedupe by CC: ticket '.$found_by_cc.' reutilizado para cc='.$cc.' evento='.$evento_id);
-      }
-    }
-  }
+    $enabled = !empty($_POST['eventosapp_webhook_conditionals_enabled']) ? '1' : '0';
+    eventosapp_webhook_conditionals_update_enabled_meta($post_id, $enabled);
 
-// ======================================================================
-// Si existe, ACTUALIZA y:
-// - Siempre reenvía correo (el ticket fue modificado con nueva info)
-// - Registra log de auditoría con campos que cambiaron
-// ======================================================================
-if ($existing) {
-  $ticket_id = (int) $existing[0];
+    $raw_rules = isset($_POST['eventosapp_webhook_conditionals_rules']) && is_array($_POST['eventosapp_webhook_conditionals_rules'])
+        ? wp_unslash($_POST['eventosapp_webhook_conditionals_rules'])
+        : [];
 
-  // ---- CAPTURAR ESTADO PREVIO PARA AUDITORÍA ----
-  $before_snapshot = [
-    'nombre'    => get_post_meta($ticket_id, '_eventosapp_asistente_nombre',   true),
-    'apellido'  => get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true),
-    'email'     => get_post_meta($ticket_id, '_eventosapp_asistente_email',    true),
-    'tel'       => get_post_meta($ticket_id, '_eventosapp_asistente_tel',      true),
-    'empresa'   => get_post_meta($ticket_id, '_eventosapp_asistente_empresa',  true),
-    'cc'        => get_post_meta($ticket_id, '_eventosapp_asistente_cc',       true),
-    'nit'       => get_post_meta($ticket_id, '_eventosapp_asistente_nit',      true),
-    'cargo'     => get_post_meta($ticket_id, '_eventosapp_asistente_cargo',    true),
-    'ciudad'    => get_post_meta($ticket_id, '_eventosapp_asistente_ciudad',   true),
-    'pais'      => get_post_meta($ticket_id, '_eventosapp_asistente_pais',     true),
-    'localidad' => get_post_meta($ticket_id, '_eventosapp_asistente_localidad',true),
-  ];
-
-  // Si hay campos extras del evento, capturarlos también
-  if (function_exists('eventosapp_get_event_extra_fields')) {
-    $schema_before = (array) eventosapp_get_event_extra_fields($evento_id);
-    foreach ($schema_before as $fld) {
-      if (empty($fld['key'])) continue;
-      $before_snapshot['extra_' . $fld['key']] = get_post_meta($ticket_id, '_eventosapp_extra_' . $fld['key'], true);
-    }
-  }
-  // ---- FIN CAPTURA PREVIA ----
-
-  eventosapp_update_ticket_from_payload($ticket_id, compact(
-    'evento_id','email','first_name','last_name','phone','company','cc','nit','cargo','city','country','localidad','external_id'
-  ), $data);
-
-  // ⬇️ Asegurar autor/creador del ticket cuando entra por webhook
-  $webhook_author = (int) evapp_webhook_author_id();
-  $current_author = (int) get_post_field('post_author', $ticket_id);
-
-  if ($current_author <= 0) {
-    wp_update_post([
-      'ID'          => $ticket_id,
-      'post_author' => $webhook_author,
-    ]);
-  }
-
-  $meta_uid = (int) get_post_meta($ticket_id, '_eventosapp_ticket_user_id', true);
-  if ($meta_uid <= 0) {
-    update_post_meta($ticket_id, '_eventosapp_ticket_user_id', $webhook_author);
-  }
-  // ⬆️ fin asegurar autor
-
-  if ( ! get_post_meta($ticket_id, '_eventosapp_creation_channel', true) ) {
-      update_post_meta($ticket_id, '_eventosapp_creation_channel', 'webhook');
-  }
-
-  // ---- CAPTURAR ESTADO POSTERIOR Y GUARDAR AUDITORÍA ----
-  $after_snapshot = [
-    'nombre'    => get_post_meta($ticket_id, '_eventosapp_asistente_nombre',   true),
-    'apellido'  => get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true),
-    'email'     => get_post_meta($ticket_id, '_eventosapp_asistente_email',    true),
-    'tel'       => get_post_meta($ticket_id, '_eventosapp_asistente_tel',      true),
-    'empresa'   => get_post_meta($ticket_id, '_eventosapp_asistente_empresa',  true),
-    'cc'        => get_post_meta($ticket_id, '_eventosapp_asistente_cc',       true),
-    'nit'       => get_post_meta($ticket_id, '_eventosapp_asistente_nit',      true),
-    'cargo'     => get_post_meta($ticket_id, '_eventosapp_asistente_cargo',    true),
-    'ciudad'    => get_post_meta($ticket_id, '_eventosapp_asistente_ciudad',   true),
-    'pais'      => get_post_meta($ticket_id, '_eventosapp_asistente_pais',     true),
-    'localidad' => get_post_meta($ticket_id, '_eventosapp_asistente_localidad',true),
-  ];
-
-  if (function_exists('eventosapp_get_event_extra_fields')) {
-    $schema_after = (array) eventosapp_get_event_extra_fields($evento_id);
-    foreach ($schema_after as $fld) {
-      if (empty($fld['key'])) continue;
-      $after_snapshot['extra_' . $fld['key']] = get_post_meta($ticket_id, '_eventosapp_extra_' . $fld['key'], true);
-    }
-  }
-
-  // Determinar qué campos cambiaron
-  $changed_fields = [];
-  foreach ($after_snapshot as $field => $new_val) {
-    $old_val = isset($before_snapshot[$field]) ? $before_snapshot[$field] : '';
-    if ((string)$old_val !== (string)$new_val) {
-      $changed_fields[$field] = ['before' => $old_val, 'after' => $new_val];
-    }
-  }
-
-  // Guardar entrada de auditoría solo si algo cambió
-  if (!empty($changed_fields)) {
-    eventosapp_add_ticket_audit_log($ticket_id, [
-      'trigger'         => 'webhook_update',
-      'dedupe_by'       => $dedupe_pref,
-      'external_id'     => $external_id,
-      'changed_fields'  => $changed_fields,
-      'before'          => $before_snapshot,
-      'after'           => $after_snapshot,
-      'ip'              => isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : '',
-    ]);
-  }
-  // ---- FIN AUDITORÍA ----
-
-  // ---- ENVÍO DE CORREO (siempre en actualización por CC) ----
-  $email_result = ['email_sent' => false, 'email_msg' => ''];
-
-  // En actualización por CC: SIEMPRE reenviar (el asistente tiene datos nuevos)
-  // Solo se puede omitir si el payload explícitamente dice resend=false
-  $resend_explicitly_false = (strtolower((string)($req->get_param('resend') ?? '')) === 'false');
-  $should_send = !$resend_explicitly_false;
-
-  // Si hay condicionales del webhook, evaluarlas también en update
-  $conditional_result_upd = null;
-  if ($should_send && function_exists('eventosapp_evaluate_webhook_conditionals')) {
-    $conditional_result_upd = eventosapp_evaluate_webhook_conditionals($ticket_id, $evento_id);
-    if (is_array($conditional_result_upd) && isset($conditional_result_upd['send_email'])) {
-      $should_send = !empty($conditional_result_upd['send_email']);
-    }
-  }
-
-  if ($should_send && function_exists('eventosapp_send_ticket_email_now')) {
-    $args = [
-      'source'    => 'webhook',
-      'recipient' => $email,
-      'force'     => true, // siempre forzar en update para ignorar idempotencia
-    ];
-
-    // Si condicional indicó plantilla específica
-    $email_template_upd = null;
-    if (is_array($conditional_result_upd) && !empty($conditional_result_upd['template'])) {
-      $email_template_upd = $conditional_result_upd['template'];
-      $original_template_upd = get_post_meta($evento_id, '_eventosapp_email_tpl', true);
-      update_post_meta($evento_id, '_eventosapp_email_tpl', $email_template_upd);
-    }
-
-    list($sent, $msg) = eventosapp_send_ticket_email_now($ticket_id, $args);
-
-    // Restaurar plantilla si fue modificada
-    if ($email_template_upd) {
-      if ($original_template_upd === '' || $original_template_upd === false) {
-        delete_post_meta($evento_id, '_eventosapp_email_tpl');
-      } else {
-        update_post_meta($evento_id, '_eventosapp_email_tpl', $original_template_upd);
-      }
-    }
-
-    update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_result', $sent ? 'sent' : 'failed');
-    update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_msg', $msg);
-    update_post_meta($ticket_id, '_eventosapp_ticket_email_webhook_sent', current_time('mysql'));
-
-    $email_result = ['email_sent' => (bool) $sent, 'email_msg' => $msg];
-
-    error_log('[EventosApp] webhook UPDATE mail ticket ' . $ticket_id . ' -> ' . ($sent ? 'SENT' : 'FAILED') . ' | ' . $msg . ' (forced resend on CC update)');
-  } elseif (!$should_send) {
-    $email_result = ['email_sent' => false, 'email_msg' => 'Correo no enviado: ' . ($resend_explicitly_false ? 'resend=false en payload' : 'regla condicional')];
-    error_log('[EventosApp] webhook UPDATE ticket ' . $ticket_id . ' -> email SKIPPED');
-  }
+    $normalized = eventosapp_webhook_conditionals_sanitize_rules($raw_rules, $post_id);
+    eventosapp_webhook_conditionals_update_rules_meta($post_id, $normalized);
+}
 
 /**
-   * Hook de extensión: ticket actualizado vía webhook.
-   * Se dispara después de que todos los metas han sido escritos
-   * y el correo ha sido procesado.
-   *
-   * @param int   $ticket_id
-   * @param array $data Payload raw (sanitizado/parseado)
-   */
-  do_action( 'eventosapp_ticket_updated_via_webhook', $ticket_id, $data );
+ * Render del metabox.
+ */
+function eventosapp_render_webhook_conditionals_metabox($post) {
+    wp_nonce_field('eventosapp_save_webhook_conditionals', EVENTOSAPP_WEBHOOK_CONDITIONALS_NONCE);
 
-  return array_merge([
-    'ok'         => true,
-    'ticket_id'  => $ticket_id,
-    'updated'    => true,
-    'fields_changed' => array_keys($changed_fields),
-    'audit_logged'   => !empty($changed_fields),
-  ], $email_result);
-}
-
-
-  // === Crear ticket nuevo ===
-
-  // Generar ID público antes de insertar y usarlo como título del post
-  $ticket_public_id = function_exists('eventosapp_generate_unique_ticket_id')
-    ? eventosapp_generate_unique_ticket_id()
-    : wp_generate_uuid4();
-
-  // Autor: emisor1 (ID 17) o resuelto por helper
-  $webhook_author = (int) evapp_webhook_author_id();
-
-  $post_id = wp_insert_post([
-    'post_type'   => 'eventosapp_ticket',
-    'post_status' => 'publish',
-    'post_title'  => sanitize_text_field($ticket_public_id), // título = ID público
-    'post_author' => $webhook_author,                        // ⬅️ autor del webhook
-  ], true);
-  if (is_wp_error($post_id)) return $post_id;
-
-  // Guardar ID público y secuencia
-  update_post_meta($post_id, 'eventosapp_ticketID', $ticket_public_id);
-  $seq = function_exists('eventosapp_next_event_sequence') ? (int) eventosapp_next_event_sequence($evento_id) : 0;
-  update_post_meta($post_id, '_eventosapp_ticket_seq', $seq);
-
-  // Guardar metadatos principales (incluye el user_id del creador)
-  update_post_meta($post_id, '_eventosapp_ticket_evento_id', $evento_id);
-  update_post_meta($post_id, '_eventosapp_ticket_user_id', $webhook_author);
-  // 2.3 Webhook (marca como webhook)
-  update_post_meta($post_id, '_eventosapp_creation_channel', 'webhook');
-  update_post_meta($post_id, '_eventosapp_asistente_nombre',   $first_name);
-  update_post_meta($post_id, '_eventosapp_asistente_apellido', $last_name);
-  update_post_meta($post_id, '_eventosapp_asistente_cc',       $cc);
-  update_post_meta($post_id, '_eventosapp_asistente_email',    $email);
-  update_post_meta($post_id, '_eventosapp_asistente_tel',      $phone);
-  update_post_meta($post_id, '_eventosapp_asistente_empresa',  $company);
-  update_post_meta($post_id, '_eventosapp_asistente_nit',      $nit);
-  update_post_meta($post_id, '_eventosapp_asistente_cargo',    $cargo);
-  update_post_meta($post_id, '_eventosapp_asistente_ciudad',   $city);
-  update_post_meta($post_id, '_eventosapp_asistente_pais',     $country);
-  update_post_meta($post_id, '_eventosapp_asistente_localidad',$localidad);
-  if (!empty($external_id)) update_post_meta($post_id, '_eventosapp_external_id', $external_id);
-
-
-  // Campos adicionales del evento (si llegan en el payload)
-  if (function_exists('eventosapp_get_event_extra_fields')) {
-    $schema = (array) eventosapp_get_event_extra_fields($evento_id);
-    foreach ($schema as $fld) {
-      if (empty($fld['key'])) continue;
-      $k = (string)$fld['key'];
-      // Acepta varias ubicaciones convencionales + sueltas
-      $raw = evapp_pick_extra($data, $k);
-      if (function_exists('eventosapp_normalize_extra_value')) {
-        $val = eventosapp_normalize_extra_value($fld, $raw);
-      } else {
-        $val = is_scalar($raw) ? sanitize_text_field($raw) : '';
-      }
-      update_post_meta($post_id, '_eventosapp_extra_'.$k, $val);
-    }
-  }
-
-  // Inicializar check-in por día
-  $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
-  if ($days) {
-    $status = [];
-    foreach ($days as $d) $status[$d] = 'not_checked_in';
-    update_post_meta($post_id, '_eventosapp_checkin_status', $status);
-  }
-
-  // Auto-asignar acceso a sesiones según localidad
-  $sesiones = get_post_meta($evento_id, '_eventosapp_sesiones_internas', true);
-  if (is_array($sesiones) && $localidad) {
-    $accesos = [];
-    foreach ($sesiones as $s) {
-      if (isset($s['nombre'],$s['localidades']) && is_array($s['localidades']) && in_array($localidad, $s['localidades'], true)) {
-        $accesos[] = $s['nombre'];
-      }
-    }
-    if ($accesos) update_post_meta($post_id, '_eventosapp_ticket_sesiones_acceso', $accesos);
-  }
-
-  // ============================================================================
-  // NUEVO SISTEMA DE QR - Generar todos los códigos QR con el sistema moderno
-  // ============================================================================
-  if (class_exists('EventosApp_QR_Manager')) {
-    // Instanciar el QR Manager y generar todos los QR codes
-    $qr_manager = new EventosApp_QR_Manager();
-    
-    // Forzar la generación eliminando cualquier QR existente primero (por si acaso)
-    delete_post_meta($post_id, '_eventosapp_qr_codes');
-    
-    // Generar todos los QR codes del nuevo sistema
-    $qr_manager->generate_all_qr_codes($post_id);
-    
-    error_log('[EventosApp] Webhook CREATE: Nuevos QR codes generados para ticket '.$post_id);
-  } else {
-    error_log('[EventosApp] Webhook CREATE: ADVERTENCIA - EventosApp_QR_Manager no disponible para ticket '.$post_id);
-  }
-
-  // ============================================================================
-  // FUNCIONES LEGACY - Mantener compatibilidad con archivos antiguos
-  // ============================================================================
-  // Generar adjuntos/archivos según flags del evento (opcional; el helper de email también genera si están ON)
-  $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
-  $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
-  if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
-  if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($post_id);
-
-  $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
-  if ($wallet_android_on==='1' || $wallet_android_on===1 || $wallet_android_on===true) {
-    if (function_exists('eventosapp_generar_enlace_wallet_android')) eventosapp_generar_enlace_wallet_android($post_id, false);
-  }
-
-  // Indexar para búsquedas
-  if (function_exists('eventosapp_ticket_build_search_blob')) eventosapp_ticket_build_search_blob($post_id);
-
-  // --- Marcar origen ---
-  update_post_meta($post_id, '_eventosapp_ticket_origin', 'webhook');
-
-  // --- EVALUAR CONDICIONALES Y ENVIAR CORREO SI CORRESPONDE ---
-  $email_result = ['email_sent' => false, 'email_msg' => '', 'conditional_matched' => false];
-  
-  $should_send_email = true; // Por defecto SÍ enviar
-  $email_template = null;
-  $conditional_result = null;
-  
-  // Evaluar condicionales si la función existe
-  if (function_exists('eventosapp_evaluate_webhook_conditionals')) {
-    $conditional_result = eventosapp_evaluate_webhook_conditionals($post_id, $evento_id);
-    
-    if (is_array($conditional_result)) {
-      $should_send_email = !empty($conditional_result['send_email']);
-      $email_template = $conditional_result['template'] ?? null;
-      
-      // Log de qué regla se aplicó (para debugging)
-      if (isset($conditional_result['matched_rule']) && is_array($conditional_result['matched_rule'])) {
-        update_post_meta($post_id, '_eventosapp_webhook_conditional_matched', $conditional_result['matched_rule']);
-        $email_result['conditional_matched'] = true;
-      }
-    }
-  }
-  
-  // Enviar correo si corresponde
-  if ($should_send_email && function_exists('eventosapp_send_ticket_email_now')) {
-    // Si hay una plantilla específica de la condicional, temporalmente cambiar la plantilla del evento
-    $original_template = null;
-    if ($email_template) {
-      $original_template = get_post_meta($evento_id, '_eventosapp_email_tpl', true);
-      update_post_meta($evento_id, '_eventosapp_email_tpl', $email_template);
-    }
-    
-    // Enviar el correo
-    list($sent, $msg) = eventosapp_send_ticket_email_now($post_id, [
-      'source'    => 'webhook',  // idempotente en reintentos
-      'recipient' => $email,
-      // 'force' => true, // descomenta si quieres ignorar idempotencia globalmente
-    ]);
-    
-    // Restaurar plantilla original si fue modificada
-    if ($email_template && $original_template !== null) {
-      if ($original_template === '' || $original_template === false) {
-        delete_post_meta($evento_id, '_eventosapp_email_tpl');
-      } else {
-        update_post_meta($evento_id, '_eventosapp_email_tpl', $original_template);
-      }
-    }
-    
-    // Trazas de auditoría
-    update_post_meta($post_id, '_eventosapp_ticket_email_webhook_result', $sent ? 'sent' : 'failed');
-    update_post_meta($post_id, '_eventosapp_ticket_email_webhook_msg', $msg);
-    if ($email_template) {
-      update_post_meta($post_id, '_eventosapp_ticket_email_webhook_template', $email_template);
-    }
-    
-    $email_result = [
-      'email_sent' => (bool) $sent, 
-      'email_msg' => $msg,
-      'conditional_matched' => $email_result['conditional_matched'],
-      'template_used' => $email_template ?: 'default'
+    $enabled      = eventosapp_webhook_conditionals_get_enabled($post->ID);
+    $rules        = eventosapp_webhook_conditionals_get_rules($post->ID);
+    $field_options = eventosapp_webhook_conditionals_get_field_options($post->ID);
+    $templates     = eventosapp_webhook_conditionals_get_email_templates($post->ID);
+    $operators      = eventosapp_webhook_conditionals_get_operators();
+    $actions        = eventosapp_webhook_conditionals_get_actions();
+    $relations      = [
+        'all' => 'Cumplir TODOS los criterios (AND)',
+        'any' => 'Cumplir CUALQUIERA de los criterios (OR)',
     ];
 
-    error_log('[EventosApp] webhook CREATE mail ticket '.$post_id.' -> '.($sent ? 'SENT' : 'FAILED').' | '.$msg.($email_template ? ' | Template: '.$email_template : ''));
-  } elseif (!$should_send_email) {
-    // Si no se envió correo por una condicional, registrarlo
-    update_post_meta($post_id, '_eventosapp_webhook_email_skipped', [
-      'reason' => 'conditional_rule',
-      'matched_rule' => $conditional_result['matched_rule'] ?? null,
-      'at' => current_time('mysql')
-    ]);
-    $email_result = [
-      'email_sent' => false, 
-      'email_msg' => 'Correo no enviado por regla condicional',
-      'conditional_matched' => true
-    ];
-    error_log('[EventosApp] webhook CREATE ticket '.$post_id.' -> email SKIPPED by conditional rule');
-  } elseif (!function_exists('eventosapp_send_ticket_email_now')) {
-    $email_result = ['email_sent' => false, 'email_msg' => 'eventosapp_send_ticket_email_now() no disponible', 'conditional_matched' => false];
-    error_log('[EventosApp] webhook CREATE ticket '.$post_id.' -> email helper NO disponible');
-  }
+    if (empty($rules)) {
+        $rules = [eventosapp_webhook_conditionals_get_default_rule()];
+    }
+    ?>
+    <div class="eventosapp-webhook-conditions-wrap">
+        <style>
+            .eventosapp-webhook-conditions-wrap .evapp-wh-info-box{
+                background:#f6f7f7;
+                border-left:4px solid #2271b1;
+                padding:14px 16px;
+                margin-bottom:16px;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-toggle-box,
+            .eventosapp-webhook-conditions-wrap .evapp-wh-rule-box{
+                border:1px solid #dcdcde;
+                border-radius:8px;
+                background:#fff;
+                padding:16px;
+                margin-bottom:16px;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-rule-head{
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:16px;
+                margin-bottom:14px;
+                padding-bottom:10px;
+                border-bottom:1px solid #e5e7eb;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-grid-3{
+                display:grid;
+                grid-template-columns:1fr 1fr 1fr;
+                gap:14px;
+                margin-bottom:12px;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-grid-2{
+                display:grid;
+                grid-template-columns:1fr 1fr;
+                gap:14px;
+            }
+            .eventosapp-webhook-conditions-wrap label{
+                display:block;
+                font-weight:600;
+                margin-bottom:6px;
+            }
+            .eventosapp-webhook-conditions-wrap select,
+            .eventosapp-webhook-conditions-wrap input[type="text"]{
+                width:100%;
+                max-width:none;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-help{
+                color:#666;
+                font-style:italic;
+                margin-top:6px;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-criteria-wrap{
+                margin:14px 0 12px;
+                border:1px solid #e5e7eb;
+                border-radius:8px;
+                background:#fafafa;
+                padding:12px;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-criteria-title{
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                gap:12px;
+                margin-bottom:10px;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-criterion-box{
+                border:1px solid #dcdcde;
+                background:#fff;
+                border-radius:6px;
+                padding:12px;
+                margin-bottom:10px;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-criterion-actions,
+            .eventosapp-webhook-conditions-wrap .evapp-wh-rule-actions{
+                display:flex;
+                justify-content:flex-end;
+                align-items:center;
+            }
+            .eventosapp-webhook-conditions-wrap .evapp-wh-muted{
+                color:#6b7280;
+                font-size:12px;
+            }
+            @media (max-width: 960px){
+                .eventosapp-webhook-conditions-wrap .evapp-wh-grid-3,
+                .eventosapp-webhook-conditions-wrap .evapp-wh-grid-2{
+                    grid-template-columns:1fr;
+                }
+            }
+        </style>
 
-  /**
-   * Hook de extensión: ticket creado vía webhook.
-   * @param int   $post_id
-   * @param array $data Payload raw (sanitizado/parseado)
-   */
-  do_action('eventosapp_ticket_created_via_webhook', $post_id, $data);
+        <div class="evapp-wh-info-box">
+            <p style="margin:0 0 8px;"><strong>¿Qué hace esto?</strong><br>
+                Configura reglas para controlar el envío de correos cuando llegan inscripciones vía webhook.<br>
+                Puedes decidir si se envía correo o no, y qué plantilla usar, según el contenido de los campos del ticket.
+            </p>
+            <p style="margin:0;"><strong>Orden de evaluación:</strong> Las reglas se evalúan de arriba hacia abajo. La primera regla que coincida se ejecuta (las demás se ignoran).</p>
+        </div>
 
-  // Respuesta REST incluyendo el resultado del correo
-  return array_merge(
-    ['ok'=>true, 'ticket_id'=>$post_id, 'public_id'=>$ticket_public_id],
-    $email_result
-  );
+        <div class="evapp-wh-toggle-box">
+            <label style="display:flex;align-items:center;gap:10px;margin:0;">
+                <input type="checkbox" name="eventosapp_webhook_conditionals_enabled" value="1" <?php checked($enabled, '1'); ?>>
+                <span style="font-size:16px;font-weight:600;">Activar condicionales para este evento</span>
+            </label>
+            <p class="evapp-wh-help">Si está desactivado, todos los tickets del webhook recibirán correo con la plantilla por defecto del evento.</p>
+        </div>
+
+        <div id="evapp-wh-rules-root">
+            <?php foreach ($rules as $rule_index => $rule): ?>
+                <?php eventosapp_render_webhook_conditionals_rule_block($post->ID, $rule_index, $rule, $field_options, $operators, $actions, $templates, $relations); ?>
+            <?php endforeach; ?>
+        </div>
+
+        <p>
+            <button type="button" class="button" id="evapp-wh-add-rule">➕ Agregar regla</button>
+        </p>
+    </div>
+
+    <script type="text/html" id="tmpl-evapp-wh-rule">
+        <?php
+        $tpl_rule = eventosapp_webhook_conditionals_get_default_rule();
+        eventosapp_render_webhook_conditionals_rule_block($post->ID, '__RULE_INDEX__', $tpl_rule, $field_options, $operators, $actions, $templates, $relations, true);
+        ?>
+    </script>
+
+    <script type="text/html" id="tmpl-evapp-wh-criterion">
+        <?php
+        $tpl_criterion = eventosapp_webhook_conditionals_get_default_criterion();
+        eventosapp_render_webhook_conditionals_criterion_block($post->ID, '__RULE_INDEX__', '__CRITERION_INDEX__', $tpl_criterion, $field_options, $operators, true);
+        ?>
+    </script>
+
+    <script>
+    (function($){
+        function refreshRuleTitles(){
+            $('#evapp-wh-rules-root .evapp-wh-rule-box').each(function(i){
+                $(this).find('.evapp-wh-rule-title').text('Regla #' + (i + 1));
+            });
+        }
+
+        function bindRule($rule){
+            $rule.on('click', '.evapp-wh-remove-rule', function(){
+                $(this).closest('.evapp-wh-rule-box').remove();
+                refreshRuleTitles();
+            });
+
+            $rule.on('click', '.evapp-wh-add-criterion', function(){
+                var $ruleBox = $(this).closest('.evapp-wh-rule-box');
+                var ruleIndex = $ruleBox.data('rule-index');
+                var $criteriaRoot = $ruleBox.find('.evapp-wh-criteria-root');
+                var criterionIndex = $criteriaRoot.children('.evapp-wh-criterion-box').length;
+                var html = $('#tmpl-evapp-wh-criterion').html()
+                    .replace(/__RULE_INDEX__/g, String(ruleIndex))
+                    .replace(/__CRITERION_INDEX__/g, String(criterionIndex));
+                $criteriaRoot.append(html);
+            });
+
+            $rule.on('click', '.evapp-wh-remove-criterion', function(){
+                var $criteriaRoot = $(this).closest('.evapp-wh-criteria-root');
+                if ($criteriaRoot.children('.evapp-wh-criterion-box').length <= 1) {
+                    alert('Cada regla debe tener al menos un criterio.');
+                    return;
+                }
+                $(this).closest('.evapp-wh-criterion-box').remove();
+            });
+        }
+
+        $(document).ready(function(){
+            $('#evapp-wh-rules-root .evapp-wh-rule-box').each(function(){
+                bindRule($(this));
+            });
+            refreshRuleTitles();
+
+            $('#evapp-wh-add-rule').on('click', function(){
+                var ruleIndex = $('#evapp-wh-rules-root .evapp-wh-rule-box').length;
+                var html = $('#tmpl-evapp-wh-rule').html().replace(/__RULE_INDEX__/g, String(ruleIndex));
+                var $rule = $(html);
+                $('#evapp-wh-rules-root').append($rule);
+                bindRule($rule);
+                refreshRuleTitles();
+            });
+        });
+    })(jQuery);
+    </script>
+    <?php
 }
 
-/** Reutilizable: actualiza un ticket existente con nuevo payload */
-function eventosapp_update_ticket_from_payload($post_id, array $flat, array $data){
-  foreach ($flat as $k=>$v) $$k = $v; // vars locales
-  update_post_meta($post_id, '_eventosapp_ticket_evento_id',   (int)$evento_id);
-  update_post_meta($post_id, '_eventosapp_asistente_nombre',   (string)$first_name);
-  update_post_meta($post_id, '_eventosapp_asistente_apellido', (string)$last_name);
-  update_post_meta($post_id, '_eventosapp_asistente_email',    (string)$email);
-  update_post_meta($post_id, '_eventosapp_asistente_tel',      (string)$phone);
-  update_post_meta($post_id, '_eventosapp_asistente_empresa',  (string)$company);
-  update_post_meta($post_id, '_eventosapp_asistente_cc',       (string)$cc);
-  update_post_meta($post_id, '_eventosapp_asistente_nit',      (string)$nit);
-  update_post_meta($post_id, '_eventosapp_asistente_cargo',    (string)$cargo);
-  update_post_meta($post_id, '_eventosapp_asistente_ciudad',   (string)$city);
-  update_post_meta($post_id, '_eventosapp_asistente_pais',     (string)($country ?: 'Colombia'));
-  update_post_meta($post_id, '_eventosapp_asistente_localidad',(string)$localidad);
-  if (!empty($external_id)) update_post_meta($post_id, '_eventosapp_external_id', (string)$external_id);
+/**
+ * Render de una regla.
+ */
+function eventosapp_render_webhook_conditionals_rule_block($evento_id, $rule_index, $rule, $field_options, $operators, $actions, $templates, $relations, $for_template = false) {
+    $relation = isset($rule['criteria_relation']) ? $rule['criteria_relation'] : 'all';
+    $action   = isset($rule['action']) ? $rule['action'] : 'send_specific';
+    $template = isset($rule['template']) ? $rule['template'] : '';
+    $criteria = isset($rule['criteria']) && is_array($rule['criteria']) ? $rule['criteria'] : [eventosapp_webhook_conditionals_get_default_criterion()];
 
-  // Extras del evento
-  if (function_exists('eventosapp_get_event_extra_fields')) {
-    $schema = (array) eventosapp_get_event_extra_fields($evento_id);
-    foreach ($schema as $fld) {
-      if (empty($fld['key'])) continue;
-      $k = (string)$fld['key'];
-      $raw = evapp_pick_extra($data, $k);
-      if (function_exists('eventosapp_normalize_extra_value')) {
-        $val = eventosapp_normalize_extra_value($fld, $raw);
-      } else {
-        $val = is_scalar($raw) ? sanitize_text_field($raw) : '';
-      }
-      update_post_meta($post_id, '_eventosapp_extra_'.$k, $val);
+    $rule_attr = $for_template ? 'data-rule-index="__RULE_INDEX__"' : 'data-rule-index="' . esc_attr($rule_index) . '"';
+    ?>
+    <div class="evapp-wh-rule-box" <?php echo $rule_attr; ?>>
+        <div class="evapp-wh-rule-head">
+            <strong class="evapp-wh-rule-title">Regla #<?php echo is_numeric($rule_index) ? intval($rule_index) + 1 : 1; ?></strong>
+            <button type="button" class="button-link-delete evapp-wh-remove-rule">✖ Eliminar</button>
+        </div>
+
+        <div class="evapp-wh-criteria-wrap">
+            <div class="evapp-wh-criteria-title">
+                <div>
+                    <label>Cómo deben cumplirse los criterios</label>
+                    <select name="eventosapp_webhook_conditionals_rules[<?php echo esc_attr($rule_index); ?>][criteria_relation]">
+                        <?php foreach ($relations as $relation_key => $relation_label): ?>
+                            <option value="<?php echo esc_attr($relation_key); ?>" <?php selected($relation, $relation_key); ?>><?php echo esc_html($relation_label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="evapp-wh-rule-actions">
+                    <button type="button" class="button evapp-wh-add-criterion">➕ Agregar criterio</button>
+                </div>
+            </div>
+
+            <div class="evapp-wh-criteria-root">
+                <?php foreach ($criteria as $criterion_index => $criterion): ?>
+                    <?php eventosapp_render_webhook_conditionals_criterion_block($evento_id, $rule_index, $criterion_index, $criterion, $field_options, $operators, $for_template); ?>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
+        <div class="evapp-wh-grid-2">
+            <div>
+                <label>Acción si coincide</label>
+                <select name="eventosapp_webhook_conditionals_rules[<?php echo esc_attr($rule_index); ?>][action]">
+                    <?php foreach ($actions as $action_key => $action_label): ?>
+                        <option value="<?php echo esc_attr($action_key); ?>" <?php selected($action, $action_key); ?>><?php echo esc_html($action_label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label>Plantilla de correo</label>
+                <select name="eventosapp_webhook_conditionals_rules[<?php echo esc_attr($rule_index); ?>][template]">
+                    <option value="">Email Ticket (por defecto)</option>
+                    <?php foreach ($templates as $template_id => $template_label): ?>
+                        <option value="<?php echo esc_attr($template_id); ?>" <?php selected($template, $template_id); ?>><?php echo esc_html($template_label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <div class="evapp-wh-help">Si está vacío, se usa la plantilla configurada en “Personalización del correo”.</div>
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+/**
+ * Render de un criterio.
+ */
+function eventosapp_render_webhook_conditionals_criterion_block($evento_id, $rule_index, $criterion_index, $criterion, $field_options, $operators, $for_template = false) {
+    $field    = isset($criterion['field']) ? $criterion['field'] : '';
+    $operator = isset($criterion['operator']) ? $criterion['operator'] : 'equals';
+    $value    = isset($criterion['value']) ? $criterion['value'] : '';
+    ?>
+    <div class="evapp-wh-criterion-box">
+        <div class="evapp-wh-grid-3">
+            <div>
+                <label>Campo a evaluar</label>
+                <select name="eventosapp_webhook_conditionals_rules[<?php echo esc_attr($rule_index); ?>][criteria][<?php echo esc_attr($criterion_index); ?>][field]">
+                    <?php foreach ($field_options as $group_label => $group_fields): ?>
+                        <optgroup label="<?php echo esc_attr($group_label); ?>">
+                            <?php foreach ($group_fields as $field_key => $field_label): ?>
+                                <option value="<?php echo esc_attr($field_key); ?>" <?php selected($field, $field_key); ?>><?php echo esc_html($field_label); ?></option>
+                            <?php endforeach; ?>
+                        </optgroup>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label>Operador</label>
+                <select name="eventosapp_webhook_conditionals_rules[<?php echo esc_attr($rule_index); ?>][criteria][<?php echo esc_attr($criterion_index); ?>][operator]">
+                    <?php foreach ($operators as $operator_key => $operator_label): ?>
+                        <option value="<?php echo esc_attr($operator_key); ?>" <?php selected($operator, $operator_key); ?>><?php echo esc_html($operator_label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label>Valor a comparar</label>
+                <input type="text" name="eventosapp_webhook_conditionals_rules[<?php echo esc_attr($rule_index); ?>][criteria][<?php echo esc_attr($criterion_index); ?>][value]" value="<?php echo esc_attr($value); ?>">
+                <div class="evapp-wh-help">No distingue mayúsculas/minúsculas. Deja vacío si el operador es “está vacío” o “no está vacío”.</div>
+            </div>
+        </div>
+        <div class="evapp-wh-criterion-actions">
+            <button type="button" class="button-link-delete evapp-wh-remove-criterion">✖ Eliminar criterio</button>
+        </div>
+    </div>
+    <?php
+}
+
+/**
+ * Evalúa reglas para un ticket.
+ * Devuelve la primera coincidencia.
+ */
+if (!function_exists('eventosapp_evaluate_webhook_conditionals')) {
+    function eventosapp_evaluate_webhook_conditionals($ticket_id, $evento_id) {
+        $enabled = eventosapp_webhook_conditionals_get_enabled($evento_id);
+        if ($enabled !== '1') {
+            return [
+                'send_email'   => true,
+                'template'     => null,
+                'matched_rule' => null,
+            ];
+        }
+
+        $rules = eventosapp_webhook_conditionals_get_rules($evento_id);
+        if (empty($rules)) {
+            return [
+                'send_email'   => true,
+                'template'     => null,
+                'matched_rule' => null,
+            ];
+        }
+
+        foreach ($rules as $index => $rule) {
+            $normalized_rule = eventosapp_webhook_conditionals_normalize_rule($rule);
+            if (empty($normalized_rule['criteria'])) {
+                continue;
+            }
+
+            $match = eventosapp_webhook_conditionals_match_rule($ticket_id, $evento_id, $normalized_rule);
+            if (!$match) {
+                continue;
+            }
+
+            $send_email = ($normalized_rule['action'] !== 'skip_email');
+            $template   = $send_email ? ($normalized_rule['template'] ?: null) : null;
+
+            return [
+                'send_email' => $send_email,
+                'template'   => $template,
+                'matched_rule' => [
+                    'rule_index'        => $index,
+                    'criteria_relation' => $normalized_rule['criteria_relation'],
+                    'criteria'          => $normalized_rule['criteria'],
+                    'action'            => $normalized_rule['action'],
+                    'template'          => $normalized_rule['template'],
+                ],
+            ];
+        }
+
+        return [
+            'send_email'   => true,
+            'template'     => null,
+            'matched_rule' => null,
+        ];
     }
-  }
+}
 
-  // Recalcular accesos por localidad si hay esquema de sesiones
-  $sesiones_upd = get_post_meta((int)$evento_id, '_eventosapp_sesiones_internas', true);
-  if (is_array($sesiones_upd) && !empty($localidad)) {
-    $accesos_upd = [];
-    foreach ($sesiones_upd as $s) {
-      if (!empty($s['nombre']) && !empty($s['localidades']) && is_array($s['localidades'])) {
-        if (in_array($localidad, $s['localidades'], true)) $accesos_upd[] = $s['nombre'];
-      }
+if (!function_exists('eventosapp_webhook_conditionals_match_rule')) {
+    function eventosapp_webhook_conditionals_match_rule($ticket_id, $evento_id, array $rule) {
+        $results = [];
+        foreach ($rule['criteria'] as $criterion) {
+            $results[] = eventosapp_webhook_conditionals_match_criterion($ticket_id, $evento_id, $criterion);
+        }
+
+        if ($rule['criteria_relation'] === 'any') {
+            return in_array(true, $results, true);
+        }
+
+        return !in_array(false, $results, true);
     }
-    update_post_meta($post_id, '_eventosapp_ticket_sesiones_acceso', $accesos_upd);
-  }
+}
 
-  // Reindexar búsqueda si aplica
-  if (function_exists('eventosapp_ticket_build_search_blob')) {
-    eventosapp_ticket_build_search_blob($post_id);
-  }
+if (!function_exists('eventosapp_webhook_conditionals_match_criterion')) {
+    function eventosapp_webhook_conditionals_match_criterion($ticket_id, $evento_id, array $criterion) {
+        $field    = isset($criterion['field']) ? (string) $criterion['field'] : '';
+        $operator = isset($criterion['operator']) ? (string) $criterion['operator'] : 'equals';
+        $expected = isset($criterion['value']) ? (string) $criterion['value'] : '';
+        $actual   = eventosapp_webhook_conditionals_get_ticket_field_value($ticket_id, $evento_id, $field);
+
+        $actual_norm   = eventosapp_webhook_conditionals_normalize_value($actual);
+        $expected_norm = eventosapp_webhook_conditionals_normalize_value($expected);
+
+        switch ($operator) {
+            case 'equals':
+                return $actual_norm === $expected_norm;
+
+            case 'not_equals':
+                return $actual_norm !== $expected_norm;
+
+            case 'contains':
+                return $expected_norm !== '' && strpos($actual_norm, $expected_norm) !== false;
+
+            case 'not_contains':
+                return $expected_norm !== '' && strpos($actual_norm, $expected_norm) === false;
+
+            case 'starts_with':
+                return $expected_norm !== '' && strpos($actual_norm, $expected_norm) === 0;
+
+            case 'ends_with':
+                if ($expected_norm === '') return false;
+                $len = strlen($expected_norm);
+                return substr($actual_norm, -$len) === $expected_norm;
+
+            case 'is_empty':
+                return $actual_norm === '';
+
+            case 'is_not_empty':
+                return $actual_norm !== '';
+
+            case 'gt':
+            case 'gte':
+            case 'lt':
+            case 'lte':
+                $actual_num   = is_numeric($actual) ? (float) $actual : null;
+                $expected_num = is_numeric($expected) ? (float) $expected : null;
+                if ($actual_num === null || $expected_num === null) return false;
+
+                if ($operator === 'gt')  return $actual_num >  $expected_num;
+                if ($operator === 'gte') return $actual_num >= $expected_num;
+                if ($operator === 'lt')  return $actual_num <  $expected_num;
+                return $actual_num <= $expected_num;
+        }
+
+        return false;
+    }
+}
+
+/**
+ * Obtención del valor del campo del ticket.
+ */
+if (!function_exists('eventosapp_webhook_conditionals_get_ticket_field_value')) {
+    function eventosapp_webhook_conditionals_get_ticket_field_value($ticket_id, $evento_id, $field) {
+        $field = (string) $field;
+
+        $map = [
+            'ticket_id'      => 'eventosapp_ticketID',
+            'nombre'         => '_eventosapp_asistente_nombre',
+            'apellido'       => '_eventosapp_asistente_apellido',
+            'email'          => '_eventosapp_asistente_email',
+            'telefono'       => '_eventosapp_asistente_tel',
+            'empresa'        => '_eventosapp_asistente_empresa',
+            'cc'             => '_eventosapp_asistente_cc',
+            'nit'            => '_eventosapp_asistente_nit',
+            'cargo'          => '_eventosapp_asistente_cargo',
+            'ciudad'         => '_eventosapp_asistente_ciudad',
+            'pais'           => '_eventosapp_asistente_pais',
+            'localidad'      => '_eventosapp_asistente_localidad',
+            'estado_pago'    => '_eventosapp_estado_pago',
+            'creation_channel' => '_eventosapp_creation_channel',
+            'external_id'    => '_eventosapp_external_id',
+        ];
+
+        if (isset($map[$field])) {
+            return get_post_meta($ticket_id, $map[$field], true);
+        }
+
+        if (strpos($field, 'extra:') === 0) {
+            $extra_key = substr($field, 6);
+            return get_post_meta($ticket_id, '_eventosapp_extra_' . $extra_key, true);
+        }
+
+        return get_post_meta($ticket_id, $field, true);
+    }
+}
+
+/**
+ * Opciones de campos disponibles.
+ */
+if (!function_exists('eventosapp_webhook_conditionals_get_field_options')) {
+    function eventosapp_webhook_conditionals_get_field_options($evento_id) {
+        $base = [
+            'Campos base del ticket' => [
+                'ticket_id'        => 'ID del ticket',
+                'nombre'           => 'Nombre',
+                'apellido'         => 'Apellido',
+                'email'            => 'Email',
+                'telefono'         => 'Teléfono',
+                'empresa'          => 'Empresa',
+                'cc'               => 'Cédula',
+                'nit'              => 'NIT',
+                'cargo'            => 'Cargo',
+                'ciudad'           => 'Ciudad',
+                'pais'             => 'País',
+                'localidad'        => 'Localidad',
+                'estado_pago'      => 'Estado de pago',
+                'creation_channel' => 'Canal de creación',
+                'external_id'      => 'External ID',
+            ],
+        ];
+
+        $extras = [];
+        if (function_exists('eventosapp_get_event_extra_fields')) {
+            $event_extras = (array) eventosapp_get_event_extra_fields($evento_id);
+            foreach ($event_extras as $extra) {
+                if (empty($extra['key'])) continue;
+                $extras['Campos adicionales del evento']['extra:' . $extra['key']] = !empty($extra['label']) ? $extra['label'] . ' (extra)' : $extra['key'] . ' (extra)';
+            }
+        }
+
+        return array_merge($base, $extras);
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_get_operators')) {
+    function eventosapp_webhook_conditionals_get_operators() {
+        return [
+            'equals'       => 'Es igual a (exacto)',
+            'not_equals'   => 'No es igual a',
+            'contains'     => 'Contiene',
+            'not_contains' => 'No contiene',
+            'starts_with'  => 'Empieza por',
+            'ends_with'    => 'Termina en',
+            'is_empty'     => 'Está vacío',
+            'is_not_empty' => 'No está vacío',
+            'gt'           => 'Mayor que',
+            'gte'          => 'Mayor o igual que',
+            'lt'           => 'Menor que',
+            'lte'          => 'Menor o igual que',
+        ];
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_get_actions')) {
+    function eventosapp_webhook_conditionals_get_actions() {
+        return [
+            'send_specific' => '✉️ Enviar correo con plantilla específica',
+            'skip_email'    => '🚫 No enviar correo',
+        ];
+    }
+}
+
+/**
+ * Plantillas disponibles.
+ * Si en tu instalación las plantillas viven en otro CPT/meta, aquí queda encapsulado.
+ */
+if (!function_exists('eventosapp_webhook_conditionals_get_email_templates')) {
+    function eventosapp_webhook_conditionals_get_email_templates($evento_id = 0) {
+        $templates = [];
+
+        $possible_post_types = [
+            'eventosapp_email_tpl',
+            'eventosapp_email_template',
+            'eventosapp_correo_tpl',
+        ];
+
+        foreach ($possible_post_types as $post_type) {
+            $posts = get_posts([
+                'post_type'      => $post_type,
+                'post_status'    => ['publish', 'draft', 'private'],
+                'numberposts'    => -1,
+                'orderby'        => 'title',
+                'order'          => 'ASC',
+                'suppress_filters' => false,
+            ]);
+
+            if (!empty($posts)) {
+                foreach ($posts as $tpl) {
+                    $templates[$tpl->ID] = $tpl->post_title;
+                }
+                break;
+            }
+        }
+
+        return $templates;
+    }
+}
+
+/**
+ * Helpers de reglas.
+ */
+if (!function_exists('eventosapp_webhook_conditionals_get_default_rule')) {
+    function eventosapp_webhook_conditionals_get_default_rule() {
+        return [
+            'criteria_relation' => 'all',
+            'criteria'          => [eventosapp_webhook_conditionals_get_default_criterion()],
+            'action'            => 'send_specific',
+            'template'          => '',
+        ];
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_get_default_criterion')) {
+    function eventosapp_webhook_conditionals_get_default_criterion() {
+        return [
+            'field'    => 'email',
+            'operator' => 'is_not_empty',
+            'value'    => '',
+        ];
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_sanitize_rules')) {
+    function eventosapp_webhook_conditionals_sanitize_rules(array $raw_rules, $evento_id) {
+        $sanitized = [];
+
+        foreach ($raw_rules as $rule) {
+            if (!is_array($rule)) continue;
+
+            $rule = eventosapp_webhook_conditionals_normalize_rule($rule);
+            $relation = ($rule['criteria_relation'] === 'any') ? 'any' : 'all';
+            $action   = ($rule['action'] === 'skip_email') ? 'skip_email' : 'send_specific';
+            $template = is_scalar($rule['template']) ? sanitize_text_field((string) $rule['template']) : '';
+
+            $criteria_out = [];
+            foreach ((array) $rule['criteria'] as $criterion) {
+                if (!is_array($criterion)) continue;
+
+                $field    = sanitize_text_field((string) ($criterion['field'] ?? ''));
+                $operator = sanitize_text_field((string) ($criterion['operator'] ?? 'equals'));
+                $value    = sanitize_text_field((string) ($criterion['value'] ?? ''));
+
+                if ($field === '') continue;
+                if (!array_key_exists($operator, eventosapp_webhook_conditionals_get_operators())) {
+                    $operator = 'equals';
+                }
+
+                $criteria_out[] = [
+                    'field'    => $field,
+                    'operator' => $operator,
+                    'value'    => $value,
+                ];
+            }
+
+            if (empty($criteria_out)) {
+                continue;
+            }
+
+            $sanitized[] = [
+                'criteria_relation' => $relation,
+                'criteria'          => array_values($criteria_out),
+                'action'            => $action,
+                'template'          => $template,
+            ];
+        }
+
+        return array_values($sanitized);
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_normalize_rule')) {
+    function eventosapp_webhook_conditionals_normalize_rule($rule) {
+        $rule = is_array($rule) ? $rule : [];
+
+        $criteria_relation = isset($rule['criteria_relation']) ? (string) $rule['criteria_relation'] : 'all';
+        $action            = isset($rule['action']) ? (string) $rule['action'] : 'send_specific';
+        $template          = isset($rule['template']) ? (string) $rule['template'] : '';
+
+        $criteria = [];
+
+        if (!empty($rule['criteria']) && is_array($rule['criteria'])) {
+            foreach ($rule['criteria'] as $criterion) {
+                if (!is_array($criterion)) continue;
+                $criteria[] = [
+                    'field'    => isset($criterion['field']) ? (string) $criterion['field'] : '',
+                    'operator' => isset($criterion['operator']) ? (string) $criterion['operator'] : 'equals',
+                    'value'    => isset($criterion['value']) ? (string) $criterion['value'] : '',
+                ];
+            }
+        }
+
+        /**
+         * Compatibilidad legacy:
+         * reglas antiguas guardadas como:
+         * - field / operator / value / action / template
+         */
+        if (empty($criteria) && (!empty($rule['field']) || !empty($rule['operator']) || array_key_exists('value', $rule))) {
+            $criteria[] = [
+                'field'    => isset($rule['field']) ? (string) $rule['field'] : '',
+                'operator' => isset($rule['operator']) ? (string) $rule['operator'] : 'equals',
+                'value'    => isset($rule['value']) ? (string) $rule['value'] : '',
+            ];
+        }
+
+        if (empty($criteria)) {
+            $criteria[] = eventosapp_webhook_conditionals_get_default_criterion();
+        }
+
+        if ($criteria_relation !== 'any') {
+            $criteria_relation = 'all';
+        }
+
+        if ($action !== 'skip_email') {
+            $action = 'send_specific';
+        }
+
+        return [
+            'criteria_relation' => $criteria_relation,
+            'criteria'          => $criteria,
+            'action'            => $action,
+            'template'          => $template,
+        ];
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_normalize_value')) {
+    function eventosapp_webhook_conditionals_normalize_value($value) {
+        if (is_array($value)) {
+            $value = implode(', ', array_map('strval', $value));
+        }
+        if (is_bool($value)) {
+            $value = $value ? '1' : '0';
+        }
+        $value = wp_strip_all_tags((string) $value);
+        $value = remove_accents($value);
+        $value = function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
+        $value = preg_replace('/\s+/u', ' ', $value);
+        return trim($value);
+    }
+}
+
+/**
+ * Lectura/escritura de metas con compatibilidad.
+ */
+if (!function_exists('eventosapp_webhook_conditionals_get_enabled')) {
+    function eventosapp_webhook_conditionals_get_enabled($evento_id) {
+        foreach (eventosapp_webhook_conditionals_meta_enabled_candidates() as $meta_key) {
+            $value = get_post_meta($evento_id, $meta_key, true);
+            if ($value !== '' && $value !== null) {
+                return ($value === '1' || $value === 1 || $value === true) ? '1' : '0';
+            }
+        }
+        return '0';
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_get_rules')) {
+    function eventosapp_webhook_conditionals_get_rules($evento_id) {
+        $rules = [];
+
+        foreach (eventosapp_webhook_conditionals_meta_rules_candidates() as $meta_key) {
+            $value = get_post_meta($evento_id, $meta_key, true);
+            if (is_array($value) && !empty($value)) {
+                $rules = $value;
+                break;
+            }
+            if (is_string($value) && $value !== '') {
+                $maybe = maybe_unserialize($value);
+                if (is_array($maybe) && !empty($maybe)) {
+                    $rules = $maybe;
+                    break;
+                }
+            }
+        }
+
+        $normalized = [];
+        foreach ((array) $rules as $rule) {
+            $normalized[] = eventosapp_webhook_conditionals_normalize_rule($rule);
+        }
+
+        return $normalized;
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_update_enabled_meta')) {
+    function eventosapp_webhook_conditionals_update_enabled_meta($evento_id, $value) {
+        foreach (eventosapp_webhook_conditionals_meta_enabled_candidates() as $meta_key) {
+            update_post_meta($evento_id, $meta_key, $value);
+        }
+    }
+}
+
+if (!function_exists('eventosapp_webhook_conditionals_update_rules_meta')) {
+    function eventosapp_webhook_conditionals_update_rules_meta($evento_id, array $rules) {
+        foreach (eventosapp_webhook_conditionals_meta_rules_candidates() as $meta_key) {
+            update_post_meta($evento_id, $meta_key, $rules);
+        }
+    }
 }
