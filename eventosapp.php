@@ -68,6 +68,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-doble-au
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-doble-auth-cron.php'; // NUEVO
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-ticket-double-auth-metabox.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-double-auth.php';
+require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-galeria-ia-buscador.php';
 
 // === Helper: Resolver nombre del Organizador dinámicamente ===
 // Siempre retorna el nombre correcto sin importar si se usó texto libre o CPT Cliente.
