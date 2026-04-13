@@ -205,87 +205,6 @@ function evapp_galeria_render_metabox_fotos( $post ) {
     <input type="hidden" name="_galeria_fotos" id="_galeria_fotos_input"
            value="<?php echo esc_attr( $fotos_raw ?: '[]' ); ?>" />
 
-    <script>
-    (function($){
-        var frame;
-        var $sortable  = $('#evapp-galeria-sortable');
-        var $input     = $('#_galeria_fotos_input');
-        var $emptyMsg  = $('#evapp-galeria-empty');
-
-        // ── Inicializar jQuery UI Sortable ──
-        $sortable.sortable({
-            items: '.evapp-galeria-item',
-            placeholder: 'evapp-galeria-placeholder',
-            opacity: 0.7,
-            update: function(){ syncIds(); }
-        });
-
-        // ── Abrir Media Library ──
-        $('#evapp-galeria-add-btn').on('click', function(e){
-            e.preventDefault();
-
-            if ( frame ) { frame.open(); return; }
-
-            frame = wp.media({
-                title   : 'Seleccionar fotos para la galería',
-                button  : { text: 'Agregar a la galería' },
-                multiple: true,
-                library : { type: 'image' }
-            });
-
-            frame.on('select', function(){
-                var selection = frame.state().get('selection');
-                selection.each(function(attachment){
-                    var att  = attachment.toJSON();
-                    var thumb = att.sizes && att.sizes.thumbnail ? att.sizes.thumbnail.url : att.url;
-
-                    // Evitar duplicados
-                    if ( $sortable.find('[data-id="' + att.id + '"]').length ) return;
-
-                    var $li = $('<li class="evapp-galeria-item" style="position:relative;cursor:grab;border-radius:4px;overflow:hidden;border:2px solid #e0e0e0;width:100px;height:100px;background:#f5f5f5;"></li>');
-                    $li.attr('data-id', att.id);
-                    $li.append('<img src="' + thumb + '" style="width:100px;height:100px;object-fit:cover;display:block;" />');
-                    $li.append('<button type="button" class="evapp-galeria-remove" title="Eliminar" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:14px;line-height:1;cursor:pointer;padding:0;">×</button>');
-                    $sortable.append($li);
-                });
-
-                $sortable.sortable('refresh');
-                syncIds();
-                toggleEmpty();
-            });
-
-            frame.open();
-        });
-
-        // ── Eliminar foto ──
-        $sortable.on('click', '.evapp-galeria-remove', function(){
-            $(this).closest('.evapp-galeria-item').remove();
-            syncIds();
-            toggleEmpty();
-        });
-
-        // ── Sincronizar IDs al campo oculto ──
-        function syncIds(){
-            var ids = [];
-            $sortable.find('.evapp-galeria-item').each(function(){
-                ids.push( parseInt( $(this).data('id'), 10 ) );
-            });
-            $input.val( JSON.stringify(ids) );
-        }
-
-        // ── Mostrar/ocultar mensaje vacío ──
-        function toggleEmpty(){
-            var count = $sortable.find('.evapp-galeria-item').length;
-            $emptyMsg.toggle( count === 0 );
-        }
-
-        // Sincronizar al cargar por si acaso
-        syncIds();
-        toggleEmpty();
-
-    })(jQuery);
-    </script>
-
     <style>
     .evapp-galeria-placeholder {
         width:100px; height:100px;
@@ -373,6 +292,8 @@ add_action( 'save_post_eventosapp_galeria', function ( $post_id ) {
 
 // ============================================================
 // 4. ENCOLAR wp.media + jQuery UI Sortable EN ADMIN
+//    El JS del uploader se inyecta en admin_footer para garantizar
+//    que wp.media y jquery-ui-sortable ya estén disponibles.
 // ============================================================
 
 add_action( 'admin_enqueue_scripts', function ( $hook ) {
@@ -382,6 +303,105 @@ add_action( 'admin_enqueue_scripts', function ( $hook ) {
 
     wp_enqueue_media();
     wp_enqueue_script( 'jquery-ui-sortable' );
+} );
+
+add_action( 'admin_footer', function () {
+    $screen = get_current_screen();
+    if ( ! $screen || $screen->post_type !== 'eventosapp_galeria' ) return;
+    if ( ! in_array( $screen->base, [ 'post' ], true ) ) return;
+    ?>
+    <script>
+    jQuery(document).ready(function($){
+
+        var frame;
+        var $sortable  = $('#evapp-galeria-sortable');
+        var $input     = $('#_galeria_fotos_input');
+        var $emptyMsg  = $('#evapp-galeria-empty');
+
+        if ( ! $sortable.length ) return; // Salir si el metabox no está en pantalla
+
+        // ── Inicializar jQuery UI Sortable ──
+        $sortable.sortable({
+            items: '.evapp-galeria-item',
+            placeholder: 'evapp-galeria-placeholder',
+            opacity: 0.7,
+            update: function(){ syncIds(); }
+        });
+
+        // ── Abrir Media Library ──
+        $('#evapp-galeria-add-btn').on('click', function(e){
+            e.preventDefault();
+
+            // Si el frame ya existe, reabrirlo directamente
+            if ( frame ) {
+                frame.open();
+                return;
+            }
+
+            frame = wp.media({
+                title   : 'Seleccionar fotos para la galería',
+                button  : { text: 'Agregar a la galería' },
+                multiple: true,
+                library : { type: 'image' }
+            });
+
+            frame.on('select', function(){
+                var selection = frame.state().get('selection');
+                selection.each(function(attachment){
+                    var att   = attachment.toJSON();
+                    var thumb = att.sizes && att.sizes.thumbnail ? att.sizes.thumbnail.url : att.url;
+
+                    // Evitar duplicados
+                    if ( $sortable.find('[data-id="' + att.id + '"]').length ) return;
+
+                    var $li = $(
+                        '<li class="evapp-galeria-item" style="position:relative;cursor:grab;border-radius:4px;overflow:hidden;border:2px solid #e0e0e0;width:100px;height:100px;background:#f5f5f5;"></li>'
+                    );
+                    $li.attr('data-id', att.id);
+                    $li.append('<img src="' + thumb + '" style="width:100px;height:100px;object-fit:cover;display:block;" />');
+                    $li.append(
+                        '<button type="button" class="evapp-galeria-remove" title="Eliminar" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:14px;line-height:1;cursor:pointer;padding:0;">×</button>'
+                    );
+                    $sortable.append($li);
+                });
+
+                $sortable.sortable('refresh');
+                syncIds();
+                toggleEmpty();
+            });
+
+            frame.open();
+        });
+
+        // ── Eliminar foto ──
+        $sortable.on('click', '.evapp-galeria-remove', function(){
+            $(this).closest('.evapp-galeria-item').remove();
+            syncIds();
+            toggleEmpty();
+        });
+
+        // ── Sincronizar IDs al campo oculto ──
+        function syncIds(){
+            var ids = [];
+            $sortable.find('.evapp-galeria-item').each(function(){
+                ids.push( parseInt( $(this).data('id'), 10 ) );
+            });
+            $input.val( JSON.stringify(ids) );
+        }
+
+        // ── Mostrar/ocultar mensaje vacío ──
+        function toggleEmpty(){
+            var count = $sortable.find('.evapp-galeria-item').length;
+            $emptyMsg.toggle( count === 0 );
+        }
+
+        // Sincronizar al cargar
+        syncIds();
+        toggleEmpty();
+
+    });
+    </script>
+    <?php
 } );
 
 // ============================================================
