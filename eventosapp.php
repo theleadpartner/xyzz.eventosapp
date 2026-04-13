@@ -49,6 +49,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-edicion-masi
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-clientes-cpt.php'; // CPT Clientes / Organizadores
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-asistentes-cpt.php'; // CPT Asistentes / Personas
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-asistente-ticket-vincular.php';
+require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-galeria-cpt.php'; // CPT Galerías de Fotos
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-networking-auth.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-networking-global.php';
 require_once plugin_dir_path(__FILE__) . 'includes/public/eventosapp-pkpass-endpoint.php';
@@ -238,13 +239,22 @@ add_action('admin_menu', function() {
         'edit.php?post_type=eventosapp_cliente'
     );
 
-    // Submenú "Asistentes"
+// Submenú "Asistentes"
     add_submenu_page(
         'eventosapp_dashboard',
         'Asistentes',
         'Asistentes',
         'manage_options',
         'edit.php?post_type=eventosapp_asistente'
+    );
+
+    // Submenú "Galerías"
+    add_submenu_page(
+        'eventosapp_dashboard',
+        'Galerías',
+        '📸 Galerías',
+        'manage_options',
+        'edit.php?post_type=eventosapp_galeria'
     );
 }, 9);
 
@@ -259,6 +269,7 @@ add_filter('parent_file', function($parent_file) {
         'eventosapp_ticket',
         'eventosapp_cliente',
         'eventosapp_asistente',
+        'eventosapp_galeria',
     ])) {
         return 'eventosapp_dashboard';
     }
