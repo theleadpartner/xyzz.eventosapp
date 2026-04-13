@@ -473,7 +473,6 @@ add_action( 'manage_eventosapp_galeria_posts_custom_column', function ( $column,
     }
 }, 10, 2 );
 
-<?php
 // ============================================================
 // 6. SHORTCODE: [eventosapp_galeria id="POST_ID"]
 // ============================================================
