@@ -123,13 +123,30 @@ function evapp_galeria_registrar_foto_handler() {
 
     check_ajax_referer( 'evapp_gi_registrar_foto', 'security' );
 
-    $galeria_id = absint( $_POST['galeria_id'] ?? 0 );
-    $ticket_id  = absint( $_POST['ticket_id']  ?? 0 );
-    $cedula     = sanitize_text_field( wp_unslash( $_POST['cedula']    ?? '' ) );
-    $foto_data  = wp_unslash( $_POST['foto_data'] ?? '' );
+    $galeria_id       = absint( $_POST['galeria_id']       ?? 0 );
+    $ticket_id        = absint( $_POST['ticket_id']        ?? 0 );
+    $cedula           = sanitize_text_field( wp_unslash( $_POST['cedula']          ?? '' ) );
+    $foto_data_multi  = wp_unslash( $_POST['foto_data_multi'] ?? '' ); // nuevo: array JSON
+    $foto_data_single = wp_unslash( $_POST['foto_data']       ?? '' ); // backward compat
 
-    if ( ! $galeria_id || ! $ticket_id || ! $cedula || ! $foto_data ) {
+    if ( ! $galeria_id || ! $ticket_id || ! $cedula ) {
         wp_send_json_error( [ 'error' => 'Datos incompletos para registrar la foto.' ] );
+    }
+
+    // Construir array de fotos a procesar
+    $fotos_raw = [];
+    if ( $foto_data_multi ) {
+        $decoded = json_decode( $foto_data_multi, true );
+        if ( is_array( $decoded ) && ! empty( $decoded ) ) {
+            $fotos_raw = $decoded;
+        }
+    }
+    if ( empty( $fotos_raw ) && $foto_data_single ) {
+        $fotos_raw = [ $foto_data_single ]; // backward compat: una sola foto
+    }
+
+    if ( empty( $fotos_raw ) ) {
+        wp_send_json_error( [ 'error' => 'No se recibió ninguna foto.' ] );
     }
 
     // Revalidar que el ticket pertenece al evento de esta galería
@@ -143,54 +160,63 @@ function evapp_galeria_registrar_foto_handler() {
         wp_send_json_error( [ 'error' => 'El ticket no pertenece a este evento.' ] );
     }
 
-    // Procesar imagen base64
-    $foto_data_limpia = preg_replace( '#^data:image/\w+;base64,#i', '', $foto_data );
-    $foto_binario     = base64_decode( $foto_data_limpia );
-
-    if ( empty( $foto_binario ) || strlen( $foto_binario ) < 1000 ) {
-        wp_send_json_error( [ 'error' => 'La imagen recibida no es válida. Por favor intenta de nuevo.' ] );
-    }
-
-    // Validar tamaño máximo (5 MB)
-    if ( strlen( $foto_binario ) > 5 * 1024 * 1024 ) {
-        wp_send_json_error( [ 'error' => 'La imagen es demasiado grande. Por favor usa una foto más pequeña o toma la foto directamente desde la cámara.' ] );
-    }
-
     // Cargar funciones de medios de WordPress (necesarias en frontend)
     require_once ABSPATH . 'wp-admin/includes/image.php';
     require_once ABSPATH . 'wp-admin/includes/file.php';
     require_once ABSPATH . 'wp-admin/includes/media.php';
 
-    // Subir imagen a wp-uploads
-    $nombre_archivo = sanitize_file_name(
-        'asistente-' . $cedula . '-' . time() . '.jpg'
-    );
-    $upload = wp_upload_bits( $nombre_archivo, null, $foto_binario );
+    $attachment_ids = [];
 
-    if ( ! empty( $upload['error'] ) ) {
-        error_log( '[EventosApp GaleriaIA] Error upload foto: ' . $upload['error'] . ' | Cédula: ' . $cedula );
-        wp_send_json_error( [ 'error' => 'Error al guardar la imagen en el servidor. Por favor intenta de nuevo.' ] );
+    // Procesar cada foto del array
+    foreach ( $fotos_raw as $idx => $foto_data ) {
+
+        $foto_data_limpia = preg_replace( '#^data:image/\w+;base64,#i', '', $foto_data );
+        $foto_binario     = base64_decode( $foto_data_limpia );
+
+        if ( empty( $foto_binario ) || strlen( $foto_binario ) < 1000 ) {
+            error_log( "[EventosApp GaleriaIA] Foto {$idx} inválida para cédula: {$cedula}" );
+            continue;
+        }
+
+        if ( strlen( $foto_binario ) > 5 * 1024 * 1024 ) {
+            error_log( "[EventosApp GaleriaIA] Foto {$idx} demasiado grande para cédula: {$cedula}" );
+            continue;
+        }
+
+        $nombre_archivo = sanitize_file_name( 'asistente-' . $cedula . '-' . ( $idx + 1 ) . '-' . time() . '.jpg' );
+        $upload = wp_upload_bits( $nombre_archivo, null, $foto_binario );
+
+        if ( ! empty( $upload['error'] ) ) {
+            error_log( "[EventosApp GaleriaIA] Error upload foto {$idx}: " . $upload['error'] . " | Cédula: {$cedula}" );
+            continue;
+        }
+
+        $attachment_id = wp_insert_attachment(
+            [
+                'post_mime_type' => 'image/jpeg',
+                'post_title'     => 'Foto Asistente – ' . $cedula . ' #' . ( $idx + 1 ),
+                'post_content'   => '',
+                'post_status'    => 'inherit',
+            ],
+            $upload['file']
+        );
+
+        if ( is_wp_error( $attachment_id ) || ! $attachment_id ) {
+            error_log( "[EventosApp GaleriaIA] Error al crear attachment {$idx} para cédula: {$cedula}" );
+            continue;
+        }
+
+        $metadata = wp_generate_attachment_metadata( $attachment_id, $upload['file'] );
+        wp_update_attachment_metadata( $attachment_id, $metadata );
+
+        $attachment_ids[] = $attachment_id;
     }
 
-    // Crear attachment en WordPress Media Library
-    $attachment_id = wp_insert_attachment(
-        [
-            'post_mime_type' => 'image/jpeg',
-            'post_title'     => 'Foto Asistente – ' . $cedula,
-            'post_content'   => '',
-            'post_status'    => 'inherit',
-        ],
-        $upload['file']
-    );
-
-    if ( is_wp_error( $attachment_id ) || ! $attachment_id ) {
-        error_log( '[EventosApp GaleriaIA] Error al crear attachment para cédula: ' . $cedula );
-        wp_send_json_error( [ 'error' => 'Error al procesar la imagen. Por favor intenta de nuevo.' ] );
+    if ( empty( $attachment_ids ) ) {
+        wp_send_json_error( [ 'error' => 'No se pudo procesar ninguna foto. Por favor intenta de nuevo.' ] );
     }
 
-    // Generar metadatos del attachment (miniaturas, dimensiones, etc.)
-    $metadata = wp_generate_attachment_metadata( $attachment_id, $upload['file'] );
-    wp_update_attachment_metadata( $attachment_id, $metadata );
+    $primary_attachment_id = $attachment_ids[0];
 
     // ── Buscar CPT asistente existente por cédula ─────────────────────────
     $asistente_id = false;
@@ -204,9 +230,18 @@ function evapp_galeria_registrar_foto_handler() {
     }
 
     if ( $asistente_id ) {
-        // ── Asistente EXISTE: actualizar foto ────────────────────────────────
-        update_post_meta( $asistente_id, '_asistente_foto_id', $attachment_id );
-        error_log( "[EventosApp GaleriaIA] Foto actualizada en asistente ID:{$asistente_id} | Cédula: {$cedula} | Attachment: {$attachment_id}" );
+        // ── Asistente EXISTE: actualizar foto principal y fusionar fotos extras ──
+        update_post_meta( $asistente_id, '_asistente_foto_id', $primary_attachment_id );
+
+        // Fusionar IDs existentes con los nuevos (sin duplicados)
+        $fotos_ids_existing_json = get_post_meta( $asistente_id, '_asistente_fotos_ids', true );
+        $fotos_ids_existing      = $fotos_ids_existing_json ? json_decode( $fotos_ids_existing_json, true ) : [];
+        if ( ! is_array( $fotos_ids_existing ) ) $fotos_ids_existing = [];
+
+        $all_fotos_ids = array_values( array_unique( array_merge( $fotos_ids_existing, $attachment_ids ) ) );
+        update_post_meta( $asistente_id, '_asistente_fotos_ids', wp_json_encode( $all_fotos_ids ) );
+
+        error_log( "[EventosApp GaleriaIA] Fotos actualizadas en asistente ID:{$asistente_id} | Cédula: {$cedula} | Total fotos: " . count( $all_fotos_ids ) );
 
     } else {
         // ── Asistente NO EXISTE: crear CPT desde datos del ticket ─────────────
@@ -227,12 +262,10 @@ function evapp_galeria_registrar_foto_handler() {
             ] );
 
             if ( is_wp_error( $asistente_id ) || ! $asistente_id ) {
-                // La foto ya fue subida; no bloquear al usuario por esto
                 error_log( "[EventosApp GaleriaIA] No se pudo crear CPT asistente para cédula: {$cedula}" );
                 wp_send_json_error( [ 'error' => 'Error al crear el perfil del asistente. Contacta al organizador del evento.' ] );
             }
 
-            // Poblar campos mínimos
             update_post_meta( $asistente_id, '_asistente_cedula',    $cedula );
             update_post_meta( $asistente_id, '_asistente_nombres',   $nombre );
             update_post_meta( $asistente_id, '_asistente_apellidos', $apellido );
@@ -244,24 +277,27 @@ function evapp_galeria_registrar_foto_handler() {
             update_post_meta( $asistente_id, '_asistente_pais',      sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_pais',    true ) ) );
         }
 
-        // Asignar la foto al asistente recién creado
+        // Asignar todas las fotos al asistente
         if ( $asistente_id && ! is_wp_error( $asistente_id ) ) {
-            update_post_meta( $asistente_id, '_asistente_foto_id', $attachment_id );
+            update_post_meta( $asistente_id, '_asistente_foto_id',   $primary_attachment_id );
+            update_post_meta( $asistente_id, '_asistente_fotos_ids', wp_json_encode( $attachment_ids ) );
+
             // Vincular ticket → asistente (bi-direccional)
-            update_post_meta( $ticket_id,    '_eventosapp_ticket_asistente_cpt_id', $asistente_id );
+            update_post_meta( $ticket_id, '_eventosapp_ticket_asistente_cpt_id', $asistente_id );
             $asociados = get_post_meta( $asistente_id, '_asistente_tickets_asociados', true );
             if ( ! is_array( $asociados ) ) $asociados = [];
             if ( ! in_array( $ticket_id, $asociados, true ) ) {
                 $asociados[] = $ticket_id;
                 update_post_meta( $asistente_id, '_asistente_tickets_asociados', $asociados );
             }
-            error_log( "[EventosApp GaleriaIA] Asistente creado ID:{$asistente_id} con foto ID:{$attachment_id} | Cédula: {$cedula}" );
+            error_log( "[EventosApp GaleriaIA] Asistente creado ID:{$asistente_id} con " . count( $attachment_ids ) . " foto(s) | Cédula: {$cedula}" );
         }
     }
 
     wp_send_json_success( [
         'asistente_id' => $asistente_id,
-        'foto_id'      => $attachment_id,
-        'mensaje'      => 'Foto registrada correctamente.',
+        'foto_id'      => $primary_attachment_id,  // backward compat
+        'fotos_ids'    => $attachment_ids,
+        'mensaje'      => 'Foto(s) registrada(s) correctamente.',
     ] );
 }
