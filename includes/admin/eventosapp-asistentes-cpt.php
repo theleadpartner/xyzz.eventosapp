@@ -527,111 +527,302 @@ function eventosapp_asistente_datos_metabox( $post ) {
 // ============================================================
 
 function eventosapp_asistente_foto_metabox( $post ) {
-    $foto_id  = (int) get_post_meta( $post->ID, '_asistente_foto_id', true );
-    $foto_url = $foto_id ? wp_get_attachment_image_url( $foto_id, 'medium' ) : '';
+
+    // Obtener fotos existentes: primero desde el array, luego fallback legacy
+    $fotos_ids_json = get_post_meta( $post->ID, '_asistente_fotos_ids', true );
+    $fotos_ids      = [];
+
+    if ( $fotos_ids_json ) {
+        $decoded = json_decode( $fotos_ids_json, true );
+        if ( is_array( $decoded ) ) {
+            $fotos_ids = array_values( array_filter( array_map( 'absint', $decoded ) ) );
+        }
+    }
+
+    // Fallback: si solo existe la foto legacy y no hay array aún
+    if ( empty( $fotos_ids ) ) {
+        $foto_id_legacy = (int) get_post_meta( $post->ID, '_asistente_foto_id', true );
+        if ( $foto_id_legacy ) {
+            $fotos_ids = [ $foto_id_legacy ];
+        }
+    }
+
+    $foto_principal_id = ! empty( $fotos_ids ) ? $fotos_ids[0] : 0;
     ?>
     <style>
-        #evapp-foto-preview {
-            width: 100%;
-            max-width: 180px;
-            height: 180px;
-            object-fit: cover;
-            border-radius: 8px;
-            border: 1px solid #c3c4c7;
-            display: <?php echo $foto_url ? 'block' : 'none'; ?>;
-            margin: 0 auto 10px;
+        .evapp-fotos-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px;
+            min-height: 50px;
         }
-        #evapp-foto-placeholder {
-            width: 100%;
-            max-width: 180px;
-            height: 180px;
-            border-radius: 8px;
-            border: 2px dashed #c3c4c7;
-            display: <?php echo $foto_url ? 'none' : 'flex'; ?>;
+        .evapp-foto-item {
+            position: relative;
+            width: 80px;
+            flex-shrink: 0;
+            cursor: grab;
+        }
+        .evapp-foto-item img {
+            width: 80px;
+            height: 80px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 2px solid #c3c4c7;
+            display: block;
+        }
+        .evapp-foto-item.is-principal img {
+            border-color: #2271b1;
+            box-shadow: 0 0 0 2px #2271b1;
+        }
+        .evapp-foto-principal-badge {
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            right: 0;
+            background: #2271b1;
+            color: #fff;
+            font-size: 9px;
+            font-weight: 700;
+            text-align: center;
+            padding: 2px 0;
+            text-transform: uppercase;
+            letter-spacing: .3px;
+        }
+        .evapp-foto-remove {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 20px;
+            height: 20px;
+            background: #d63638;
+            color: #fff;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            font-size: 12px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
             align-items: center;
             justify-content: center;
-            flex-direction: column;
-            margin: 0 auto 10px;
-            color: #8c8f94;
-            font-size: 12px;
-            gap: 8px;
+            padding: 0;
         }
-        .evapp-foto-actions {
+        .evapp-foto-remove:hover { background: #b32d2e; }
+        .evapp-foto-num {
+            display: block;
+            text-align: center;
+            font-size: 10px;
+            color: #646970;
+            margin-top: 3px;
+        }
+        .evapp-foto-empty {
+            width: 80px;
+            height: 80px;
+            border: 2px dashed #c3c4c7;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #8c8f94;
+            font-size: 11px;
+            text-align: center;
+            line-height: 1.3;
+            padding: 6px;
+            box-sizing: border-box;
+        }
+        .evapp-fotos-actions {
             display: flex;
             flex-direction: column;
             gap: 6px;
-            align-items: center;
+            margin-top: 4px;
         }
-        .evapp-foto-actions .button { width: 100%; max-width: 180px; text-align: center; }
+        .evapp-fotos-actions .button { width: 100%; text-align: center; }
+        .evapp-fotos-hint {
+            font-size: 11px;
+            color: #8c8f94;
+            margin-top: 6px;
+            line-height: 1.4;
+        }
     </style>
 
-    <input type="hidden" id="_asistente_foto_id" name="_asistente_foto_id"
-           value="<?php echo esc_attr( $foto_id ); ?>" />
+    <!-- Campo oculto: array JSON de todos los IDs (nuevo, multi-foto) -->
+    <input type="hidden"
+           id="_asistente_fotos_ids"
+           name="_asistente_fotos_ids"
+           value="<?php echo esc_attr( wp_json_encode( $fotos_ids ) ); ?>" />
 
-    <img id="evapp-foto-preview" src="<?php echo esc_url( $foto_url ); ?>" alt="Foto del asistente" />
+    <!-- Campo oculto: foto principal (backward compat con face-checkin y SQL queries) -->
+    <input type="hidden"
+           id="_asistente_foto_id"
+           name="_asistente_foto_id"
+           value="<?php echo esc_attr( $foto_principal_id ); ?>" />
 
-    <div id="evapp-foto-placeholder">
-        <span class="dashicons dashicons-format-image" style="font-size:36px;width:36px;height:36px;"></span>
-        <span>Sin foto</span>
+    <!-- Grid de fotos -->
+    <div id="evapp-fotos-grid" class="evapp-fotos-grid">
+        <?php if ( empty( $fotos_ids ) ) : ?>
+            <div class="evapp-foto-empty" id="evapp-fotos-empty-msg">
+                📷<br>Sin fotos
+            </div>
+        <?php else : ?>
+            <?php foreach ( $fotos_ids as $idx => $att_id ) :
+                $thumb_url = wp_get_attachment_image_url( $att_id, [ 80, 80 ] );
+                if ( ! $thumb_url ) continue;
+                ?>
+                <div class="evapp-foto-item<?php echo $idx === 0 ? ' is-principal' : ''; ?>"
+                     data-id="<?php echo esc_attr( $att_id ); ?>">
+                    <img src="<?php echo esc_url( $thumb_url ); ?>"
+                         alt="Foto <?php echo esc_attr( $idx + 1 ); ?>" />
+                    <?php if ( $idx === 0 ) : ?>
+                        <span class="evapp-foto-principal-badge">Principal</span>
+                    <?php endif; ?>
+                    <button type="button" class="evapp-foto-remove" title="Eliminar foto">×</button>
+                    <span class="evapp-foto-num">#<?php echo esc_html( $idx + 1 ); ?></span>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
     </div>
 
-    <div class="evapp-foto-actions">
-        <button type="button" id="evapp-foto-upload" class="button button-secondary">
-            📷 <?php echo $foto_id ? 'Cambiar foto' : 'Subir foto'; ?>
+    <div class="evapp-fotos-actions">
+        <button type="button" id="evapp-fotos-add-btn" class="button button-primary">
+            📷 Agregar foto(s)
         </button>
-        <?php if ( $foto_id ) : ?>
-        <button type="button" id="evapp-foto-remove" class="button" style="color:#d63638;">
-            🗑️ Eliminar foto
+        <?php if ( ! empty( $fotos_ids ) ) : ?>
+        <button type="button" id="evapp-fotos-clear-btn" class="button" style="color:#d63638;">
+            🗑️ Eliminar todas las fotos
         </button>
         <?php endif; ?>
     </div>
 
+    <p class="evapp-fotos-hint">
+        Arrastra para reordenar. La <strong>primera foto</strong> es la principal (usada en reconocimiento facial y columnas). Puedes agregar hasta 5 fotos para mejorar la precisión del reconocimiento.
+    </p>
+
     <script>
     (function($){
-        var frame;
+        if ( typeof wp === 'undefined' || ! wp.media ) return;
 
-        $('#evapp-foto-upload').on('click', function(e){
+        var frame;
+        var $grid     = $('#evapp-fotos-grid');
+        var $inputIds = $('#_asistente_fotos_ids');
+        var $inputPri = $('#_asistente_foto_id');
+        var MAX_FOTOS = 5;
+
+        // ── Inicializar Sortable ────────────────────────────────────────────
+        $grid.sortable({
+            items: '.evapp-foto-item',
+            placeholder: 'evapp-foto-placeholder',
+            opacity: 0.7,
+            tolerance: 'pointer',
+            update: function(){ evappSyncIds(); }
+        });
+
+        // ── Sincronizar campos ocultos ──────────────────────────────────────
+        function evappSyncIds() {
+            var ids = [];
+            $grid.find('.evapp-foto-item').each(function(){
+                ids.push( parseInt( $(this).data('id'), 10 ) );
+            });
+            $inputIds.val( JSON.stringify(ids) );
+            $inputPri.val( ids.length ? ids[0] : '' );
+            // Actualizar badges de "Principal" y numeración
+            $grid.find('.evapp-foto-item').each(function(i){
+                $(this).toggleClass('is-principal', i === 0);
+                $(this).find('.evapp-foto-principal-badge').remove();
+                $(this).find('.evapp-foto-num').text( '#' + (i + 1) );
+                if ( i === 0 ) {
+                    $(this).find('img').after(
+                        '<span class="evapp-foto-principal-badge">Principal</span>'
+                    );
+                }
+            });
+            evappToggleEmpty();
+        }
+
+        function evappToggleEmpty() {
+            var count = $grid.find('.evapp-foto-item').length;
+            $('#evapp-fotos-empty-msg').toggle( count === 0 );
+            // Mostrar/ocultar botón "Eliminar todas"
+            if ( count === 0 ) {
+                $('#evapp-fotos-clear-btn').hide();
+            } else {
+                if ( ! $('#evapp-fotos-clear-btn').length ) {
+                    $('<button type="button" id="evapp-fotos-clear-btn" class="button" style="color:#d63638;">🗑️ Eliminar todas las fotos</button>')
+                        .insertAfter('#evapp-fotos-add-btn');
+                    evappBindClear();
+                }
+                $('#evapp-fotos-clear-btn').show();
+            }
+        }
+
+        // ── Abrir Media Library ─────────────────────────────────────────────
+        $('#evapp-fotos-add-btn').on('click', function(e){
             e.preventDefault();
+
+            var currentCount = $grid.find('.evapp-foto-item').length;
+            if ( currentCount >= MAX_FOTOS ) {
+                alert('Ya tienes ' + MAX_FOTOS + ' fotos, que es el máximo permitido. Elimina alguna antes de agregar otra.');
+                return;
+            }
 
             if ( frame ) { frame.open(); return; }
 
             frame = wp.media({
-                title: 'Seleccionar foto del asistente',
-                button: { text: 'Usar esta foto' },
-                multiple: false,
-                library: { type: 'image' }
+                title   : 'Seleccionar fotos del asistente',
+                button  : { text: 'Agregar foto(s)' },
+                multiple: true,
+                library : { type: 'image' }
             });
 
             frame.on('select', function(){
-                var attachment = frame.state().get('selection').first().toJSON();
-                $('#_asistente_foto_id').val( attachment.id );
-                $('#evapp-foto-preview').attr('src', attachment.url).show();
-                $('#evapp-foto-placeholder').hide();
-                $('#evapp-foto-upload').text('📷 Cambiar foto');
+                var selection = frame.state().get('selection');
+                var added     = 0;
+                var current   = $grid.find('.evapp-foto-item').length;
 
-                // Mostrar botón de eliminar si no existe
-                if ( ! $('#evapp-foto-remove').length ) {
-                    $('<button type="button" id="evapp-foto-remove" class="button" style="color:#d63638;">🗑️ Eliminar foto</button>')
-                        .insertAfter('#evapp-foto-upload');
-                    evappBindRemoveFoto();
-                }
+                selection.each(function(attachment){
+                    if ( current + added >= MAX_FOTOS ) return;
+                    var att   = attachment.toJSON();
+                    // Evitar duplicados
+                    if ( $grid.find('[data-id="' + att.id + '"]').length ) return;
+
+                    var thumb = att.sizes && att.sizes.thumbnail ? att.sizes.thumbnail.url : att.url;
+                    var $item = $(
+                        '<div class="evapp-foto-item" data-id="' + att.id + '">' +
+                        '<img src="' + thumb + '" alt="Foto" />' +
+                        '<button type="button" class="evapp-foto-remove" title="Eliminar foto">&times;</button>' +
+                        '<span class="evapp-foto-num">#?</span>' +
+                        '</div>'
+                    );
+                    $grid.append($item);
+                    added++;
+                });
+
+                $grid.sortable('refresh');
+                evappSyncIds();
             });
 
             frame.open();
         });
 
-        function evappBindRemoveFoto() {
-            $(document).on('click', '#evapp-foto-remove', function(e){
+        // ── Eliminar foto individual ────────────────────────────────────────
+        $grid.on('click', '.evapp-foto-remove', function(e){
+            e.preventDefault();
+            $(this).closest('.evapp-foto-item').remove();
+            evappSyncIds();
+        });
+
+        // ── Eliminar todas las fotos ────────────────────────────────────────
+        function evappBindClear() {
+            $(document).on('click', '#evapp-fotos-clear-btn', function(e){
                 e.preventDefault();
-                $('#_asistente_foto_id').val('');
-                $('#evapp-foto-preview').hide().attr('src', '');
-                $('#evapp-foto-placeholder').show();
-                $('#evapp-foto-upload').text('📷 Subir foto');
-                $(this).remove();
+                if ( ! confirm('¿Estás seguro de que quieres eliminar todas las fotos de este asistente?') ) return;
+                $grid.find('.evapp-foto-item').remove();
+                evappSyncIds();
             });
         }
+        evappBindClear();
 
-        evappBindRemoveFoto();
+        // Inicializar al cargar
+        evappSyncIds();
 
     })(jQuery);
     </script>
