@@ -1852,14 +1852,27 @@ ob_start();
                 if ( progressEl ) progressEl.textContent = msg || '';
             }
 
-            function evappGiCargarImagen(src) {
+function evappGiCargarImagen(src) {
                 return new Promise(function(resolve, reject) {
-                    var img      = new Image();
-                    img.crossOrigin = 'anonymous';
+                    var img       = new Image();
+                    var isDataUrl = src.indexOf('data:') === 0;
+
+                    // crossOrigin solo aplica a URLs HTTP/HTTPS, no a data URLs
+                    if ( ! isDataUrl ) {
+                        img.crossOrigin = 'anonymous';
+                    }
+
                     img.onload  = function() { resolve(img); };
-                    img.onerror = function() { reject(new Error('No se pudo cargar: ' + src)); };
-                    // Añadir parámetro para evitar cache de CORS
-                    img.src = src + (src.indexOf('?') === -1 ? '?' : '&') + '_evappf=' + Date.now();
+                    img.onerror = function() {
+                        reject(new Error('No se pudo cargar: ' + (isDataUrl ? '[data URL]' : src)));
+                    };
+
+                    // Cache-buster SOLO para URLs HTTP (los data URLs no admiten query strings)
+                    if ( isDataUrl ) {
+                        img.src = src;
+                    } else {
+                        img.src = src + (src.indexOf('?') === -1 ? '?' : '&') + '_evappf=' + Date.now();
+                    }
                 });
             }
 
