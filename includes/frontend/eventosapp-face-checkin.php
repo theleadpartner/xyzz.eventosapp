@@ -551,29 +551,35 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
                 setStatus('Procesando ' + total + ' fotos del evento…', true);
                 faceDB = []; // limpiar antes de reprocesar
 
-                let procesados = 0;
+let procesados = 0;
                 for (const a of lista) {
-                    try {
-                        const img = await faceapi.fetchImage(a.foto_url);
-                        const detection = await faceapi
-                            .detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
-                            .withFaceLandmarks()
-                            .withFaceDescriptor();
+                    // Usar todas las fotos disponibles; fallback a foto_url única por compatibilidad
+                    const photoUrls = (a.foto_urls && a.foto_urls.length) ? a.foto_urls : [a.foto_url];
 
-                        if (detection) {
-                            faceDB.push({
-                                cedula:     a.cedula,
-                                nombre:     a.nombre,
-                                descriptor: detection.descriptor
-                            });
+                    for (const photoUrl of photoUrls) {
+                        try {
+                            const img = await faceapi.fetchImage(photoUrl);
+                            const detection = await faceapi
+                                .detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+                                .withFaceLandmarks()
+                                .withFaceDescriptor();
+
+                            if (detection) {
+                                faceDB.push({
+                                    cedula:     a.cedula,
+                                    nombre:     a.nombre,
+                                    descriptor: detection.descriptor
+                                });
+                            }
+                        } catch (imgErr) {
+                            console.warn('[FaceCheckin] No se pudo procesar foto de:', a.nombre, '|', photoUrl, imgErr.message);
                         }
-                    } catch (imgErr) {
-                        console.warn('[FaceCheckin] No se pudo procesar foto de:', a.nombre, imgErr);
                     }
+
                     procesados++;
                     const pct = Math.round((procesados / total) * 100);
-                    setProgress(90 + (pct * 0.1)); // de 90% a 100%
-                    setStatus('Procesando ' + procesados + '/' + total + ' fotos…', true);
+                    setProgress(90 + (pct * 0.1));
+                    setStatus('Procesando ' + procesados + '/' + total + ' perfiles…', true);
                 }
 
                 // Paso 4: guardar en caché si hubo descriptores válidos
@@ -845,7 +851,6 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
 
     $event_id = isset( $_POST['event_id'] ) ? (int) $_POST['event_id'] : 0;
 
-    // Validar que el evento activo coincide (no-admins)
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
         $active = (int) eventosapp_get_active_event();
         if ( ! $active || $event_id !== $active ) {
@@ -860,7 +865,6 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
     global $wpdb;
 
     // ── Paso 1: Obtener cédulas registradas en tickets del evento ──────────
-    // Usa _eventosapp_asistente_cc (campo cédula en el ticket)
     $cedulas_evento = $wpdb->get_col( $wpdb->prepare(
         "SELECT DISTINCT pm_cc.meta_value
            FROM {$wpdb->postmeta} pm_ev
@@ -883,16 +887,13 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
         ] );
     }
 
-    // ── Paso 2: Buscar asistentes CPT que coincidan con esas cédulas y tengan foto ──
-    // Dividimos en lotes para no generar un IN() demasiado grande
+    // ── Paso 2: Buscar asistentes CPT que tengan foto ──────────────────────
     $resultado = [];
-
     $lotes = array_chunk( $cedulas_evento, 100 );
+
     foreach ( $lotes as $lote ) {
         $placeholders = implode( ', ', array_fill( 0, count( $lote ), '%s' ) );
 
-        // Obtenemos los asistentes que coincidan con las cédulas del evento
-        // y que tengan foto asignada (_asistente_foto_id no vacío)
         $rows = $wpdb->get_results( $wpdb->prepare(
             "SELECT
                 p.ID            AS asistente_id,
@@ -914,28 +915,44 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
 
         if ( ! empty( $rows ) ) {
             foreach ( $rows as $row ) {
-                $foto_id  = (int) $row->foto_id;
-                $foto_url = wp_get_attachment_url( $foto_id );
-                if ( ! $foto_url ) continue;
+                $foto_id      = (int) $row->foto_id;
+                $foto_url_pri = wp_get_attachment_url( $foto_id );
+                if ( ! $foto_url_pri ) continue;
+
+                // Construir array de todas las URLs: foto principal + fotos adicionales
+                $foto_urls = [ $foto_url_pri ];
+
+                $fotos_ids_json = get_post_meta( (int) $row->asistente_id, '_asistente_fotos_ids', true );
+                if ( $fotos_ids_json ) {
+                    $fotos_ids_extra = json_decode( $fotos_ids_json, true );
+                    if ( is_array( $fotos_ids_extra ) ) {
+                        foreach ( $fotos_ids_extra as $fid ) {
+                            $fid = (int) $fid;
+                            if ( $fid && $fid !== $foto_id ) {
+                                $extra_url = wp_get_attachment_url( $fid );
+                                if ( $extra_url ) $foto_urls[] = $extra_url;
+                            }
+                        }
+                    }
+                }
 
                 $resultado[] = [
                     'asistente_id' => (int) $row->asistente_id,
                     'cedula'       => $row->cedula,
                     'nombre'       => trim( $row->nombres . ' ' . $row->apellidos ),
-                    'foto_url'     => $foto_url,
-                    'foto_id'      => $foto_id,
+                    'foto_url'     => $foto_url_pri,              // backward compat
+                    'foto_id'      => $foto_id,                   // backward compat
+                    'foto_urls'    => array_values( $foto_urls ),  // nuevo: todas las fotos
                 ];
             }
         }
     }
 
-    // ── Paso 3: Generar cache_version basada en IDs y foto_ids ────────────
-    // Cambia si se agrega/quita un asistente o si cambia alguna foto
-    $version_data = array_map( function( $a ) {
-        return $a['asistente_id'] . '_' . $a['foto_id'];
-    }, $resultado );
+    // ── Paso 3: Generar cache_version (cambia si se agregan/quitan fotos) ──
+    $total_urls   = array_sum( array_map( function( $a ) { return count( $a['foto_urls'] ); }, $resultado ) );
+    $version_data = array_map( function( $a ) { return $a['asistente_id'] . '_' . $a['foto_id']; }, $resultado );
     sort( $version_data );
-    $cache_version = substr( md5( implode( '|', $version_data ) ), 0, 12 );
+    $cache_version = substr( md5( implode( '|', $version_data ) . '|n' . $total_urls ), 0, 12 );
 
     wp_send_json_success( [
         'asistentes'    => $resultado,
