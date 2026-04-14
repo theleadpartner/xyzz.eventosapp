@@ -540,7 +540,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     $nonce_buscar   = $evento_id ? wp_create_nonce( 'evapp_gi_buscar_ticket' )  : '';
     $nonce_registro = $evento_id ? wp_create_nonce( 'evapp_gi_registrar_foto' ) : '';
 
-ob_start();
+    ob_start();
     if ( $evento_id ) {
         echo '<script src="' . esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/js/face-api.min.js' ) . '"></script>' . "\n";
     }
@@ -614,7 +614,422 @@ ob_start();
             <button class="evapp-galeria-lb-next" aria-label="Siguiente">&#8250;</button>
         </div>
 
-<?php if ( $evento_id ) : ?>
+        <?php if ( $evento_id ) : ?>
+        <!-- ================================================================
+             WIZARD IA – BUSCADOR DE FOTOS POR RECONOCIMIENTO FACIAL
+        ================================================================ -->
+        <div class="evapp-gi-finder-section" id="<?php echo esc_attr( $uid ); ?>-finder">
+
+            <!-- CTA inicial -->
+            <div class="evapp-gi-trigger-wrap" id="<?php echo esc_attr( $uid ); ?>-trigger">
+                <p class="evapp-gi-promo-text">
+                    ¿Quieres ver las fotos en donde apareces?<br>
+                    <strong>Deja que la Inteligencia Artificial lo haga por ti.</strong>
+                </p>
+                <button type="button" class="evapp-gi-btn-abrir" id="<?php echo esc_attr( $uid ); ?>-btn-abrir">
+                    🔍 &nbsp;Buscar
+                </button>
+            </div>
+
+            <!-- WIZARD CONTAINER -->
+            <div class="evapp-gi-wizard" id="<?php echo esc_attr( $uid ); ?>-wizard" style="display:none;" aria-live="polite">
+
+                <!-- ── PASO 1: Validar identidad ── -->
+                <div class="evapp-gi-step evapp-gi-step-1" data-step="1">
+                    <div class="evapp-gi-step-header">
+                        <span class="evapp-gi-badge">Paso 1 de 3</span>
+                        <h3 class="evapp-gi-step-title">Valida tu identidad</h3>
+                    </div>
+                    <p class="evapp-gi-step-desc">
+                        Necesitamos validar que eres asistente del evento, por favor ingresa los siguientes datos para continuar.
+                    </p>
+                    <div class="evapp-gi-field-wrap">
+                        <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-cedula">Número de Identificación</label>
+                        <input type="text" id="<?php echo esc_attr($uid); ?>-cedula"
+                               class="evapp-gi-input evapp-gi-cedula"
+                               placeholder="Ej: 1234567890" autocomplete="off" inputmode="text" />
+                    </div>
+                    <div class="evapp-gi-field-wrap">
+                        <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-apellidos">Apellidos</label>
+                        <input type="text" id="<?php echo esc_attr($uid); ?>-apellidos"
+                               class="evapp-gi-input evapp-gi-apellidos"
+                               placeholder="Ej: García López" autocomplete="off" />
+                    </div>
+                    <p class="evapp-gi-hint-text">✏️ Escribe tus datos tal cual como en tu inscripción al evento.</p>
+                    <div class="evapp-gi-msg evapp-gi-msg-1" role="alert" style="display:none;"></div>
+                    <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-validar">Continuar &rarr;</button>
+                </div>
+
+                <!-- ── PASO 2: Confirmación de identidad ── -->
+                <div class="evapp-gi-step evapp-gi-step-2" data-step="2" style="display:none;">
+                    <div class="evapp-gi-step-header">
+                        <span class="evapp-gi-badge evapp-gi-badge-ok">✓ Verificado</span>
+                        <h3 class="evapp-gi-step-title">¡Te encontramos!</h3>
+                    </div>
+                    <div class="evapp-gi-asistente-card"><!-- Se llena desde JS --></div>
+                    <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-ir-paso3">
+                        Continuar &rarr; Capturar Foto
+                    </button>
+                </div>
+
+                <!-- ── PASO 3: Captura de fotos (multi) ── -->
+                <div class="evapp-gi-step evapp-gi-step-3" data-step="3" style="display:none;">
+                    <div class="evapp-gi-step-header">
+                        <span class="evapp-gi-badge">Paso 2 de 3</span>
+                        <h3 class="evapp-gi-step-title">Captura tus fotos</h3>
+                    </div>
+                    <p class="evapp-gi-step-desc">
+                        Cuantas más fotos agregues con diferentes características, mejor será la detección. Puedes agregar hasta 3.
+                    </p>
+                    <!-- Tips -->
+                    <div class="evapp-gi-foto-tips">
+                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon">😊</span><span>De frente, sin accesorios</span></div>
+                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon">🕶️</span><span>Con gafas o sombrero si los usas</span></div>
+                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon">↗️</span><span>Leve ángulo lateral</span></div>
+                    </div>
+                    <!-- Tira de fotos -->
+                    <div class="evapp-gi-foto-strip"><!-- Se llena desde JS --></div>
+                    <p class="evapp-gi-strip-status">Aún no has agregado ninguna foto. Agrega al menos una para continuar.</p>
+                    <!-- Mensaje error -->
+                    <div class="evapp-gi-msg evapp-gi-msg-step3" role="alert" style="display:none;"></div>
+                    <!-- Opciones de captura -->
+                    <div class="evapp-gi-foto-opciones evapp-gi-foto-opciones-main">
+                        <button type="button" class="evapp-gi-btn-opcion evapp-gi-btn-subir-foto">
+                            <span class="evapp-gi-btn-opcion-icon">📁</span><span>Subir una Foto</span>
+                        </button>
+                        <button type="button" class="evapp-gi-btn-opcion evapp-gi-btn-abrir-cam">
+                            <span class="evapp-gi-btn-opcion-icon">📷</span><span>Tomar Foto</span>
+                        </button>
+                    </div>
+                    <input type="file" class="evapp-gi-file-input" accept="image/*" style="display:none;" />
+                    <!-- Preview upload -->
+                    <div class="evapp-gi-upload-guide-wrap" style="display:none;">
+                        <p class="evapp-gi-guide-instruc">Asegúrate que tu cara quede centrada dentro del óvalo antes de continuar:</p>
+                        <div class="evapp-gi-guide-frame">
+                            <img class="evapp-gi-upload-preview-img" src="" alt="Vista previa de tu foto" />
+                            <div class="evapp-gi-oval-overlay"><div class="evapp-gi-oval-ring"></div></div>
+                        </div>
+                        <div class="evapp-gi-guide-actions">
+                            <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-aprobar-upload">✓ &nbsp;La foto se ve bien, continuar</button>
+                            <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-elegir-otra">↩ &nbsp;Elegir otra foto</button>
+                        </div>
+                    </div>
+                    <!-- Cámara -->
+                    <div class="evapp-gi-cam-wrap" style="display:none;">
+                        <div class="evapp-gi-cam-view-frame">
+                            <video class="evapp-gi-video" autoplay playsinline muted></video>
+                            <div class="evapp-gi-oval-overlay evapp-gi-oval-cam">
+                                <div class="evapp-gi-oval-ring"></div>
+                                <p class="evapp-gi-cam-label">Centra tu cara aquí</p>
+                            </div>
+                        </div>
+                        <canvas class="evapp-gi-canvas" style="display:none;"></canvas>
+                        <div class="evapp-gi-cam-actions">
+                            <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-capturar">📸 &nbsp;Capturar Foto</button>
+                            <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-cancel-cam">Cancelar Cámara</button>
+                        </div>
+                    </div>
+                    <!-- Continuar con fotos -->
+                    <div class="evapp-gi-step3-actions" style="display:none;">
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-step3-continuar">
+                            ✓ &nbsp;Continuar con <span class="evapp-gi-fotos-count">0</span> foto(s)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ── PASO 4: Aprobar foto ── -->
+                <div class="evapp-gi-step evapp-gi-step-4" data-step="4" style="display:none;">
+                    <div class="evapp-gi-step-header">
+                        <span class="evapp-gi-badge">Paso 3 de 3</span>
+                        <h3 class="evapp-gi-step-title">¿La foto se ve bien?</h3>
+                    </div>
+                    <p class="evapp-gi-step-desc">Revisa que tu cara se vea con claridad antes de continuar.</p>
+                    <div class="evapp-gi-preview-circular-wrap">
+                        <img class="evapp-gi-preview-final-img" src="" alt="Tu foto" />
+                    </div>
+                    <div class="evapp-gi-msg evapp-gi-msg-4" role="alert" style="display:none;"></div>
+                    <div class="evapp-gi-paso4-actions">
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-confirmar-foto">✓ &nbsp;Sí, agregar esta foto</button>
+                        <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-retomar-cam">↩ &nbsp;Tomar otra foto</button>
+                    </div>
+                </div>
+
+                <!-- ── CARGANDO ── -->
+                <div class="evapp-gi-step evapp-gi-step-loading" data-step="loading" style="display:none;">
+                    <div class="evapp-gi-loading-wrap">
+                        <div class="evapp-gi-spinner"></div>
+                        <h3 class="evapp-gi-loading-title">Procesando tus fotos...</h3>
+                        <p class="evapp-gi-loading-desc">Estamos registrando tu información, por favor espera.</p>
+                    </div>
+                </div>
+
+                <!-- ── ÉXITO ── -->
+                <div class="evapp-gi-step evapp-gi-step-success" data-step="success" style="display:none;">
+                    <div class="evapp-gi-success-wrap">
+                        <div class="evapp-gi-success-icon">🎉</div>
+                        <h3 class="evapp-gi-success-title">¡Ya tenemos todo!</h3>
+                        <p class="evapp-gi-success-desc">Vamos a comenzar la búsqueda de tus fotos usando Inteligencia Artificial.</p>
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-continuar">🔍 &nbsp;Buscar mis fotos</button>
+                    </div>
+                </div>
+
+                <!-- ── BUSCANDO ── -->
+                <div class="evapp-gi-step evapp-gi-step-searching" data-step="searching" style="display:none;">
+                    <div class="evapp-gi-loading-wrap">
+                        <div class="evapp-gi-spinner"></div>
+                        <h3 class="evapp-gi-loading-title">Buscando tus fotos con IA...</h3>
+                        <p class="evapp-gi-loading-desc" id="<?php echo esc_attr( $uid ); ?>-search-progress">Cargando modelos de reconocimiento facial...</p>
+                        <div class="evapp-gi-search-bar-wrap">
+                            <div class="evapp-gi-search-bar-inner" id="<?php echo esc_attr( $uid ); ?>-search-bar"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── RESULTADOS ── -->
+                <div class="evapp-gi-step evapp-gi-step-results" data-step="results" style="display:none;">
+                    <div class="evapp-gi-step-header">
+                        <span class="evapp-gi-badge evapp-gi-badge-ok">✓ Búsqueda completada</span>
+                        <h3 class="evapp-gi-step-title">¡Encontramos tus fotos!</h3>
+                    </div>
+                    <p class="evapp-gi-results-count"></p>
+                    <div class="evapp-gi-results-carousel-wrap"><!-- Se llena desde JS --></div>
+                    <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda" style="margin-top:18px;">↩ &nbsp;Volver al inicio</button>
+                </div>
+
+                <!-- ── SIN RESULTADOS ── -->
+                <div class="evapp-gi-step evapp-gi-step-no-results" data-step="no-results" style="display:none;">
+                    <div class="evapp-gi-success-wrap">
+                        <div class="evapp-gi-success-icon" style="font-size:52px;">😔</div>
+                        <h3 class="evapp-gi-step-title" style="font-size:20px;">No encontramos coincidencias</h3>
+                        <p class="evapp-gi-step-desc">
+                            No detectamos tu rostro en las fotos de la galería. Puede ser que no hayas sido fotografiado/a aún, o que la foto que usaste no sea muy clara. Intenta con otras fotos de referencia.
+                        </p>
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-intentar-otra-foto">📷 &nbsp;Intentar con otras fotos</button>
+                        <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda-2" style="margin-top:8px;">↩ &nbsp;Volver al inicio</button>
+                    </div>
+                </div>
+
+            </div><!-- .evapp-gi-wizard -->
+        </div><!-- .evapp-gi-finder-section -->
+
+        <style>
+        /* ── Sección contenedor ── */
+        .evapp-gi-finder-section { margin-top:36px; padding:32px 28px; background:linear-gradient(145deg,#f0f4ff,#e8eeff); border-radius:14px; border:1px solid #c7d4ff; }
+        .evapp-gi-trigger-wrap { text-align:center; }
+        .evapp-gi-promo-text { font-size:16px; color:#444; margin:0 0 18px; line-height:1.65; }
+        .evapp-gi-promo-text strong { color:#1c3d8f; }
+        .evapp-gi-btn-abrir { display:inline-flex; align-items:center; gap:6px; padding:14px 40px; background:#1c3d8f; color:#fff; border:none; border-radius:50px; font-size:16px; font-weight:700; cursor:pointer; transition:background .2s,transform .15s,box-shadow .2s; box-shadow:0 4px 14px rgba(28,61,143,.25); }
+        .evapp-gi-btn-abrir:hover { background:#122d6e; transform:translateY(-2px); box-shadow:0 6px 20px rgba(28,61,143,.35); }
+        .evapp-gi-wizard { max-width:500px; margin:0 auto; }
+        .evapp-gi-step-header { margin-bottom:14px; }
+        .evapp-gi-badge { display:inline-block; background:#1c3d8f; color:#fff; font-size:11px; font-weight:700; padding:3px 12px; border-radius:20px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px; }
+        .evapp-gi-badge-ok { background:#15803d; }
+        .evapp-gi-step-title { font-size:22px; font-weight:800; color:#111827; margin:0 0 4px; line-height:1.2; }
+        .evapp-gi-step-desc { color:#5a6377; font-size:14px; line-height:1.65; margin-bottom:22px; }
+        .evapp-gi-field-wrap { margin-bottom:16px; }
+        .evapp-gi-label { display:block; font-size:13px; font-weight:700; color:#2d3748; margin-bottom:6px; }
+        .evapp-gi-input { width:100%; padding:12px 15px; border:2px solid #d1dafe; border-radius:9px; font-size:15px; color:#111; background:#fff; transition:border-color .2s,box-shadow .2s; box-sizing:border-box; }
+        .evapp-gi-input:focus { outline:none; border-color:#1c3d8f; box-shadow:0 0 0 3px rgba(28,61,143,.12); }
+        .evapp-gi-hint-text { font-size:12px; color:#888; margin:0 0 22px; line-height:1.5; }
+        .evapp-gi-msg { padding:12px 16px; border-radius:8px; font-size:14px; margin-bottom:14px; font-weight:500; line-height:1.5; }
+        .evapp-gi-msg.error { background:#fef2f2; border:1px solid #fca5a5; color:#b91c1c; }
+        .evapp-gi-msg.success { background:#f0fdf4; border:1px solid #86efac; color:#15803d; }
+        .evapp-gi-btn-primary { display:flex; align-items:center; justify-content:center; width:100%; padding:14px 24px; background:#1c3d8f; color:#fff; border:none; border-radius:9px; font-size:15px; font-weight:700; cursor:pointer; transition:background .2s,opacity .2s; text-align:center; margin-top:10px; box-sizing:border-box; }
+        .evapp-gi-btn-primary:hover { background:#122d6e; }
+        .evapp-gi-btn-primary:disabled { opacity:.6; cursor:not-allowed; }
+        .evapp-gi-btn-secondary { display:flex; align-items:center; justify-content:center; width:100%; padding:12px 24px; background:transparent; color:#555; border:2px solid #d1d5db; border-radius:9px; font-size:14px; font-weight:600; cursor:pointer; transition:border-color .2s,color .2s,background .2s; text-align:center; margin-top:8px; box-sizing:border-box; }
+        .evapp-gi-btn-secondary:hover { border-color:#9ca3af; color:#111; background:#f9fafb; }
+        /* Tarjeta asistente */
+        .evapp-gi-asistente-card { background:#fff; border:1px solid #dde8ff; border-radius:10px; padding:18px 20px; margin-bottom:22px; box-shadow:0 2px 8px rgba(28,61,143,.07); }
+        .evapp-gi-as-name { font-size:19px; font-weight:800; color:#111827; margin-bottom:6px; }
+        .evapp-gi-as-info { font-size:13px; color:#666; line-height:1.75; }
+        /* Tips */
+        .evapp-gi-foto-tips { display:flex; gap:8px; margin-bottom:16px; }
+        .evapp-gi-tip-item { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; background:#fff; border:1px solid #dde8ff; border-radius:9px; padding:10px 6px; font-size:11px; font-weight:600; color:#444; text-align:center; line-height:1.35; }
+        .evapp-gi-tip-icon { font-size:20px; }
+        /* Tira de fotos */
+        .evapp-gi-foto-strip { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+        .evapp-gi-foto-strip-item { position:relative; width:88px; height:88px; border-radius:10px; overflow:visible; border:3px solid #1c3d8f; box-shadow:0 3px 10px rgba(28,61,143,.18); flex-shrink:0; }
+        .evapp-gi-foto-strip-item img { width:100%; height:100%; object-fit:cover; border-radius:8px; display:block; }
+        .evapp-gi-strip-label { display:block; text-align:center; font-size:10px; font-weight:700; color:#1c3d8f; margin-top:4px; }
+        .evapp-gi-foto-strip-remove { position:absolute; top:-8px; right:-8px; width:22px; height:22px; background:#e74c3c; color:#fff; border:2px solid #fff; border-radius:50%; font-size:13px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; z-index:2; }
+        .evapp-gi-foto-strip-remove:hover { background:#c0392b; }
+        .evapp-gi-strip-status { font-size:13px; color:#666; margin:0 0 14px; line-height:1.5; }
+        .evapp-gi-strip-status.is-hint { color:#1c3d8f; font-weight:600; }
+        .evapp-gi-strip-status.is-ok   { color:#15803d; font-weight:700; }
+        .evapp-gi-step3-actions { margin-top:14px; }
+        /* Opciones foto */
+        .evapp-gi-foto-opciones { display:flex; gap:14px; margin-bottom:24px; }
+        .evapp-gi-btn-opcion { flex:1; display:flex; flex-direction:column; align-items:center; gap:10px; padding:22px 14px; background:#fff; border:2px solid #d1dafe; border-radius:12px; font-size:14px; font-weight:700; color:#2d3748; cursor:pointer; transition:border-color .2s,box-shadow .2s,transform .15s; }
+        .evapp-gi-btn-opcion:hover { border-color:#1c3d8f; box-shadow:0 4px 14px rgba(28,61,143,.14); transform:translateY(-3px); }
+        .evapp-gi-btn-opcion-icon { font-size:30px; }
+        /* Guide frame */
+        .evapp-gi-guide-frame { position:relative; width:100%; max-width:320px; margin:0 auto 16px; border-radius:12px; overflow:hidden; background:#111; aspect-ratio:3/4; }
+        .evapp-gi-upload-preview-img { width:100%; height:100%; object-fit:cover; display:block; }
+        .evapp-gi-guide-instruc { font-size:13px; color:#555; margin-bottom:10px; text-align:center; }
+        .evapp-gi-oval-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; pointer-events:none; }
+        .evapp-gi-oval-ring { width:190px; height:250px; border-radius:50%; border:3px solid rgba(255,255,255,.92); box-shadow:0 0 0 9999px rgba(0,0,0,.48),0 0 0 4px rgba(255,255,255,.18); }
+        /* Cámara */
+        .evapp-gi-cam-view-frame { position:relative; width:100%; max-width:320px; margin:0 auto 16px; border-radius:12px; overflow:hidden; background:#111; aspect-ratio:3/4; }
+        .evapp-gi-video { width:100%; height:100%; object-fit:cover; display:block; transform:scaleX(-1); }
+        .evapp-gi-oval-cam { z-index:2; }
+        .evapp-gi-cam-label { color:rgba(255,255,255,.92); font-size:13px; font-weight:700; margin-top:14px; text-shadow:0 1px 4px rgba(0,0,0,.7); }
+        .evapp-gi-cam-actions { display:flex; flex-direction:column; gap:8px; }
+        /* Preview circular */
+        .evapp-gi-preview-circular-wrap { width:240px; height:240px; margin:0 auto 22px; border-radius:50%; overflow:hidden; border:5px solid #1c3d8f; box-shadow:0 8px 28px rgba(28,61,143,.22); }
+        .evapp-gi-preview-final-img { width:100%; height:100%; object-fit:cover; display:block; }
+        .evapp-gi-paso4-actions, .evapp-gi-guide-actions { display:flex; flex-direction:column; gap:8px; }
+        /* Cargando */
+        .evapp-gi-loading-wrap { text-align:center; padding:44px 20px; }
+        .evapp-gi-spinner { width:52px; height:52px; border:5px solid #dde8ff; border-top-color:#1c3d8f; border-radius:50%; animation:evapp-gi-spin .75s linear infinite; margin:0 auto 20px; }
+        @keyframes evapp-gi-spin { to { transform:rotate(360deg); } }
+        .evapp-gi-loading-title { font-size:18px; font-weight:700; color:#111827; margin:0 0 8px; }
+        .evapp-gi-loading-desc { font-size:14px; color:#666; margin:0; }
+        /* Éxito */
+        .evapp-gi-success-wrap { text-align:center; padding:40px 20px; }
+        .evapp-gi-success-icon { font-size:62px; margin-bottom:16px; display:block; animation:evapp-gi-pop .45s cubic-bezier(.34,1.56,.64,1) both; }
+        @keyframes evapp-gi-pop { 0%{transform:scale(.4);opacity:0} 100%{transform:scale(1);opacity:1} }
+        .evapp-gi-success-title { font-size:24px; font-weight:800; color:#111827; margin:0 0 10px; }
+        .evapp-gi-success-desc { font-size:15px; color:#555; margin-bottom:24px; }
+        /* Barra progreso búsqueda */
+        .evapp-gi-search-bar-wrap { width:100%; background:#dde8ff; border-radius:50px; height:8px; margin:18px auto 0; max-width:320px; overflow:hidden; }
+        .evapp-gi-search-bar-inner { height:100%; background:linear-gradient(90deg,#1c3d8f,#4f7cff); border-radius:50px; width:0%; transition:width .4s ease; }
+        /* Resultados */
+        .evapp-gi-results-count { font-size:15px; font-weight:700; color:#15803d; margin:0 0 16px; text-align:center; }
+        .evapp-gi-results-carousel-wrap { position:relative; }
+        .evapp-gi-results-slides { background:#111; border-radius:12px; overflow:hidden; min-height:260px; display:flex; align-items:center; justify-content:center; }
+        .evapp-gi-result-slide { display:none; width:100%; text-align:center; }
+        .evapp-gi-result-slide.active { display:block; }
+        .evapp-gi-result-slide img { max-width:100%; max-height:460px; width:auto; height:auto; object-fit:contain; display:block; margin:0 auto; }
+        .evapp-gi-results-nav-row { display:flex; align-items:center; justify-content:center; gap:14px; margin-top:10px; }
+        .evapp-gi-results-nav-btn { background:#1c3d8f; color:#fff; border:none; border-radius:50%; width:40px; height:40px; font-size:24px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .2s; flex-shrink:0; }
+        .evapp-gi-results-nav-btn:hover { background:#122d6e; }
+        .evapp-gi-results-nav-btn:disabled { opacity:.35; cursor:not-allowed; }
+        .evapp-gi-results-counter { font-size:13px; color:#555; min-width:60px; text-align:center; }
+        .evapp-gi-download-btn { display:flex; align-items:center; justify-content:center; gap:6px; margin:12px auto 0; padding:12px 28px; background:#15803d; color:#fff; border:none; border-radius:9px; font-size:14px; font-weight:700; cursor:pointer; text-decoration:none; transition:background .2s; width:fit-content; max-width:100%; box-sizing:border-box; }
+        .evapp-gi-download-btn:hover { background:#166534; color:#fff; text-decoration:none; }
+        /* Responsive */
+        @media (max-width:500px) {
+            .evapp-gi-finder-section { padding:22px 16px; }
+            .evapp-gi-step-title { font-size:19px; }
+            .evapp-gi-foto-opciones { flex-direction:column; gap:10px; }
+            .evapp-gi-btn-opcion { padding:16px 12px; }
+            .evapp-gi-preview-circular-wrap { width:200px; height:200px; }
+            .evapp-gi-oval-ring { width:160px; height:210px; }
+            .evapp-gi-cam-view-frame, .evapp-gi-guide-frame { max-width:100%; }
+            .evapp-gi-result-slide img { max-height:320px; }
+            .evapp-gi-download-btn { width:100%; }
+            .evapp-gi-foto-tips { flex-direction:column; gap:6px; }
+            .evapp-gi-tip-item { flex-direction:row; justify-content:flex-start; gap:8px; padding:8px 12px; }
+            .evapp-gi-foto-strip-item { width:72px; height:72px; }
+        }
+        </style>
+        <?php endif; // $evento_id — wizard HTML + CSS ?>
+
+    </div><!-- .evapp-galeria-wrap -->
+
+    <?php
+    $imagenes_json = wp_json_encode( $imagenes );
+    $ajax_url      = admin_url( 'admin-ajax.php' );
+    ?>
+
+    <script>
+    (function(){
+        var uid      = <?php echo wp_json_encode( $uid ); ?>;
+        var imagenes = <?php echo $imagenes_json; ?>;
+        var total    = imagenes.length;
+        var current  = 0;
+        var wrap     = document.getElementById(uid);
+
+        if ( ! wrap || ! total ) return;
+
+        var slides     = wrap.querySelectorAll('.evapp-galeria-slide');
+        var thumbBtns  = wrap.querySelectorAll('.evapp-galeria-thumb');
+        var counterCur = wrap.querySelector('.evapp-galeria-current');
+        var lb         = wrap.querySelector('.evapp-galeria-lightbox');
+        var lbImg      = wrap.querySelector('.evapp-galeria-lb-img');
+        var lbCaption  = wrap.querySelector('.evapp-galeria-lb-caption');
+        var lbCurrent  = 0;
+
+        // ── Ir a slide ──
+        function goTo( index ) {
+            slides[current].classList.remove('active');
+            thumbBtns[current].classList.remove('active');
+            current = ( index + total ) % total;
+            slides[current].classList.add('active');
+            thumbBtns[current].classList.add('active');
+            counterCur.textContent = current + 1;
+            thumbBtns[current].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+
+        wrap.querySelector('.evapp-galeria-prev').addEventListener('click', function(){ goTo( current - 1 ); });
+        wrap.querySelector('.evapp-galeria-next').addEventListener('click', function(){ goTo( current + 1 ); });
+
+        thumbBtns.forEach(function(btn){
+            btn.addEventListener('click', function(){ goTo( parseInt( btn.dataset.index, 10 ) ); });
+        });
+
+        // Swipe táctil (carrusel)
+        var touchStartX = 0;
+        var slidesWrap  = wrap.querySelector('.evapp-galeria-slides-wrap');
+        slidesWrap.addEventListener('touchstart', function(e){ touchStartX = e.changedTouches[0].clientX; }, { passive: true });
+        slidesWrap.addEventListener('touchend',   function(e){
+            var diff = touchStartX - e.changedTouches[0].clientX;
+            if ( Math.abs(diff) > 40 ) goTo( diff > 0 ? current + 1 : current - 1 );
+        }, { passive: true });
+
+        // ── Lightbox ──
+        function openLightbox(index) {
+            lbCurrent = ( index + total ) % total;
+            lbImg.src = imagenes[lbCurrent].full;
+            lbImg.alt = imagenes[lbCurrent].alt;
+            lbCaption.textContent = imagenes[lbCurrent].caption || '';
+            lb.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        }
+        function closeLightbox() {
+            lb.style.display = 'none';
+            document.body.style.overflow = '';
+            lbImg.src = '';
+        }
+        function lbGoTo(index) {
+            lbCurrent = ( index + total ) % total;
+            lbImg.src = imagenes[lbCurrent].full;
+            lbImg.alt = imagenes[lbCurrent].alt;
+            lbCaption.textContent = imagenes[lbCurrent].caption || '';
+        }
+
+        wrap.querySelectorAll('.evapp-galeria-lightbox-trigger').forEach(function(a){
+            a.addEventListener('click', function(e){
+                e.preventDefault();
+                openLightbox( parseInt( a.dataset.index, 10 ) );
+            });
+        });
+        wrap.querySelector('.evapp-galeria-lb-close').addEventListener('click', closeLightbox);
+        lb.addEventListener('click', function(e){ if ( e.target === lb ) closeLightbox(); });
+        wrap.querySelector('.evapp-galeria-lb-prev').addEventListener('click', function(){ lbGoTo( lbCurrent - 1 ); });
+        wrap.querySelector('.evapp-galeria-lb-next').addEventListener('click', function(){ lbGoTo( lbCurrent + 1 ); });
+
+        // Swipe táctil (lightbox)
+        var lbTouchStart = 0;
+        lb.addEventListener('touchstart', function(e){ lbTouchStart = e.changedTouches[0].clientX; }, { passive: true });
+        lb.addEventListener('touchend',   function(e){
+            var diff = lbTouchStart - e.changedTouches[0].clientX;
+            if ( Math.abs(diff) > 40 ) lbGoTo( diff > 0 ? lbCurrent + 1 : lbCurrent - 1 );
+        }, { passive: true });
+
+        // Teclado lightbox
+        document.addEventListener('keydown', function(e){
+            if ( lb.style.display === 'none' ) return;
+            if ( e.key === 'ArrowLeft'  ) lbGoTo( lbCurrent - 1 );
+            if ( e.key === 'ArrowRight' ) lbGoTo( lbCurrent + 1 );
+            if ( e.key === 'Escape'     ) closeLightbox();
+        });
+
+        // ====================================================================
+        // WIZARD IA – BUSCADOR DE FOTOS
+        // ====================================================================
+        <?php if ( $evento_id ) : ?>
         (function(){
 
             var ajaxUrl       = <?php echo wp_json_encode( $ajax_url ); ?>;
@@ -630,47 +1045,38 @@ ob_start();
             if ( ! finder || ! wizard ) return;
 
             // ── Estado del wizard ────────────────────────────────────────────
-            var ticketId      = null;
-            var cedulaVal     = '';
-            var fotoDataUrl   = null;   // TEMP: foto siendo capturada actualmente
-            var fotosDataUrls = [];     // FINAL: array de fotos confirmadas (max 3)
-            var faceDescsQuery = [];    // Array de Float32Array con descriptores del usuario
-            var camStream     = null;
-            var MAX_FOTOS     = 3;
+            var ticketId       = null;
+            var cedulaVal      = '';
+            var fotoDataUrl    = null;
+            var fotosDataUrls  = [];
+            var faceDescsQuery = [];
+            var camStream      = null;
+            var MAX_FOTOS      = 3;
 
             // ── Helpers generales ────────────────────────────────────────────
-
             function showStep(cls) {
                 wizard.querySelectorAll('.evapp-gi-step').forEach(function(s){ s.style.display = 'none'; });
                 var el = wizard.querySelector('.' + cls);
                 if ( el ) el.style.display = '';
             }
-
             function showMsg(el, txt, tipo) {
-                el.textContent   = txt;
-                el.className     = 'evapp-gi-msg ' + ( tipo || 'error' );
+                el.textContent = txt;
+                el.className   = 'evapp-gi-msg ' + ( tipo || 'error' );
                 el.style.display = '';
             }
-
             function hideMsg(el) { if (el) el.style.display = 'none'; }
-
             function setLoading(btn, lbl) { btn.disabled = true;  btn.textContent = lbl || 'Procesando...'; }
             function setReady(btn, lbl)   { btn.disabled = false; btn.textContent = lbl; }
-
             function escHtml(str) {
-                return String(str || '')
-                    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
             }
-
             function comprimirImagen(dataUrl, callback) {
                 var img = new Image();
                 img.onload = function() {
-                    var MAX = 900;
-                    var w = img.naturalWidth, h = img.naturalHeight;
+                    var MAX = 900, w = img.naturalWidth, h = img.naturalHeight;
                     if ( w > MAX || h > MAX ) {
-                        if ( w > h ) { h = Math.round( h * MAX / w ); w = MAX; }
-                        else         { w = Math.round( w * MAX / h ); h = MAX; }
+                        if ( w > h ) { h = Math.round(h * MAX / w); w = MAX; }
+                        else         { w = Math.round(w * MAX / h); h = MAX; }
                     }
                     var cv = document.createElement('canvas');
                     cv.width = w; cv.height = h;
@@ -680,7 +1086,6 @@ ob_start();
                 img.onerror = function() { callback(dataUrl); };
                 img.src = dataUrl;
             }
-
             function detenerCamara() {
                 if ( camStream ) {
                     camStream.getTracks().forEach(function(t){ t.stop(); });
@@ -690,69 +1095,47 @@ ob_start();
                 }
             }
 
-            // ── Actualizar tira de fotos coleccionadas (paso 3) ─────────────
+            // ── Actualizar tira de fotos (paso 3) ───────────────────────────
             function evappGiActualizarStrip() {
                 var strip     = wizard.querySelector('.evapp-gi-foto-strip');
                 var statusEl  = wizard.querySelector('.evapp-gi-strip-status');
                 var actionsEl = wizard.querySelector('.evapp-gi-step3-actions');
                 var countEl   = wizard.querySelector('.evapp-gi-fotos-count');
                 var mainOpts  = wizard.querySelector('.evapp-gi-foto-opciones-main');
-
                 if ( ! strip ) return;
-
                 strip.innerHTML = '';
-
                 fotosDataUrls.forEach(function(dataUrl, idx) {
                     var item = document.createElement('div');
                     item.className = 'evapp-gi-foto-strip-item';
-
                     var img = document.createElement('img');
-                    img.src = dataUrl;
-                    img.alt = 'Foto ' + (idx + 1);
+                    img.src = dataUrl; img.alt = 'Foto ' + (idx + 1);
                     item.appendChild(img);
-
                     var label = document.createElement('span');
-                    label.className   = 'evapp-gi-strip-label';
+                    label.className = 'evapp-gi-strip-label';
                     label.textContent = 'Foto ' + (idx + 1);
                     item.appendChild(label);
-
                     var rmBtn = document.createElement('button');
-                    rmBtn.type      = 'button';
-                    rmBtn.className = 'evapp-gi-foto-strip-remove';
-                    rmBtn.innerHTML = '&times;';
-                    rmBtn.setAttribute('data-idx', idx);
+                    rmBtn.type = 'button'; rmBtn.className = 'evapp-gi-foto-strip-remove';
+                    rmBtn.innerHTML = '&times;'; rmBtn.setAttribute('data-idx', idx);
                     rmBtn.addEventListener('click', function() {
-                        var i = parseInt(this.getAttribute('data-idx'), 10);
-                        fotosDataUrls.splice(i, 1);
+                        fotosDataUrls.splice( parseInt(this.getAttribute('data-idx'), 10), 1 );
                         evappGiActualizarStrip();
                     });
                     item.appendChild(rmBtn);
-
                     strip.appendChild(item);
                 });
-
                 if ( statusEl ) {
-                    if ( fotosDataUrls.length === 0 ) {
-                        statusEl.textContent = 'Aún no has agregado ninguna foto. Agrega al menos una para continuar.';
-                        statusEl.className   = 'evapp-gi-strip-status';
-                    } else if ( fotosDataUrls.length === 1 ) {
-                        statusEl.textContent = '✅ 1 foto agregada. ¡Agrega 1 o 2 más para mejorar los resultados!';
-                        statusEl.className   = 'evapp-gi-strip-status is-hint';
-                    } else if ( fotosDataUrls.length === 2 ) {
-                        statusEl.textContent = '✅ 2 fotos agregadas. Puedes agregar 1 más o ya continuar.';
-                        statusEl.className   = 'evapp-gi-strip-status is-hint';
-                    } else {
-                        statusEl.textContent = '✅ 3 fotos agregadas. ¡Perfecto! Ya puedes continuar.';
-                        statusEl.className   = 'evapp-gi-strip-status is-ok';
-                    }
+                    if ( fotosDataUrls.length === 0 )      { statusEl.textContent = 'Aún no has agregado ninguna foto. Agrega al menos una para continuar.'; statusEl.className = 'evapp-gi-strip-status'; }
+                    else if ( fotosDataUrls.length === 1 ) { statusEl.textContent = '✅ 1 foto agregada. ¡Agrega 1 o 2 más para mejorar los resultados!'; statusEl.className = 'evapp-gi-strip-status is-hint'; }
+                    else if ( fotosDataUrls.length === 2 ) { statusEl.textContent = '✅ 2 fotos agregadas. Puedes agregar 1 más o ya continuar.'; statusEl.className = 'evapp-gi-strip-status is-hint'; }
+                    else                                    { statusEl.textContent = '✅ 3 fotos agregadas. ¡Perfecto! Ya puedes continuar.'; statusEl.className = 'evapp-gi-strip-status is-ok'; }
                 }
-
                 if ( actionsEl ) actionsEl.style.display = fotosDataUrls.length > 0 ? '' : 'none';
                 if ( countEl   ) countEl.textContent     = fotosDataUrls.length;
                 if ( mainOpts  ) mainOpts.style.display  = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
             }
 
-            // ── Abrir wizard ─────────────────────────────────────────────────
+            // ── Abrir wizard ──────────────────────────────────────────────────
             if ( btnAbrir ) {
                 btnAbrir.addEventListener('click', function(){
                     triggerWrap.style.display = 'none';
@@ -771,22 +1154,18 @@ ob_start();
                 btnValidar.addEventListener('click', function(){
                     var cedula    = inputCedula.value.trim();
                     var apellidos = inputApell.value.trim();
-
                     if ( ! cedula || ! apellidos ) {
                         showMsg( msg1, '⚠️ Por favor ingresa tu número de identificación y tus apellidos.', 'error' );
                         return;
                     }
-
                     hideMsg( msg1 );
                     setLoading( btnValidar, 'Buscando...' );
-
                     var fd = new FormData();
-                    fd.append('action',     'evapp_galeria_buscar_ticket');
-                    fd.append('security',   nonceBuscar);
+                    fd.append('action', 'evapp_galeria_buscar_ticket');
+                    fd.append('security', nonceBuscar);
                     fd.append('galeria_id', galeriaId);
-                    fd.append('cedula',     cedula);
-                    fd.append('apellidos',  apellidos);
-
+                    fd.append('cedula', cedula);
+                    fd.append('apellidos', apellidos);
                     fetch( ajaxUrl, { method: 'POST', body: fd } )
                         .then(function(r){ return r.json(); })
                         .then(function(res){
@@ -794,14 +1173,13 @@ ob_start();
                             if ( res.success ) {
                                 ticketId  = res.data.ticket_id;
                                 cedulaVal = cedula;
-
                                 var card = wizard.querySelector('.evapp-gi-asistente-card');
                                 card.innerHTML =
                                     '<div class="evapp-gi-as-name">' + escHtml(res.data.nombre_completo) + '</div>' +
                                     '<div class="evapp-gi-as-info">' +
-                                        ( res.data.empresa ? '🏢 ' + escHtml(res.data.empresa) + '<br>' : '' ) +
-                                        ( res.data.cargo   ? '💼 ' + escHtml(res.data.cargo)   + '<br>' : '' ) +
-                                        ( res.data.email   ? '✉️ ' + escHtml(res.data.email)            : '' ) +
+                                    ( res.data.empresa ? '🏢 ' + escHtml(res.data.empresa) + '<br>' : '' ) +
+                                    ( res.data.cargo   ? '💼 ' + escHtml(res.data.cargo)   + '<br>' : '' ) +
+                                    ( res.data.email   ? '✉️ ' + escHtml(res.data.email)            : '' ) +
                                     '</div>';
                                 showStep('evapp-gi-step-2');
                             } else {
@@ -813,11 +1191,8 @@ ob_start();
                             showMsg( msg1, '❌ Error de conexión. Por favor intenta de nuevo.', 'error' );
                         });
                 });
-
                 [inputCedula, inputApell].forEach(function(inp){
-                    inp.addEventListener('keydown', function(e){
-                        if ( e.key === 'Enter' ) btnValidar.click();
-                    });
+                    inp.addEventListener('keydown', function(e){ if ( e.key === 'Enter' ) btnValidar.click(); });
                 });
             }
 
@@ -825,12 +1200,12 @@ ob_start();
             var btnIrPaso3 = wizard.querySelector('.evapp-gi-btn-ir-paso3');
             if ( btnIrPaso3 ) {
                 btnIrPaso3.addEventListener('click', function(){
-                    evappGiActualizarStrip(); // inicializar tira vacía
+                    evappGiActualizarStrip();
                     showStep('evapp-gi-step-3');
                 });
             }
 
-            // ── PASO 3: Referencias de elementos ─────────────────────────────
+            // ── PASO 3: Referencias ───────────────────────────────────────────
             var fileInput     = wizard.querySelector('.evapp-gi-file-input');
             var btnSubirFoto  = wizard.querySelector('.evapp-gi-btn-subir-foto');
             var fotoOpciones  = wizard.querySelector('.evapp-gi-foto-opciones-main');
@@ -846,11 +1221,9 @@ ob_start();
             var btnCancelCam  = wizard.querySelector('.evapp-gi-btn-cancel-cam');
             var msgStep3      = wizard.querySelector('.evapp-gi-msg-step3');
 
-            // Subir foto desde archivo
             if ( btnSubirFoto ) {
                 btnSubirFoto.addEventListener('click', function(){ fileInput.click(); });
             }
-
             if ( fileInput ) {
                 fileInput.addEventListener('change', function(){
                     var file = fileInput.files[0];
@@ -860,15 +1233,13 @@ ob_start();
                         comprimirImagen(e.target.result, function(compressed){
                             fotoDataUrl            = compressed;
                             uploadPreview.src      = compressed;
-                            fotoOpciones.style.display  = 'none';
-                            uploadGuide.style.display   = '';
+                            fotoOpciones.style.display = 'none';
+                            uploadGuide.style.display  = '';
                         });
                     };
                     reader.readAsDataURL(file);
                 });
             }
-
-            // Aprobar foto subida → ir a paso 4
             if ( btnAprobarUp ) {
                 btnAprobarUp.addEventListener('click', function(){
                     var prevImg = wizard.querySelector('.evapp-gi-preview-final-img');
@@ -876,50 +1247,36 @@ ob_start();
                     showStep('evapp-gi-step-4');
                 });
             }
-
-            // Elegir otra foto → resetear upload
             if ( btnElegirOtra ) {
                 btnElegirOtra.addEventListener('click', function(){
-                    fotoDataUrl                 = null;
-                    fileInput.value             = '';
-                    uploadGuide.style.display   = 'none';
-                    fotoOpciones.style.display  = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
+                    fotoDataUrl = null; fileInput.value = '';
+                    uploadGuide.style.display  = 'none';
+                    fotoOpciones.style.display = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
                 });
             }
-
-            // Abrir cámara
             if ( btnAbrirCam ) {
                 btnAbrirCam.addEventListener('click', function(){
                     fotoOpciones.style.display = 'none';
                     camWrap.style.display      = '';
-
                     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 960 } }, audio: false })
-                        .then(function(stream){
-                            camStream       = stream;
-                            video.srcObject = stream;
-                        })
+                        .then(function(stream){ camStream = stream; video.srcObject = stream; })
                         .catch(function(err){
                             console.error('[EventosApp GaleriaIA] Cámara:', err);
                             camWrap.style.display      = 'none';
                             fotoOpciones.style.display = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
-                            alert('No se pudo acceder a la cámara. Verifica que hayas dado permisos al navegador, o usa la opción "Subir una Foto".');
+                            alert('No se pudo acceder a la cámara. Verifica los permisos del navegador, o usa "Subir una Foto".');
                         });
                 });
             }
-
-            // Capturar frame
             if ( btnCapturar ) {
                 btnCapturar.addEventListener('click', function(){
                     canvas.width  = video.videoWidth  || 720;
                     canvas.height = video.videoHeight || 960;
                     var ctx = canvas.getContext('2d');
-                    ctx.translate( canvas.width, 0 );
-                    ctx.scale(-1, 1);
+                    ctx.translate( canvas.width, 0 ); ctx.scale(-1, 1);
                     ctx.drawImage(video, 0, 0);
-
                     detenerCamara();
                     camWrap.style.display = 'none';
-
                     comprimirImagen(canvas.toDataURL('image/jpeg', 0.92), function(compressed){
                         fotoDataUrl = compressed;
                         var prevImg = wizard.querySelector('.evapp-gi-preview-final-img');
@@ -928,8 +1285,6 @@ ob_start();
                     });
                 });
             }
-
-            // Cancelar cámara
             if ( btnCancelCam ) {
                 btnCancelCam.addEventListener('click', function(){
                     detenerCamara();
@@ -949,19 +1304,14 @@ ob_start();
                 });
             }
 
-            // ── PASO 4: Confirmar foto (agregar al array y volver a paso 3) ──
+            // ── PASO 4: Confirmar foto → agregar al array y volver a paso 3 ──
             var btnConfirmar = wizard.querySelector('.evapp-gi-btn-confirmar-foto');
             var btnRetomar   = wizard.querySelector('.evapp-gi-btn-retomar-cam');
             var msg4         = wizard.querySelector('.evapp-gi-msg-4');
 
             if ( btnConfirmar ) {
                 btnConfirmar.addEventListener('click', function(){
-                    // Agregar la foto al array de confirmadas
-                    if ( fotoDataUrl ) {
-                        fotosDataUrls.push(fotoDataUrl);
-                        fotoDataUrl = null;
-                    }
-                    // Actualizar tira y resetear UI de captura
+                    if ( fotoDataUrl ) { fotosDataUrls.push(fotoDataUrl); fotoDataUrl = null; }
                     evappGiActualizarStrip();
                     if ( fileInput    ) fileInput.value = '';
                     if ( uploadGuide  ) uploadGuide.style.display  = 'none';
@@ -970,20 +1320,14 @@ ob_start();
                     showStep('evapp-gi-step-3');
                 });
             }
-
-            // Retomar cámara desde paso 4 → volver a paso 3 con cámara abierta
             if ( btnRetomar ) {
                 btnRetomar.addEventListener('click', function(){
                     fotoDataUrl = null;
                     showStep('evapp-gi-step-3');
                     fotoOpciones.style.display = 'none';
                     camWrap.style.display      = '';
-
                     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 960 } }, audio: false })
-                        .then(function(stream){
-                            camStream       = stream;
-                            video.srcObject = stream;
-                        })
+                        .then(function(stream){ camStream = stream; video.srcObject = stream; })
                         .catch(function(){
                             camWrap.style.display      = 'none';
                             fotoOpciones.style.display = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
@@ -1000,7 +1344,6 @@ ob_start();
                 fd.append('ticket_id',       ticketId);
                 fd.append('cedula',          cedulaVal);
                 fd.append('foto_data_multi', JSON.stringify(fotosDataUrls));
-
                 fetch( ajaxUrl, { method: 'POST', body: fd } )
                     .then(function(r){ return r.json(); })
                     .then(function(res){
@@ -1017,14 +1360,13 @@ ob_start();
                     });
             }
 
-            // ── PASO 6: Continuar → Iniciar búsqueda con IA ─────────────────
+            // ── PASO 6: Buscar mis fotos ─────────────────────────────────────
             var btnContinuar  = wizard.querySelector('.evapp-gi-btn-continuar');
             var faceModelsUrl = <?php echo wp_json_encode( trailingslashit( EVENTOSAPP_PLUGIN_URL ) . 'includes/assets/face-models' ); ?>;
             var progressEl    = document.getElementById(uid + '-search-progress');
             var barEl         = document.getElementById(uid + '-search-bar');
 
-            // ── IndexedDB v2: nuevo formato con descriptors (array) ──────────
-            // Nombre distinto de v1 ('evapp_gallery_faces') para evitar colisión de schema
+            // ── IndexedDB v2 ──────────────────────────────────────────────────
             var IDB_NAME    = 'evapp_gallery_faces_v2';
             var IDB_STORE   = 'photo_descriptors';
             var IDB_VERSION = 1;
@@ -1034,14 +1376,11 @@ ob_start();
                 return new Promise(function(resolve) {
                     if ( ! window.indexedDB ) { resolve(null); return; }
                     var req = indexedDB.open(IDB_NAME, IDB_VERSION);
-                    req.onupgradeneeded = function(e) {
-                        e.target.result.createObjectStore(IDB_STORE, { keyPath: 'url' });
-                    };
+                    req.onupgradeneeded = function(e) { e.target.result.createObjectStore(IDB_STORE, { keyPath: 'url' }); };
                     req.onsuccess = function(e) { idbConn = e.target.result; resolve(idbConn); };
                     req.onerror   = function()  { resolve(null); };
                 });
             }
-
             function evappGiIdbGet(url) {
                 return new Promise(function(resolve) {
                     if ( ! idbConn ) { resolve(null); return; }
@@ -1053,8 +1392,6 @@ ob_start();
                     } catch(e) { resolve(null); }
                 });
             }
-
-            // descriptorsArray: Array de Arrays de números (Float32Array → plain array)
             function evappGiIdbPut(url, descriptorsArray) {
                 if ( ! idbConn ) return;
                 try {
@@ -1063,48 +1400,32 @@ ob_start();
                 } catch(e) {}
             }
 
-            // ── Helpers de búsqueda ──────────────────────────────────────────
             function evappGiSetProgress(pct, msg) {
                 if ( barEl )      barEl.style.width    = Math.min(100, pct) + '%';
                 if ( progressEl ) progressEl.textContent = msg || '';
             }
-
             function evappGiCargarImagen(src) {
                 return new Promise(function(resolve, reject) {
-                    var img       = new Image();
-                    var isDataUrl = src.indexOf('data:') === 0;
+                    var img = new Image(), isDataUrl = src.indexOf('data:') === 0;
                     if ( ! isDataUrl ) img.crossOrigin = 'anonymous';
                     img.onload  = function() { resolve(img); };
-                    img.onerror = function() {
-                        reject(new Error('No se pudo cargar: ' + (isDataUrl ? '[data URL]' : src)));
-                    };
+                    img.onerror = function() { reject(new Error('No se pudo cargar: ' + (isDataUrl ? '[data URL]' : src))); };
                     img.src = isDataUrl ? src : src + (src.indexOf('?') === -1 ? '?' : '&') + '_evappf=' + Date.now();
                 });
             }
 
-            // Devuelve TODOS los descriptores de TODAS las caras detectadas en la foto de galería
             async function evappGiGetDescriptoresGaleria(photoUrl) {
-                // 1. Revisar cache (formato v2: { url, descriptors: [[...]] })
                 var cached = await evappGiIdbGet(photoUrl);
                 if ( cached && cached.descriptors ) {
-                    if ( cached.descriptors.length === 0 ) return []; // "sin caras" cacheado
+                    if ( cached.descriptors.length === 0 ) return [];
                     return cached.descriptors.map(function(d) { return new Float32Array(d); });
                 }
-
-                // 2. Detectar TODAS las caras en la foto de galería
                 var img  = await evappGiCargarImagen(photoUrl);
                 var dets = await faceapi
                     .detectAllFaces(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.38 }))
-                    .withFaceLandmarks()
-                    .withFaceDescriptors();
-
-                if ( ! dets || ! dets.length ) {
-                    evappGiIdbPut(photoUrl, []); // cachear "sin caras"
-                    return [];
-                }
-
+                    .withFaceLandmarks().withFaceDescriptors();
+                if ( ! dets || ! dets.length ) { evappGiIdbPut(photoUrl, []); return []; }
                 var descriptors = dets.map(function(d) { return d.descriptor; });
-                // Guardar en cache como array de arrays de números
                 evappGiIdbPut(photoUrl, descriptors.map(function(d) { return Array.from(d); }));
                 return descriptors;
             }
@@ -1112,61 +1433,33 @@ ob_start();
             async function evappGiIniciarBusqueda() {
                 try {
                     evappGiSetProgress(5, 'Cargando modelos de reconocimiento facial...');
-
-                    if ( typeof faceapi === 'undefined' ) {
-                        throw new Error('El motor de reconocimiento facial no está disponible.');
-                    }
-
+                    if ( typeof faceapi === 'undefined' ) throw new Error('Motor de reconocimiento facial no disponible.');
                     await Promise.all([
                         faceapi.nets.ssdMobilenetv1.isLoaded    ? Promise.resolve() : faceapi.nets.ssdMobilenetv1.loadFromUri(faceModelsUrl),
                         faceapi.nets.faceLandmark68Net.isLoaded  ? Promise.resolve() : faceapi.nets.faceLandmark68Net.loadFromUri(faceModelsUrl),
                         faceapi.nets.faceRecognitionNet.isLoaded ? Promise.resolve() : faceapi.nets.faceRecognitionNet.loadFromUri(faceModelsUrl),
                     ]);
-
                     evappGiSetProgress(15, 'Analizando tus ' + fotosDataUrls.length + ' foto(s) de referencia...');
-
                     await evappGiOpenIDB();
-
-                    // Extraer descriptor de CADA foto de referencia del usuario
                     faceDescsQuery = [];
                     for (var pi = 0; pi < fotosDataUrls.length; pi++) {
                         try {
                             var qImg = await evappGiCargarImagen(fotosDataUrls[pi]);
                             var qDet = await faceapi
                                 .detectSingleFace(qImg, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 }))
-                                .withFaceLandmarks()
-                                .withFaceDescriptor();
-                            if ( qDet ) {
-                                faceDescsQuery.push(qDet.descriptor);
-                            }
-                        } catch(eQuery) {
-                            console.warn('[EventosApp GaleriaIA] Skip foto referencia ' + pi + ':', eQuery.message);
-                        }
+                                .withFaceLandmarks().withFaceDescriptor();
+                            if ( qDet ) faceDescsQuery.push(qDet.descriptor);
+                        } catch(eQuery) { console.warn('[EventosApp GaleriaIA] Skip foto referencia ' + pi + ':', eQuery.message); }
                     }
-
-                    if ( faceDescsQuery.length === 0 ) {
-                        evappGiSetProgress(100, '');
-                        showStep('evapp-gi-step-no-results');
-                        return;
-                    }
-
+                    if ( faceDescsQuery.length === 0 ) { evappGiSetProgress(100, ''); showStep('evapp-gi-step-no-results'); return; }
                     evappGiSetProgress(25, 'Comparando con fotos de la galería...');
-
-                    var matches = [];
-                    var total   = imagenes.length;
-
+                    var matches = [], total = imagenes.length;
                     for ( var i = 0; i < total; i++ ) {
                         var foto = imagenes[i];
-
-                        evappGiSetProgress(
-                            25 + Math.round((i / total) * 70),
-                            'Analizando foto ' + (i + 1) + ' de ' + total + '...'
-                        );
-
+                        evappGiSetProgress(25 + Math.round((i / total) * 70), 'Analizando foto ' + (i + 1) + ' de ' + total + '...');
                         try {
                             var galleryDescs = await evappGiGetDescriptoresGaleria(foto.full);
                             if ( galleryDescs && galleryDescs.length ) {
-                                // Comparar CADA descriptor del usuario contra CADA cara de la foto
                                 var minDist = Infinity;
                                 for (var qi = 0; qi < faceDescsQuery.length; qi++) {
                                     for (var gi = 0; gi < galleryDescs.length; gi++) {
@@ -1174,21 +1467,12 @@ ob_start();
                                         if ( d < minDist ) minDist = d;
                                     }
                                 }
-                                if ( minDist < 0.56 ) {
-                                    matches.push({ index: i, photo: foto, distance: minDist });
-                                }
+                                if ( minDist < 0.56 ) matches.push({ index: i, photo: foto, distance: minDist });
                             }
-                        } catch(ePhoto) {
-                            console.warn('[EventosApp GaleriaIA] Skip foto ' + i + ':', ePhoto.message);
-                        }
+                        } catch(ePhoto) { console.warn('[EventosApp GaleriaIA] Skip foto ' + i + ':', ePhoto.message); }
                     }
-
                     evappGiSetProgress(100, 'Búsqueda completada.');
-
-                    setTimeout(function(){
-                        evappGiMostrarResultados(matches);
-                    }, 600);
-
+                    setTimeout(function(){ evappGiMostrarResultados(matches); }, 600);
                 } catch (err) {
                     console.error('[EventosApp GaleriaIA] Error en búsqueda facial:', err);
                     showStep('evapp-gi-step-no-results');
@@ -1196,49 +1480,35 @@ ob_start();
             }
 
             function evappGiMostrarResultados(matches) {
-                if ( ! matches || ! matches.length ) {
-                    showStep('evapp-gi-step-no-results');
-                    return;
-                }
-
+                if ( ! matches || ! matches.length ) { showStep('evapp-gi-step-no-results'); return; }
                 matches.sort(function(a, b){ return a.distance - b.distance; });
-
                 var resCount    = wizard.querySelector('.evapp-gi-results-count');
                 var resCarousel = wizard.querySelector('.evapp-gi-results-carousel-wrap');
-
                 if ( resCount ) {
                     resCount.textContent = matches.length === 1
                         ? '🎉 ¡Encontramos 1 foto en donde apareces!'
                         : '🎉 ¡Encontramos ' + matches.length + ' fotos en donde apareces!';
                 }
-
                 var html = '<div class="evapp-gi-results-slides">';
                 matches.forEach(function(m, idx) {
                     var altTxt = escHtml(m.photo.alt || ('Foto ' + (idx + 1)));
-                    html +=
-                        '<div class="evapp-gi-result-slide' + (idx === 0 ? ' active' : '') + '" data-ri="' + idx + '">' +
-                        '<img src="' + escHtml(m.photo.full) + '" alt="' + altTxt + '" loading="' + (idx === 0 ? 'eager' : 'lazy') + '" />' +
-                        '</div>';
+                    html += '<div class="evapp-gi-result-slide' + (idx === 0 ? ' active' : '') + '" data-ri="' + idx + '">' +
+                            '<img src="' + escHtml(m.photo.full) + '" alt="' + altTxt + '" loading="' + (idx === 0 ? 'eager' : 'lazy') + '" /></div>';
                 });
                 html += '</div>';
-
-                html +=
-                    '<div class="evapp-gi-results-nav-row">' +
-                    '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-prev" aria-label="Anterior">&#8249;</button>' +
-                    '<span class="evapp-gi-results-counter"><span class="evapp-gi-res-cur">1</span> / ' + matches.length + '</span>' +
-                    '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-next" aria-label="Siguiente">&#8250;</button>' +
-                    '</div>' +
-                    '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.full) + '" download target="_blank">⬇️ &nbsp;Descargar esta foto</a>';
-
+                html += '<div class="evapp-gi-results-nav-row">' +
+                        '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-prev" aria-label="Anterior">&#8249;</button>' +
+                        '<span class="evapp-gi-results-counter"><span class="evapp-gi-res-cur">1</span> / ' + matches.length + '</span>' +
+                        '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-next" aria-label="Siguiente">&#8250;</button>' +
+                        '</div>' +
+                        '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.full) + '" download target="_blank">⬇️ &nbsp;Descargar esta foto</a>';
                 resCarousel.innerHTML = html;
-
                 var rSlides = resCarousel.querySelectorAll('.evapp-gi-result-slide');
-                var rCur    = 0;
-                var rPrev   = resCarousel.querySelector('.evapp-gi-res-prev');
-                var rNext   = resCarousel.querySelector('.evapp-gi-res-next');
+                var rCur = 0;
+                var rPrev = resCarousel.querySelector('.evapp-gi-res-prev');
+                var rNext = resCarousel.querySelector('.evapp-gi-res-next');
                 var rCurLbl = resCarousel.querySelector('.evapp-gi-res-cur');
                 var rDlBtn  = resCarousel.querySelector('.evapp-gi-dl-btn');
-
                 function rGoTo(idx) {
                     rSlides[rCur].classList.remove('active');
                     rCur = (idx + matches.length) % matches.length;
@@ -1246,7 +1516,6 @@ ob_start();
                     if ( rCurLbl ) rCurLbl.textContent = rCur + 1;
                     if ( rDlBtn  ) rDlBtn.href = matches[rCur].photo.full;
                 }
-
                 if ( matches.length <= 1 ) {
                     if ( rPrev ) rPrev.style.display = 'none';
                     if ( rNext ) rNext.style.display = 'none';
@@ -1254,7 +1523,6 @@ ob_start();
                     if ( rPrev ) rPrev.addEventListener('click', function(){ rGoTo(rCur - 1); });
                     if ( rNext ) rNext.addEventListener('click', function(){ rGoTo(rCur + 1); });
                 }
-
                 var rSlidesCont = resCarousel.querySelector('.evapp-gi-results-slides');
                 if ( rSlidesCont ) {
                     var rTouchX = 0;
@@ -1264,11 +1532,9 @@ ob_start();
                         if ( Math.abs(diff) > 40 ) rGoTo(diff > 0 ? rCur + 1 : rCur - 1);
                     }, { passive: true });
                 }
-
                 showStep('evapp-gi-step-results');
             }
 
-            // ── Botón "Buscar mis fotos" (paso success) ──────────────────────
             if ( btnContinuar ) {
                 btnContinuar.addEventListener('click', function(){
                     showStep('evapp-gi-step-searching');
@@ -1276,13 +1542,9 @@ ob_start();
                 });
             }
 
-            // ── Reset completo del wizard ─────────────────────────────────────
+            // ── Reset completo ────────────────────────────────────────────────
             function evappGiResetWizard() {
-                fotoDataUrl    = null;
-                fotosDataUrls  = [];
-                ticketId       = null;
-                cedulaVal      = '';
-                faceDescsQuery = [];
+                fotoDataUrl = null; fotosDataUrls = []; ticketId = null; cedulaVal = ''; faceDescsQuery = [];
                 if ( inputCedula ) inputCedula.value = '';
                 if ( inputApell  ) inputApell.value  = '';
                 if ( uploadGuide  ) uploadGuide.style.display  = 'none';
@@ -1296,22 +1558,15 @@ ob_start();
             }
 
             var btnNuevaBusqueda = wizard.querySelector('.evapp-gi-btn-nueva-busqueda');
-            if ( btnNuevaBusqueda ) {
-                btnNuevaBusqueda.addEventListener('click', evappGiResetWizard);
-            }
+            if ( btnNuevaBusqueda ) btnNuevaBusqueda.addEventListener('click', evappGiResetWizard);
 
             var btnNuevaBusqueda2 = wizard.querySelector('.evapp-gi-btn-nueva-busqueda-2');
-            if ( btnNuevaBusqueda2 ) {
-                btnNuevaBusqueda2.addEventListener('click', evappGiResetWizard);
-            }
+            if ( btnNuevaBusqueda2 ) btnNuevaBusqueda2.addEventListener('click', evappGiResetWizard);
 
-            // ── "Intentar con otra foto" → reiniciar desde paso 3 ───────────
             var btnIntentarOtraFoto = wizard.querySelector('.evapp-gi-btn-intentar-otra-foto');
             if ( btnIntentarOtraFoto ) {
                 btnIntentarOtraFoto.addEventListener('click', function(){
-                    fotoDataUrl    = null;
-                    fotosDataUrls  = [];
-                    faceDescsQuery = [];
+                    fotoDataUrl = null; fotosDataUrls = []; faceDescsQuery = [];
                     if ( uploadGuide  ) uploadGuide.style.display  = 'none';
                     if ( camWrap      ) camWrap.style.display      = 'none';
                     if ( fotoOpciones ) fotoOpciones.style.display = '';
