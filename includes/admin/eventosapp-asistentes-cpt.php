@@ -97,18 +97,18 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
 
         if ( $duplicado_id ) {
             $cedula_error = true;
-            // Guardar el error en un transient para mostrarlo en admin_notices
             set_transient(
                 'evapp_asistente_cedula_error_' . get_current_user_id(),
                 [
-                    'cedula'      => $cedula_nueva,
-                    'duplicado_id'=> $duplicado_id,
+                    'cedula'       => $cedula_nueva,
+                    'duplicado_id' => $duplicado_id,
                 ],
                 60
             );
         }
     }
 
+    // ── Campos de texto/email (sin foto, se gestiona por separado) ───────────
     $campos = [
         '_asistente_nombres'   => 'sanitize_text_field',
         '_asistente_apellidos' => 'sanitize_text_field',
@@ -118,7 +118,6 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
         '_asistente_cargo'     => 'sanitize_text_field',
         '_asistente_ciudad'    => 'sanitize_text_field',
         '_asistente_pais'      => 'sanitize_text_field',
-        '_asistente_foto_id'   => 'absint',
     ];
 
     foreach ( $campos as $key => $sanitizer ) {
@@ -131,15 +130,43 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
     if ( ! $cedula_error ) {
         update_post_meta( $post_id, '_asistente_cedula', $cedula_nueva );
     }
-    // Si hay duplicado, conservar la cédula anterior (no la sobreescribimos)
 
-    // Sincronizar post_title con Nombres + Apellidos usando wpdb directo
-    // para evitar bucle de hooks y posibles errores 503.
+    // ── Guardar array de fotos (_asistente_fotos_ids) ────────────────────────
+    // El campo oculto `_asistente_fotos_ids` contiene un JSON de IDs ordenados.
+    // _asistente_foto_id (foto principal) se deriva automáticamente del primero.
+    if ( isset( $_POST['_asistente_fotos_ids'] ) ) {
+        $fotos_raw = wp_unslash( $_POST['_asistente_fotos_ids'] );
+        $fotos_arr = json_decode( $fotos_raw, true );
+
+        if ( ! is_array( $fotos_arr ) ) $fotos_arr = [];
+
+        // Sanitizar: solo enteros positivos
+        $fotos_arr = array_values( array_filter( array_map( 'absint', $fotos_arr ) ) );
+
+        update_post_meta( $post_id, '_asistente_fotos_ids', wp_json_encode( $fotos_arr ) );
+
+        // Sincronizar foto principal (backward compat con face-checkin y otras funciones)
+        $foto_principal = ! empty( $fotos_arr ) ? $fotos_arr[0] : 0;
+        update_post_meta( $post_id, '_asistente_foto_id', $foto_principal );
+
+    } elseif ( isset( $_POST['_asistente_foto_id'] ) ) {
+        // Fallback: si por alguna razón solo viene el campo legacy, guardarlo
+        $foto_id_legacy = absint( $_POST['_asistente_foto_id'] );
+        update_post_meta( $post_id, '_asistente_foto_id', $foto_id_legacy );
+        // Construir el array de fotos si no existe aún
+        $fotos_existentes_json = get_post_meta( $post_id, '_asistente_fotos_ids', true );
+        if ( ! $fotos_existentes_json && $foto_id_legacy ) {
+            update_post_meta( $post_id, '_asistente_fotos_ids', wp_json_encode( [ $foto_id_legacy ] ) );
+        }
+    }
+
+    // ── Sincronizar post_title con Nombres + Apellidos ───────────────────────
     $nombres   = isset( $_POST['_asistente_nombres'] )   ? sanitize_text_field( $_POST['_asistente_nombres'] )   : '';
     $apellidos = isset( $_POST['_asistente_apellidos'] ) ? sanitize_text_field( $_POST['_asistente_apellidos'] ) : '';
     $titulo    = trim( $nombres . ' ' . $apellidos );
 
     if ( $titulo ) {
+        global $wpdb;
         $wpdb->update(
             $wpdb->posts,
             [
