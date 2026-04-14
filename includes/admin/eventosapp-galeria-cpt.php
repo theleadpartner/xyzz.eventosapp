@@ -540,7 +540,10 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     $nonce_buscar   = $evento_id ? wp_create_nonce( 'evapp_gi_buscar_ticket' )  : '';
     $nonce_registro = $evento_id ? wp_create_nonce( 'evapp_gi_registrar_foto' ) : '';
 
-    ob_start();
+ob_start();
+    if ( $evento_id ) {
+        echo '<script src="' . esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/js/face-api.min.js' ) . '"></script>' . "\n";
+    }
     ?>
     <div id="<?php echo esc_attr( $uid ); ?>" class="evapp-galeria-wrap">
 
@@ -773,14 +776,58 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     </div>
                 </div>
 
-                <!-- ── PASO 6: Éxito final ── -->
+<!-- ── PASO 6: Éxito final ── -->
                 <div class="evapp-gi-step evapp-gi-step-success" data-step="success" style="display:none;">
                     <div class="evapp-gi-success-wrap">
                         <div class="evapp-gi-success-icon">🎉</div>
                         <h3 class="evapp-gi-success-title">¡Ya tenemos todo!</h3>
-                        <p class="evapp-gi-success-desc">Vamos a comenzar la búsqueda de tus fotos.</p>
+                        <p class="evapp-gi-success-desc">Vamos a comenzar la búsqueda de tus fotos usando Inteligencia Artificial.</p>
                         <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-continuar">
-                            Continuar
+                            🔍 &nbsp;Buscar mis fotos
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ── PASO 7: Buscando con IA ── -->
+                <div class="evapp-gi-step evapp-gi-step-searching" data-step="searching" style="display:none;">
+                    <div class="evapp-gi-loading-wrap">
+                        <div class="evapp-gi-spinner"></div>
+                        <h3 class="evapp-gi-loading-title">Buscando tus fotos con IA...</h3>
+                        <p class="evapp-gi-loading-desc" id="<?php echo esc_attr( $uid ); ?>-search-progress">Cargando modelos de reconocimiento facial...</p>
+                        <div class="evapp-gi-search-bar-wrap">
+                            <div class="evapp-gi-search-bar-inner" id="<?php echo esc_attr( $uid ); ?>-search-bar"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── PASO 8: Resultados ── -->
+                <div class="evapp-gi-step evapp-gi-step-results" data-step="results" style="display:none;">
+                    <div class="evapp-gi-step-header">
+                        <span class="evapp-gi-badge evapp-gi-badge-ok">✓ Búsqueda completada</span>
+                        <h3 class="evapp-gi-step-title">¡Encontramos tus fotos!</h3>
+                    </div>
+                    <p class="evapp-gi-results-count"></p>
+                    <div class="evapp-gi-results-carousel-wrap">
+                        <!-- Se llena desde JS -->
+                    </div>
+                    <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda" style="margin-top:18px;">
+                        ↩ &nbsp;Volver al inicio
+                    </button>
+                </div>
+
+                <!-- ── PASO 9: Sin resultados ── -->
+                <div class="evapp-gi-step evapp-gi-step-no-results" data-step="no-results" style="display:none;">
+                    <div class="evapp-gi-success-wrap">
+                        <div class="evapp-gi-success-icon" style="font-size:52px;">😔</div>
+                        <h3 class="evapp-gi-step-title" style="font-size:20px;">No encontramos coincidencias</h3>
+                        <p class="evapp-gi-step-desc">
+                            No detectamos tu rostro en las fotos de la galería. Puede ser que no hayas sido fotografiado/a aún, o que la foto que usaste no sea muy clara. Intenta con otra foto.
+                        </p>
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-intentar-otra-foto">
+                            📷 &nbsp;Intentar con otra foto
+                        </button>
+                        <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda-2" style="margin-top:8px;">
+                            ↩ &nbsp;Volver al inicio
                         </button>
                     </div>
                 </div>
@@ -1202,6 +1249,122 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             .evapp-gi-cam-view-frame,
             .evapp-gi-guide-frame    { max-width: 100%; }
         }
+
+/* ── Barra de progreso de búsqueda ── */
+        .evapp-gi-search-bar-wrap {
+            width: 100%;
+            background: #dde8ff;
+            border-radius: 50px;
+            height: 8px;
+            margin: 18px auto 0;
+            max-width: 320px;
+            overflow: hidden;
+        }
+        .evapp-gi-search-bar-inner {
+            height: 100%;
+            background: linear-gradient(90deg, #1c3d8f, #4f7cff);
+            border-radius: 50px;
+            width: 0%;
+            transition: width 0.4s ease;
+        }
+
+        /* ── Resultados: conteo ── */
+        .evapp-gi-results-count {
+            font-size: 15px;
+            font-weight: 700;
+            color: #15803d;
+            margin: 0 0 16px;
+            text-align: center;
+        }
+
+        /* ── Resultados: carrusel ── */
+        .evapp-gi-results-carousel-wrap {
+            position: relative;
+        }
+        .evapp-gi-results-slides {
+            background: #111;
+            border-radius: 12px;
+            overflow: hidden;
+            min-height: 260px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .evapp-gi-result-slide {
+            display: none;
+            width: 100%;
+            text-align: center;
+        }
+        .evapp-gi-result-slide.active {
+            display: block;
+        }
+        .evapp-gi-result-slide img {
+            max-width: 100%;
+            max-height: 460px;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
+            margin: 0 auto;
+        }
+        .evapp-gi-results-nav-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            margin-top: 10px;
+        }
+        .evapp-gi-results-nav-btn {
+            background: #1c3d8f;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            font-size: 24px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background .2s;
+            flex-shrink: 0;
+        }
+        .evapp-gi-results-nav-btn:hover    { background: #122d6e; }
+        .evapp-gi-results-nav-btn:disabled { opacity: .35; cursor: not-allowed; }
+        .evapp-gi-results-counter {
+            font-size: 13px;
+            color: #555;
+            min-width: 60px;
+            text-align: center;
+        }
+        .evapp-gi-download-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            margin: 12px auto 0;
+            padding: 12px 28px;
+            background: #15803d;
+            color: #fff;
+            border: none;
+            border-radius: 9px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background .2s;
+            width: fit-content;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        .evapp-gi-download-btn:hover { background: #166534; color: #fff; text-decoration: none; }
+
+        @media (max-width: 500px) {
+            .evapp-gi-result-slide img { max-height: 320px; }
+            .evapp-gi-download-btn     { width: 100%; }
+        }
+            
         </style>
         <?php endif; // $evento_id ?>
 
@@ -1638,13 +1801,291 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     });
             }
 
-            // ── PASO 6: Continuar (fin del flujo por ahora) ───────────────────
-            var btnContinuar = wizard.querySelector('.evapp-gi-btn-continuar');
+// ── PASO 6: Continuar → Iniciar búsqueda con IA ─────────────────
+            var btnContinuar  = wizard.querySelector('.evapp-gi-btn-continuar');
+            var faceModelsUrl = <?php echo wp_json_encode( trailingslashit( EVENTOSAPP_PLUGIN_URL ) . 'includes/assets/face-models' ); ?>;
+            var progressEl    = document.getElementById(uid + '-search-progress');
+            var barEl         = document.getElementById(uid + '-search-bar');
+            var faceDescQuery = null; // Float32Array: descriptor del rostro del usuario
+
+            // ── IndexedDB: cache de descriptores de fotos de galería ─────────
+            var IDB_NAME    = 'evapp_gallery_faces';
+            var IDB_STORE   = 'photo_descriptors';
+            var IDB_VERSION = 1;
+            var idbConn     = null;
+
+            function evappGiOpenIDB() {
+                return new Promise(function(resolve) {
+                    if ( ! window.indexedDB ) { resolve(null); return; }
+                    var req = indexedDB.open(IDB_NAME, IDB_VERSION);
+                    req.onupgradeneeded = function(e) {
+                        e.target.result.createObjectStore(IDB_STORE, { keyPath: 'url' });
+                    };
+                    req.onsuccess = function(e) { idbConn = e.target.result; resolve(idbConn); };
+                    req.onerror   = function()  { resolve(null); };
+                });
+            }
+
+            function evappGiIdbGet(url) {
+                return new Promise(function(resolve) {
+                    if ( ! idbConn ) { resolve(null); return; }
+                    try {
+                        var tx  = idbConn.transaction(IDB_STORE, 'readonly');
+                        var req = tx.objectStore(IDB_STORE).get(url);
+                        req.onsuccess = function() { resolve(req.result || null); };
+                        req.onerror   = function() { resolve(null); };
+                    } catch(e) { resolve(null); }
+                });
+            }
+
+            function evappGiIdbPut(url, descriptor) {
+                if ( ! idbConn ) return;
+                try {
+                    var tx = idbConn.transaction(IDB_STORE, 'readwrite');
+                    tx.objectStore(IDB_STORE).put({ url: url, descriptor: Array.from(descriptor) });
+                } catch(e) {}
+            }
+
+            // ── Helpers de búsqueda ──────────────────────────────────────────
+            function evappGiSetProgress(pct, msg) {
+                if ( barEl )      barEl.style.width  = Math.min(100, pct) + '%';
+                if ( progressEl ) progressEl.textContent = msg || '';
+            }
+
+            function evappGiCargarImagen(src) {
+                return new Promise(function(resolve, reject) {
+                    var img      = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload  = function() { resolve(img); };
+                    img.onerror = function() { reject(new Error('No se pudo cargar: ' + src)); };
+                    // Añadir parámetro para evitar cache de CORS
+                    img.src = src + (src.indexOf('?') === -1 ? '?' : '&') + '_evappf=' + Date.now();
+                });
+            }
+
+            async function evappGiGetDescriptorGaleria(photoUrl) {
+                // 1. Revisar cache IndexedDB
+                var cached = await evappGiIdbGet(photoUrl);
+                if ( cached && cached.descriptor && cached.descriptor.length ) {
+                    return new Float32Array(cached.descriptor);
+                }
+
+                // 2. Detectar cara en la foto de galería
+                var img  = await evappGiCargarImagen(photoUrl);
+                var dets = await faceapi
+                    .detectAllFaces(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.42 }))
+                    .withFaceLandmarks()
+                    .withFaceDescriptors();
+
+                if ( ! dets || ! dets.length ) return null;
+
+                // Tomar la cara más grande (la más prominente en la foto)
+                var best = dets.reduce(function(a, b) {
+                    var areaA = a.detection.box.width * a.detection.box.height;
+                    var areaB = b.detection.box.width * b.detection.box.height;
+                    return areaA >= areaB ? a : b;
+                });
+
+                // Guardar en cache
+                evappGiIdbPut(photoUrl, best.descriptor);
+                return best.descriptor;
+            }
+
+            async function evappGiIniciarBusqueda() {
+                try {
+                    evappGiSetProgress(5, 'Cargando modelos de reconocimiento facial...');
+
+                    if ( typeof faceapi === 'undefined' ) {
+                        throw new Error('El motor de reconocimiento facial no está disponible.');
+                    }
+
+                    // Cargar modelos solo si no están ya cargados
+                    await Promise.all([
+                        faceapi.nets.ssdMobilenetv1.isLoaded    ? Promise.resolve() : faceapi.nets.ssdMobilenetv1.loadFromUri(faceModelsUrl),
+                        faceapi.nets.faceLandmark68Net.isLoaded  ? Promise.resolve() : faceapi.nets.faceLandmark68Net.loadFromUri(faceModelsUrl),
+                        faceapi.nets.faceRecognitionNet.isLoaded ? Promise.resolve() : faceapi.nets.faceRecognitionNet.loadFromUri(faceModelsUrl),
+                    ]);
+
+                    evappGiSetProgress(15, 'Analizando tu foto de referencia...');
+
+                    // Abrir IndexedDB para caching
+                    await evappGiOpenIDB();
+
+                    // Detectar descriptor en la foto del usuario
+                    var queryImg = await evappGiCargarImagen(fotoDataUrl);
+                    var queryDet = await faceapi
+                        .detectSingleFace(queryImg, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+                        .withFaceLandmarks()
+                        .withFaceDescriptor();
+
+                    if ( ! queryDet ) {
+                        evappGiSetProgress(100, '');
+                        showStep('evapp-gi-step-no-results');
+                        return;
+                    }
+
+                    faceDescQuery = queryDet.descriptor;
+                    evappGiSetProgress(25, 'Comparando con fotos de la galería...');
+
+                    var matches = [];
+                    var total   = imagenes.length;
+
+                    for ( var i = 0; i < total; i++ ) {
+                        var foto = imagenes[i];
+
+                        evappGiSetProgress(
+                            25 + Math.round((i / total) * 70),
+                            'Analizando foto ' + (i + 1) + ' de ' + total + '...'
+                        );
+
+                        try {
+                            var galleryDesc = await evappGiGetDescriptorGaleria(foto.full);
+                            if ( galleryDesc ) {
+                                var dist = faceapi.euclideanDistance(faceDescQuery, galleryDesc);
+                                if ( dist < 0.52 ) {
+                                    matches.push({ index: i, photo: foto, distance: dist });
+                                }
+                            }
+                        } catch(ePhoto) {
+                            console.warn('[EventosApp GaleriaIA] Skip foto ' + i + ':', ePhoto.message);
+                        }
+                    }
+
+                    evappGiSetProgress(100, 'Búsqueda completada.');
+
+                    setTimeout(function(){
+                        evappGiMostrarResultados(matches);
+                    }, 600);
+
+                } catch (err) {
+                    console.error('[EventosApp GaleriaIA] Error en búsqueda facial:', err);
+                    showStep('evapp-gi-step-no-results');
+                }
+            }
+
+            function evappGiMostrarResultados(matches) {
+                if ( ! matches || ! matches.length ) {
+                    showStep('evapp-gi-step-no-results');
+                    return;
+                }
+
+                // Ordenar por distancia ascendente (mejor coincidencia primero)
+                matches.sort(function(a, b){ return a.distance - b.distance; });
+
+                var resCount    = wizard.querySelector('.evapp-gi-results-count');
+                var resCarousel = wizard.querySelector('.evapp-gi-results-carousel-wrap');
+
+                if ( resCount ) {
+                    resCount.textContent = matches.length === 1
+                        ? '🎉 ¡Encontramos 1 foto en donde apareces!'
+                        : '🎉 ¡Encontramos ' + matches.length + ' fotos en donde apareces!';
+                }
+
+                // Construir HTML del carrusel de resultados
+                var html = '<div class="evapp-gi-results-slides">';
+                matches.forEach(function(m, idx) {
+                    var altTxt = escHtml(m.photo.alt || ('Foto ' + (idx + 1)));
+                    html +=
+                        '<div class="evapp-gi-result-slide' + (idx === 0 ? ' active' : '') + '" data-ri="' + idx + '">' +
+                        '<img src="' + escHtml(m.photo.full) + '" alt="' + altTxt + '" loading="' + (idx === 0 ? 'eager' : 'lazy') + '" />' +
+                        '</div>';
+                });
+                html += '</div>';
+
+                // Fila de navegación + botón descargar
+                html +=
+                    '<div class="evapp-gi-results-nav-row">' +
+                    '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-prev" aria-label="Anterior">&#8249;</button>' +
+                    '<span class="evapp-gi-results-counter"><span class="evapp-gi-res-cur">1</span> / ' + matches.length + '</span>' +
+                    '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-next" aria-label="Siguiente">&#8250;</button>' +
+                    '</div>' +
+                    '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.full) + '" download target="_blank">⬇️ &nbsp;Descargar esta foto</a>';
+
+                resCarousel.innerHTML = html;
+
+                // Lógica de navegación del carrusel de resultados
+                var rSlides  = resCarousel.querySelectorAll('.evapp-gi-result-slide');
+                var rCur     = 0;
+                var rPrev    = resCarousel.querySelector('.evapp-gi-res-prev');
+                var rNext    = resCarousel.querySelector('.evapp-gi-res-next');
+                var rCurLbl  = resCarousel.querySelector('.evapp-gi-res-cur');
+                var rDlBtn   = resCarousel.querySelector('.evapp-gi-dl-btn');
+
+                function rGoTo(idx) {
+                    rSlides[rCur].classList.remove('active');
+                    rCur = (idx + matches.length) % matches.length;
+                    rSlides[rCur].classList.add('active');
+                    if ( rCurLbl ) rCurLbl.textContent = rCur + 1;
+                    if ( rDlBtn  ) rDlBtn.href = matches[rCur].photo.full;
+                }
+
+                if ( matches.length <= 1 ) {
+                    if ( rPrev ) rPrev.style.display = 'none';
+                    if ( rNext ) rNext.style.display = 'none';
+                } else {
+                    if ( rPrev ) rPrev.addEventListener('click', function(){ rGoTo(rCur - 1); });
+                    if ( rNext ) rNext.addEventListener('click', function(){ rGoTo(rCur + 1); });
+                }
+
+                // Swipe táctil en el carrusel de resultados
+                var rSlidesCont = resCarousel.querySelector('.evapp-gi-results-slides');
+                if ( rSlidesCont ) {
+                    var rTouchX = 0;
+                    rSlidesCont.addEventListener('touchstart', function(e){ rTouchX = e.changedTouches[0].clientX; }, { passive: true });
+                    rSlidesCont.addEventListener('touchend', function(e){
+                        var diff = rTouchX - e.changedTouches[0].clientX;
+                        if ( Math.abs(diff) > 40 ) rGoTo(diff > 0 ? rCur + 1 : rCur - 1);
+                    }, { passive: true });
+                }
+
+                showStep('evapp-gi-step-results');
+            }
+
+            // ── Botón "Buscar mis fotos" (paso success) ──────────────────────
             if ( btnContinuar ) {
                 btnContinuar.addEventListener('click', function(){
-                    // Fin del flujo por ahora – ocultar wizard y mostrar CTA
-                    wizard.style.display      = 'none';
-                    triggerWrap.style.display = '';
+                    showStep('evapp-gi-step-searching');
+                    evappGiIniciarBusqueda();
+                });
+            }
+
+            // ── Función de reset completo del wizard ─────────────────────────
+            function evappGiResetWizard() {
+                fotoDataUrl   = null;
+                ticketId      = null;
+                cedulaVal     = '';
+                faceDescQuery = null;
+                if ( inputCedula ) inputCedula.value = '';
+                if ( inputApell  ) inputApell.value  = '';
+                wizard.style.display      = 'none';
+                triggerWrap.style.display = '';
+            }
+
+            // ── Botón "Volver al inicio" en resultados ───────────────────────
+            var btnNuevaBusqueda = wizard.querySelector('.evapp-gi-btn-nueva-busqueda');
+            if ( btnNuevaBusqueda ) {
+                btnNuevaBusqueda.addEventListener('click', evappGiResetWizard);
+            }
+
+            // ── Botón "Volver al inicio" en sin-resultados ───────────────────
+            var btnNuevaBusqueda2 = wizard.querySelector('.evapp-gi-btn-nueva-busqueda-2');
+            if ( btnNuevaBusqueda2 ) {
+                btnNuevaBusqueda2.addEventListener('click', evappGiResetWizard);
+            }
+
+            // ── Botón "Intentar con otra foto" en sin-resultados ─────────────
+            var btnIntentarOtraFoto = wizard.querySelector('.evapp-gi-btn-intentar-otra-foto');
+            if ( btnIntentarOtraFoto ) {
+                btnIntentarOtraFoto.addEventListener('click', function(){
+                    fotoDataUrl   = null;
+                    faceDescQuery = null;
+                    var foOpc = wizard.querySelector('.evapp-gi-foto-opciones');
+                    var cWrap = wizard.querySelector('.evapp-gi-cam-wrap');
+                    var uGuid = wizard.querySelector('.evapp-gi-upload-guide-wrap');
+                    if ( foOpc ) foOpc.style.display = '';
+                    if ( cWrap ) cWrap.style.display = 'none';
+                    if ( uGuid ) uGuid.style.display = 'none';
+                    showStep('evapp-gi-step-3');
                 });
             }
 
