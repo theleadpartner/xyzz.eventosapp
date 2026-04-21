@@ -689,42 +689,26 @@ add_action('wp_ajax_eventosapp_front_send_ticket_email', function(){
         wp_send_json_error(['message' => 'Correo destino inválido'], 400);
     }
 
-    // 6) Flags del evento
+    // 6) Flags del evento: generar PDF e ICS antes de enviar si aplica
     $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
     $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
 
     if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($tid);
     if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($tid);
 
-    // 7) Adjuntos
-    $attachments = [];
-    if ($pdf_on) {
-        $pdf_url = get_post_meta($tid, '_eventosapp_ticket_pdf_url', true);
-        if ($pdf_url && function_exists('eventosapp_url_to_path')) {
-            $pdf_path = eventosapp_url_to_path($pdf_url);
-            if ($pdf_path && file_exists($pdf_path)) $attachments[] = $pdf_path;
-        }
-    }
-    if ($ics_on) {
-        $ics_url = get_post_meta($tid, '_eventosapp_ticket_ics_url', true);
-        if ($ics_url && function_exists('eventosapp_url_to_path')) {
-            $ics_path = eventosapp_url_to_path($ics_url);
-            if ($ics_path && file_exists($ics_path)) $attachments[] = $ics_path;
-        }
+    // 7) Delegar el envío a la función centralizada que registra tracking en BD
+    if ( ! function_exists('eventosapp_send_ticket_email_now') ) {
+        wp_send_json_error(['message' => 'Función de envío no disponible.'], 500);
     }
 
-    // 8) Email
-    if ( ! function_exists('eventosapp_build_ticket_email_html') ) {
-        wp_send_json_error(['message'=>'Plantilla de email no disponible.'], 500);
+    list($ok, $msg) = eventosapp_send_ticket_email_now($tid, [
+        'recipient' => $to,
+        'source'    => 'frontend_edit',
+        'force'     => true,
+    ]);
+
+    if ($ok) {
+        wp_send_json_success(['message' => $msg]);
     }
-    $subject = 'Tu ticket';
-    $ev_name = $evento_id ? get_the_title($evento_id) : '';
-    if ($ev_name) $subject = 'Tu ticket para ' . $ev_name;
-
-    $html = eventosapp_build_ticket_email_html($tid);
-    $headers = ['Content-Type: text/html; charset=UTF-8'];
-
-    $ok = wp_mail($to, $subject, $html, $headers, $attachments);
-    if ($ok) wp_send_json_success(true);
-    wp_send_json_error(['message'=>'No se pudo enviar el correo. Revisa configuración SMTP/hosting.'], 500);
+    wp_send_json_error(['message' => $msg ?: 'No se pudo enviar el correo. Revisa configuración SMTP/hosting.'], 500);
 });
