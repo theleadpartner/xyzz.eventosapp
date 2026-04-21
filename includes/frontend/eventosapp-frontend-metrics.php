@@ -1206,12 +1206,13 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
         }
     }
 
-    $headers[] = 'Fecha creación';
+$headers[] = 'Fecha creación';
     
     // Encabezados de estado de correo
     $headers[] = 'Estado Correo Ticket';
     $headers[] = 'Fecha del Primer Envío';
     $headers[] = 'Fecha del Último Envío';
+    $headers[] = 'Canal de Envío';
     
     // NUEVO: Encabezado para medio de check-in
     $headers[] = 'Medio de Check-in';
@@ -1376,7 +1377,7 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
 
         $row[] = (string)$created;
         
-        // Datos de estado de correo
+// Datos de estado de correo
         $email_status = get_post_meta($tid, '_eventosapp_ticket_email_sent_status', true);
         $row[] = ($email_status === 'enviado') ? 'Enviado' : 'No Enviado';
         
@@ -1385,8 +1386,24 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
         
         $last_sent = get_post_meta($tid, '_eventosapp_ticket_last_email_at', true);
         $row[] = $last_sent ? date_i18n('Y-m-d H:i:s', strtotime($last_sent)) : '';
+
+        // Canal de envío: fuente del envío más reciente registrado en el historial
+        $email_history = get_post_meta($tid, '_eventosapp_ticket_email_history', true);
+        if (!is_array($email_history)) $email_history = [];
+        $email_source_raw = isset($email_history[0]['source']) ? (string) $email_history[0]['source'] : '';
+        $email_source_labels = [
+            'admin'          => 'Envío manual (admin)',
+            'manual'         => 'Envío manual (admin)',
+            'auto'           => 'Envío automático',
+            'webhook'        => 'Webhook',
+            'reminder'       => 'Recordatorio',
+            'frontend_edit'  => 'Módulo edición frontend',
+        ];
+        $row[] = isset($email_source_labels[$email_source_raw])
+            ? $email_source_labels[$email_source_raw]
+            : ($email_source_raw ?: '');
         
-        // NUEVO: Agregar medio de check-in
+        // Medio de check-in
         $row[] = (string)$qr_type_checkin;
         
         $dataRows[] = $row;
