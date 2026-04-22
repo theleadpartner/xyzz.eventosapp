@@ -820,112 +820,134 @@ function eventosapp_ticket_passes_reminder_filters( $ticket_id, $filters ) {
 }
 
 
-/** Disparo único: construir cola con tickets del evento (aplicando filtros de segmentación) y programar procesamiento por lotes */
-add_action('eventosapp_dispatch_event_reminder', 'eventosapp_dispatch_event_reminder_cb', 10, 1);
+/** Disparo único: construir cola con tickets del evento (aplicando filtros) y guardar log */
+add_action('eventosapp_dispatch_event_reminder','eventosapp_dispatch_event_reminder_cb',10,1);
 function eventosapp_dispatch_event_reminder_cb($evento_id){
     $evento_id = intval($evento_id);
     if (!$evento_id) return;
 
-    // Verifica que aún esté habilitado
-    if (get_post_meta($evento_id, '_eventosapp_reminder_enabled', true) !== '1') return;
+    if (get_post_meta($evento_id,'_eventosapp_reminder_enabled',true) !== '1') return;
 
-    // Listar tickets del evento
+    // Todos los tickets del evento
     $tickets = get_posts([
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'any',
-        'fields'         => 'ids',
-        'nopaging'       => true,
-        'meta_query'     => [
-            [
-                'key'   => '_eventosapp_ticket_evento_id',
-                'value' => $evento_id,
-            ]
-        ]
+        'post_type'  => 'eventosapp_ticket',
+        'post_status'=> 'any',
+        'fields'     => 'ids',
+        'nopaging'   => true,
+        'meta_query' => [['key'=>'_eventosapp_ticket_evento_id','value'=>$evento_id]],
     ]);
-
     if (!is_array($tickets)) $tickets = [];
 
-    // Leer filtros de segmentación configurados para este evento
-    $rem_filters = get_post_meta($evento_id, '_eventosapp_reminder_filters', true);
+    $total_event_tix = count($tickets);
+
+    // Filtros de segmentación
+    $rem_filters = get_post_meta($evento_id,'_eventosapp_reminder_filters',true);
     if (!is_array($rem_filters)) $rem_filters = [];
 
-    // Construir cola: email válido + no enviado previamente + pasar filtros de segmentación
-    $queue = [];
+    // Construir cola con contadores detallados para el log
+    $queue              = [];
+    $count_already_sent = 0;
+    $count_no_email     = 0;
+    $count_filtered_out = 0;
+
     foreach ($tickets as $tk) {
-        // Saltar si ya recibió el recordatorio
-        $sent = get_post_meta($tk, '_eventosapp_ticket_reminder_sent', true);
-        if ($sent) continue;
-
-        // Validar email
-        $email = sanitize_email(get_post_meta($tk, '_eventosapp_asistente_email', true));
-        if (!$email || !is_email($email)) continue;
-
-        // Aplicar filtros de segmentación (solo si hay filtros configurados)
-        if (!empty($rem_filters) && !eventosapp_ticket_passes_reminder_filters($tk, $rem_filters)) continue;
-
+        // Omitir si ya recibió el recordatorio
+        if (get_post_meta($tk,'_eventosapp_ticket_reminder_sent',true)) {
+            $count_already_sent++;
+            continue;
+        }
+        // Omitir sin email válido
+        $email = sanitize_email(get_post_meta($tk,'_eventosapp_asistente_email',true));
+        if (!$email || !is_email($email)) {
+            $count_no_email++;
+            continue;
+        }
+        // Aplicar filtros de segmentación
+        if (!empty($rem_filters) && !eventosapp_ticket_passes_reminder_filters($tk,$rem_filters)) {
+            $count_filtered_out++;
+            continue;
+        }
         $queue[] = $tk;
     }
 
-    // Guarda cola (opción sin autoload)
+    // Guardar cola (sin autoload)
     update_option(eventosapp_reminder_queue_key($evento_id), $queue, false);
-    update_post_meta($evento_id, '_eventosapp_reminder_queue_size', count($queue));
-    update_post_meta($evento_id, '_eventosapp_reminder_queue_begins', current_time('mysql'));
+    update_post_meta($evento_id,'_eventosapp_reminder_queue_size',  count($queue));
+    update_post_meta($evento_id,'_eventosapp_reminder_queue_begins',current_time('mysql'));
+
+    // Guardar estadísticas del dispatch para el log del metabox
+    $dispatch_stats = [
+        'dispatched_at'   => current_time('mysql'),
+        'total_event_tix' => $total_event_tix,
+        'already_sent'    => $count_already_sent,
+        'no_email'        => $count_no_email,
+        'filtered_out'    => $count_filtered_out,
+        'filter_count'    => count($rem_filters),
+        'queue_size'      => count($queue),
+        'sent_ok'         => 0,
+        'sent_fail'       => 0,
+        'completed'       => false,
+        'completed_at'    => '',
+    ];
+    update_post_meta($evento_id,'_eventosapp_reminder_dispatch_stats',$dispatch_stats);
 
     if (!empty($queue)) {
-        // Programa procesador minutely si no está ya programado
-        if (!wp_next_scheduled('eventosapp_process_event_reminder_queue', [$evento_id])) {
-            wp_schedule_event(time() + 60, 'evapp_minutely', 'eventosapp_process_event_reminder_queue', [$evento_id]);
+        if (!wp_next_scheduled('eventosapp_process_event_reminder_queue',[$evento_id])) {
+            wp_schedule_event(time()+60,'evapp_minutely','eventosapp_process_event_reminder_queue',[$evento_id]);
         }
     } else {
-        // Nada que procesar (por filtros o sin tickets)
-        update_post_meta($evento_id, '_eventosapp_reminder_done', current_time('mysql'));
+        // Nada que enviar — marcar como completado de inmediato
+        $dispatch_stats['completed']    = true;
+        $dispatch_stats['completed_at'] = current_time('mysql');
+        update_post_meta($evento_id,'_eventosapp_reminder_dispatch_stats',$dispatch_stats);
+        update_post_meta($evento_id,'_eventosapp_reminder_done',current_time('mysql'));
     }
 }
 
 /** Procesa la cola del evento en lotes para no saturar el servidor */
-add_action('eventosapp_process_event_reminder_queue', 'eventosapp_process_event_reminder_queue_cb', 10, 1);
+add_action('eventosapp_process_event_reminder_queue','eventosapp_process_event_reminder_queue_cb',10,1);
 function eventosapp_process_event_reminder_queue_cb($evento_id){
     $evento_id = intval($evento_id);
     if (!$evento_id) return;
 
-    // Lock simple para evitar carrera si el cron se solapa
     $lock_key = eventosapp_reminder_lock_key($evento_id);
-    if (get_transient($lock_key)) return; // otro proceso corriendo
-    set_transient($lock_key, 1, 55); // bloquea ~1min
+    if (get_transient($lock_key)) return;
+    set_transient($lock_key,1,55);
 
     $key   = eventosapp_reminder_queue_key($evento_id);
-    $queue = get_option($key, []);
+    $queue = get_option($key,[]);
     if (!is_array($queue)) $queue = [];
 
     if (empty($queue)) {
-        // Fin: limpiar y desprogramar
         delete_option($key);
         delete_transient($lock_key);
         eventosapp_unschedule_event_reminder_jobs($evento_id);
-        update_post_meta($evento_id, '_eventosapp_reminder_done', current_time('mysql'));
+        // Marcar como completado en el log
+        $stats = get_post_meta($evento_id,'_eventosapp_reminder_dispatch_stats',true);
+        if (is_array($stats)) {
+            $stats['completed']    = true;
+            $stats['completed_at'] = current_time('mysql');
+            update_post_meta($evento_id,'_eventosapp_reminder_dispatch_stats',$stats);
+        }
+        update_post_meta($evento_id,'_eventosapp_reminder_done',current_time('mysql'));
         return;
     }
 
-    // Tamaño de lote (ritmo por minuto). Si no hay meta, usa el filtro/defecto 20.
-    $default_batch = intval(apply_filters('eventosapp_reminder_batch_size', 20));
-    $BATCH = intval(get_post_meta($evento_id, '_eventosapp_reminder_rate_per_minute', true));
+    $default_batch = intval(apply_filters('eventosapp_reminder_batch_size',20));
+    $BATCH = intval(get_post_meta($evento_id,'_eventosapp_reminder_rate_per_minute',true));
     if ($BATCH < 1) $BATCH = $default_batch;
 
     $to_process = array_splice($queue, 0, $BATCH);
 
-    $emoji       = '🔔';
     $event_title = get_the_title($evento_id);
-    $subject     = $emoji . ' RECORDATORIO: 🎟️ Hoy es el evento ' . $event_title;
+    $subject     = '🔔 RECORDATORIO: 🎟️ Hoy es el evento ' . $event_title;
 
     $sent_ok = 0; $sent_fail = 0;
 
     foreach ($to_process as $ticket_id) {
-        // doble chequeo por si ya se marcó
-        if (get_post_meta($ticket_id, '_eventosapp_ticket_reminder_sent', true)) {
-            continue;
-        }
-        // Enviar con subject de recordatorio y source 'reminder'
-        list($ok,) = eventosapp_send_ticket_email_now($ticket_id, [
+        if (get_post_meta($ticket_id,'_eventosapp_ticket_reminder_sent',true)) continue;
+
+        list($ok,) = eventosapp_send_ticket_email_now($ticket_id,[
             'subject' => $subject,
             'source'  => 'reminder',
             'force'   => true,
@@ -933,30 +955,40 @@ function eventosapp_process_event_reminder_queue_cb($evento_id){
 
         if ($ok) {
             $sent_ok++;
-            update_post_meta($ticket_id, '_eventosapp_ticket_reminder_sent', current_time('mysql'));
+            update_post_meta($ticket_id,'_eventosapp_ticket_reminder_sent',current_time('mysql'));
         } else {
             $sent_fail++;
         }
-
-        // Pequeño respiro entre envíos del mismo lote para no pegar picos
-        usleep(100000); // 0.1s aprox
+        usleep(100000);
     }
 
-    // Actualiza cola y métricas
-    update_option($key, $queue, false);
-    update_post_meta($evento_id, '_eventosapp_reminder_batch_last', [
-        'at'    => current_time('mysql'),
-        'ok'    => $sent_ok,
-        'fail'  => $sent_fail,
-        'left'  => count($queue),
-        'rate'  => $BATCH,
+    update_option($key,$queue,false);
+
+    // Métricas de lote (compatibilidad con código existente)
+    update_post_meta($evento_id,'_eventosapp_reminder_batch_last',[
+        'at'   => current_time('mysql'),
+        'ok'   => $sent_ok,
+        'fail' => $sent_fail,
+        'left' => count($queue),
+        'rate' => $BATCH,
     ]);
 
-    // Si terminó, desprograma
+    // Actualizar log del dispatch con totales acumulados
+    $stats = get_post_meta($evento_id,'_eventosapp_reminder_dispatch_stats',true);
+    if (is_array($stats)) {
+        $stats['sent_ok']   = intval($stats['sent_ok']   ?? 0) + $sent_ok;
+        $stats['sent_fail'] = intval($stats['sent_fail'] ?? 0) + $sent_fail;
+        if (empty($queue)) {
+            $stats['completed']    = true;
+            $stats['completed_at'] = current_time('mysql');
+        }
+        update_post_meta($evento_id,'_eventosapp_reminder_dispatch_stats',$stats);
+    }
+
     if (empty($queue)) {
         delete_option($key);
         eventosapp_unschedule_event_reminder_jobs($evento_id);
-        update_post_meta($evento_id, '_eventosapp_reminder_done', current_time('mysql'));
+        update_post_meta($evento_id,'_eventosapp_reminder_done',current_time('mysql'));
     }
 
     delete_transient($lock_key);
