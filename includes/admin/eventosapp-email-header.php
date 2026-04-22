@@ -57,6 +57,43 @@ add_action('add_meta_boxes', function(){
     );
 });
 
+/**
+ * Campos disponibles para filtros de segmentación del recordatorio.
+ */
+if ( ! function_exists('eventosapp_reminder_filter_fields') ) {
+    function eventosapp_reminder_filter_fields() {
+        return [
+            '_eventosapp_ticket_email_sent_status' => 'Estado de envío del correo',
+            '_eventosapp_asistente_nombre'          => 'Nombre',
+            '_eventosapp_asistente_apellido'        => 'Apellido',
+            '_eventosapp_asistente_email'           => 'Email',
+            '_eventosapp_asistente_cc'              => 'Cédula / ID',
+            '_eventosapp_asistente_empresa'         => 'Empresa',
+            '_eventosapp_asistente_cargo'           => 'Cargo',
+            '_eventosapp_asistente_localidad'       => 'Localidad',
+            '_eventosapp_asistente_tipo_entrada'    => 'Tipo de entrada',
+            '_eventosapp_creation_channel'          => 'Canal de creación',
+        ];
+    }
+}
+
+/**
+ * Operadores disponibles para filtros de segmentación del recordatorio.
+ */
+if ( ! function_exists('eventosapp_reminder_filter_operators') ) {
+    function eventosapp_reminder_filter_operators() {
+        return [
+            'equals'       => 'Es igual a',
+            'not_equals'   => 'No es igual a',
+            'contains'     => 'Contiene',
+            'not_contains' => 'No contiene',
+            'is_empty'     => 'Está vacío',
+            'is_not_empty' => 'No está vacío',
+        ];
+    }
+}
+
+
 function eventosapp_render_metabox_email_header($post){
     $url          = get_post_meta($post->ID, '_eventosapp_email_header_img', true) ?: '';
     $tpl_selected = get_post_meta($post->ID, '_eventosapp_email_tpl', true) ?: 'email-ticket.html';
@@ -75,6 +112,9 @@ function eventosapp_render_metabox_email_header($post){
     $rem_unit   = get_post_meta($post->ID, '_eventosapp_reminder_unit', true) ?: 'hours'; // minutes|hours|days
     $rem_rate   = get_post_meta($post->ID, '_eventosapp_reminder_rate_per_minute', true);
     $rem_rate   = ($rem_rate === '' || $rem_rate === null) ? 20 : max(1, intval($rem_rate));
+    // Filtros de segmentación del recordatorio
+    $rem_filters = get_post_meta( $post->ID, '_eventosapp_reminder_filters', true );
+    if ( ! is_array( $rem_filters ) ) $rem_filters = [];
 
     $fallback = 'https://eventosapp.com/wp-content/uploads/2025/08/header_ticket_gen.jpg';
     $templates = eventosapp_email_list_templates();
@@ -101,6 +141,13 @@ function eventosapp_render_metabox_email_header($post){
       /* Estilos para la imagen del mensaje adicional */
       .evapp-msg-img-wrap{background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:8px}
       .evapp-msg-img-wrap .preview{margin:8px 0;max-width:300px}
+    /* Filtros de segmentación del recordatorio */
+      .evapp-reminder-filters { margin-top:10px; border-top:1px dashed #d1d5db; padding-top:10px; }
+      .evapp-rem-filter-row { display:flex; gap:4px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
+      .evapp-rem-filter-row .evapp-rem-field    { flex:2; min-width:110px; }
+      .evapp-rem-filter-row .evapp-rem-operator { flex:1.8; min-width:110px; }
+      .evapp-rem-filter-row .evapp-rem-value    { flex:2; min-width:70px; }
+      .evapp-rem-filter-row .evapp-rem-del      { flex:0 0 auto; color:#c00; min-width:28px; text-align:center; }
     </style>
 
     <div class="evapp-hdr">
@@ -239,6 +286,50 @@ function eventosapp_render_metabox_email_header($post){
         ?>
         <div class="preview-line"><strong>Asunto del recordatorio:</strong> <?php echo esc_html($rem_subject); ?></div>
         <span class="muted">El remitente (From) será: <strong><?php echo $from_name ? esc_html($from_name) : esc_html(get_bloginfo('name')); ?></strong></span>
+      <!-- ===================================== -->
+      <!-- Segmentación / filtros del recordatorio -->
+      <!-- ===================================== -->
+      <div class="evapp-reminder-filters">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <strong style="font-size:12px;">🎯 Segmentación (filtros)</strong>
+          <button type="button" class="button button-small" id="evapp-add-rem-filter">+ Filtro</button>
+        </div>
+        <small style="color:#666;display:block;margin-bottom:7px;">
+          Sin filtros → llega a <em>todos</em> los tickets con email válido.<br>
+          Con filtros → solo a los tickets que cumplan <strong>todos</strong> (AND).
+        </small>
+
+        <div id="evapp-rem-filter-rows">
+          <?php
+          $no_val_ops = ['is_empty', 'is_not_empty'];
+          foreach ( $rem_filters as $idx => $rf ) :
+              $rf_field    = isset($rf['field'])    ? $rf['field']    : '';
+              $rf_operator = isset($rf['operator']) ? $rf['operator'] : 'equals';
+              $rf_value    = isset($rf['value'])    ? $rf['value']    : '';
+          ?>
+          <div class="evapp-rem-filter-row">
+            <select name="evapp_rem_filters[<?php echo intval($idx); ?>][field]" class="evapp-rem-field">
+              <?php foreach ( eventosapp_reminder_filter_fields() as $fkey => $flabel ) : ?>
+                <option value="<?php echo esc_attr($fkey); ?>" <?php selected($rf_field, $fkey); ?>><?php echo esc_html($flabel); ?></option>
+              <?php endforeach; ?>
+            </select>
+            <select name="evapp_rem_filters[<?php echo intval($idx); ?>][operator]" class="evapp-rem-operator">
+              <?php foreach ( eventosapp_reminder_filter_operators() as $okey => $olabel ) : ?>
+                <option value="<?php echo esc_attr($okey); ?>" <?php selected($rf_operator, $okey); ?>><?php echo esc_html($olabel); ?></option>
+              <?php endforeach; ?>
+            </select>
+            <input type="text"
+                   name="evapp_rem_filters[<?php echo intval($idx); ?>][value]"
+                   class="evapp-rem-value"
+                   value="<?php echo esc_attr($rf_value); ?>"
+                   placeholder="valor"
+                   style="<?php echo in_array($rf_operator, $no_val_ops, true) ? 'display:none;' : ''; ?>">
+            <button type="button" class="button button-small evapp-rem-del" style="color:#c00;" title="Eliminar filtro">✕</button>
+          </div>
+          <?php endforeach; ?>
+        </div>
+      </div>
+      <!-- /Segmentación filtros -->
       </div>
       <!-- /NUEVO: Recordatorio -->
     </div>
@@ -355,6 +446,77 @@ function eventosapp_render_metabox_email_header($post){
       }
       $('#evapp_reminder_enabled').on('change', toggleReminderFields);
       toggleReminderFields();
+
+        // =====================================
+      // Filtros de segmentación del recordatorio
+      // =====================================
+      (function(){
+        var remFilterIdx   = <?php echo max( count($rem_filters), 0 ); ?>;
+        var remFields      = <?php echo json_encode( eventosapp_reminder_filter_fields() ); ?>;
+        var remOps         = <?php echo json_encode( eventosapp_reminder_filter_operators() ); ?>;
+        var noValueOps     = ['is_empty', 'is_not_empty'];
+
+        function buildFieldOptions(selectedKey) {
+          var out = '';
+          $.each(remFields, function(k, v){
+            out += '<option value="'+k+'"'+(k===selectedKey?' selected':'')+'>'+v+'</option>';
+          });
+          return out;
+        }
+
+        function buildOpOptions(selectedKey) {
+          var out = '';
+          $.each(remOps, function(k, v){
+            out += '<option value="'+k+'"'+(k===selectedKey?' selected':'')+'>'+v+'</option>';
+          });
+          return out;
+        }
+
+        function buildFilterRow(idx) {
+          return $(
+            '<div class="evapp-rem-filter-row">' +
+              '<select name="evapp_rem_filters['+idx+'][field]" class="evapp-rem-field">' + buildFieldOptions('') + '</select>' +
+              '<select name="evapp_rem_filters['+idx+'][operator]" class="evapp-rem-operator">' + buildOpOptions('equals') + '</select>' +
+              '<input type="text" name="evapp_rem_filters['+idx+'][value]" class="evapp-rem-value" placeholder="valor">' +
+              '<button type="button" class="button button-small evapp-rem-del" style="color:#c00;" title="Eliminar">✕</button>' +
+            '</div>'
+          );
+        }
+
+        function syncValueVisibility($opSel) {
+          var op       = $opSel.val();
+          var $valInp  = $opSel.closest('.evapp-rem-filter-row').find('.evapp-rem-value');
+          if (noValueOps.indexOf(op) >= 0) {
+            $valInp.hide().val('');
+          } else {
+            $valInp.show();
+          }
+        }
+
+        // Agregar fila
+        $('#evapp-add-rem-filter').on('click', function(){
+          var $row = buildFilterRow(remFilterIdx++);
+          $('#evapp-rem-filter-rows').append($row);
+          syncValueVisibility($row.find('.evapp-rem-operator'));
+        });
+
+        // Eliminar fila
+        $(document).on('click', '.evapp-rem-del', function(){
+          $(this).closest('.evapp-rem-filter-row').remove();
+        });
+
+        // Cambio de operador → mostrar/ocultar campo valor
+        $(document).on('change', '.evapp-rem-operator', function(){
+          syncValueVisibility($(this));
+        });
+
+        // Inicializar visibilidad en filas ya renderizadas
+        $('.evapp-rem-filter-row .evapp-rem-operator').each(function(){
+          syncValueVisibility($(this));
+        });
+      })();
+      // /Filtros de segmentación
+
     })(jQuery);
     </script>
     <?php
@@ -380,9 +542,9 @@ add_action('save_post_eventosapp_event', function($post_id){
     else      delete_post_meta($post_id, '_eventosapp_email_header_img');
 
     // Plantilla
-    $tpl  = isset($_POST['eventosapp_email_tpl']) ? basename( sanitize_text_field( wp_unslash($_POST['eventosapp_email_tpl']) ) ) : '';
-    $dir  = eventosapp_email_templates_dir();
-    $ok   = $tpl && is_readable($dir . $tpl);
+    $tpl = isset($_POST['eventosapp_email_tpl']) ? basename(sanitize_text_field(wp_unslash($_POST['eventosapp_email_tpl']))) : '';
+    $dir = eventosapp_email_templates_dir();
+    $ok  = $tpl && is_readable($dir . $tpl);
     update_post_meta($post_id, '_eventosapp_email_tpl', $ok ? $tpl : 'email-ticket.html');
 
     // Asunto
@@ -405,9 +567,7 @@ add_action('save_post_eventosapp_event', function($post_id){
     if ($msg) update_post_meta($post_id, '_eventosapp_email_msg', $msg);
     else      delete_post_meta($post_id, '_eventosapp_email_msg');
 
-    // ==========================
-    // NUEVO: Imagen del mensaje adicional
-    // ==========================
+    // Imagen del mensaje adicional
     $msg_img = isset($_POST['eventosapp_email_msg_img']) ? trim(wp_unslash($_POST['eventosapp_email_msg_img'])) : '';
     $msg_img = esc_url_raw($msg_img);
     if ($msg_img) update_post_meta($post_id, '_eventosapp_email_msg_img', $msg_img);
@@ -419,14 +579,14 @@ add_action('save_post_eventosapp_event', function($post_id){
     if ($h_color) update_post_meta($post_id, '_eventosapp_email_heading_color', $h_color);
     else          delete_post_meta($post_id, '_eventosapp_email_heading_color');
 
-    // ==========================
-    // NUEVO: Guardado recordatorio
-    // ==========================
+    // ========================
+    // Recordatorio: habilitado
+    // ========================
     $rem_enabled = isset($_POST['eventosapp_reminder_enabled']) ? '1' : '0';
     update_post_meta($post_id, '_eventosapp_reminder_enabled', $rem_enabled);
 
     $amount = isset($_POST['eventosapp_reminder_amount']) ? intval($_POST['eventosapp_reminder_amount']) : 0;
-    if ($amount < 0) $amount = 0; // no negativos
+    if ($amount < 0) $amount = 0;
     if ($rem_enabled === '1') {
         update_post_meta($post_id, '_eventosapp_reminder_amount', $amount);
     } else {
@@ -434,31 +594,55 @@ add_action('save_post_eventosapp_event', function($post_id){
     }
 
     $unit = isset($_POST['eventosapp_reminder_unit']) ? sanitize_text_field($_POST['eventosapp_reminder_unit']) : 'hours';
-    $allowed = ['minutes','hours','days'];
-    if (!in_array($unit, $allowed, true)) $unit = 'hours';
+    if (!in_array($unit, ['minutes','hours','days'], true)) $unit = 'hours';
     if ($rem_enabled === '1') {
         update_post_meta($post_id, '_eventosapp_reminder_unit', $unit);
     } else {
         delete_post_meta($post_id, '_eventosapp_reminder_unit');
     }
 
-    // NUEVO: ritmo por minuto
     $rate = isset($_POST['eventosapp_reminder_rate']) ? intval($_POST['eventosapp_reminder_rate']) : 0;
     if ($rate < 1) $rate = 0;
     if ($rem_enabled === '1' && $rate > 0) {
-        // límite sano
         if ($rate > 500) $rate = 500;
         update_post_meta($post_id, '_eventosapp_reminder_rate_per_minute', $rate);
     } else {
         delete_post_meta($post_id, '_eventosapp_reminder_rate_per_minute');
     }
 
+    // =====================================================
+    // NUEVO: Filtros de segmentación del recordatorio
+    // =====================================================
+    $raw_filters       = ( isset($_POST['evapp_rem_filters']) && is_array($_POST['evapp_rem_filters']) )
+                         ? $_POST['evapp_rem_filters'] : [];
+    $allowed_fields    = array_keys( eventosapp_reminder_filter_fields() );
+    $allowed_operators = array_keys( eventosapp_reminder_filter_operators() );
+    $clean_filters     = [];
+
+    foreach ($raw_filters as $rf) {
+        if (!is_array($rf)) continue;
+        $field    = isset($rf['field'])    ? sanitize_key($rf['field'])                      : '';
+        $operator = isset($rf['operator']) ? sanitize_key($rf['operator'])                   : '';
+        $value    = isset($rf['value'])    ? sanitize_text_field(wp_unslash($rf['value']))   : '';
+
+        if (!in_array($field,    $allowed_fields,    true)) continue;
+        if (!in_array($operator, $allowed_operators, true)) continue;
+
+        // Para operadores sin valor, forzar cadena vacía
+        if (in_array($operator, ['is_empty','is_not_empty'], true)) $value = '';
+
+        $clean_filters[] = compact('field', 'operator', 'value');
+    }
+
+    if (!empty($clean_filters)) {
+        update_post_meta($post_id, '_eventosapp_reminder_filters', $clean_filters);
+    } else {
+        delete_post_meta($post_id, '_eventosapp_reminder_filters');
+    }
+    // /Filtros de segmentación
+
     // Programar/ajustar cron para el recordatorio de este evento
     if (function_exists('eventosapp_maybe_reschedule_event_reminder')) {
         eventosapp_maybe_reschedule_event_reminder($post_id);
     }
-
-    // Nota: El asunto del recordatorio se define así (cuando se envíe el recordatorio):
-    // '🔔 RECORDATORIO: Hoy es el evento ' . get_the_title($evento_id)
-    // y el From name será el mismo de _eventosapp_email_fromname.
 }, 25);
