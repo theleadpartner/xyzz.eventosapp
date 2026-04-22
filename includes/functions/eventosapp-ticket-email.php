@@ -767,7 +767,60 @@ function eventosapp_maybe_reschedule_event_reminder($evento_id){
     // Si el ts ya pasó, no hacemos nada (no disparo retroactivo)
 }
 
-/** Disparo único: construir cola con todos los tickets del evento y programar su procesamiento por lotes */
+
+/**
+ * Evalúa si un ticket pasa todos los filtros de segmentación configurados para el recordatorio.
+ * Se aplica lógica AND: el ticket debe cumplir TODOS los filtros para ser incluido.
+ *
+ * @param int   $ticket_id  ID del ticket (post).
+ * @param array $filters    Array de reglas: [['field'=>..., 'operator'=>..., 'value'=>...], ...]
+ * @return bool             true si pasa todos los filtros (o no hay filtros), false si falla alguno.
+ */
+function eventosapp_ticket_passes_reminder_filters( $ticket_id, $filters ) {
+    if ( empty($filters) || ! is_array($filters) ) return true;
+
+    foreach ( $filters as $f ) {
+        if ( empty($f['field']) || empty($f['operator']) ) continue;
+
+        $field    = sanitize_key( (string) $f['field'] );
+        $operator = sanitize_key( (string) $f['operator'] );
+        $rule_val = isset($f['value']) ? (string) $f['value'] : '';
+
+        // Obtener valor real del meta del ticket
+        $meta_val = (string) get_post_meta( $ticket_id, $field, true );
+
+        $passes = false;
+        switch ( $operator ) {
+            case 'equals':
+                $passes = ( strtolower(trim($meta_val)) === strtolower(trim($rule_val)) );
+                break;
+            case 'not_equals':
+                $passes = ( strtolower(trim($meta_val)) !== strtolower(trim($rule_val)) );
+                break;
+            case 'contains':
+                $passes = ( $rule_val !== '' && stripos($meta_val, $rule_val) !== false );
+                break;
+            case 'not_contains':
+                $passes = ( $rule_val === '' || stripos($meta_val, $rule_val) === false );
+                break;
+            case 'is_empty':
+                $passes = ( trim($meta_val) === '' );
+                break;
+            case 'is_not_empty':
+                $passes = ( trim($meta_val) !== '' );
+                break;
+            default:
+                $passes = true; // operador desconocido → no filtrar por seguridad
+        }
+
+        if ( ! $passes ) return false; // falla un filtro → ticket excluido
+    }
+
+    return true; // pasó todos
+}
+
+
+/** Disparo único: construir cola con tickets del evento (aplicando filtros de segmentación) y programar procesamiento por lotes */
 add_action('eventosapp_dispatch_event_reminder', 'eventosapp_dispatch_event_reminder_cb', 10, 1);
 function eventosapp_dispatch_event_reminder_cb($evento_id){
     $evento_id = intval($evento_id);
@@ -792,15 +845,25 @@ function eventosapp_dispatch_event_reminder_cb($evento_id){
 
     if (!is_array($tickets)) $tickets = [];
 
-    // Filtra por email válido y no enviados previamente
+    // Leer filtros de segmentación configurados para este evento
+    $rem_filters = get_post_meta($evento_id, '_eventosapp_reminder_filters', true);
+    if (!is_array($rem_filters)) $rem_filters = [];
+
+    // Construir cola: email válido + no enviado previamente + pasar filtros de segmentación
     $queue = [];
     foreach ($tickets as $tk) {
+        // Saltar si ya recibió el recordatorio
         $sent = get_post_meta($tk, '_eventosapp_ticket_reminder_sent', true);
         if ($sent) continue;
+
+        // Validar email
         $email = sanitize_email(get_post_meta($tk, '_eventosapp_asistente_email', true));
-        if ($email && is_email($email)) {
-            $queue[] = $tk;
-        }
+        if (!$email || !is_email($email)) continue;
+
+        // Aplicar filtros de segmentación (solo si hay filtros configurados)
+        if (!empty($rem_filters) && !eventosapp_ticket_passes_reminder_filters($tk, $rem_filters)) continue;
+
+        $queue[] = $tk;
     }
 
     // Guarda cola (opción sin autoload)
@@ -809,12 +872,12 @@ function eventosapp_dispatch_event_reminder_cb($evento_id){
     update_post_meta($evento_id, '_eventosapp_reminder_queue_begins', current_time('mysql'));
 
     if (!empty($queue)) {
-        // Programa procesador minutely si no está programado
+        // Programa procesador minutely si no está ya programado
         if (!wp_next_scheduled('eventosapp_process_event_reminder_queue', [$evento_id])) {
             wp_schedule_event(time() + 60, 'evapp_minutely', 'eventosapp_process_event_reminder_queue', [$evento_id]);
         }
     } else {
-        // Nada que procesar
+        // Nada que procesar (por filtros o sin tickets)
         update_post_meta($evento_id, '_eventosapp_reminder_done', current_time('mysql'));
     }
 }
