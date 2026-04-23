@@ -571,7 +571,7 @@ const d = resp.data || {};
         html += row('Localidad', d.localidad);
         html += '</div>';
 setOutput(html);
-        if (d.acompanantes_enabled) injectAcompanantesPanel(d.ticket_id);
+        if (d.acompanantes_enabled && !d.already) injectAcompanantesPanel(d.ticket_id);
         injectScanAgainButton(); // <-- aquí agregamos el botón
         smoothScrollTo(out);
       })
