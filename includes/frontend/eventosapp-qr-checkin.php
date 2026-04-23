@@ -2003,8 +2003,8 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     if (!is_array($checkin_ses)) $checkin_ses = [];
     $already = (isset($checkin_ses[$session]) && $checkin_ses[$session] === 'checked_in');
 
-    if ($already) {
-        'already'=>true]);
+if ($already) {
+        wp_send_json_success(['already'=>true]);
     }
 
     // Marcar como checked_in (idempotente)
@@ -2028,9 +2028,9 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
         'usuario' => $usuario,
         'origen'  => 'qr_sesion',
     ];
-    update_post_meta($ticket_id, '_eventosapp_checkin_log', $log);
+update_post_meta($ticket_id, '_eventosapp_checkin_log', $log);
 
-    'already'=>false, 'now'=>'checked_in']);
+    wp_send_json_success(['already'=>false, 'now'=>'checked_in']);
 });
 
 
@@ -2546,9 +2546,9 @@ function eventosapp_send_payment_reminder_callback() {
         
         update_post_meta($ticket_id, '_eventosapp_payment_reminder_log', $log);
         
-        error_log("EventosApp: Recordatorio de pago enviado al ticket ID $ticket_id - Email: $asistente_email");
-        
-        
+error_log("EventosApp: Recordatorio de pago enviado al ticket ID $ticket_id - Email: $asistente_email");
+
+        wp_send_json_success([
             'message' => 'Correo enviado exitosamente',
             'email' => $asistente_email,
             'ticket_id' => $ticket_id
