@@ -49,8 +49,10 @@ if ( function_exists('eventosapp_require_feature') ) {
         }
     });
 
-    // Nonce para AJAX
+// Nonce para AJAX
     $nonce = wp_create_nonce('eventosapp_qr_checkin');
+    // Nonce dedicado para registrar acompañantes
+    $companion_nonce = wp_create_nonce('eventosapp_registrar_acompanantes');
 
     ob_start(); ?>
     <style>
@@ -155,11 +157,62 @@ if ( function_exists('eventosapp_require_feature') ) {
       cursor: not-allowed;
     }
     
-    /* Animación de spinner */
+/* Animación de spinner */
     @keyframes spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
+
+    /* === Panel de acompañantes sin QR === */
+    .evapp-acomp-panel {
+      margin-top: 14px;
+      background: #0f1d3a;
+      border: 1px solid rgba(79,124,255,.35);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .evapp-acomp-label {
+      color: #a7b8ff;
+      font-size: .9rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .evapp-acomp-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .evapp-acomp-input {
+      flex: 0 0 90px;
+      background: #0b1020;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 8px;
+      color: #eaf1ff;
+      font-size: 1.1rem;
+      font-weight: 700;
+      padding: .5rem .7rem;
+      text-align: center;
+      -moz-appearance: textfield;
+    }
+    .evapp-acomp-input::-webkit-inner-spin-button,
+    .evapp-acomp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    .evapp-acomp-btn {
+      flex: 1;
+      background: #4f7cff;
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: .55rem .9rem;
+      font-weight: 700;
+      font-size: .9rem;
+      cursor: pointer;
+      transition: filter .15s;
+    }
+    .evapp-acomp-btn:hover:not(:disabled) { filter: brightness(1.08); }
+    .evapp-acomp-btn:disabled { opacity: .55; cursor: not-allowed; }
+    .evapp-acomp-status { margin-top: 8px; font-size: .88rem; }
+		
+    </style>
 		
     </style>
 
@@ -195,9 +248,10 @@ if ( function_exists('eventosapp_require_feature') ) {
 
 <script>
 (function(){
-  const ajaxURL   = "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
-  const ajaxNonce = "<?php echo esc_js( $nonce ); ?>";
-  const eventID   = parseInt(document.querySelector('.evapp-qr-shell').dataset.event,10)||0;
+const ajaxURL        = "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
+  const ajaxNonce      = "<?php echo esc_js( $nonce ); ?>";
+  const companionNonce = "<?php echo esc_js( $companion_nonce ); ?>";
+  const eventID        = parseInt(document.querySelector('.evapp-qr-shell').dataset.event,10)||0;
 
   const btn   = document.getElementById('evappStartScan');
   const video = document.getElementById('evappVideo');
@@ -344,7 +398,7 @@ if ( function_exists('eventosapp_require_feature') ) {
     requestAnimationFrame(tick);
   }
 
-  function injectScanAgainButton(){
+function injectScanAgainButton(){
     // Añade el botón "Escanear otro QR" bajo el resultado.
     const againBtn = document.createElement('button');
     againBtn.id = 'evappScanAnother';
@@ -365,6 +419,68 @@ if ( function_exists('eventosapp_require_feature') ) {
       // Si prefieres que SOLO haga scroll y el usuario pulse el botón principal,
       // comenta las líneas de start() y setOutput() arriba, dejando solo el scroll.
     }, { once:false });
+  }
+
+  /**
+   * Panel de acompañantes sin QR.
+   * Se inyecta debajo del resultado de check-in cuando el evento lo tiene activado.
+   */
+  function injectAcompanantesPanel(ticketId){
+    if (!ticketId) return;
+
+    const panel = document.createElement('div');
+    panel.className = 'evapp-acomp-panel';
+    panel.innerHTML =
+      '<div class="evapp-acomp-label">🧑‍🤝‍🧑 Acompañantes sin QR</div>' +
+      '<div class="evapp-acomp-row">' +
+        '<input type="number" class="evapp-acomp-input" id="evappAcompInput" min="0" max="500" step="1" value="0" placeholder="0">' +
+        '<button type="button" class="evapp-acomp-btn" id="evappAcompBtn">Registrar acompañantes</button>' +
+      '</div>' +
+      '<div class="evapp-acomp-status" id="evappAcompStatus"></div>';
+
+    out.appendChild(panel);
+
+    document.getElementById('evappAcompBtn').addEventListener('click', function(){
+      const cantidad = parseInt(document.getElementById('evappAcompInput').value, 10);
+      const statusEl = document.getElementById('evappAcompStatus');
+      const thisBtn  = this;
+
+      if (isNaN(cantidad) || cantidad < 0 || cantidad > 500) {
+        statusEl.innerHTML = '<span style="color:#ff6b6b;">❌ Ingresa un número válido (0–500).</span>';
+        return;
+      }
+
+      thisBtn.disabled = true;
+      thisBtn.textContent = 'Guardando…';
+      statusEl.innerHTML = '<span style="color:#a9b6d3;">Registrando…</span>';
+
+      const fd = new FormData();
+      fd.append('action',          'eventosapp_registrar_acompanantes');
+      fd.append('companion_nonce', companionNonce);
+      fd.append('ticket_id',       String(ticketId));
+      fd.append('cantidad',        String(cantidad));
+
+      fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
+        .then(r => r.json())
+        .then(resp => {
+          if (resp && resp.success) {
+            statusEl.innerHTML = '<span style="color:#7CFF8D;">✅ ' + cantidad + ' acompañante(s) registrado(s). Total acumulado: ' + (resp.data.total || cantidad) + '</span>';
+            thisBtn.textContent = '✓ Guardado';
+            document.getElementById('evappAcompInput').value = 0;
+            setTimeout(()=>{ thisBtn.disabled = false; thisBtn.textContent = 'Registrar acompañantes'; }, 3000);
+          } else {
+            const msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Error al guardar.';
+            statusEl.innerHTML = '<span style="color:#ff6b6b;">❌ ' + msg + '</span>';
+            thisBtn.disabled = false;
+            thisBtn.textContent = 'Reintentar';
+          }
+        })
+        .catch(() => {
+          statusEl.innerHTML = '<span style="color:#ff6b6b;">❌ Error de conexión.</span>';
+          thisBtn.disabled = false;
+          thisBtn.textContent = 'Reintentar';
+        });
+    });
   }
 
   function onScan(data){
@@ -454,7 +570,8 @@ const d = resp.data || {};
         html += row('Cargo', d.designation);
         html += row('Localidad', d.localidad);
         html += '</div>';
-        setOutput(html);
+setOutput(html);
+        if (d.acompanantes_enabled) injectAcompanantesPanel(d.ticket_id);
         injectScanAgainButton(); // <-- aquí agregamos el botón
         smoothScrollTo(out);
       })
@@ -758,18 +875,19 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     $role  = get_post_meta($ticket_post_id, '_eventosapp_asistente_cargo', true);
     $loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
 
-    wp_send_json_success([
-        'already'            => $already,
-        'full_name'          => trim($first.' '.$last),
-        'company'            => $comp,
-        'designation'        => $role,
-        'localidad'          => $loc,
-        'event_name'         => get_the_title($event_id),
-        'ticket_id'          => $ticket_post_id,
-        'checkin_date'       => $today,
-        'checkin_date_label' => date_i18n('D, d M Y', strtotime($today)),
-        'qr_type_label'      => $qr_type_label,  // NUEVO: Enviar tipo de QR al frontend
-        'payment_message'    => $mensaje_pago    // NUEVO: Mensaje de estado de pago
+
+        'already'              => $already,
+        'full_name'            => trim($first.' '.$last),
+        'company'              => $comp,
+        'designation'          => $role,
+        'localidad'            => $loc,
+        'event_name'           => get_the_title($event_id),
+        'ticket_id'            => $ticket_post_id,
+        'checkin_date'         => $today,
+        'checkin_date_label'   => date_i18n('D, d M Y', strtotime($today)),
+        'qr_type_label'        => $qr_type_label,
+        'payment_message'      => $mensaje_pago,
+        'acompanantes_enabled' => (get_post_meta($event_id, '_eventosapp_ticket_acompanantes_checkin', true) === '1'),
     ]);
 });
 
@@ -1276,7 +1394,7 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     $role  = get_post_meta($ticket_post_id, '_eventosapp_asistente_cargo', true);
     $loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
 
-    wp_send_json_success([
+    
         'full_name'   => trim($first.' '.$last),
         'company'     => $comp,
         'designation' => $role,
@@ -1829,7 +1947,7 @@ add_action('wp_ajax_eventosapp_qr_sesion_lookup', function(){
     if (!is_array($checkin_ses)) $checkin_ses = [];
     $status = isset($checkin_ses[$session]) ? $checkin_ses[$session] : 'not_checked_in';
 
-    wp_send_json_success([
+    
         'ticket_id'       => $ticket_post_id,
         'full_name'       => trim($first.' '.$last),
         'company'         => $comp,
@@ -1886,7 +2004,7 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     $already = (isset($checkin_ses[$session]) && $checkin_ses[$session] === 'checked_in');
 
     if ($already) {
-        wp_send_json_success(['already'=>true]);
+        'already'=>true]);
     }
 
     // Marcar como checked_in (idempotente)
@@ -1912,7 +2030,7 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     ];
     update_post_meta($ticket_id, '_eventosapp_checkin_log', $log);
 
-    wp_send_json_success(['already'=>false, 'now'=>'checked_in']);
+    'already'=>false, 'now'=>'checked_in']);
 });
 
 
@@ -2258,7 +2376,7 @@ function eventosapp_qr_contact_lookup_cb(){
     if (!$phone) $phone = get_post_meta($ticket_post_id, '_eventosapp_asistente_cel', true);
     if (!$phone) $phone = get_post_meta($ticket_post_id, '_eventosapp_asistente_celular', true);
 
-    wp_send_json_success([
+    
         'ticket_id'   => $ticket_post_id,
         'first_name'  => $first,
         'last_name'   => $last,
@@ -2430,7 +2548,7 @@ function eventosapp_send_payment_reminder_callback() {
         
         error_log("EventosApp: Recordatorio de pago enviado al ticket ID $ticket_id - Email: $asistente_email");
         
-        wp_send_json_success([
+        
             'message' => 'Correo enviado exitosamente',
             'email' => $asistente_email,
             'ticket_id' => $ticket_id
@@ -2442,4 +2560,64 @@ function eventosapp_send_payment_reminder_callback() {
             'message' => 'No se pudo enviar el correo. Por favor, intenta nuevamente.'
         ]);
     }
+}
+
+/**
+ * ========================================================================
+ * AJAX: Registrar acompañantes sin QR vinculados a un ticket de check-in
+ * ========================================================================
+ * Meta guardada: _eventosapp_ticket_acompanantes_sin_qr (total acumulado)
+ * Log guardado:  _eventosapp_ticket_acompanantes_log    (historial)
+ */
+add_action('wp_ajax_eventosapp_registrar_acompanantes', 'eventosapp_registrar_acompanantes_callback');
+function eventosapp_registrar_acompanantes_callback() {
+    // Verificar nonce dedicado
+    check_ajax_referer('eventosapp_registrar_acompanantes', 'companion_nonce');
+
+    // Verificar login y permisos mínimos
+    if ( ! is_user_logged_in() ) {
+        wp_send_json_error(['message' => 'Debes iniciar sesión.'], 401);
+    }
+    $can_qr     = function_exists('eventosapp_role_can') && eventosapp_role_can('qr');
+    $can_search = function_exists('eventosapp_role_can') && eventosapp_role_can('search');
+    if ( ! $can_qr && ! $can_search ) {
+        wp_send_json_error(['message' => 'Permisos insuficientes.'], 403);
+    }
+
+    $ticket_id = isset($_POST['ticket_id']) ? absint($_POST['ticket_id']) : 0;
+    $cantidad  = isset($_POST['cantidad'])  ? absint($_POST['cantidad'])  : 0;
+
+    if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
+        wp_send_json_error(['message' => 'Ticket inválido.']);
+    }
+    if ( $cantidad < 0 || $cantidad > 500 ) {
+        wp_send_json_error(['message' => 'Cantidad inválida (0–500).']);
+    }
+
+    // Acumular total en el meta del ticket
+    $current_total = (int) get_post_meta($ticket_id, '_eventosapp_ticket_acompanantes_sin_qr', true);
+    $new_total     = $current_total + $cantidad;
+    update_post_meta($ticket_id, '_eventosapp_ticket_acompanantes_sin_qr', $new_total);
+
+    // Log del registro
+    $log = get_post_meta($ticket_id, '_eventosapp_ticket_acompanantes_log', true);
+    if ( ! is_array($log) ) $log = [];
+    $user = wp_get_current_user();
+    $log[] = [
+        'fecha'    => current_time('Y-m-d'),
+        'hora'     => current_time('H:i:s'),
+        'cantidad' => $cantidad,
+        'total'    => $new_total,
+        'usuario'  => ( $user && $user->exists() ) ? $user->display_name . ' (' . $user->user_email . ')' : 'Sistema',
+    ];
+    update_post_meta($ticket_id, '_eventosapp_ticket_acompanantes_log', $log);
+
+    error_log("EventosApp: Acompañantes sin QR registrados — Ticket ID $ticket_id, Cantidad: $cantidad, Total acumulado: $new_total");
+
+    wp_send_json_success([
+        'message'   => 'Acompañantes registrados correctamente.',
+        'cantidad'  => $cantidad,
+        'total'     => $new_total,
+        'ticket_id' => $ticket_id,
+    ]);
 }
