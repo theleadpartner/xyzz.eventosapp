@@ -276,36 +276,72 @@ function evapp_ticket_id_by_serial($serial){
 
 /** Push APNs a todos los dispositivos registrados de un ticket */
 function evapp_pkws_push_ticket_update($ticket_id){
-    $cfg = evapp_pkws_cfg();
+    $cfg  = evapp_pkws_cfg();
     $devs = get_post_meta($ticket_id, '_evapp_pk_devices', true);
-    if (!is_array($devs) || !$devs) {
+    if (!is_array($devs) || empty($devs)) {
         return;
     }
 
-    $host = ($cfg['env']==='production') ? 'https://api.push.apple.com' : 'https://api.sandbox.push.apple.com';
-    $topic = $cfg['pass_type_id'];
+    $host  = ($cfg['env'] === 'production')
+            ? 'https://api.push.apple.com'
+            : 'https://api.sandbox.push.apple.com';
+    $topic = $cfg['pass_type_id'] ?? '';
 
-    // Para HTTP/2 con certificado cliente, necesitamos un PEM combinado (cert+key).
-    // Lo generamos (y cacheamos) a partir del .p12
+    if (!$topic) {
+        error_log("EVENTOSAPP APNs ticket:$ticket_id — pass_type_id vacío, push cancelado.");
+        return;
+    }
+
+    // PEM combinado (cert + key) generado/cacheado desde el .p12
     $pem = evapp_p12_to_pem_cached($cfg['p12_path'], $cfg['p12_pass']);
     if (!$pem) {
+        error_log("EVENTOSAPP APNs ticket:$ticket_id — PEM no disponible (revisa p12_path y p12_pass en Integraciones).");
         return;
     }
 
-    foreach ($devs as $deviceId => $info){
+    foreach ($devs as $deviceId => $info) {
         $token = $info['pushToken'] ?? '';
         if (!$token) continue;
 
         $url = $host . '/3/device/' . $token;
-        $ch = curl_init($url);
+        $ch  = curl_init($url);
+
         curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['apns-topic: '.$topic]);
-        curl_setopt($ch, CURLOPT_SSLCERT, $pem);            // cert+key
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, '');           // vacío para PassKit
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'apns-topic: '      . $topic,
+            'apns-push-type: background',  // OBLIGATORIO iOS 13+; PassKit siempre es background
+            'apns-priority: 5',            // 5 = low/background (correcto para PassKit; 10 sería incorrecto)
+            'apns-expiration: 0',          // No almacenar si el dispositivo está offline
+            'Content-Type: application/json',
+        ]);
+        // Certificado (parte pública del PEM combinado)
+        curl_setopt($ch, CURLOPT_SSLCERT,        $pem);
+        curl_setopt($ch, CURLOPT_SSLCERTTYPE,    'PEM');
+        // Clave privada (misma ruta: PEM combinado cert+key)
+        curl_setopt($ch, CURLOPT_SSLKEY,         $pem);
+        curl_setopt($ch, CURLOPT_SSLKEYTYPE,     'PEM');
+        curl_setopt($ch, CURLOPT_POST,           true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS,     '{}');   // PassKit requiere {} — NO cadena vacía
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_exec($ch);
+        curl_setopt($ch, CURLOPT_TIMEOUT,        15);
+
+        $body     = curl_exec($ch);
+        $httpcode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlerr  = curl_error($ch);
         curl_close($ch);
+
+        if ($curlerr || $httpcode !== 200) {
+            error_log(sprintf(
+                'EVENTOSAPP APNs ERROR ticket:%d device:%s HTTP:%d curl_error:%s body:%s',
+                (int) $ticket_id,
+                substr((string) $deviceId, 0, 24),
+                $httpcode,
+                $curlerr,
+                substr((string) $body, 0, 300)
+            ));
+        } else {
+            error_log("EVENTOSAPP APNs OK ticket:$ticket_id HTTP:$httpcode");
+        }
     }
 }
 
