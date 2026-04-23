@@ -169,11 +169,15 @@ function evapp_wps_dispatch_push( $push_id ) {
  * ============================================================ */
 
 /**
- * Envía addMessage (TEXT_AND_NOTIFY) a la clase del evento en Google Wallet
- * Y también a cada objeto individual para garantizar la notificación push en el SO Android.
+ * Envía addMessage (TEXT_AND_NOTIFY) a la clase del evento en Google Wallet.
+ * Un único call de API a nivel de Clase es suficiente: Google distribuye la
+ * notificación push vía FCM a todos los dispositivos que tengan un pase de
+ * esa clase guardado.
  *
- * - Clase: el mensaje aparece en la sección de mensajes dentro de la app Wallet (todos los portadores).
- * - Objeto: dispara la notificación push visible en el centro de notificaciones del SO vía FCM.
+ * NOTA DE PLATAFORMA: El texto visible en la barra de notificaciones del SO
+ * Android ("Mensaje nuevo / Presiona para ver el pase") es hardcoded por
+ * Google Wallet. Los campos header y body de nuestro mensaje SÍ son visibles
+ * dentro del pase cuando el usuario lo abre desde la notificación.
  *
  * Retorna ['ok' => bool, 'error' => string|null].
  */
@@ -212,17 +216,11 @@ function evapp_wps_dispatch_google( $evento_id, $mensaje ) {
         return [ 'ok' => false, 'error' => 'No se pudo obtener access token de Google' ];
     }
 
-    $common_headers = [
-        'Authorization' => 'Bearer ' . $token,
-        'Content-Type'  => 'application/json',
-    ];
-
-    // ID base del mensaje (único por envío)
-    $msg_id = 'evapp-push-' . time() . '-' . $evento_id;
-
-    // ── 1) addMessage a nivel de CLASE ──────────────────────────────────────────
-    // Propaga el mensaje in-app a todos los portadores de objetos de esta clase.
-    $class_payload = [
+    // addMessage a nivel de CLASE con TEXT_AND_NOTIFY
+    // Google distribuye la notificación push a todos los portadores de esta clase via FCM.
+    // Un solo call; no se necesita iterar por cada ticket/objeto (evita duplicados).
+    $msg_id  = 'evapp-push-' . time() . '-' . $evento_id;
+    $payload = [
         'message' => [
             'header'      => get_the_title( $evento_id ),
             'body'        => sanitize_text_field( $mensaje ),
@@ -231,99 +229,33 @@ function evapp_wps_dispatch_google( $evento_id, $mensaje ) {
         ],
     ];
 
-    $class_endpoint = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketClass/'
-                    . rawurlencode( $class_id ) . '/addMessage';
+    $endpoint = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketClass/'
+              . rawurlencode( $class_id ) . '/addMessage';
 
-    $class_response = wp_remote_post( $class_endpoint, [
+    $response = wp_remote_post( $endpoint, [
         'timeout' => 20,
-        'headers' => $common_headers,
-        'body'    => wp_json_encode( $class_payload ),
+        'headers' => [
+            'Authorization' => 'Bearer ' . $token,
+            'Content-Type'  => 'application/json',
+        ],
+        'body' => wp_json_encode( $payload ),
     ] );
 
-    if ( is_wp_error( $class_response ) ) {
-        $err = $class_response->get_error_message();
+    if ( is_wp_error( $response ) ) {
+        $err = $response->get_error_message();
         error_log( "EVENTOSAPP GW PUSH clase:$class_id wp_error:$err" );
         return [ 'ok' => false, 'error' => $err ];
     }
 
-    $class_code = wp_remote_retrieve_response_code( $class_response );
-    if ( $class_code < 200 || $class_code >= 300 ) {
-        $class_body = wp_remote_retrieve_body( $class_response );
-        $err        = "HTTP $class_code: " . wp_strip_all_tags( $class_body );
+    $code = wp_remote_retrieve_response_code( $response );
+    if ( $code < 200 || $code >= 300 ) {
+        $body = wp_remote_retrieve_body( $response );
+        $err  = "HTTP $code: " . wp_strip_all_tags( $body );
         error_log( "EVENTOSAPP GW PUSH clase:$class_id error:$err" );
         return [ 'ok' => false, 'error' => $err ];
     }
 
-    error_log( "EVENTOSAPP GW PUSH clase:$class_id OK HTTP:$class_code" );
-
-    // ── 2) addMessage a nivel de OBJETO (por ticket) ─────────────────────────────
-    // La notificación a nivel de clase entrega el mensaje in-app pero no siempre
-    // dispara la notificación push del SO Android. El nivel de objeto envía vía FCM
-    // al dispositivo específico que tiene ese pase, activando la notificación visible
-    // en el centro de notificaciones.
-    // Límite: 150 tickets por ejecución para evitar timeouts de PHP.
-    $tickets = get_posts( [
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'any',
-        'fields'         => 'ids',
-        'posts_per_page' => 150,
-        'meta_query'     => [
-            'relation' => 'AND',
-            [
-                'key'   => '_eventosapp_ticket_evento_id',
-                'value' => (int) $evento_id,
-            ],
-            [
-                'key'     => '_eventosapp_ticket_wallet_android_url',
-                'compare' => 'EXISTS',
-            ],
-            [
-                'key'     => 'eventosapp_ticketID',
-                'compare' => 'EXISTS',
-            ],
-        ],
-        'no_found_rows' => true,
-    ] );
-
-    $obj_endpoint_base = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketObject/';
-    $obj_ok            = 0;
-    $obj_err           = 0;
-
-    foreach ( $tickets as $ticket_id ) {
-        $unique_id = get_post_meta( (int) $ticket_id, 'eventosapp_ticketID', true );
-        if ( ! $unique_id ) continue;
-
-        $object_id   = $issuer_id . '.' . $unique_id;
-        $obj_payload = [
-            'message' => [
-                'header'      => get_the_title( $evento_id ),
-                'body'        => sanitize_text_field( $mensaje ),
-                'id'          => $msg_id . '-' . $unique_id,
-                'messageType' => 'TEXT_AND_NOTIFY',
-            ],
-        ];
-
-        $obj_res  = wp_remote_post( $obj_endpoint_base . rawurlencode( $object_id ) . '/addMessage', [
-            'timeout' => 8,
-            'headers' => $common_headers,
-            'body'    => wp_json_encode( $obj_payload ),
-        ] );
-
-        if ( is_wp_error( $obj_res ) ) {
-            $obj_err++;
-            error_log( "EVENTOSAPP GW PUSH obj:$object_id wp_error:" . $obj_res->get_error_message() );
-        } else {
-            $ocode = wp_remote_retrieve_response_code( $obj_res );
-            if ( $ocode >= 200 && $ocode < 300 ) {
-                $obj_ok++;
-            } else {
-                $obj_err++;
-                error_log( "EVENTOSAPP GW PUSH obj:$object_id HTTP:$ocode body:" . substr( wp_remote_retrieve_body( $obj_res ), 0, 200 ) );
-            }
-        }
-    }
-
-    error_log( "EVENTOSAPP GW PUSH evento:$evento_id clase:OK obj_ok:$obj_ok obj_err:$obj_err total_tickets:" . count( $tickets ) );
+    error_log( "EVENTOSAPP GW PUSH evento:$evento_id clase:$class_id OK HTTP:$code msg_id:$msg_id" );
 
     return [ 'ok' => true, 'error' => null ];
 }
