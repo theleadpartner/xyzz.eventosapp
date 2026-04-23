@@ -873,9 +873,9 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     $last  = get_post_meta($ticket_post_id, '_eventosapp_asistente_apellido', true);
     $comp  = get_post_meta($ticket_post_id, '_eventosapp_asistente_empresa', true);
     $role  = get_post_meta($ticket_post_id, '_eventosapp_asistente_cargo', true);
-    $loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
+$loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
 
-
+    wp_send_json_success([
         'already'              => $already,
         'full_name'            => trim($first.' '.$last),
         'company'              => $comp,
