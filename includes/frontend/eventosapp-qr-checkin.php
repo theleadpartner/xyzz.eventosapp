@@ -1392,9 +1392,9 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
     $last  = get_post_meta($ticket_post_id, '_eventosapp_asistente_apellido', true);
     $comp  = get_post_meta($ticket_post_id, '_eventosapp_asistente_empresa', true);
     $role  = get_post_meta($ticket_post_id, '_eventosapp_asistente_cargo', true);
-    $loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
+$loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
 
-    
+    wp_send_json_success([
         'full_name'   => trim($first.' '.$last),
         'company'     => $comp,
         'designation' => $role,
@@ -1943,11 +1943,11 @@ add_action('wp_ajax_eventosapp_qr_sesion_lookup', function(){
         ? eventosapp_ticket_tiene_acceso($ticket_post_id, $session)
         : false;
 
-    $checkin_ses = get_post_meta($ticket_post_id, '_eventosapp_ticket_checkin_sesiones', true);
+$checkin_ses = get_post_meta($ticket_post_id, '_eventosapp_ticket_checkin_sesiones', true);
     if (!is_array($checkin_ses)) $checkin_ses = [];
     $status = isset($checkin_ses[$session]) ? $checkin_ses[$session] : 'not_checked_in';
 
-    
+    wp_send_json_success([
         'ticket_id'       => $ticket_post_id,
         'full_name'       => trim($first.' '.$last),
         'company'         => $comp,
@@ -2374,9 +2374,9 @@ function eventosapp_qr_contact_lookup_cb(){
     $phone = get_post_meta($ticket_post_id, '_eventosapp_asistente_tel', true);
     if (!$phone) $phone = get_post_meta($ticket_post_id, '_eventosapp_asistente_telefono', true);
     if (!$phone) $phone = get_post_meta($ticket_post_id, '_eventosapp_asistente_cel', true);
-    if (!$phone) $phone = get_post_meta($ticket_post_id, '_eventosapp_asistente_celular', true);
+if (!$phone) $phone = get_post_meta($ticket_post_id, '_eventosapp_asistente_celular', true);
 
-    
+    wp_send_json_success([
         'ticket_id'   => $ticket_post_id,
         'first_name'  => $first,
         'last_name'   => $last,
