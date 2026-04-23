@@ -169,15 +169,18 @@ function evapp_wps_dispatch_push( $push_id ) {
  * ============================================================ */
 
 /**
- * Envía addMessage (TEXT_AND_NOTIFY) a la clase del evento en Google Wallet.
- * Un único call de API a nivel de Clase es suficiente: Google distribuye la
- * notificación push vía FCM a todos los dispositivos que tengan un pase de
- * esa clase guardado.
+ * Envía addMessage (TEXT_AND_NOTIFY) a cada objeto/ticket individual en Google Wallet.
  *
- * NOTA DE PLATAFORMA: El texto visible en la barra de notificaciones del SO
- * Android ("Mensaje nuevo / Presiona para ver el pase") es hardcoded por
- * Google Wallet. Los campos header y body de nuestro mensaje SÍ son visibles
- * dentro del pase cuando el usuario lo abre desde la notificación.
+ * COMPORTAMIENTO CONFIRMADO POR PRUEBAS:
+ * - addMessage a nivel de CLASE → API devuelve 200 pero NO dispara notificación push
+ *   en el dispositivo Android. Solo deposita el mensaje dentro del pase.
+ * - addMessage a nivel de OBJETO → SÍ dispara la notificación push visible en el
+ *   centro de notificaciones del SO Android vía FCM de Google.
+ *
+ * Por lo tanto se itera por cada ticket del evento que tenga un objeto en Google Wallet
+ * y se envía addMessage individual. Límite: 150 tickets por ejecución para evitar
+ * timeouts de PHP. El texto de la notificación ("Mensaje nuevo / Presiona para ver el
+ * pase") es hardcoded por Google Wallet y no puede ser personalizado desde esta API.
  *
  * Retorna ['ok' => bool, 'error' => string|null].
  */
@@ -191,24 +194,6 @@ function evapp_wps_dispatch_google( $evento_id, $mensaje ) {
         return [ 'ok' => false, 'error' => 'issuer_id no configurado' ];
     }
 
-    // Resolver class_id del evento (misma lógica que google-wallet-android.php)
-    $wallet_custom    = get_post_meta( $evento_id, '_eventosapp_wallet_custom_enable', true ) === '1';
-    $class_id_event   = $wallet_custom ? trim( (string) get_post_meta( $evento_id, '_eventosapp_wallet_class_id', true ) ) : '';
-    $class_id_default = trim( (string) get_option('eventosapp_wallet_class_id', '') );
-
-    if ( $class_id_event !== '' ) {
-        $class_id = $class_id_event;
-    } elseif ( $class_id_default !== '' ) {
-        $class_id = $class_id_default;
-    } else {
-        $class_id = 'event_' . $evento_id;
-    }
-
-    // Asegurar prefijo issuer_id
-    if ( strpos( $class_id, '.' ) === false ) {
-        $class_id = $issuer_id . '.' . ltrim( $class_id, '.' );
-    }
-
     // Obtener token de acceso
     $token_res = eventosapp_google_wallet_get_access_token();
     $token     = $token_res['token'] ?? null;
@@ -216,48 +201,93 @@ function evapp_wps_dispatch_google( $evento_id, $mensaje ) {
         return [ 'ok' => false, 'error' => 'No se pudo obtener access token de Google' ];
     }
 
-    // addMessage a nivel de CLASE con TEXT_AND_NOTIFY
-    // Google distribuye la notificación push a todos los portadores de esta clase via FCM.
-    // Un solo call; no se necesita iterar por cada ticket/objeto (evita duplicados).
-    $msg_id  = 'evapp-push-' . time() . '-' . $evento_id;
-    $payload = [
-        'message' => [
-            'header'      => get_the_title( $evento_id ),
-            'body'        => sanitize_text_field( $mensaje ),
-            'id'          => $msg_id,
-            'messageType' => 'TEXT_AND_NOTIFY',
-        ],
+    $common_headers = [
+        'Authorization' => 'Bearer ' . $token,
+        'Content-Type'  => 'application/json',
     ];
 
-    $endpoint = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketClass/'
-              . rawurlencode( $class_id ) . '/addMessage';
+    // ID base del mensaje (único por envío)
+    $msg_id = 'evapp-push-' . time() . '-' . $evento_id;
 
-    $response = wp_remote_post( $endpoint, [
-        'timeout' => 20,
-        'headers' => [
-            'Authorization' => 'Bearer ' . $token,
-            'Content-Type'  => 'application/json',
+    // Obtener tickets del evento que tengan objeto en Google Wallet (url + ticketID)
+    // Límite 150 para evitar timeout de PHP; para eventos grandes se debería paginar en futuro.
+    $tickets = get_posts( [
+        'post_type'      => 'eventosapp_ticket',
+        'post_status'    => 'any',
+        'fields'         => 'ids',
+        'posts_per_page' => 150,
+        'meta_query'     => [
+            'relation' => 'AND',
+            [
+                'key'   => '_eventosapp_ticket_evento_id',
+                'value' => (int) $evento_id,
+            ],
+            [
+                'key'     => '_eventosapp_ticket_wallet_android_url',
+                'compare' => 'EXISTS',
+            ],
+            [
+                'key'     => 'eventosapp_ticketID',
+                'compare' => 'EXISTS',
+            ],
         ],
-        'body' => wp_json_encode( $payload ),
+        'no_found_rows' => true,
     ] );
 
-    if ( is_wp_error( $response ) ) {
-        $err = $response->get_error_message();
-        error_log( "EVENTOSAPP GW PUSH clase:$class_id wp_error:$err" );
-        return [ 'ok' => false, 'error' => $err ];
+    if ( empty( $tickets ) ) {
+        error_log( "EVENTOSAPP GW PUSH evento:$evento_id — sin tickets con Google Wallet generado." );
+        return [ 'ok' => true, 'error' => null ]; // OK pero sin destinatarios
     }
 
-    $code = wp_remote_retrieve_response_code( $response );
-    if ( $code < 200 || $code >= 300 ) {
-        $body = wp_remote_retrieve_body( $response );
-        $err  = "HTTP $code: " . wp_strip_all_tags( $body );
-        error_log( "EVENTOSAPP GW PUSH clase:$class_id error:$err" );
-        return [ 'ok' => false, 'error' => $err ];
+    $obj_endpoint_base = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketObject/';
+    $obj_ok  = 0;
+    $obj_err = 0;
+
+    foreach ( $tickets as $ticket_id ) {
+        $unique_id = get_post_meta( (int) $ticket_id, 'eventosapp_ticketID', true );
+        if ( ! $unique_id ) continue;
+
+        $object_id   = $issuer_id . '.' . $unique_id;
+        $obj_payload = [
+            'message' => [
+                'header'      => get_the_title( $evento_id ),
+                'body'        => sanitize_text_field( $mensaje ),
+                'id'          => $msg_id . '-' . $unique_id,
+                'messageType' => 'TEXT_AND_NOTIFY',
+            ],
+        ];
+
+        $obj_res = wp_remote_post(
+            $obj_endpoint_base . rawurlencode( $object_id ) . '/addMessage',
+            [
+                'timeout' => 8,
+                'headers' => $common_headers,
+                'body'    => wp_json_encode( $obj_payload ),
+            ]
+        );
+
+        if ( is_wp_error( $obj_res ) ) {
+            $obj_err++;
+            error_log( "EVENTOSAPP GW PUSH obj:$object_id wp_error:" . $obj_res->get_error_message() );
+        } else {
+            $ocode = wp_remote_retrieve_response_code( $obj_res );
+            if ( $ocode >= 200 && $ocode < 300 ) {
+                $obj_ok++;
+            } else {
+                $obj_err++;
+                error_log( "EVENTOSAPP GW PUSH obj:$object_id HTTP:$ocode body:" . substr( wp_remote_retrieve_body( $obj_res ), 0, 200 ) );
+            }
+        }
     }
 
-    error_log( "EVENTOSAPP GW PUSH evento:$evento_id clase:$class_id OK HTTP:$code msg_id:$msg_id" );
+    error_log( "EVENTOSAPP GW PUSH evento:$evento_id obj_ok:$obj_ok obj_err:$obj_err total_procesados:" . count( $tickets ) );
 
-    return [ 'ok' => true, 'error' => null ];
+    // Considerar éxito si al menos 1 objeto recibió el mensaje
+    if ( $obj_ok > 0 ) {
+        return [ 'ok' => true, 'error' => null ];
+    }
+
+    return [ 'ok' => false, 'error' => "Ningún objeto recibió el mensaje (ok:0 err:$obj_err)" ];
 }
 
 /* ============================================================
