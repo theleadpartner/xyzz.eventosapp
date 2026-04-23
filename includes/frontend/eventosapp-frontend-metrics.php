@@ -1214,8 +1214,11 @@ $headers[] = 'Fecha creación';
     $headers[] = 'Fecha del Último Envío';
     $headers[] = 'Canal de Envío';
     
-    // NUEVO: Encabezado para medio de check-in
+// Encabezado para medio de check-in
     $headers[] = 'Medio de Check-in';
+
+    // NUEVO: Acompañantes sin QR
+    $headers[] = 'Acompañantes sin QR';
 
     // === 5) Filas
     $dataRows = [];
@@ -1403,9 +1406,13 @@ $headers[] = 'Fecha creación';
             ? $email_source_labels[$email_source_raw]
             : ($email_source_raw ?: '');
         
-        // Medio de check-in
+// Medio de check-in
         $row[] = (string)$qr_type_checkin;
-        
+
+        // NUEVO: Acompañantes sin QR (total acumulado del ticket)
+        $acompanantes_total = (int) get_post_meta($tid, '_eventosapp_ticket_acompanantes_sin_qr', true);
+        $row[] = $acompanantes_total > 0 ? (string)$acompanantes_total : '0';
+
         $dataRows[] = $row;
     }
 
