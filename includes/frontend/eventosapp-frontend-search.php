@@ -83,12 +83,13 @@ wp_register_script('eventosapp-front-search', '', ['jquery'], null, true);
 
 // Variables para el JS
 wp_localize_script('eventosapp-front-search', 'EvFrontSearch', [
-    'ajax_url'      => admin_url('admin-ajax.php'),
-    'search_nonce'  => wp_create_nonce('eventosapp_front_search'),
-    'toggle_nonce'  => wp_create_nonce('eventosapp_toggle_checkin'),
-    'print_nonce'   => wp_create_nonce('eventosapp_render_badge'),
-    'event_id'      => $eid,
-    'msgs'          => [
+    'ajax_url'           => admin_url('admin-ajax.php'),
+    'search_nonce'       => wp_create_nonce('eventosapp_front_search'),
+    'toggle_nonce'       => wp_create_nonce('eventosapp_toggle_checkin'),
+    'print_nonce'        => wp_create_nonce('eventosapp_render_badge'),
+    'acompanantes_nonce' => wp_create_nonce('eventosapp_registrar_acompanantes'),
+    'event_id'           => $eid,
+    'msgs'               => [
         'not_allowed' => __('El check-in solo está permitido en las fechas del evento. Hoy no corresponde.', 'eventosapp'),
         'net_error'   => __('Error de red. Intenta de nuevo.', 'eventosapp')
     ]
@@ -111,6 +112,15 @@ $css = <<<CSS
 .evfs-note{position:absolute;bottom:-6px;right:0;transform:translateY(100%);font-size:.9rem;padding:.35rem .55rem;border-radius:6px;background:#ffe9e9;color:#9a2424;border:1px solid #ffd3d3}
 .evfs-note.ok{background:#e9ffe9;color:#1e6f2b;border-color:#c9f2c9}
 .evfs-check[disabled]{opacity:.55;cursor:not-allowed;filter:grayscale(20%)}
+.evfs-acomp-panel{margin-top:8px;background:#eaf3ff;border:1px solid #b3d4f5;border-radius:10px;padding:10px 12px;width:100%}
+.evfs-acomp-label{font-size:.85rem;font-weight:600;color:#1e4a80;margin-bottom:6px}
+.evfs-acomp-row{display:flex;gap:6px;align-items:center}
+.evfs-acomp-input{flex:0 0 70px;border:1px solid #b3d4f5;border-radius:6px;padding:.35rem .5rem;font-size:1rem;font-weight:700;text-align:center;-moz-appearance:textfield}
+.evfs-acomp-input::-webkit-inner-spin-button,.evfs-acomp-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.evfs-acomp-btn{flex:1;background:#3782C4;color:#fff;border:0;border-radius:6px;padding:.35rem .7rem;font-size:.85rem;font-weight:700;cursor:pointer;transition:filter .15s}
+.evfs-acomp-btn:hover:not(:disabled){filter:brightness(1.1)}
+.evfs-acomp-btn:disabled{opacity:.55;cursor:not-allowed}
+.evfs-acomp-status{margin-top:5px;font-size:.82rem}
 @media(max-width:600px){
   .evfs-row{flex-direction:column}
   .evfs-actions{flex-direction:row;align-items:stretch;width:100%;justify-content:stretch}
@@ -189,7 +199,7 @@ jQuery(function($){
     }, 250);
   });
 
-  // Toggle check-in
+// Toggle check-in
   $(document).on('click','.evfs-check', function(){
     var $b = $(this), id = $b.data('ticket-id');
     $.post(EvFrontSearch.ajax_url, {
@@ -198,7 +208,33 @@ jQuery(function($){
       ticket_id: id
     }, function(resp){
       if(resp && resp.success){
-        $b.attr('aria-checked', (resp.data.today_status==='checked_in') ? 'true' : 'false').text((resp.data.today_status==='checked_in') ? '✓ Checked In' : 'Check In');
+        var newStatus = resp.data.today_status;
+        $b.attr('aria-checked', newStatus === 'checked_in' ? 'true' : 'false')
+          .text(newStatus === 'checked_in' ? '✓ Checked In' : 'Check In');
+
+        // Panel de acompañantes: solo al hacer check-in (no al revertir)
+        if (newStatus === 'checked_in' && resp.data.acompanantes_enabled && resp.data.ticket_id) {
+          var $row = $b.closest('.evfs-row');
+          // Eliminar panel previo si existe para no duplicar
+          $row.next('.evfs-acomp-wrapper').remove();
+          var tid = resp.data.ticket_id;
+          var $panel = $(
+            '<div class="evfs-acomp-wrapper" style="margin-bottom:8px;">' +
+              '<div class="evfs-acomp-panel">' +
+                '<div class="evfs-acomp-label">🧑‍🤝‍🧑 Acompañantes sin QR</div>' +
+                '<div class="evfs-acomp-row">' +
+                  '<input type="number" class="evfs-acomp-input" min="0" max="500" step="1" value="0">' +
+                  '<button type="button" class="evfs-acomp-btn" data-ticket-id="' + tid + '">Registrar</button>' +
+                '</div>' +
+                '<div class="evfs-acomp-status"></div>' +
+              '</div>' +
+            '</div>'
+          );
+          $row.after($panel);
+        } else if (newStatus !== 'checked_in') {
+          // Si se revierte el check-in, ocultar el panel
+          $b.closest('.evfs-row').next('.evfs-acomp-wrapper').remove();
+        }
       } else {
         var msg = (resp && resp.data && resp.data.message) ? resp.data.message : EvFrontSearch.msgs.not_allowed;
         showNote($b, msg, false);
@@ -214,6 +250,45 @@ jQuery(function($){
         }
       } catch(e){}
       showNote($b, msg, false);
+    });
+  });
+
+  // Registrar acompañantes sin QR (delegado al documento)
+  $(document).on('click', '.evfs-acomp-btn', function(){
+    var $btn      = $(this);
+    var tid       = $btn.data('ticket-id');
+    var $panel    = $btn.closest('.evfs-acomp-panel');
+    var $input    = $panel.find('.evfs-acomp-input');
+    var $status   = $panel.find('.evfs-acomp-status');
+    var cantidad  = parseInt($input.val(), 10);
+
+    if (isNaN(cantidad) || cantidad < 0 || cantidad > 500) {
+      $status.html('<span style="color:#9a2424;">❌ Ingresa un número válido (0–500).</span>');
+      return;
+    }
+
+    $btn.prop('disabled', true).text('Guardando…');
+    $status.html('<span style="color:#555;">Registrando…</span>');
+
+    $.post(EvFrontSearch.ajax_url, {
+      action:          'eventosapp_registrar_acompanantes',
+      companion_nonce: EvFrontSearch.acompanantes_nonce,
+      ticket_id:       tid,
+      cantidad:        cantidad
+    }, function(resp){
+      if (resp && resp.success) {
+        $status.html('<span style="color:#1e6f2b;">✅ ' + cantidad + ' acompañante(s) registrado(s). Total: ' + (resp.data.total || cantidad) + '</span>');
+        $input.val(0);
+        $btn.text('✓ Guardado');
+        setTimeout(function(){ $btn.prop('disabled', false).text('Registrar'); }, 3000);
+      } else {
+        var msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Error al guardar.';
+        $status.html('<span style="color:#9a2424;">❌ ' + msg + '</span>');
+        $btn.prop('disabled', false).text('Reintentar');
+      }
+    }, 'json').fail(function(){
+      $status.html('<span style="color:#9a2424;">❌ Error de conexión.</span>');
+      $btn.prop('disabled', false).text('Reintentar');
     });
   });
 
@@ -472,10 +547,12 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     $log[] = $log_entry;
     update_post_meta($ticket_id, '_eventosapp_checkin_log', $log);
 
-    wp_send_json_success([
-        'today_status'  => $new,
-        'today_allowed' => true,
-        'message'       => 'Estado actualizado.'
+wp_send_json_success([
+        'today_status'         => $new,
+        'today_allowed'        => true,
+        'message'              => 'Estado actualizado.',
+        'ticket_id'            => $ticket_id,
+        'acompanantes_enabled' => (get_post_meta($evento_id, '_eventosapp_ticket_acompanantes_checkin', true) === '1'),
     ]);
 });
 
