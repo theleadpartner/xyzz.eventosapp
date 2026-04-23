@@ -44,8 +44,11 @@ function eventosapp_render_metabox_extras_ticket($post) {
     // Flag "Activar Doble Autenticación"
     $double_auth = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_enabled', true);
 
-    // NUEVO: Flag "Vincular ticket con CPT Asistente"
+    // Flag "Vincular ticket con CPT Asistente"
     $vincular_asistente = get_post_meta($post->ID, '_eventosapp_ticket_vincular_asistente', true);
+
+    // NUEVO: Flag "Registrar acompañantes sin QR en Check-In"
+    $acompanantes_checkin = get_post_meta($post->ID, '_eventosapp_ticket_acompanantes_checkin', true);
 
     wp_nonce_field('eventosapp_extras_ticket_guardar', 'eventosapp_extras_ticket_nonce');
     ?>
@@ -138,6 +141,18 @@ function eventosapp_render_metabox_extras_ticket($post) {
         Si el asistente no existe, se creará. Los datos del perfil siempre se actualizarán con los del último ticket creado.
     </small>
 
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_acompanantes_checkin" value="1" <?php checked($acompanantes_checkin, '1'); ?>>
+        <strong>🧑‍🤝‍🧑 Registrar acompañantes sin QR en Check-In</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Después de un check-in exitoso (QR o manual), aparecerá un campo para ingresar cuántos
+        acompañantes sin QR ingresaron con el asistente. El dato queda registrado en el ticket
+        y se incluye en la exportación de base de datos.
+    </small>
+
     <?php
 }
 
@@ -194,11 +209,18 @@ add_action('save_post_eventosapp_event', function($post_id){
         isset($_POST['eventosapp_ticket_control_pago']) ? '1' : '0'
     );
 
-    // NUEVO: Vincular Tickets con CPT Asistentes
+    // Vincular Tickets con CPT Asistentes
     update_post_meta(
         $post_id,
         '_eventosapp_ticket_vincular_asistente',
         isset($_POST['eventosapp_ticket_vincular_asistente']) ? '1' : '0'
+    );
+
+    // NUEVO: Registrar acompañantes sin QR en Check-In
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_acompanantes_checkin',
+        isset($_POST['eventosapp_ticket_acompanantes_checkin']) ? '1' : '0'
     );
 
 }, 25); // prioridad > 20 para correr después del guardado base
