@@ -555,13 +555,16 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             }
         }
 
-        // Lugar del evento — se prueban las claves más comunes del CPT eventosapp_event
-        $ev_lugar  = get_post_meta( $evento_id, '_eventosapp_lugar',        true ); // campo lugar/venue único
-        $ev_ubic   = get_post_meta( $evento_id, '_eventosapp_ubicacion',    true ); // alias ubicación
-        $ev_ciudad = get_post_meta( $evento_id, '_eventosapp_ciudad',       true ); // ciudad separada
-        $ev_depto  = get_post_meta( $evento_id, '_eventosapp_departamento', true ); // departamento separado
+        // Lugar del evento — clave confirmada desde el formulario admin del CPT evento
+        $ev_direccion = get_post_meta( $evento_id, '_eventosapp_direccion',    true ); // "Dirección del Evento" (campo principal)
+        $ev_lugar     = get_post_meta( $evento_id, '_eventosapp_lugar',        true ); // fallback: campo lugar/venue
+        $ev_ubic      = get_post_meta( $evento_id, '_eventosapp_ubicacion',    true ); // fallback: alias ubicación
+        $ev_ciudad    = get_post_meta( $evento_id, '_eventosapp_ciudad',       true ); // fallback: ciudad separada
+        $ev_depto     = get_post_meta( $evento_id, '_eventosapp_departamento', true ); // fallback: departamento separado
 
-        if ( $ev_lugar ) {
+        if ( $ev_direccion ) {
+            $header_lugar = $ev_direccion;
+        } elseif ( $ev_lugar ) {
             $header_lugar = $ev_lugar;
         } elseif ( $ev_ubic ) {
             $header_lugar = $ev_ubic;
