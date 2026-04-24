@@ -512,6 +512,75 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     $evento_id   = (int) get_post_meta( $galeria_id, '_galeria_evento_id', true );
     $uid         = 'evapp-galeria-' . $galeria_id;
 
+    // ── Datos del evento y cliente para el header informativo ────────────
+    $header_titulo       = $post->post_title; // título de la galería
+    $header_fecha_dia    = '';
+    $header_fecha_str    = '';
+    $header_lugar        = '';
+    $header_cliente_nombre   = '';
+    $header_cliente_logo_url = '';
+
+    if ( $evento_id ) {
+        // Fecha del evento
+        $tipo_fecha = get_post_meta( $evento_id, '_eventosapp_tipo_fecha', true ) ?: 'unica';
+
+        if ( $tipo_fecha === 'unica' ) {
+            $fecha_raw = get_post_meta( $evento_id, '_eventosapp_fecha_unica', true );
+            if ( $fecha_raw ) {
+                $ts                = strtotime( $fecha_raw );
+                $header_fecha_dia  = date_i18n( 'l', $ts );   // ej: "domingo"
+                $header_fecha_str  = date_i18n( 'd.m.y', $ts ); // ej: "21.12.25"
+            }
+        } elseif ( $tipo_fecha === 'consecutiva' ) {
+            $fi = get_post_meta( $evento_id, '_eventosapp_fecha_inicio', true );
+            $ff = get_post_meta( $evento_id, '_eventosapp_fecha_fin',    true );
+            if ( $fi ) {
+                $ts               = strtotime( $fi );
+                $header_fecha_dia = date_i18n( 'l', $ts );
+                $header_fecha_str = date_i18n( 'd.m.y', $ts );
+                if ( $ff ) {
+                    $header_fecha_str .= ' – ' . date_i18n( 'd.m.y', strtotime( $ff ) );
+                }
+            }
+        } else {
+            // fechas no consecutivas
+            $fnoco = get_post_meta( $evento_id, '_eventosapp_fechas_noco', true );
+            if ( is_array( $fnoco ) && ! empty( $fnoco ) ) {
+                $ts               = strtotime( $fnoco[0] );
+                $header_fecha_dia = date_i18n( 'l', $ts );
+                $header_fecha_str = date_i18n( 'd.m.y', $ts );
+                if ( count( $fnoco ) > 1 ) {
+                    $header_fecha_str .= ' (+' . ( count( $fnoco ) - 1 ) . ')';
+                }
+            }
+        }
+
+        // Lugar del evento
+        $ev_ciudad = get_post_meta( $evento_id, '_eventosapp_ciudad',       true );
+        $ev_depto  = get_post_meta( $evento_id, '_eventosapp_departamento', true );
+        if ( $ev_ciudad && $ev_depto ) {
+            $header_lugar = $ev_ciudad . ', ' . $ev_depto;
+        } elseif ( $ev_ciudad ) {
+            $header_lugar = $ev_ciudad;
+        } elseif ( $ev_depto ) {
+            $header_lugar = $ev_depto;
+        }
+
+        // Cliente dueño del evento
+        $cliente_id = (int) get_post_meta( $evento_id, '_eventosapp_cliente_id', true );
+        if ( $cliente_id ) {
+            $cli_nombre  = get_post_meta( $cliente_id, '_cliente_nombre_empresa', true );
+            $cli_logo_id = (int) get_post_meta( $cliente_id, '_cliente_logo_id', true );
+            if ( $cli_nombre ) {
+                $header_cliente_nombre = $cli_nombre;
+            }
+            if ( $cli_logo_id ) {
+                $header_cliente_logo_url = wp_get_attachment_image_url( $cli_logo_id, [ 48, 48 ] );
+            }
+        }
+    }
+    // ── Fin datos header ─────────────────────────────────────────────────
+
     // Construir datos de imágenes
     $imagenes = [];
     foreach ( $fotos_ids as $att_id ) {
@@ -546,6 +615,59 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     }
     ?>
     <div id="<?php echo esc_attr( $uid ); ?>" class="evapp-galeria-wrap">
+
+        <!-- ── Header informativo de la galería ── -->
+        <div class="evapp-galeria-header">
+            <div class="evapp-galeria-header-top">
+                <h2 class="evapp-galeria-header-title"><?php echo esc_html( $header_titulo ); ?></h2>
+            </div>
+            <div class="evapp-galeria-header-meta">
+                <?php if ( $header_fecha_dia || $header_fecha_str ) : ?>
+                    <span class="evapp-gh-meta-item">
+                        <span class="evapp-gh-icon" aria-hidden="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        </span>
+                        <?php
+                        if ( $header_fecha_dia && $header_fecha_str ) {
+                            echo esc_html( $header_fecha_dia ) . ' &ndash; ' . esc_html( $header_fecha_str );
+                        } elseif ( $header_fecha_str ) {
+                            echo esc_html( $header_fecha_str );
+                        }
+                        ?>
+                    </span>
+                <?php endif; ?>
+
+                <?php if ( $header_lugar ) : ?>
+                    <span class="evapp-gh-meta-item">
+                        <span class="evapp-gh-icon" aria-hidden="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                        </span>
+                        <?php echo esc_html( $header_lugar ); ?>
+                    </span>
+                <?php endif; ?>
+
+                <span class="evapp-gh-meta-item">
+                    <span class="evapp-gh-icon" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    </span>
+                    <?php echo esc_html( number_format_i18n( $total ) ); ?> foto<?php echo $total !== 1 ? 's' : ''; ?>
+                </span>
+
+                <?php if ( $header_cliente_nombre ) : ?>
+                    <span class="evapp-gh-meta-item evapp-gh-cliente">
+                        <span class="evapp-gh-hash">#</span>
+                        <span class="evapp-gh-evento-por">Evento por</span>
+                        <?php if ( $header_cliente_logo_url ) : ?>
+                            <img src="<?php echo esc_url( $header_cliente_logo_url ); ?>"
+                                 alt="<?php echo esc_attr( $header_cliente_nombre ); ?>"
+                                 class="evapp-gh-cliente-logo" />
+                        <?php endif; ?>
+                        <strong class="evapp-gh-cliente-nombre"><?php echo esc_html( $header_cliente_nombre ); ?></strong>
+                    </span>
+                <?php endif; ?>
+            </div>
+        </div>
+        <!-- ── Fin header ── -->
 
         <?php if ( $descripcion ) : ?>
             <p class="evapp-galeria-descripcion"><?php echo esc_html( $descripcion ); ?></p>
@@ -1609,6 +1731,76 @@ add_action( 'wp_enqueue_scripts', function () {
     --evapp-g-accent: #0073aa;
     --evapp-g-radius: 8px;
     --evapp-g-shadow: 0 4px 20px rgba(0,0,0,.15);
+}
+/* ── Header informativo ── */
+.evapp-galeria-header {
+    padding: 14px 0 12px;
+    border-bottom: 1px solid #e8e8e8;
+    margin-bottom: 14px;
+}
+.evapp-galeria-header-top {
+    margin-bottom: 8px;
+}
+.evapp-galeria-header-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: #111;
+    margin: 0;
+    line-height: 1.25;
+}
+.evapp-galeria-header-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    font-size: 13px;
+    color: #555;
+}
+.evapp-gh-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+.evapp-gh-icon {
+    display: inline-flex;
+    align-items: center;
+    color: #888;
+    flex-shrink: 0;
+}
+.evapp-gh-cliente {
+    font-size: 13px;
+    color: #444;
+    gap: 5px;
+}
+.evapp-gh-hash {
+    color: #888;
+    font-weight: 700;
+    font-size: 13px;
+    margin-right: 1px;
+}
+.evapp-gh-evento-por {
+    color: #888;
+    font-size: 13px;
+}
+.evapp-gh-cliente-logo {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+    border-radius: 3px;
+    vertical-align: middle;
+    flex-shrink: 0;
+    background: transparent;
+}
+.evapp-gh-cliente-nombre {
+    font-weight: 700;
+    color: #222;
+    font-size: 13px;
+}
+@media (max-width: 600px) {
+    .evapp-galeria-header-title { font-size: 17px; }
+    .evapp-galeria-header-meta  { font-size: 12px; gap: 5px 12px; }
+    .evapp-gh-cliente-logo      { width: 20px; height: 20px; }
 }
 .evapp-galeria-descripcion {
     color: #555;
