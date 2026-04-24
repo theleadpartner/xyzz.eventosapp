@@ -555,10 +555,17 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             }
         }
 
-        // Lugar del evento
-        $ev_ciudad = get_post_meta( $evento_id, '_eventosapp_ciudad',       true );
-        $ev_depto  = get_post_meta( $evento_id, '_eventosapp_departamento', true );
-        if ( $ev_ciudad && $ev_depto ) {
+        // Lugar del evento — se prueban las claves más comunes del CPT eventosapp_event
+        $ev_lugar  = get_post_meta( $evento_id, '_eventosapp_lugar',        true ); // campo lugar/venue único
+        $ev_ubic   = get_post_meta( $evento_id, '_eventosapp_ubicacion',    true ); // alias ubicación
+        $ev_ciudad = get_post_meta( $evento_id, '_eventosapp_ciudad',       true ); // ciudad separada
+        $ev_depto  = get_post_meta( $evento_id, '_eventosapp_departamento', true ); // departamento separado
+
+        if ( $ev_lugar ) {
+            $header_lugar = $ev_lugar;
+        } elseif ( $ev_ubic ) {
+            $header_lugar = $ev_ubic;
+        } elseif ( $ev_ciudad && $ev_depto ) {
             $header_lugar = $ev_ciudad . ', ' . $ev_depto;
         } elseif ( $ev_ciudad ) {
             $header_lugar = $ev_ciudad;
@@ -655,8 +662,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
 
                 <?php if ( $header_cliente_nombre ) : ?>
                     <span class="evapp-gh-meta-item evapp-gh-cliente">
-                        <span class="evapp-gh-hash">#</span>
-                        <span class="evapp-gh-evento-por">Evento por</span>
+                        <span class="evapp-gh-organizador-label">Organizador:</span>
                         <?php if ( $header_cliente_logo_url ) : ?>
                             <img src="<?php echo esc_url( $header_cliente_logo_url ); ?>"
                                  alt="<?php echo esc_attr( $header_cliente_nombre ); ?>"
@@ -1773,15 +1779,10 @@ add_action( 'wp_enqueue_scripts', function () {
     color: #444;
     gap: 5px;
 }
-.evapp-gh-hash {
+.evapp-gh-organizador-label {
     color: #888;
-    font-weight: 700;
     font-size: 13px;
     margin-right: 1px;
-}
-.evapp-gh-evento-por {
-    color: #888;
-    font-size: 13px;
 }
 .evapp-gh-cliente-logo {
     width: 24px;
