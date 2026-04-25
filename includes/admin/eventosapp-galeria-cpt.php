@@ -611,6 +611,41 @@ if ( ! function_exists( 'evapp_galeria_ia_sanitize_texts' ) ) {
     }
 }
 
+if ( ! function_exists( 'evapp_galeria_ia_default_cta_settings' ) ) {
+    function evapp_galeria_ia_default_cta_settings() {
+        return [
+            'cta_layout'          => 'vertical',
+            'cta_image_url'       => '',
+            'cta_image_hover_url' => '',
+            'cta_image_alt'       => '',
+            'cta_order_image'     => 10,
+            'cta_order_text'      => 20,
+            'cta_order_button'    => 30,
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_ia_sanitize_cta_settings' ) ) {
+    function evapp_galeria_ia_sanitize_cta_settings( $atts ) {
+        $defaults = evapp_galeria_ia_default_cta_settings();
+        $settings = [];
+
+        $layout = isset( $atts['cta_layout'] ) ? sanitize_key( $atts['cta_layout'] ) : $defaults['cta_layout'];
+        $settings['cta_layout'] = in_array( $layout, [ 'vertical', 'horizontal' ], true ) ? $layout : 'vertical';
+
+        $settings['cta_image_url']       = isset( $atts['cta_image_url'] ) ? esc_url_raw( $atts['cta_image_url'] ) : '';
+        $settings['cta_image_hover_url'] = isset( $atts['cta_image_hover_url'] ) ? esc_url_raw( $atts['cta_image_hover_url'] ) : '';
+        $settings['cta_image_alt']       = isset( $atts['cta_image_alt'] ) ? sanitize_text_field( $atts['cta_image_alt'] ) : '';
+
+        $settings['cta_order_image']  = isset( $atts['cta_order_image'] ) ? absint( $atts['cta_order_image'] ) : (int) $defaults['cta_order_image'];
+        $settings['cta_order_text']   = isset( $atts['cta_order_text'] ) ? absint( $atts['cta_order_text'] ) : (int) $defaults['cta_order_text'];
+        $settings['cta_order_button'] = isset( $atts['cta_order_button'] ) ? absint( $atts['cta_order_button'] ) : (int) $defaults['cta_order_button'];
+
+        return $settings;
+    }
+}
+
+
 if ( ! function_exists( 'evapp_galeria_ia_spinner_html' ) ) {
     function evapp_galeria_ia_spinner_html( $texts ) {
         $type = isset( $texts['spinner_type'] ) ? sanitize_key( $texts['spinner_type'] ) : 'css';
@@ -636,9 +671,18 @@ if ( ! function_exists( 'evapp_galeria_ia_spinner_html' ) ) {
 }
 
 add_shortcode( 'eventosapp_galeria', function ( $atts ) {
-    $atts = shortcode_atts( array_merge( [ 'id' => 0 ], evapp_galeria_ia_default_texts() ), $atts, 'eventosapp_galeria' );
+    $atts = shortcode_atts(
+        array_merge(
+            [ 'id' => 0 ],
+            evapp_galeria_ia_default_texts(),
+            evapp_galeria_ia_default_cta_settings()
+        ),
+        $atts,
+        'eventosapp_galeria'
+    );
     $galeria_id = absint( $atts['id'] );
     $gi_text    = evapp_galeria_ia_sanitize_texts( $atts );
+    $gi_cta     = evapp_galeria_ia_sanitize_cta_settings( $atts );
 
     if ( ! $galeria_id ) {
         return '<p style="color:#c00;">⚠️ Shortcode: falta el atributo <code>id</code>.</p>';
@@ -908,12 +952,28 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         <div class="evapp-gi-finder-section" id="<?php echo esc_attr( $uid ); ?>-finder">
 
             <!-- CTA inicial -->
-            <div class="evapp-gi-trigger-wrap" id="<?php echo esc_attr( $uid ); ?>-trigger">
-                <p class="evapp-gi-promo-text">
+            <div class="evapp-gi-trigger-wrap evapp-gi-trigger-layout-<?php echo esc_attr( $gi_cta['cta_layout'] ); ?>" id="<?php echo esc_attr( $uid ); ?>-trigger">
+                <?php if ( ! empty( $gi_cta['cta_image_url'] ) ) : ?>
+                    <div class="evapp-gi-promo-image-wrap" style="order:<?php echo esc_attr( $gi_cta['cta_order_image'] ); ?>;">
+                        <img class="evapp-gi-promo-image evapp-gi-promo-image-normal<?php echo ! empty( $gi_cta['cta_image_hover_url'] ) ? ' has-hover' : ''; ?>"
+                             src="<?php echo esc_url( $gi_cta['cta_image_url'] ); ?>"
+                             alt="<?php echo esc_attr( $gi_cta['cta_image_alt'] ?: $gi_text['promo_question'] ); ?>"
+                             loading="lazy" />
+                        <?php if ( ! empty( $gi_cta['cta_image_hover_url'] ) ) : ?>
+                            <img class="evapp-gi-promo-image evapp-gi-promo-image-hover"
+                                 src="<?php echo esc_url( $gi_cta['cta_image_hover_url'] ); ?>"
+                                 alt=""
+                                 aria-hidden="true"
+                                 loading="lazy" />
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
+
+                <p class="evapp-gi-promo-text" style="order:<?php echo esc_attr( $gi_cta['cta_order_text'] ); ?>;">
                     <?php echo esc_html( $gi_text['promo_question'] ); ?><br>
                     <strong><?php echo esc_html( $gi_text['promo_highlight'] ); ?></strong>
                 </p>
-                <button type="button" class="evapp-gi-btn-abrir" id="<?php echo esc_attr( $uid ); ?>-btn-abrir">
+                <button type="button" class="evapp-gi-btn-abrir" id="<?php echo esc_attr( $uid ); ?>-btn-abrir" style="order:<?php echo esc_attr( $gi_cta['cta_order_button'] ); ?>;">
                     <?php echo esc_html( $gi_text['promo_button'] ); ?>
                 </button>
             </div>
@@ -1102,10 +1162,19 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         <style>
         /* ── Sección contenedor ── */
         .evapp-gi-finder-section { margin-top:36px; padding:32px 28px; background:linear-gradient(145deg,#f0f4ff,#e8eeff); border-radius:14px; border:1px solid #c7d4ff; }
-        .evapp-gi-trigger-wrap { text-align:center; }
-        .evapp-gi-promo-text { font-size:16px; color:#444; margin:0 0 18px; line-height:1.65; }
+        .evapp-gi-trigger-wrap { text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; }
+        .evapp-gi-trigger-layout-horizontal { flex-direction:row; flex-wrap:wrap; text-align:left; }
+        .evapp-gi-trigger-layout-vertical { flex-direction:column; text-align:center; }
+        .evapp-gi-promo-image-wrap { position:relative; display:inline-flex; align-items:center; justify-content:center; width:120px; max-width:100%; flex:0 0 auto; line-height:0; overflow:hidden; }
+        .evapp-gi-promo-image { display:block; width:100%; height:auto; max-width:100%; object-fit:contain; transition:opacity .32s ease, transform .32s ease; }
+        .evapp-gi-promo-image-hover { position:absolute; inset:0; opacity:0; transform:scale(.98); }
+        .evapp-gi-promo-image-normal.has-hover { opacity:1; }
+        .evapp-gi-finder-section:hover .evapp-gi-promo-image-normal.has-hover { opacity:0; transform:scale(1.02); }
+        .evapp-gi-finder-section:hover .evapp-gi-promo-image-hover { opacity:1; transform:scale(1); }
+        .evapp-gi-promo-text { font-size:16px; color:#444; margin:0; line-height:1.65; flex:0 1 auto; }
+        .evapp-gi-trigger-layout-horizontal .evapp-gi-promo-text { flex:1 1 260px; }
         .evapp-gi-promo-text strong { color:#1c3d8f; }
-        .evapp-gi-btn-abrir { display:inline-flex; align-items:center; gap:6px; padding:14px 40px; background:#1c3d8f; color:#fff; border:none; border-radius:50px; font-size:16px; font-weight:700; cursor:pointer; transition:background .2s,transform .15s,box-shadow .2s; box-shadow:0 4px 14px rgba(28,61,143,.25); }
+        .evapp-gi-btn-abrir { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:14px 40px; background:#1c3d8f; color:#fff; border:none; border-radius:50px; font-size:16px; font-weight:700; cursor:pointer; transition:background .2s,transform .15s,box-shadow .2s; box-shadow:0 4px 14px rgba(28,61,143,.25); flex:0 0 auto; }
         .evapp-gi-btn-abrir:hover { background:#122d6e; transform:translateY(-2px); box-shadow:0 6px 20px rgba(28,61,143,.35); }
         .evapp-gi-wizard { max-width:500px; margin:0 auto; }
         .evapp-gi-step-header { margin-bottom:14px; }
@@ -1203,6 +1272,8 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         /* Responsive */
         @media (max-width:500px) {
             .evapp-gi-finder-section { padding:22px 16px; }
+            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; text-align:center; }
+            .evapp-gi-promo-image-wrap { width:96px; }
             .evapp-gi-step-title { font-size:19px; }
             .evapp-gi-foto-opciones { flex-direction:column; gap:10px; }
             .evapp-gi-btn-opcion { padding:16px 12px; }
@@ -2653,6 +2724,68 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 ] );
                 $this->end_controls_section();
 
+                $this->start_controls_section( 'section_ai_cta_layout_media', [
+                    'label' => 'Flujo IA: CTA imagen, orientación y orden',
+                    'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                ] );
+                $this->add_control( 'cta_layout', [
+                    'label'   => 'Orientación de elementos del CTA inicial',
+                    'type'    => \Elementor\Controls_Manager::SELECT,
+                    'default' => 'vertical',
+                    'options' => [
+                        'vertical'   => 'Vertical',
+                        'horizontal' => 'Horizontal',
+                    ],
+                ] );
+                $this->add_control( 'cta_image', [
+                    'label'       => 'Imagen inicial del CTA',
+                    'type'        => \Elementor\Controls_Manager::MEDIA,
+                    'description' => 'Imagen normal de la mascota o caricatura. Si no se sube imagen, el CTA conserva solo texto y botón.',
+                ] );
+                $this->add_control( 'cta_hover_image', [
+                    'label'       => 'Imagen al pasar el cursor sobre el banner',
+                    'type'        => \Elementor\Controls_Manager::MEDIA,
+                    'description' => 'Esta imagen reemplaza de forma animada a la imagen inicial cuando el cursor pasa sobre el contenedor del flujo IA.',
+                    'condition'   => [ 'cta_image[url]!' => '' ],
+                ] );
+                $this->add_control( 'cta_image_alt', [
+                    'label'       => 'Texto alternativo de la imagen',
+                    'type'        => \Elementor\Controls_Manager::TEXT,
+                    'default'     => '',
+                    'label_block' => true,
+                ] );
+                $this->add_control( 'cta_order_heading', [
+                    'label'     => 'Orden de elementos del CTA inicial',
+                    'type'      => \Elementor\Controls_Manager::HEADING,
+                    'separator' => 'before',
+                ] );
+                $this->add_control( 'cta_order_image', [
+                    'label'       => 'Orden: imagen',
+                    'type'        => \Elementor\Controls_Manager::NUMBER,
+                    'default'     => 10,
+                    'min'         => 0,
+                    'max'         => 999,
+                    'step'        => 1,
+                    'description' => 'El número más bajo aparece primero.',
+                ] );
+                $this->add_control( 'cta_order_text', [
+                    'label'       => 'Orden: frases',
+                    'type'        => \Elementor\Controls_Manager::NUMBER,
+                    'default'     => 20,
+                    'min'         => 0,
+                    'max'         => 999,
+                    'step'        => 1,
+                ] );
+                $this->add_control( 'cta_order_button', [
+                    'label'       => 'Orden: botón',
+                    'type'        => \Elementor\Controls_Manager::NUMBER,
+                    'default'     => 30,
+                    'min'         => 0,
+                    'max'         => 999,
+                    'step'        => 1,
+                ] );
+                $this->end_controls_section();
+
 
                 $this->start_controls_section( 'style_layout_order', [
                     'label' => 'Ubicación / orden de bloques',
@@ -2896,6 +3029,21 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $this->start_controls_section( 'style_ai_container', [ 'label' => 'Flujo IA: contenedor y CTA', 'tab' => \Elementor\Controls_Manager::TAB_STYLE ] );
                 $this->add_box_controls( 'ai_container', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-finder-section' );
                 $this->add_text_align_control( 'ai_trigger_wrap_align', 'Alineación del bloque CTA', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' );
+                $this->add_responsive_control( 'ai_cta_elements_gap', [
+                    'label'      => 'Separación entre imagen, frases y botón',
+                    'type'       => \Elementor\Controls_Manager::SLIDER,
+                    'size_units' => [ 'px', 'em' ],
+                    'range'      => [ 'px' => [ 'min' => 0, 'max' => 120 ], 'em' => [ 'min' => 0, 'max' => 8 ] ],
+                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' => 'gap: {{SIZE}}{{UNIT}};' ],
+                ] );
+                $this->add_responsive_control( 'ai_cta_image_width', [
+                    'label'      => 'Ancho imagen CTA',
+                    'type'       => \Elementor\Controls_Manager::SLIDER,
+                    'size_units' => [ 'px', '%', 'em' ],
+                    'range'      => [ 'px' => [ 'min' => 32, 'max' => 520 ], '%' => [ 'min' => 5, 'max' => 100 ], 'em' => [ 'min' => 2, 'max' => 32 ] ],
+                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap' => 'width: {{SIZE}}{{UNIT}};' ],
+                ] );
+                $this->add_box_controls( 'ai_cta_image_box', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap', false );
                 $this->add_text_controls( 'ai_promo', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text strong', 'Texto CTA inicial' );
                 $this->add_button_controls( 'ai_open_btn', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-abrir', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-abrir:hover', 'Botón abrir buscador' );
                 $this->end_controls_section();
@@ -3113,6 +3261,23 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     if ( isset( $settings[ $key ] ) && $settings[ $key ] !== '' ) {
                         $shortcode_attrs[ $key ] = $settings[ $key ];
                     }
+                }
+
+                $cta_defaults = evapp_galeria_ia_default_cta_settings();
+                foreach ( [ 'cta_layout', 'cta_image_alt', 'cta_order_image', 'cta_order_text', 'cta_order_button' ] as $cta_key ) {
+                    if ( isset( $settings[ $cta_key ] ) && $settings[ $cta_key ] !== '' ) {
+                        $shortcode_attrs[ $cta_key ] = $settings[ $cta_key ];
+                    } elseif ( isset( $cta_defaults[ $cta_key ] ) ) {
+                        $shortcode_attrs[ $cta_key ] = $cta_defaults[ $cta_key ];
+                    }
+                }
+
+                if ( ! empty( $settings['cta_image']['url'] ) ) {
+                    $shortcode_attrs['cta_image_url'] = esc_url_raw( $settings['cta_image']['url'] );
+                }
+
+                if ( ! empty( $settings['cta_hover_image']['url'] ) ) {
+                    $shortcode_attrs['cta_image_hover_url'] = esc_url_raw( $settings['cta_hover_image']['url'] );
                 }
 
                 if ( ! empty( $settings['spinner_image']['url'] ) ) {
