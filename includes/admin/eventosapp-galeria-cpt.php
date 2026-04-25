@@ -1737,7 +1737,16 @@ add_action( 'wp_enqueue_scripts', function () {
     --evapp-g-accent: #0073aa;
     --evapp-g-radius: 8px;
     --evapp-g-shadow: 0 4px 20px rgba(0,0,0,.15);
+    display: flex;
+    flex-direction: column;
 }
+.evapp-galeria-wrap > .evapp-galeria-header { order: 10; }
+.evapp-galeria-wrap > .evapp-galeria-descripcion { order: 20; }
+.evapp-galeria-wrap > .evapp-galeria-main-wrap { order: 30; }
+.evapp-galeria-wrap > .evapp-galeria-counter { order: 40; }
+.evapp-galeria-wrap > .evapp-galeria-thumbs-wrap { order: 50; }
+.evapp-galeria-wrap > .evapp-gi-finder-section { order: 60; }
+.evapp-galeria-wrap > .evapp-galeria-lightbox { order: 999; }
 /* ── Header informativo ── */
 .evapp-galeria-header {
     padding: 14px 0 12px;
@@ -2228,6 +2237,22 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 ] );
             }
 
+            private function add_order_control( $control_id, $label, $selector, $default, $description = '' ) {
+                $this->add_responsive_control( $control_id, [
+                    'label'       => $label,
+                    'type'        => \Elementor\Controls_Manager::NUMBER,
+                    'default'     => $default,
+                    'min'         => 0,
+                    'max'         => 999,
+                    'step'        => 1,
+                    'description' => $description,
+                    'selectors'   => [
+                        '{{WRAPPER}} .evapp-galeria-wrap' => 'display:flex; flex-direction:column;',
+                        $selector                         => 'order: {{VALUE}};',
+                    ],
+                ] );
+            }
+
             protected function register_controls() {
 
                 $this->start_controls_section( 'section_content', [
@@ -2242,6 +2267,59 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'label_block' => true,
                     'description' => 'Selecciona una galería creada en EventosApp. Conserva el mismo render del shortcode para no romper compatibilidad.',
                 ] );
+                $this->end_controls_section();
+
+                $this->start_controls_section( 'style_layout_order', [
+                    'label' => 'Ubicación / orden de bloques',
+                    'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
+                ] );
+                $this->add_control( 'layout_order_help', [
+                    'type'            => \Elementor\Controls_Manager::RAW_HTML,
+                    'raw'             => 'Cada bloque se puede mover de forma independiente. El número más bajo aparece más arriba. Los valores por defecto conservan el orden actual.',
+                    'content_classes' => 'elementor-panel-alert elementor-panel-alert-info',
+                ] );
+                $this->add_order_control(
+                    'order_header',
+                    'Título y detalles del evento',
+                    '{{WRAPPER}} .evapp-galeria-wrap > .evapp-galeria-header',
+                    10,
+                    'Bloque superior con el título, fecha, lugar, cantidad de fotos y organizador.'
+                );
+                $this->add_order_control(
+                    'order_description',
+                    'Descripción de la galería',
+                    '{{WRAPPER}} .evapp-galeria-wrap > .evapp-galeria-descripcion',
+                    20,
+                    'Solo se verá cuando la galería tenga descripción guardada.'
+                );
+                $this->add_order_control(
+                    'order_main_gallery',
+                    'Galería principal / foto grande',
+                    '{{WRAPPER}} .evapp-galeria-wrap > .evapp-galeria-main-wrap',
+                    30,
+                    'Caja principal de imagen grande con flechas laterales.'
+                );
+                $this->add_order_control(
+                    'order_counter',
+                    'Contador de fotos',
+                    '{{WRAPPER}} .evapp-galeria-wrap > .evapp-galeria-counter',
+                    40,
+                    'Contador tipo 1 / 24.'
+                );
+                $this->add_order_control(
+                    'order_thumbnails',
+                    'Miniaturas',
+                    '{{WRAPPER}} .evapp-galeria-wrap > .evapp-galeria-thumbs-wrap',
+                    50,
+                    'Tira horizontal de miniaturas.'
+                );
+                $this->add_order_control(
+                    'order_ai_flow',
+                    'Flujo IA: contenedor y CTA',
+                    '{{WRAPPER}} .evapp-galeria-wrap > .evapp-gi-finder-section',
+                    60,
+                    'Para ubicarlo antes de la galería principal, usa un número menor que el bloque “Galería principal / foto grande”. Ejemplo: 25.'
+                );
                 $this->end_controls_section();
 
                 $this->start_controls_section( 'style_container', [ 'label' => 'Contenedor general', 'tab' => \Elementor\Controls_Manager::TAB_STYLE ] );
