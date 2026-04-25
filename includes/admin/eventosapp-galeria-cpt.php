@@ -516,10 +516,16 @@ if ( ! function_exists( 'evapp_galeria_ia_default_texts' ) ) {
             'step3_title'                 => 'Captura tus fotos',
             'step3_desc'                  => 'Cuantas más fotos agregues con diferentes características, mejor será la detección. Puedes agregar hasta 3.',
             'tip1_icon'                   => '😊',
+            'tip1_image_url'              => '',
+            'tip1_image_alt'              => '',
             'tip1_text'                   => 'De frente, sin accesorios',
             'tip2_icon'                   => '🕶️',
+            'tip2_image_url'              => '',
+            'tip2_image_alt'              => '',
             'tip2_text'                   => 'Con gafas o sombrero si los usas',
             'tip3_icon'                   => '↗️',
+            'tip3_image_url'              => '',
+            'tip3_image_alt'              => '',
             'tip3_text'                   => 'Leve ángulo lateral',
             'strip_empty'                 => 'Aún no has agregado ninguna foto. Agrega al menos una para continuar.',
             'strip_one'                   => '✅ 1 foto agregada. ¡Agrega 1 o 2 más para mejorar los resultados!',
@@ -599,7 +605,7 @@ if ( ! function_exists( 'evapp_galeria_ia_sanitize_texts' ) ) {
                 continue;
             }
 
-            if ( $key === 'spinner_image_url' ) {
+            if ( substr( $key, -10 ) === '_image_url' ) {
                 $texts[ $key ] = esc_url_raw( $value );
                 continue;
             }
@@ -667,6 +673,32 @@ if ( ! function_exists( 'evapp_galeria_ia_spinner_html' ) ) {
         }
 
         return '<div class="evapp-gi-spinner evapp-gi-spinner-css" aria-hidden="true"></div>';
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_ia_tip_media_html' ) ) {
+    function evapp_galeria_ia_tip_media_html( $texts, $tip_number ) {
+        $tip_number = absint( $tip_number );
+        if ( $tip_number < 1 || $tip_number > 3 ) {
+            return '';
+        }
+
+        $icon_key  = 'tip' . $tip_number . '_icon';
+        $image_key = 'tip' . $tip_number . '_image_url';
+        $alt_key   = 'tip' . $tip_number . '_image_alt';
+        $text_key  = 'tip' . $tip_number . '_text';
+
+        $image_url = isset( $texts[ $image_key ] ) ? esc_url( $texts[ $image_key ] ) : '';
+        $image_alt = isset( $texts[ $alt_key ] ) && $texts[ $alt_key ] !== ''
+            ? $texts[ $alt_key ]
+            : ( isset( $texts[ $text_key ] ) ? $texts[ $text_key ] : '' );
+
+        if ( $image_url ) {
+            return '<span class="evapp-gi-tip-media evapp-gi-tip-media-image"><img src="' . $image_url . '" alt="' . esc_attr( $image_alt ) . '" loading="lazy" /></span>';
+        }
+
+        $icon = isset( $texts[ $icon_key ] ) && $texts[ $icon_key ] !== '' ? $texts[ $icon_key ] : '';
+        return '<span class="evapp-gi-tip-media evapp-gi-tip-icon">' . esc_html( $icon ) . '</span>';
     }
 }
 
@@ -1030,9 +1062,9 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     </p>
                     <!-- Tips -->
                     <div class="evapp-gi-foto-tips">
-                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon"><?php echo esc_html( $gi_text['tip1_icon'] ); ?></span><span><?php echo esc_html( $gi_text['tip1_text'] ); ?></span></div>
-                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon"><?php echo esc_html( $gi_text['tip2_icon'] ); ?></span><span><?php echo esc_html( $gi_text['tip2_text'] ); ?></span></div>
-                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon"><?php echo esc_html( $gi_text['tip3_icon'] ); ?></span><span><?php echo esc_html( $gi_text['tip3_text'] ); ?></span></div>
+                        <div class="evapp-gi-tip-item"><?php echo evapp_galeria_ia_tip_media_html( $gi_text, 1 ); ?><span><?php echo esc_html( $gi_text['tip1_text'] ); ?></span></div>
+                        <div class="evapp-gi-tip-item"><?php echo evapp_galeria_ia_tip_media_html( $gi_text, 2 ); ?><span><?php echo esc_html( $gi_text['tip2_text'] ); ?></span></div>
+                        <div class="evapp-gi-tip-item"><?php echo evapp_galeria_ia_tip_media_html( $gi_text, 3 ); ?><span><?php echo esc_html( $gi_text['tip3_text'] ); ?></span></div>
                     </div>
                     <!-- Tira de fotos -->
                     <div class="evapp-gi-foto-strip"><!-- Se llena desde JS --></div>
@@ -1202,7 +1234,9 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         /* Tips */
         .evapp-gi-foto-tips { display:flex; gap:8px; margin-bottom:16px; }
         .evapp-gi-tip-item { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; background:#fff; border:1px solid #dde8ff; border-radius:9px; padding:10px 6px; font-size:11px; font-weight:600; color:#444; text-align:center; line-height:1.35; }
-        .evapp-gi-tip-icon { font-size:20px; }
+        .evapp-gi-tip-media { display:flex; align-items:center; justify-content:center; width:42px; height:42px; flex:0 0 auto; }
+        .evapp-gi-tip-icon { font-size:20px; line-height:1; }
+        .evapp-gi-tip-media-image img { display:block; width:100%; height:100%; object-fit:contain; }
         /* Tira de fotos */
         .evapp-gi-foto-strip { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
         .evapp-gi-foto-strip-item { position:relative; width:88px; height:88px; border-radius:10px; overflow:visible; border:3px solid #1c3d8f; box-shadow:0 3px 10px rgba(28,61,143,.18); flex-shrink:0; }
@@ -2626,11 +2660,11 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $this->add_ai_text_control( 'badge_step_2', 'Etiqueta paso 2' );
                 $this->add_ai_text_control( 'step3_title', 'Título captura' );
                 $this->add_ai_text_control( 'step3_desc', 'Descripción captura', 'textarea' );
-                $this->add_ai_text_control( 'tip1_icon', 'Icono tip 1' );
+                $this->add_ai_text_control( 'tip1_icon', 'Emoji fallback tip 1' );
                 $this->add_ai_text_control( 'tip1_text', 'Texto tip 1' );
-                $this->add_ai_text_control( 'tip2_icon', 'Icono tip 2' );
+                $this->add_ai_text_control( 'tip2_icon', 'Emoji fallback tip 2' );
                 $this->add_ai_text_control( 'tip2_text', 'Texto tip 2' );
-                $this->add_ai_text_control( 'tip3_icon', 'Icono tip 3' );
+                $this->add_ai_text_control( 'tip3_icon', 'Emoji fallback tip 3' );
                 $this->add_ai_text_control( 'tip3_text', 'Texto tip 3' );
                 $this->add_ai_text_control( 'strip_empty', 'Estado sin fotos', 'textarea' );
                 $this->add_ai_text_control( 'strip_one', 'Estado 1 foto', 'textarea' );
@@ -2699,6 +2733,52 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $this->add_ai_text_control( 'no_results_title', 'Título sin resultados' );
                 $this->add_ai_text_control( 'no_results_desc', 'Descripción sin resultados', 'textarea' );
                 $this->add_ai_text_control( 'try_other_photo_button', 'Botón intentar con otras fotos' );
+                $this->end_controls_section();
+
+                $this->start_controls_section( 'section_ai_instruction_images', [
+                    'label' => 'Flujo IA: imágenes instrucciones de fotos',
+                    'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                ] );
+                $this->add_control( 'tip_images_help', [
+                    'type'            => \Elementor\Controls_Manager::RAW_HTML,
+                    'raw'             => 'Sube una imagen para reemplazar el emoji de cada tarjeta de instrucciones. Si dejas una imagen vacía, se seguirá usando el emoji fallback configurado en “Flujo IA: textos captura y cámara”.',
+                    'content_classes' => 'elementor-panel-alert elementor-panel-alert-info',
+                ] );
+                $this->add_control( 'tip1_image_heading', [
+                    'label'     => 'Instrucción 1',
+                    'type'      => \Elementor\Controls_Manager::HEADING,
+                    'separator' => 'before',
+                ] );
+                $this->add_control( 'tip1_image', [
+                    'label'       => 'Imagen instrucción 1',
+                    'type'        => \Elementor\Controls_Manager::MEDIA,
+                    'description' => 'Reemplaza el emoji de “De frente, sin accesorios”.',
+                ] );
+                $this->add_ai_text_control( 'tip1_image_alt', 'Texto alternativo imagen 1' );
+
+                $this->add_control( 'tip2_image_heading', [
+                    'label'     => 'Instrucción 2',
+                    'type'      => \Elementor\Controls_Manager::HEADING,
+                    'separator' => 'before',
+                ] );
+                $this->add_control( 'tip2_image', [
+                    'label'       => 'Imagen instrucción 2',
+                    'type'        => \Elementor\Controls_Manager::MEDIA,
+                    'description' => 'Reemplaza el emoji de “Con gafas o sombrero si los usas”.',
+                ] );
+                $this->add_ai_text_control( 'tip2_image_alt', 'Texto alternativo imagen 2' );
+
+                $this->add_control( 'tip3_image_heading', [
+                    'label'     => 'Instrucción 3',
+                    'type'      => \Elementor\Controls_Manager::HEADING,
+                    'separator' => 'before',
+                ] );
+                $this->add_control( 'tip3_image', [
+                    'label'       => 'Imagen instrucción 3',
+                    'type'        => \Elementor\Controls_Manager::MEDIA,
+                    'description' => 'Reemplaza el emoji de “Leve ángulo lateral”.',
+                ] );
+                $this->add_ai_text_control( 'tip3_image_alt', 'Texto alternativo imagen 3' );
                 $this->end_controls_section();
 
                 $this->start_controls_section( 'section_ai_spinner_icons', [
@@ -3097,7 +3177,17 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-foto-tips' => 'gap: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_flex_justify_control( 'ai_tips_row_align', 'Alineación del grupo de tips', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-foto-tips' );
-                $this->add_flex_items_align_control( 'ai_tips_items_align', 'Alineación interna tips ícono + texto', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-item' );
+                $this->add_flex_items_align_control( 'ai_tips_items_align', 'Alineación interna tips imagen + texto', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-item' );
+                $this->add_responsive_control( 'ai_tip_media_size', [
+                    'label'      => 'Tamaño imagen / emoji de instrucciones',
+                    'type'       => \Elementor\Controls_Manager::SLIDER,
+                    'size_units' => [ 'px', 'em' ],
+                    'range'      => [ 'px' => [ 'min' => 18, 'max' => 180 ], 'em' => [ 'min' => 1, 'max' => 12 ] ],
+                    'selectors'  => [
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-media' => 'width: {{SIZE}}{{UNIT}}; height: {{SIZE}}{{UNIT}};',
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-icon'  => 'font-size: {{SIZE}}{{UNIT}};',
+                    ],
+                ] );
                 $this->add_responsive_control( 'ai_strip_gap', [
                     'label'      => 'Separación tira fotos',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -3278,6 +3368,15 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
 
                 if ( ! empty( $settings['cta_hover_image']['url'] ) ) {
                     $shortcode_attrs['cta_image_hover_url'] = esc_url_raw( $settings['cta_hover_image']['url'] );
+                }
+
+                for ( $tip_i = 1; $tip_i <= 3; $tip_i++ ) {
+                    $tip_image_control = 'tip' . $tip_i . '_image';
+                    $tip_image_attr    = 'tip' . $tip_i . '_image_url';
+
+                    if ( ! empty( $settings[ $tip_image_control ]['url'] ) ) {
+                        $shortcode_attrs[ $tip_image_attr ] = esc_url_raw( $settings[ $tip_image_control ]['url'] );
+                    }
                 }
 
                 if ( ! empty( $settings['spinner_image']['url'] ) ) {
