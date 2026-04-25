@@ -480,9 +480,165 @@ add_action( 'manage_eventosapp_galeria_posts_custom_column', function ( $column,
 //   includes/admin/eventosapp-galeria-cpt.php
 // ============================================================
 
+// ============================================================
+// 5.1 HELPERS: Textos configurables del flujo IA
+// ============================================================
+
+if ( ! function_exists( 'evapp_galeria_ia_default_texts' ) ) {
+    function evapp_galeria_ia_default_texts() {
+        return [
+            'promo_question'              => '¿Quieres ver las fotos en donde apareces?',
+            'promo_highlight'             => 'Deja que la Inteligencia Artificial lo haga por ti.',
+            'promo_button'                => '🔍 Buscar',
+
+            'badge_step_1'                => 'Paso 1 de 3',
+            'step1_title'                 => 'Valida tu identidad',
+            'step1_desc'                  => 'Necesitamos validar que eres asistente del evento, por favor ingresa los siguientes datos para continuar.',
+            'cedula_label'                => 'Número de Identificación',
+            'cedula_placeholder'          => 'Ej: 1234567890',
+            'apellidos_label'             => 'Apellidos',
+            'apellidos_placeholder'       => 'Ej: García López',
+            'step1_hint'                  => '✏️ Escribe tus datos tal cual como en tu inscripción al evento.',
+            'validate_button'             => 'Continuar →',
+            'validate_loading'            => 'Buscando...',
+            'validate_empty_error'        => '⚠️ Por favor ingresa tu número de identificación y tus apellidos.',
+            'validate_server_error'       => '❌ No encontramos un asistente con esos datos. Intenta de nuevo.',
+            'connection_error'            => '❌ Error de conexión. Por favor intenta de nuevo.',
+
+            'badge_verified'              => '✓ Verificado',
+            'step2_title'                 => '¡Te encontramos!',
+            'step2_button'                => 'Continuar → Capturar Foto',
+            'assistant_company_icon'      => '🏢',
+            'assistant_role_icon'         => '💼',
+            'assistant_email_icon'        => '✉️',
+
+            'badge_step_2'                => 'Paso 2 de 3',
+            'step3_title'                 => 'Captura tus fotos',
+            'step3_desc'                  => 'Cuantas más fotos agregues con diferentes características, mejor será la detección. Puedes agregar hasta 3.',
+            'tip1_icon'                   => '😊',
+            'tip1_text'                   => 'De frente, sin accesorios',
+            'tip2_icon'                   => '🕶️',
+            'tip2_text'                   => 'Con gafas o sombrero si los usas',
+            'tip3_icon'                   => '↗️',
+            'tip3_text'                   => 'Leve ángulo lateral',
+            'strip_empty'                 => 'Aún no has agregado ninguna foto. Agrega al menos una para continuar.',
+            'strip_one'                   => '✅ 1 foto agregada. ¡Agrega 1 o 2 más para mejorar los resultados!',
+            'strip_two'                   => '✅ 2 fotos agregadas. Puedes agregar 1 más o ya continuar.',
+            'strip_three'                 => '✅ 3 fotos agregadas. ¡Perfecto! Ya puedes continuar.',
+            'photo_label'                 => 'Foto {num}',
+            'upload_button'               => '📁 Subir una Foto',
+            'camera_button'               => '📷 Tomar Foto',
+            'upload_guide_text'           => 'Asegúrate que tu cara quede centrada dentro del óvalo antes de continuar:',
+            'upload_preview_alt'          => 'Vista previa de tu foto',
+            'approve_upload_button'       => '✓ La foto se ve bien, continuar',
+            'choose_other_button'         => '↩ Elegir otra foto',
+            'camera_label'                => 'Centra tu cara aquí',
+            'capture_button'              => '📸 Capturar Foto',
+            'cancel_camera_button'        => 'Cancelar Cámara',
+            'continue_photos_prefix'      => '✓ Continuar con',
+            'continue_photos_suffix'      => 'foto(s)',
+            'camera_permission_error'     => 'No se pudo acceder a la cámara. Verifica los permisos del navegador, o usa "Subir una Foto".',
+
+            'badge_step_3'                => 'Paso 3 de 3',
+            'step4_title'                 => '¿La foto se ve bien?',
+            'step4_desc'                  => 'Revisa que tu cara se vea con claridad antes de continuar.',
+            'preview_final_alt'           => 'Tu foto',
+            'confirm_photo_button'        => '✓ Sí, agregar esta foto',
+            'retake_photo_button'         => '↩ Tomar otra foto',
+
+            'spinner_type'                => 'css',
+            'spinner_icon'                => '⏳',
+            'spinner_image_url'           => '',
+            'loading_title'               => 'Procesando tus fotos...',
+            'loading_desc'                => 'Estamos registrando tu información, por favor espera.',
+            'save_server_error'           => '❌ Error al guardar las fotos. Por favor intenta de nuevo.',
+
+            'success_icon'                => '🎉',
+            'success_title'               => '¡Ya tenemos todo!',
+            'success_desc'                => 'Vamos a comenzar la búsqueda de tus fotos usando Inteligencia Artificial.',
+            'success_button'              => '🔍 Buscar mis fotos',
+
+            'searching_title'             => 'Buscando tus fotos con IA...',
+            'progress_loading_models'     => 'Cargando modelos de reconocimiento facial...',
+            'progress_analyzing_refs'     => 'Analizando tus {count} foto(s) de referencia...',
+            'progress_comparing'          => 'Comparando con fotos de la galería...',
+            'progress_analyzing_photo'    => 'Analizando foto {current} de {total}...',
+            'progress_completed'          => 'Búsqueda completada.',
+            'face_engine_error'           => 'Motor de reconocimiento facial no disponible.',
+            'image_load_error'            => 'No se pudo cargar: {src}',
+
+            'results_badge'               => '✓ Búsqueda completada',
+            'results_title'               => '¡Encontramos tus fotos!',
+            'results_count_one'           => '🎉 ¡Encontramos 1 foto en donde apareces!',
+            'results_count_many'          => '🎉 ¡Encontramos {count} fotos en donde apareces!',
+            'results_prev_label'          => 'Anterior',
+            'results_next_label'          => 'Siguiente',
+            'download_button'             => '⬇️ Descargar esta foto',
+            'back_start_button'           => '↩ Volver al inicio',
+
+            'no_results_icon'             => '😔',
+            'no_results_title'            => 'No encontramos coincidencias',
+            'no_results_desc'             => 'No detectamos tu rostro en las fotos de la galería. Puede ser que no hayas sido fotografiado/a aún, o que la foto que usaste no sea muy clara. Intenta con otras fotos de referencia.',
+            'try_other_photo_button'      => '📷 Intentar con otras fotos',
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_ia_sanitize_texts' ) ) {
+    function evapp_galeria_ia_sanitize_texts( $atts ) {
+        $defaults = evapp_galeria_ia_default_texts();
+        $texts    = [];
+
+        foreach ( $defaults as $key => $default ) {
+            $value = isset( $atts[ $key ] ) ? $atts[ $key ] : $default;
+
+            if ( $key === 'spinner_type' ) {
+                $value   = sanitize_key( $value );
+                $allowed = [ 'css', 'emoji', 'image', 'none' ];
+                $texts[ $key ] = in_array( $value, $allowed, true ) ? $value : 'css';
+                continue;
+            }
+
+            if ( $key === 'spinner_image_url' ) {
+                $texts[ $key ] = esc_url_raw( $value );
+                continue;
+            }
+
+            $texts[ $key ] = sanitize_text_field( $value );
+        }
+
+        return $texts;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_ia_spinner_html' ) ) {
+    function evapp_galeria_ia_spinner_html( $texts ) {
+        $type = isset( $texts['spinner_type'] ) ? sanitize_key( $texts['spinner_type'] ) : 'css';
+
+        if ( $type === 'emoji' ) {
+            $icon = isset( $texts['spinner_icon'] ) && $texts['spinner_icon'] !== '' ? $texts['spinner_icon'] : '⏳';
+            return '<div class="evapp-gi-spinner evapp-gi-spinner-emoji" aria-hidden="true">' . esc_html( $icon ) . '</div>';
+        }
+
+        if ( $type === 'image' ) {
+            $url = isset( $texts['spinner_image_url'] ) ? esc_url( $texts['spinner_image_url'] ) : '';
+            if ( $url ) {
+                return '<div class="evapp-gi-spinner evapp-gi-spinner-image" aria-hidden="true"><img src="' . $url . '" alt="" loading="lazy" /></div>';
+            }
+        }
+
+        if ( $type === 'none' ) {
+            return '<div class="evapp-gi-spinner evapp-gi-spinner-none" aria-hidden="true"></div>';
+        }
+
+        return '<div class="evapp-gi-spinner evapp-gi-spinner-css" aria-hidden="true"></div>';
+    }
+}
+
 add_shortcode( 'eventosapp_galeria', function ( $atts ) {
-    $atts = shortcode_atts( [ 'id' => 0 ], $atts, 'eventosapp_galeria' );
+    $atts = shortcode_atts( array_merge( [ 'id' => 0 ], evapp_galeria_ia_default_texts() ), $atts, 'eventosapp_galeria' );
     $galeria_id = absint( $atts['id'] );
+    $gi_text    = evapp_galeria_ia_sanitize_texts( $atts );
 
     if ( ! $galeria_id ) {
         return '<p style="color:#c00;">⚠️ Shortcode: falta el atributo <code>id</code>.</p>';
@@ -754,11 +910,11 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             <!-- CTA inicial -->
             <div class="evapp-gi-trigger-wrap" id="<?php echo esc_attr( $uid ); ?>-trigger">
                 <p class="evapp-gi-promo-text">
-                    ¿Quieres ver las fotos en donde apareces?<br>
-                    <strong>Deja que la Inteligencia Artificial lo haga por ti.</strong>
+                    <?php echo esc_html( $gi_text['promo_question'] ); ?><br>
+                    <strong><?php echo esc_html( $gi_text['promo_highlight'] ); ?></strong>
                 </p>
                 <button type="button" class="evapp-gi-btn-abrir" id="<?php echo esc_attr( $uid ); ?>-btn-abrir">
-                    🔍 &nbsp;Buscar
+                    <?php echo esc_html( $gi_text['promo_button'] ); ?>
                 </button>
             </div>
 
@@ -768,81 +924,81 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 <!-- ── PASO 1: Validar identidad ── -->
                 <div class="evapp-gi-step evapp-gi-step-1" data-step="1">
                     <div class="evapp-gi-step-header">
-                        <span class="evapp-gi-badge">Paso 1 de 3</span>
-                        <h3 class="evapp-gi-step-title">Valida tu identidad</h3>
+                        <span class="evapp-gi-badge"><?php echo esc_html( $gi_text['badge_step_1'] ); ?></span>
+                        <h3 class="evapp-gi-step-title"><?php echo esc_html( $gi_text['step1_title'] ); ?></h3>
                     </div>
                     <p class="evapp-gi-step-desc">
-                        Necesitamos validar que eres asistente del evento, por favor ingresa los siguientes datos para continuar.
+                        <?php echo esc_html( $gi_text['step1_desc'] ); ?>
                     </p>
                     <div class="evapp-gi-field-wrap">
-                        <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-cedula">Número de Identificación</label>
+                        <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-cedula"><?php echo esc_html( $gi_text['cedula_label'] ); ?></label>
                         <input type="text" id="<?php echo esc_attr($uid); ?>-cedula"
                                class="evapp-gi-input evapp-gi-cedula"
-                               placeholder="Ej: 1234567890" autocomplete="off" inputmode="text" />
+                               placeholder="<?php echo esc_attr( $gi_text['cedula_placeholder'] ); ?>" autocomplete="off" inputmode="text" />
                     </div>
                     <div class="evapp-gi-field-wrap">
-                        <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-apellidos">Apellidos</label>
+                        <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-apellidos"><?php echo esc_html( $gi_text['apellidos_label'] ); ?></label>
                         <input type="text" id="<?php echo esc_attr($uid); ?>-apellidos"
                                class="evapp-gi-input evapp-gi-apellidos"
-                               placeholder="Ej: García López" autocomplete="off" />
+                               placeholder="<?php echo esc_attr( $gi_text['apellidos_placeholder'] ); ?>" autocomplete="off" />
                     </div>
-                    <p class="evapp-gi-hint-text">✏️ Escribe tus datos tal cual como en tu inscripción al evento.</p>
+                    <p class="evapp-gi-hint-text"><?php echo esc_html( $gi_text['step1_hint'] ); ?></p>
                     <div class="evapp-gi-msg evapp-gi-msg-1" role="alert" style="display:none;"></div>
-                    <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-validar">Continuar &rarr;</button>
+                    <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-validar"><?php echo esc_html( $gi_text['validate_button'] ); ?></button>
                 </div>
 
                 <!-- ── PASO 2: Confirmación de identidad ── -->
                 <div class="evapp-gi-step evapp-gi-step-2" data-step="2" style="display:none;">
                     <div class="evapp-gi-step-header">
-                        <span class="evapp-gi-badge evapp-gi-badge-ok">✓ Verificado</span>
-                        <h3 class="evapp-gi-step-title">¡Te encontramos!</h3>
+                        <span class="evapp-gi-badge evapp-gi-badge-ok"><?php echo esc_html( $gi_text['badge_verified'] ); ?></span>
+                        <h3 class="evapp-gi-step-title"><?php echo esc_html( $gi_text['step2_title'] ); ?></h3>
                     </div>
                     <div class="evapp-gi-asistente-card"><!-- Se llena desde JS --></div>
                     <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-ir-paso3">
-                        Continuar &rarr; Capturar Foto
+                        <?php echo esc_html( $gi_text['step2_button'] ); ?>
                     </button>
                 </div>
 
                 <!-- ── PASO 3: Captura de fotos (multi) ── -->
                 <div class="evapp-gi-step evapp-gi-step-3" data-step="3" style="display:none;">
                     <div class="evapp-gi-step-header">
-                        <span class="evapp-gi-badge">Paso 2 de 3</span>
-                        <h3 class="evapp-gi-step-title">Captura tus fotos</h3>
+                        <span class="evapp-gi-badge"><?php echo esc_html( $gi_text['badge_step_2'] ); ?></span>
+                        <h3 class="evapp-gi-step-title"><?php echo esc_html( $gi_text['step3_title'] ); ?></h3>
                     </div>
                     <p class="evapp-gi-step-desc">
-                        Cuantas más fotos agregues con diferentes características, mejor será la detección. Puedes agregar hasta 3.
+                        <?php echo esc_html( $gi_text['step3_desc'] ); ?>
                     </p>
                     <!-- Tips -->
                     <div class="evapp-gi-foto-tips">
-                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon">😊</span><span>De frente, sin accesorios</span></div>
-                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon">🕶️</span><span>Con gafas o sombrero si los usas</span></div>
-                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon">↗️</span><span>Leve ángulo lateral</span></div>
+                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon"><?php echo esc_html( $gi_text['tip1_icon'] ); ?></span><span><?php echo esc_html( $gi_text['tip1_text'] ); ?></span></div>
+                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon"><?php echo esc_html( $gi_text['tip2_icon'] ); ?></span><span><?php echo esc_html( $gi_text['tip2_text'] ); ?></span></div>
+                        <div class="evapp-gi-tip-item"><span class="evapp-gi-tip-icon"><?php echo esc_html( $gi_text['tip3_icon'] ); ?></span><span><?php echo esc_html( $gi_text['tip3_text'] ); ?></span></div>
                     </div>
                     <!-- Tira de fotos -->
                     <div class="evapp-gi-foto-strip"><!-- Se llena desde JS --></div>
-                    <p class="evapp-gi-strip-status">Aún no has agregado ninguna foto. Agrega al menos una para continuar.</p>
+                    <p class="evapp-gi-strip-status"><?php echo esc_html( $gi_text['strip_empty'] ); ?></p>
                     <!-- Mensaje error -->
                     <div class="evapp-gi-msg evapp-gi-msg-step3" role="alert" style="display:none;"></div>
                     <!-- Opciones de captura -->
                     <div class="evapp-gi-foto-opciones evapp-gi-foto-opciones-main">
                         <button type="button" class="evapp-gi-btn-opcion evapp-gi-btn-subir-foto">
-                            <span class="evapp-gi-btn-opcion-icon">📁</span><span>Subir una Foto</span>
+                            <span><?php echo esc_html( $gi_text['upload_button'] ); ?></span>
                         </button>
                         <button type="button" class="evapp-gi-btn-opcion evapp-gi-btn-abrir-cam">
-                            <span class="evapp-gi-btn-opcion-icon">📷</span><span>Tomar Foto</span>
+                            <span><?php echo esc_html( $gi_text['camera_button'] ); ?></span>
                         </button>
                     </div>
                     <input type="file" class="evapp-gi-file-input" accept="image/*" style="display:none;" />
                     <!-- Preview upload -->
                     <div class="evapp-gi-upload-guide-wrap" style="display:none;">
-                        <p class="evapp-gi-guide-instruc">Asegúrate que tu cara quede centrada dentro del óvalo antes de continuar:</p>
+                        <p class="evapp-gi-guide-instruc"><?php echo esc_html( $gi_text['upload_guide_text'] ); ?></p>
                         <div class="evapp-gi-guide-frame">
-                            <img class="evapp-gi-upload-preview-img" src="" alt="Vista previa de tu foto" />
+                            <img class="evapp-gi-upload-preview-img" src="" alt="<?php echo esc_attr( $gi_text['upload_preview_alt'] ); ?>" />
                             <div class="evapp-gi-oval-overlay"><div class="evapp-gi-oval-ring"></div></div>
                         </div>
                         <div class="evapp-gi-guide-actions">
-                            <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-aprobar-upload">✓ &nbsp;La foto se ve bien, continuar</button>
-                            <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-elegir-otra">↩ &nbsp;Elegir otra foto</button>
+                            <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-aprobar-upload"><?php echo esc_html( $gi_text['approve_upload_button'] ); ?></button>
+                            <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-elegir-otra"><?php echo esc_html( $gi_text['choose_other_button'] ); ?></button>
                         </div>
                     </div>
                     <!-- Cámara -->
@@ -851,19 +1007,19 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                             <video class="evapp-gi-video" autoplay playsinline muted></video>
                             <div class="evapp-gi-oval-overlay evapp-gi-oval-cam">
                                 <div class="evapp-gi-oval-ring"></div>
-                                <p class="evapp-gi-cam-label">Centra tu cara aquí</p>
+                                <p class="evapp-gi-cam-label"><?php echo esc_html( $gi_text['camera_label'] ); ?></p>
                             </div>
                         </div>
                         <canvas class="evapp-gi-canvas" style="display:none;"></canvas>
                         <div class="evapp-gi-cam-actions">
-                            <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-capturar">📸 &nbsp;Capturar Foto</button>
-                            <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-cancel-cam">Cancelar Cámara</button>
+                            <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-capturar"><?php echo esc_html( $gi_text['capture_button'] ); ?></button>
+                            <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-cancel-cam"><?php echo esc_html( $gi_text['cancel_camera_button'] ); ?></button>
                         </div>
                     </div>
                     <!-- Continuar con fotos -->
                     <div class="evapp-gi-step3-actions" style="display:none;">
                         <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-step3-continuar">
-                            ✓ &nbsp;Continuar con <span class="evapp-gi-fotos-count">0</span> foto(s)
+                            <?php echo esc_html( $gi_text['continue_photos_prefix'] ); ?> <span class="evapp-gi-fotos-count">0</span> <?php echo esc_html( $gi_text['continue_photos_suffix'] ); ?>
                         </button>
                     </div>
                 </div>
@@ -871,45 +1027,45 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 <!-- ── PASO 4: Aprobar foto ── -->
                 <div class="evapp-gi-step evapp-gi-step-4" data-step="4" style="display:none;">
                     <div class="evapp-gi-step-header">
-                        <span class="evapp-gi-badge">Paso 3 de 3</span>
-                        <h3 class="evapp-gi-step-title">¿La foto se ve bien?</h3>
+                        <span class="evapp-gi-badge"><?php echo esc_html( $gi_text['badge_step_3'] ); ?></span>
+                        <h3 class="evapp-gi-step-title"><?php echo esc_html( $gi_text['step4_title'] ); ?></h3>
                     </div>
-                    <p class="evapp-gi-step-desc">Revisa que tu cara se vea con claridad antes de continuar.</p>
+                    <p class="evapp-gi-step-desc"><?php echo esc_html( $gi_text['step4_desc'] ); ?></p>
                     <div class="evapp-gi-preview-circular-wrap">
-                        <img class="evapp-gi-preview-final-img" src="" alt="Tu foto" />
+                        <img class="evapp-gi-preview-final-img" src="" alt="<?php echo esc_attr( $gi_text['preview_final_alt'] ); ?>" />
                     </div>
                     <div class="evapp-gi-msg evapp-gi-msg-4" role="alert" style="display:none;"></div>
                     <div class="evapp-gi-paso4-actions">
-                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-confirmar-foto">✓ &nbsp;Sí, agregar esta foto</button>
-                        <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-retomar-cam">↩ &nbsp;Tomar otra foto</button>
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-confirmar-foto"><?php echo esc_html( $gi_text['confirm_photo_button'] ); ?></button>
+                        <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-retomar-cam"><?php echo esc_html( $gi_text['retake_photo_button'] ); ?></button>
                     </div>
                 </div>
 
                 <!-- ── CARGANDO ── -->
                 <div class="evapp-gi-step evapp-gi-step-loading" data-step="loading" style="display:none;">
                     <div class="evapp-gi-loading-wrap">
-                        <div class="evapp-gi-spinner"></div>
-                        <h3 class="evapp-gi-loading-title">Procesando tus fotos...</h3>
-                        <p class="evapp-gi-loading-desc">Estamos registrando tu información, por favor espera.</p>
+                        <?php echo evapp_galeria_ia_spinner_html( $gi_text ); ?>
+                        <h3 class="evapp-gi-loading-title"><?php echo esc_html( $gi_text['loading_title'] ); ?></h3>
+                        <p class="evapp-gi-loading-desc"><?php echo esc_html( $gi_text['loading_desc'] ); ?></p>
                     </div>
                 </div>
 
                 <!-- ── ÉXITO ── -->
                 <div class="evapp-gi-step evapp-gi-step-success" data-step="success" style="display:none;">
                     <div class="evapp-gi-success-wrap">
-                        <div class="evapp-gi-success-icon">🎉</div>
-                        <h3 class="evapp-gi-success-title">¡Ya tenemos todo!</h3>
-                        <p class="evapp-gi-success-desc">Vamos a comenzar la búsqueda de tus fotos usando Inteligencia Artificial.</p>
-                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-continuar">🔍 &nbsp;Buscar mis fotos</button>
+                        <div class="evapp-gi-success-icon"><?php echo esc_html( $gi_text['success_icon'] ); ?></div>
+                        <h3 class="evapp-gi-success-title"><?php echo esc_html( $gi_text['success_title'] ); ?></h3>
+                        <p class="evapp-gi-success-desc"><?php echo esc_html( $gi_text['success_desc'] ); ?></p>
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-continuar"><?php echo esc_html( $gi_text['success_button'] ); ?></button>
                     </div>
                 </div>
 
                 <!-- ── BUSCANDO ── -->
                 <div class="evapp-gi-step evapp-gi-step-searching" data-step="searching" style="display:none;">
                     <div class="evapp-gi-loading-wrap">
-                        <div class="evapp-gi-spinner"></div>
-                        <h3 class="evapp-gi-loading-title">Buscando tus fotos con IA...</h3>
-                        <p class="evapp-gi-loading-desc" id="<?php echo esc_attr( $uid ); ?>-search-progress">Cargando modelos de reconocimiento facial...</p>
+                        <?php echo evapp_galeria_ia_spinner_html( $gi_text ); ?>
+                        <h3 class="evapp-gi-loading-title"><?php echo esc_html( $gi_text['searching_title'] ); ?></h3>
+                        <p class="evapp-gi-loading-desc" id="<?php echo esc_attr( $uid ); ?>-search-progress"><?php echo esc_html( $gi_text['progress_loading_models'] ); ?></p>
                         <div class="evapp-gi-search-bar-wrap">
                             <div class="evapp-gi-search-bar-inner" id="<?php echo esc_attr( $uid ); ?>-search-bar"></div>
                         </div>
@@ -919,24 +1075,24 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 <!-- ── RESULTADOS ── -->
                 <div class="evapp-gi-step evapp-gi-step-results" data-step="results" style="display:none;">
                     <div class="evapp-gi-step-header">
-                        <span class="evapp-gi-badge evapp-gi-badge-ok">✓ Búsqueda completada</span>
-                        <h3 class="evapp-gi-step-title">¡Encontramos tus fotos!</h3>
+                        <span class="evapp-gi-badge evapp-gi-badge-ok"><?php echo esc_html( $gi_text['results_badge'] ); ?></span>
+                        <h3 class="evapp-gi-step-title"><?php echo esc_html( $gi_text['results_title'] ); ?></h3>
                     </div>
                     <p class="evapp-gi-results-count"></p>
                     <div class="evapp-gi-results-carousel-wrap"><!-- Se llena desde JS --></div>
-                    <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda" style="margin-top:18px;">↩ &nbsp;Volver al inicio</button>
+                    <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda" style="margin-top:18px;"><?php echo esc_html( $gi_text['back_start_button'] ); ?></button>
                 </div>
 
                 <!-- ── SIN RESULTADOS ── -->
                 <div class="evapp-gi-step evapp-gi-step-no-results" data-step="no-results" style="display:none;">
                     <div class="evapp-gi-success-wrap">
-                        <div class="evapp-gi-success-icon" style="font-size:52px;">😔</div>
-                        <h3 class="evapp-gi-step-title" style="font-size:20px;">No encontramos coincidencias</h3>
+                        <div class="evapp-gi-success-icon" style="font-size:52px;"><?php echo esc_html( $gi_text['no_results_icon'] ); ?></div>
+                        <h3 class="evapp-gi-step-title" style="font-size:20px;"><?php echo esc_html( $gi_text['no_results_title'] ); ?></h3>
                         <p class="evapp-gi-step-desc">
-                            No detectamos tu rostro en las fotos de la galería. Puede ser que no hayas sido fotografiado/a aún, o que la foto que usaste no sea muy clara. Intenta con otras fotos de referencia.
+                            <?php echo esc_html( $gi_text['no_results_desc'] ); ?>
                         </p>
-                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-intentar-otra-foto">📷 &nbsp;Intentar con otras fotos</button>
-                        <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda-2" style="margin-top:8px;">↩ &nbsp;Volver al inicio</button>
+                        <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-intentar-otra-foto"><?php echo esc_html( $gi_text['try_other_photo_button'] ); ?></button>
+                        <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda-2" style="margin-top:8px;"><?php echo esc_html( $gi_text['back_start_button'] ); ?></button>
                     </div>
                 </div>
 
@@ -1013,7 +1169,12 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         /* Cargando */
         .evapp-gi-loading-wrap { text-align:center; padding:44px 20px; }
         .evapp-gi-spinner { width:52px; height:52px; border:5px solid #dde8ff; border-top-color:#1c3d8f; border-radius:50%; animation:evapp-gi-spin .75s linear infinite; margin:0 auto 20px; }
+        .evapp-gi-spinner-emoji { width:auto; height:auto; border:0; border-radius:0; font-size:52px; line-height:1; animation:evapp-gi-pulse 1s ease-in-out infinite; }
+        .evapp-gi-spinner-image { border:0; border-radius:0; background:transparent; animation:none; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+        .evapp-gi-spinner-image img { width:100%; height:100%; object-fit:contain; display:block; }
+        .evapp-gi-spinner-none { display:none; }
         @keyframes evapp-gi-spin { to { transform:rotate(360deg); } }
+        @keyframes evapp-gi-pulse { 0%,100%{ transform:scale(1); opacity:1; } 50%{ transform:scale(1.12); opacity:.72; } }
         .evapp-gi-loading-title { font-size:18px; font-weight:700; color:#111827; margin:0 0 8px; }
         .evapp-gi-loading-desc { font-size:14px; color:#666; margin:0; }
         /* Éxito */
@@ -1167,6 +1328,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             var galeriaId     = <?php echo wp_json_encode( $galeria_id ); ?>;
             var nonceBuscar   = <?php echo wp_json_encode( $nonce_buscar ); ?>;
             var nonceRegistro = <?php echo wp_json_encode( $nonce_registro ); ?>;
+            var giText        = <?php echo wp_json_encode( $gi_text ); ?>;
 
             var finder      = document.getElementById(uid + '-finder');
             var wizard      = document.getElementById(uid + '-wizard');
@@ -1185,6 +1347,15 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             var MAX_FOTOS      = 3;
 
             // ── Helpers generales ────────────────────────────────────────────
+            function t(key, replacements) {
+                var value = giText && Object.prototype.hasOwnProperty.call(giText, key) ? String(giText[key] || '') : '';
+                if ( replacements ) {
+                    Object.keys(replacements).forEach(function(repKey){
+                        value = value.split('{' + repKey + '}').join(String(replacements[repKey]));
+                    });
+                }
+                return value;
+            }
             function showStep(cls) {
                 wizard.querySelectorAll('.evapp-gi-step').forEach(function(s){ s.style.display = 'none'; });
                 var el = wizard.querySelector('.' + cls);
@@ -1196,7 +1367,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 el.style.display = '';
             }
             function hideMsg(el) { if (el) el.style.display = 'none'; }
-            function setLoading(btn, lbl) { btn.disabled = true;  btn.textContent = lbl || 'Procesando...'; }
+            function setLoading(btn, lbl) { btn.disabled = true;  btn.textContent = lbl || t('loading_title'); }
             function setReady(btn, lbl)   { btn.disabled = false; btn.textContent = lbl; }
             function escHtml(str) {
                 return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -1239,11 +1410,11 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     var item = document.createElement('div');
                     item.className = 'evapp-gi-foto-strip-item';
                     var img = document.createElement('img');
-                    img.src = dataUrl; img.alt = 'Foto ' + (idx + 1);
+                    img.src = dataUrl; img.alt = t('photo_label', { num: idx + 1 });
                     item.appendChild(img);
                     var label = document.createElement('span');
                     label.className = 'evapp-gi-strip-label';
-                    label.textContent = 'Foto ' + (idx + 1);
+                    label.textContent = t('photo_label', { num: idx + 1 });
                     item.appendChild(label);
                     var rmBtn = document.createElement('button');
                     rmBtn.type = 'button'; rmBtn.className = 'evapp-gi-foto-strip-remove';
@@ -1256,10 +1427,10 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     strip.appendChild(item);
                 });
                 if ( statusEl ) {
-                    if ( fotosDataUrls.length === 0 )      { statusEl.textContent = 'Aún no has agregado ninguna foto. Agrega al menos una para continuar.'; statusEl.className = 'evapp-gi-strip-status'; }
-                    else if ( fotosDataUrls.length === 1 ) { statusEl.textContent = '✅ 1 foto agregada. ¡Agrega 1 o 2 más para mejorar los resultados!'; statusEl.className = 'evapp-gi-strip-status is-hint'; }
-                    else if ( fotosDataUrls.length === 2 ) { statusEl.textContent = '✅ 2 fotos agregadas. Puedes agregar 1 más o ya continuar.'; statusEl.className = 'evapp-gi-strip-status is-hint'; }
-                    else                                    { statusEl.textContent = '✅ 3 fotos agregadas. ¡Perfecto! Ya puedes continuar.'; statusEl.className = 'evapp-gi-strip-status is-ok'; }
+                    if ( fotosDataUrls.length === 0 )      { statusEl.textContent = t('strip_empty'); statusEl.className = 'evapp-gi-strip-status'; }
+                    else if ( fotosDataUrls.length === 1 ) { statusEl.textContent = t('strip_one'); statusEl.className = 'evapp-gi-strip-status is-hint'; }
+                    else if ( fotosDataUrls.length === 2 ) { statusEl.textContent = t('strip_two'); statusEl.className = 'evapp-gi-strip-status is-hint'; }
+                    else                                    { statusEl.textContent = t('strip_three'); statusEl.className = 'evapp-gi-strip-status is-ok'; }
                 }
                 if ( actionsEl ) actionsEl.style.display = fotosDataUrls.length > 0 ? '' : 'none';
                 if ( countEl   ) countEl.textContent     = fotosDataUrls.length;
@@ -1286,11 +1457,11 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     var cedula    = inputCedula.value.trim();
                     var apellidos = inputApell.value.trim();
                     if ( ! cedula || ! apellidos ) {
-                        showMsg( msg1, '⚠️ Por favor ingresa tu número de identificación y tus apellidos.', 'error' );
+                        showMsg( msg1, t('validate_empty_error'), 'error' );
                         return;
                     }
                     hideMsg( msg1 );
-                    setLoading( btnValidar, 'Buscando...' );
+                    setLoading( btnValidar, t('validate_loading') );
                     var fd = new FormData();
                     fd.append('action', 'evapp_galeria_buscar_ticket');
                     fd.append('security', nonceBuscar);
@@ -1300,7 +1471,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     fetch( ajaxUrl, { method: 'POST', body: fd } )
                         .then(function(r){ return r.json(); })
                         .then(function(res){
-                            setReady( btnValidar, 'Continuar →' );
+                            setReady( btnValidar, t('validate_button') );
                             if ( res.success ) {
                                 ticketId  = res.data.ticket_id;
                                 cedulaVal = cedula;
@@ -1308,18 +1479,18 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                                 card.innerHTML =
                                     '<div class="evapp-gi-as-name">' + escHtml(res.data.nombre_completo) + '</div>' +
                                     '<div class="evapp-gi-as-info">' +
-                                    ( res.data.empresa ? '🏢 ' + escHtml(res.data.empresa) + '<br>' : '' ) +
-                                    ( res.data.cargo   ? '💼 ' + escHtml(res.data.cargo)   + '<br>' : '' ) +
-                                    ( res.data.email   ? '✉️ ' + escHtml(res.data.email)            : '' ) +
+                                    ( res.data.empresa ? escHtml(t('assistant_company_icon')) + ' ' + escHtml(res.data.empresa) + '<br>' : '' ) +
+                                    ( res.data.cargo   ? escHtml(t('assistant_role_icon')) + ' ' + escHtml(res.data.cargo) + '<br>' : '' ) +
+                                    ( res.data.email   ? escHtml(t('assistant_email_icon')) + ' ' + escHtml(res.data.email) : '' ) +
                                     '</div>';
                                 showStep('evapp-gi-step-2');
                             } else {
-                                showMsg( msg1, res.data.error || '❌ No encontramos un asistente con esos datos. Intenta de nuevo.', 'error' );
+                                showMsg( msg1, t('validate_server_error'), 'error' );
                             }
                         })
                         .catch(function(){
-                            setReady( btnValidar, 'Continuar →' );
-                            showMsg( msg1, '❌ Error de conexión. Por favor intenta de nuevo.', 'error' );
+                            setReady( btnValidar, t('validate_button') );
+                            showMsg( msg1, t('connection_error'), 'error' );
                         });
                 });
                 [inputCedula, inputApell].forEach(function(inp){
@@ -1395,7 +1566,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                             console.error('[EventosApp GaleriaIA] Cámara:', err);
                             camWrap.style.display      = 'none';
                             fotoOpciones.style.display = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
-                            alert('No se pudo acceder a la cámara. Verifica los permisos del navegador, o usa "Subir una Foto".');
+                            alert(t('camera_permission_error'));
                         });
                 });
             }
@@ -1482,12 +1653,12 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                             showStep('evapp-gi-step-success');
                         } else {
                             showStep('evapp-gi-step-3');
-                            if ( msgStep3 ) showMsg( msgStep3, res.data.error || '❌ Error al guardar las fotos. Por favor intenta de nuevo.', 'error' );
+                            if ( msgStep3 ) showMsg( msgStep3, t('save_server_error'), 'error' );
                         }
                     })
                     .catch(function(){
                         showStep('evapp-gi-step-3');
-                        if ( msgStep3 ) showMsg( msgStep3, '❌ Error de conexión. Por favor intenta de nuevo.', 'error' );
+                        if ( msgStep3 ) showMsg( msgStep3, t('connection_error'), 'error' );
                     });
             }
 
@@ -1540,7 +1711,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     var img = new Image(), isDataUrl = src.indexOf('data:') === 0;
                     if ( ! isDataUrl ) img.crossOrigin = 'anonymous';
                     img.onload  = function() { resolve(img); };
-                    img.onerror = function() { reject(new Error('No se pudo cargar: ' + (isDataUrl ? '[data URL]' : src))); };
+                    img.onerror = function() { reject(new Error(t('image_load_error', { src: (isDataUrl ? '[data URL]' : src) }))); };
                     img.src = isDataUrl ? src : src + (src.indexOf('?') === -1 ? '?' : '&') + '_evappf=' + Date.now();
                 });
             }
@@ -1563,14 +1734,14 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
 
             async function evappGiIniciarBusqueda() {
                 try {
-                    evappGiSetProgress(5, 'Cargando modelos de reconocimiento facial...');
-                    if ( typeof faceapi === 'undefined' ) throw new Error('Motor de reconocimiento facial no disponible.');
+                    evappGiSetProgress(5, t('progress_loading_models'));
+                    if ( typeof faceapi === 'undefined' ) throw new Error(t('face_engine_error'));
                     await Promise.all([
                         faceapi.nets.ssdMobilenetv1.isLoaded    ? Promise.resolve() : faceapi.nets.ssdMobilenetv1.loadFromUri(faceModelsUrl),
                         faceapi.nets.faceLandmark68Net.isLoaded  ? Promise.resolve() : faceapi.nets.faceLandmark68Net.loadFromUri(faceModelsUrl),
                         faceapi.nets.faceRecognitionNet.isLoaded ? Promise.resolve() : faceapi.nets.faceRecognitionNet.loadFromUri(faceModelsUrl),
                     ]);
-                    evappGiSetProgress(15, 'Analizando tus ' + fotosDataUrls.length + ' foto(s) de referencia...');
+                    evappGiSetProgress(15, t('progress_analyzing_refs', { count: fotosDataUrls.length }));
                     await evappGiOpenIDB();
                     faceDescsQuery = [];
                     for (var pi = 0; pi < fotosDataUrls.length; pi++) {
@@ -1583,11 +1754,11 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                         } catch(eQuery) { console.warn('[EventosApp GaleriaIA] Skip foto referencia ' + pi + ':', eQuery.message); }
                     }
                     if ( faceDescsQuery.length === 0 ) { evappGiSetProgress(100, ''); showStep('evapp-gi-step-no-results'); return; }
-                    evappGiSetProgress(25, 'Comparando con fotos de la galería...');
+                    evappGiSetProgress(25, t('progress_comparing'));
                     var matches = [], total = imagenes.length;
                     for ( var i = 0; i < total; i++ ) {
                         var foto = imagenes[i];
-                        evappGiSetProgress(25 + Math.round((i / total) * 70), 'Analizando foto ' + (i + 1) + ' de ' + total + '...');
+                        evappGiSetProgress(25 + Math.round((i / total) * 70), t('progress_analyzing_photo', { current: i + 1, total: total }));
                         try {
                             var galleryDescs = await evappGiGetDescriptoresGaleria(foto.full);
                             if ( galleryDescs && galleryDescs.length ) {
@@ -1602,7 +1773,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                             }
                         } catch(ePhoto) { console.warn('[EventosApp GaleriaIA] Skip foto ' + i + ':', ePhoto.message); }
                     }
-                    evappGiSetProgress(100, 'Búsqueda completada.');
+                    evappGiSetProgress(100, t('progress_completed'));
                     setTimeout(function(){ evappGiMostrarResultados(matches); }, 600);
                 } catch (err) {
                     console.error('[EventosApp GaleriaIA] Error en búsqueda facial:', err);
@@ -1617,22 +1788,22 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 var resCarousel = wizard.querySelector('.evapp-gi-results-carousel-wrap');
                 if ( resCount ) {
                     resCount.textContent = matches.length === 1
-                        ? '🎉 ¡Encontramos 1 foto en donde apareces!'
-                        : '🎉 ¡Encontramos ' + matches.length + ' fotos en donde apareces!';
+                        ? t('results_count_one')
+                        : t('results_count_many', { count: matches.length });
                 }
                 var html = '<div class="evapp-gi-results-slides">';
                 matches.forEach(function(m, idx) {
-                    var altTxt = escHtml(m.photo.alt || ('Foto ' + (idx + 1)));
+                    var altTxt = escHtml(m.photo.alt || t('photo_label', { num: idx + 1 }));
                     html += '<div class="evapp-gi-result-slide' + (idx === 0 ? ' active' : '') + '" data-ri="' + idx + '">' +
                             '<img src="' + escHtml(m.photo.full) + '" alt="' + altTxt + '" loading="' + (idx === 0 ? 'eager' : 'lazy') + '" /></div>';
                 });
                 html += '</div>';
                 html += '<div class="evapp-gi-results-nav-row">' +
-                        '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-prev" aria-label="Anterior">&#8249;</button>' +
+                        '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-prev" aria-label="' + escHtml(t('results_prev_label')) + '">&#8249;</button>' +
                         '<span class="evapp-gi-results-counter"><span class="evapp-gi-res-cur">1</span> / ' + matches.length + '</span>' +
-                        '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-next" aria-label="Siguiente">&#8250;</button>' +
+                        '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-next" aria-label="' + escHtml(t('results_next_label')) + '">&#8250;</button>' +
                         '</div>' +
-                        '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.full) + '" download target="_blank">⬇️ &nbsp;Descargar esta foto</a>';
+                        '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.full) + '" download target="_blank">' + escHtml(t('download_button')) + '</a>';
                 resCarousel.innerHTML = html;
                 var rSlides = resCarousel.querySelectorAll('.evapp-gi-result-slide');
                 var rCur = 0;
@@ -2308,6 +2479,26 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 ] );
             }
 
+            private function add_ai_text_control( $key, $label, $type = 'text' ) {
+                $defaults = evapp_galeria_ia_default_texts();
+                $control_type = $type === 'textarea' ? \Elementor\Controls_Manager::TEXTAREA : \Elementor\Controls_Manager::TEXT;
+
+                $this->add_control( $key, [
+                    'label'       => $label,
+                    'type'        => $control_type,
+                    'default'     => isset( $defaults[ $key ] ) ? $defaults[ $key ] : '',
+                    'label_block' => true,
+                ] );
+            }
+
+            private function add_ai_text_heading( $label ) {
+                $this->add_control( sanitize_key( 'ai_text_heading_' . md5( $label ) ), [
+                    'label'     => $label,
+                    'type'      => \Elementor\Controls_Manager::HEADING,
+                    'separator' => 'before',
+                ] );
+            }
+
             protected function register_controls() {
 
                 $this->start_controls_section( 'section_content', [
@@ -2323,6 +2514,145 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'description' => 'Selecciona una galería creada en EventosApp. Conserva el mismo render del shortcode para no romper compatibilidad.',
                 ] );
                 $this->end_controls_section();
+                $this->start_controls_section( 'section_ai_texts_cta_identity', [
+                    'label' => 'Flujo IA: textos CTA e identidad',
+                    'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                ] );
+                $this->add_ai_text_heading( 'CTA inicial' );
+                $this->add_ai_text_control( 'promo_question', 'Pregunta principal' );
+                $this->add_ai_text_control( 'promo_highlight', 'Frase destacada' );
+                $this->add_ai_text_control( 'promo_button', 'Botón CTA' );
+
+                $this->add_ai_text_heading( 'Paso 1 — Validación' );
+                $this->add_ai_text_control( 'badge_step_1', 'Etiqueta paso 1' );
+                $this->add_ai_text_control( 'step1_title', 'Título paso 1' );
+                $this->add_ai_text_control( 'step1_desc', 'Descripción paso 1', 'textarea' );
+                $this->add_ai_text_control( 'cedula_label', 'Label identificación' );
+                $this->add_ai_text_control( 'cedula_placeholder', 'Placeholder identificación' );
+                $this->add_ai_text_control( 'apellidos_label', 'Label apellidos' );
+                $this->add_ai_text_control( 'apellidos_placeholder', 'Placeholder apellidos' );
+                $this->add_ai_text_control( 'step1_hint', 'Texto de ayuda' );
+                $this->add_ai_text_control( 'validate_button', 'Botón validar' );
+                $this->add_ai_text_control( 'validate_loading', 'Texto botón validando' );
+                $this->add_ai_text_control( 'validate_empty_error', 'Error campos vacíos' );
+                $this->add_ai_text_control( 'validate_server_error', 'Error validación no encontrada' );
+                $this->add_ai_text_control( 'connection_error', 'Error conexión' );
+
+                $this->add_ai_text_heading( 'Paso 2 — Asistente encontrado' );
+                $this->add_ai_text_control( 'badge_verified', 'Etiqueta verificado' );
+                $this->add_ai_text_control( 'step2_title', 'Título paso 2' );
+                $this->add_ai_text_control( 'step2_button', 'Botón hacia captura' );
+                $this->add_ai_text_control( 'assistant_company_icon', 'Icono empresa' );
+                $this->add_ai_text_control( 'assistant_role_icon', 'Icono cargo' );
+                $this->add_ai_text_control( 'assistant_email_icon', 'Icono email' );
+                $this->end_controls_section();
+
+                $this->start_controls_section( 'section_ai_texts_capture', [
+                    'label' => 'Flujo IA: textos captura y cámara',
+                    'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                ] );
+                $this->add_ai_text_heading( 'Paso 3 — Captura de fotos' );
+                $this->add_ai_text_control( 'badge_step_2', 'Etiqueta paso 2' );
+                $this->add_ai_text_control( 'step3_title', 'Título captura' );
+                $this->add_ai_text_control( 'step3_desc', 'Descripción captura', 'textarea' );
+                $this->add_ai_text_control( 'tip1_icon', 'Icono tip 1' );
+                $this->add_ai_text_control( 'tip1_text', 'Texto tip 1' );
+                $this->add_ai_text_control( 'tip2_icon', 'Icono tip 2' );
+                $this->add_ai_text_control( 'tip2_text', 'Texto tip 2' );
+                $this->add_ai_text_control( 'tip3_icon', 'Icono tip 3' );
+                $this->add_ai_text_control( 'tip3_text', 'Texto tip 3' );
+                $this->add_ai_text_control( 'strip_empty', 'Estado sin fotos', 'textarea' );
+                $this->add_ai_text_control( 'strip_one', 'Estado 1 foto', 'textarea' );
+                $this->add_ai_text_control( 'strip_two', 'Estado 2 fotos', 'textarea' );
+                $this->add_ai_text_control( 'strip_three', 'Estado 3 fotos', 'textarea' );
+                $this->add_ai_text_control( 'photo_label', 'Label foto cargada. Usa {num}' );
+                $this->add_ai_text_control( 'upload_button', 'Botón subir foto' );
+                $this->add_ai_text_control( 'camera_button', 'Botón tomar foto' );
+                $this->add_ai_text_control( 'upload_guide_text', 'Instrucción preview', 'textarea' );
+                $this->add_ai_text_control( 'upload_preview_alt', 'Alt preview subida' );
+                $this->add_ai_text_control( 'approve_upload_button', 'Botón aprobar foto subida' );
+                $this->add_ai_text_control( 'choose_other_button', 'Botón elegir otra foto' );
+                $this->add_ai_text_control( 'camera_label', 'Label cámara' );
+                $this->add_ai_text_control( 'capture_button', 'Botón capturar' );
+                $this->add_ai_text_control( 'cancel_camera_button', 'Botón cancelar cámara' );
+                $this->add_ai_text_control( 'continue_photos_prefix', 'Texto antes del contador' );
+                $this->add_ai_text_control( 'continue_photos_suffix', 'Texto después del contador' );
+                $this->add_ai_text_control( 'camera_permission_error', 'Alerta permiso cámara', 'textarea' );
+
+                $this->add_ai_text_heading( 'Paso 4 — Confirmación de foto' );
+                $this->add_ai_text_control( 'badge_step_3', 'Etiqueta paso 3' );
+                $this->add_ai_text_control( 'step4_title', 'Título confirmar foto' );
+                $this->add_ai_text_control( 'step4_desc', 'Descripción confirmar foto', 'textarea' );
+                $this->add_ai_text_control( 'preview_final_alt', 'Alt foto final' );
+                $this->add_ai_text_control( 'confirm_photo_button', 'Botón agregar foto' );
+                $this->add_ai_text_control( 'retake_photo_button', 'Botón repetir foto' );
+                $this->end_controls_section();
+
+                $this->start_controls_section( 'section_ai_texts_states_results', [
+                    'label' => 'Flujo IA: textos carga y resultados',
+                    'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                ] );
+                $this->add_ai_text_heading( 'Carga después de recibir las fotos' );
+                $this->add_ai_text_control( 'loading_title', 'Título procesando fotos' );
+                $this->add_ai_text_control( 'loading_desc', 'Descripción procesando fotos', 'textarea' );
+                $this->add_ai_text_control( 'save_server_error', 'Error guardando fotos' );
+
+                $this->add_ai_text_heading( 'Fotos recibidas / éxito' );
+                $this->add_ai_text_control( 'success_icon', 'Emoticon de fotos recibidas' );
+                $this->add_ai_text_control( 'success_title', 'Título fotos recibidas' );
+                $this->add_ai_text_control( 'success_desc', 'Descripción fotos recibidas', 'textarea' );
+                $this->add_ai_text_control( 'success_button', 'Botón buscar mis fotos' );
+
+                $this->add_ai_text_heading( 'Búsqueda IA' );
+                $this->add_ai_text_control( 'searching_title', 'Título buscando' );
+                $this->add_ai_text_control( 'progress_loading_models', 'Progreso cargando modelos' );
+                $this->add_ai_text_control( 'progress_analyzing_refs', 'Progreso analizando referencias. Usa {count}' );
+                $this->add_ai_text_control( 'progress_comparing', 'Progreso comparando' );
+                $this->add_ai_text_control( 'progress_analyzing_photo', 'Progreso foto. Usa {current} y {total}' );
+                $this->add_ai_text_control( 'progress_completed', 'Progreso completado' );
+                $this->add_ai_text_control( 'face_engine_error', 'Error motor IA' );
+                $this->add_ai_text_control( 'image_load_error', 'Error cargar imagen. Usa {src}' );
+
+                $this->add_ai_text_heading( 'Resultados' );
+                $this->add_ai_text_control( 'results_badge', 'Etiqueta búsqueda completada' );
+                $this->add_ai_text_control( 'results_title', 'Título resultados' );
+                $this->add_ai_text_control( 'results_count_one', 'Texto resultado 1 foto' );
+                $this->add_ai_text_control( 'results_count_many', 'Texto resultados varias fotos. Usa {count}' );
+                $this->add_ai_text_control( 'results_prev_label', 'Aria flecha anterior' );
+                $this->add_ai_text_control( 'results_next_label', 'Aria flecha siguiente' );
+                $this->add_ai_text_control( 'download_button', 'Botón descargar foto' );
+                $this->add_ai_text_control( 'back_start_button', 'Botón volver al inicio' );
+
+                $this->add_ai_text_heading( 'Sin resultados' );
+                $this->add_ai_text_control( 'no_results_icon', 'Emoticon sin resultados' );
+                $this->add_ai_text_control( 'no_results_title', 'Título sin resultados' );
+                $this->add_ai_text_control( 'no_results_desc', 'Descripción sin resultados', 'textarea' );
+                $this->add_ai_text_control( 'try_other_photo_button', 'Botón intentar con otras fotos' );
+                $this->end_controls_section();
+
+                $this->start_controls_section( 'section_ai_spinner_icons', [
+                    'label' => 'Flujo IA: spinner e iconos',
+                    'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                ] );
+                $this->add_control( 'spinner_type', [
+                    'label'   => 'Tipo de spinner',
+                    'type'    => \Elementor\Controls_Manager::SELECT,
+                    'default' => 'css',
+                    'options' => [
+                        'css'   => 'Spinner circular actual',
+                        'emoji' => 'Emoji / texto',
+                        'image' => 'Imagen personalizada',
+                        'none'  => 'Ocultar spinner',
+                    ],
+                ] );
+                $this->add_ai_text_control( 'spinner_icon', 'Emoji / texto del spinner' );
+                $this->add_control( 'spinner_image', [
+                    'label'     => 'Imagen del spinner',
+                    'type'      => \Elementor\Controls_Manager::MEDIA,
+                    'condition' => [ 'spinner_type' => 'image' ],
+                ] );
+                $this->end_controls_section();
+
 
                 $this->start_controls_section( 'style_layout_order', [
                     'label' => 'Ubicación / orden de bloques',
@@ -2688,31 +3018,34 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'type'       => \Elementor\Controls_Manager::SLIDER,
                     'size_units' => [ 'px', 'em' ],
                     'range'      => [ 'px' => [ 'min' => 18, 'max' => 180 ], 'em' => [ 'min' => 1, 'max' => 12 ] ],
-                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner' => 'width: {{SIZE}}{{UNIT}}; height: {{SIZE}}{{UNIT}};' ],
+                    'selectors'  => [
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner'       => 'width: {{SIZE}}{{UNIT}}; height: {{SIZE}}{{UNIT}};',
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-emoji' => 'font-size: {{SIZE}}{{UNIT}}; width:auto; height:auto;',
+                    ],
                 ] );
                 $this->add_responsive_control( 'ai_spinner_border_width', [
                     'label'      => 'Grosor spinner',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
                     'size_units' => [ 'px' ],
                     'range'      => [ 'px' => [ 'min' => 1, 'max' => 24 ] ],
-                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner' => 'border-width: {{SIZE}}{{UNIT}};' ],
+                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-css' => 'border-width: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_control( 'ai_spinner_base_color', [
                     'label'     => 'Color base spinner',
                     'type'      => \Elementor\Controls_Manager::COLOR,
-                    'selectors' => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner' => 'border-color: {{VALUE}};' ],
+                    'selectors' => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-css' => 'border-color: {{VALUE}};' ],
                 ] );
                 $this->add_control( 'ai_spinner_active_color', [
                     'label'     => 'Color activo spinner',
                     'type'      => \Elementor\Controls_Manager::COLOR,
-                    'selectors' => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner' => 'border-top-color: {{VALUE}};' ],
+                    'selectors' => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-css' => 'border-top-color: {{VALUE}};' ],
                 ] );
                 $this->add_control( 'ai_spinner_duration', [
                     'label'      => 'Velocidad spinner',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
                     'size_units' => [ 's' ],
                     'range'      => [ 's' => [ 'min' => 0.2, 'max' => 4, 'step' => 0.05 ] ],
-                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner' => 'animation-duration: {{SIZE}}{{UNIT}};' ],
+                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-css, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-emoji' => 'animation-duration: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_responsive_control( 'ai_success_icon_size', [
                     'label'      => 'Tamaño icono éxito / sin resultados',
@@ -2770,8 +3103,31 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     return;
                 }
 
-                echo do_shortcode( '[eventosapp_galeria id="' . absint( $galeria_id ) . '"]' );
+                $shortcode_attrs = [ 'id' => $galeria_id ];
+                $defaults        = evapp_galeria_ia_default_texts();
+
+                foreach ( $defaults as $key => $default ) {
+                    if ( $key === 'spinner_image_url' ) {
+                        continue;
+                    }
+                    if ( isset( $settings[ $key ] ) && $settings[ $key ] !== '' ) {
+                        $shortcode_attrs[ $key ] = $settings[ $key ];
+                    }
+                }
+
+                if ( ! empty( $settings['spinner_image']['url'] ) ) {
+                    $shortcode_attrs['spinner_image_url'] = esc_url_raw( $settings['spinner_image']['url'] );
+                }
+
+                $shortcode = '[eventosapp_galeria';
+                foreach ( $shortcode_attrs as $attr_key => $attr_value ) {
+                    $shortcode .= ' ' . sanitize_key( $attr_key ) . '="' . esc_attr( $attr_value ) . '"';
+                }
+                $shortcode .= ']';
+
+                echo do_shortcode( $shortcode );
             }
+
         }
     }
 
