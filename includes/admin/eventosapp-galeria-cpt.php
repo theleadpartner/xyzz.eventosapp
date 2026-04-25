@@ -2137,11 +2137,64 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'type'      => \Elementor\Controls_Manager::COLOR,
                     'selectors' => [ $selector => 'color: {{VALUE}};' ],
                 ] );
+                $this->add_responsive_control( $prefix . '_align', [
+                    'label'     => 'Alineación del texto',
+                    'type'      => \Elementor\Controls_Manager::CHOOSE,
+                    'options'   => [
+                        'left'   => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                        'center' => [ 'title' => 'Centro',    'icon' => 'eicon-text-align-center' ],
+                        'right'  => [ 'title' => 'Derecha',   'icon' => 'eicon-text-align-right' ],
+                    ],
+                    'selectors' => [ $selector => 'text-align: {{VALUE}};' ],
+                    'toggle'    => true,
+                ] );
                 $this->add_responsive_control( $prefix . '_spacing', [
                     'label'      => 'Margen',
                     'type'       => \Elementor\Controls_Manager::DIMENSIONS,
                     'size_units' => [ 'px', 'em', '%' ],
                     'selectors'  => [ $selector => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                ] );
+            }
+
+            private function add_text_align_control( $control_id, $label, $selector ) {
+                $this->add_responsive_control( $control_id, [
+                    'label'     => $label,
+                    'type'      => \Elementor\Controls_Manager::CHOOSE,
+                    'options'   => [
+                        'left'   => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                        'center' => [ 'title' => 'Centro',    'icon' => 'eicon-text-align-center' ],
+                        'right'  => [ 'title' => 'Derecha',   'icon' => 'eicon-text-align-right' ],
+                    ],
+                    'selectors' => [ $selector => 'text-align: {{VALUE}};' ],
+                    'toggle'    => true,
+                ] );
+            }
+
+            private function add_flex_justify_control( $control_id, $label, $selector ) {
+                $this->add_responsive_control( $control_id, [
+                    'label'     => $label,
+                    'type'      => \Elementor\Controls_Manager::CHOOSE,
+                    'options'   => [
+                        'flex-start' => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                        'center'     => [ 'title' => 'Centro',    'icon' => 'eicon-text-align-center' ],
+                        'flex-end'   => [ 'title' => 'Derecha',   'icon' => 'eicon-text-align-right' ],
+                    ],
+                    'selectors' => [ $selector => 'justify-content: {{VALUE}};' ],
+                    'toggle'    => true,
+                ] );
+            }
+
+            private function add_flex_items_align_control( $control_id, $label, $selector ) {
+                $this->add_responsive_control( $control_id, [
+                    'label'     => $label,
+                    'type'      => \Elementor\Controls_Manager::CHOOSE,
+                    'options'   => [
+                        'flex-start' => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                        'center'     => [ 'title' => 'Centro',    'icon' => 'eicon-text-align-center' ],
+                        'flex-end'   => [ 'title' => 'Derecha',   'icon' => 'eicon-text-align-right' ],
+                    ],
+                    'selectors' => [ $selector => 'align-items: {{VALUE}};' ],
+                    'toggle'    => true,
                 ] );
             }
 
@@ -2155,6 +2208,8 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'name'     => $prefix . '_typography',
                     'selector' => $selector,
                 ] );
+                $this->add_flex_justify_control( $prefix . '_content_justify', 'Alineación del contenido', $selector );
+                $this->add_text_align_control( $prefix . '_text_align', 'Alineación del texto', $selector );
                 $this->start_controls_tabs( $prefix . '_tabs' );
                 $this->start_controls_tab( $prefix . '_normal', [ 'label' => 'Normal' ] );
                 $this->add_control( $prefix . '_color', [
@@ -2336,7 +2391,9 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $this->start_controls_section( 'style_header', [ 'label' => 'Título y detalles del evento', 'tab' => \Elementor\Controls_Manager::TAB_STYLE ] );
                 $this->add_box_controls( 'header', '{{WRAPPER}} .evapp-galeria-header' );
                 $this->add_text_controls( 'gallery_title', '{{WRAPPER}} .evapp-galeria-header-title', 'Título' );
+                $this->add_flex_justify_control( 'gallery_meta_group_align', 'Alineación del bloque de detalles', '{{WRAPPER}} .evapp-galeria-header-meta' );
                 $this->add_text_controls( 'gallery_meta', '{{WRAPPER}} .evapp-galeria-header-meta, {{WRAPPER}} .evapp-gh-meta-item, {{WRAPPER}} .evapp-gh-organizador-label, {{WRAPPER}} .evapp-gh-cliente-nombre', 'Detalles del evento' );
+                $this->add_flex_justify_control( 'gallery_meta_items_align', 'Alineación interna texto + ícono', '{{WRAPPER}} .evapp-gh-meta-item' );
                 $this->add_control( 'meta_icon_color', [
                     'label'     => 'Color íconos de detalles',
                     'type'      => \Elementor\Controls_Manager::COLOR,
@@ -2449,6 +2506,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'range'      => [ 'px' => [ 'min' => 0, 'max' => 80 ], 'em' => [ 'min' => 0, 'max' => 6 ] ],
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-thumbs-wrap, {{WRAPPER}} .evapp-galeria-thumbs' => 'gap: {{SIZE}}{{UNIT}};' ],
                 ] );
+                $this->add_flex_justify_control( 'thumbs_align', 'Alineación horizontal de miniaturas', '{{WRAPPER}} .evapp-galeria-thumbs-wrap, {{WRAPPER}} .evapp-galeria-thumbs' );
                 $this->add_responsive_control( 'thumb_width', [
                     'label'      => 'Ancho miniatura',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -2507,6 +2565,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
 
                 $this->start_controls_section( 'style_ai_container', [ 'label' => 'Flujo IA: contenedor y CTA', 'tab' => \Elementor\Controls_Manager::TAB_STYLE ] );
                 $this->add_box_controls( 'ai_container', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-finder-section' );
+                $this->add_text_align_control( 'ai_trigger_wrap_align', 'Alineación del bloque CTA', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' );
                 $this->add_text_controls( 'ai_promo', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text strong', 'Texto CTA inicial' );
                 $this->add_button_controls( 'ai_open_btn', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-abrir', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-abrir:hover', 'Botón abrir buscador' );
                 $this->end_controls_section();
@@ -2519,6 +2578,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'range'      => [ 'px' => [ 'min' => 260, 'max' => 1200 ], '%' => [ 'min' => 20, 'max' => 100 ], 'vw' => [ 'min' => 20, 'max' => 100 ] ],
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-wizard' => 'max-width: {{SIZE}}{{UNIT}};' ],
                 ] );
+                $this->add_text_align_control( 'ai_step_header_align', 'Alineación encabezados de pasos', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-step-header' );
                 $this->add_text_controls( 'ai_titles', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-step-title, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-loading-title, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-title', 'Títulos del flujo' );
                 $this->add_text_controls( 'ai_descriptions', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-step-desc, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-loading-desc, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-desc, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-hint-text, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-guide-instruc', 'Descripciones e instrucciones' );
                 $this->add_button_controls( 'ai_badge', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-badge', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-badge', 'Badges de pasos' );
@@ -2531,6 +2591,8 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'selectors' => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-input:focus' => 'border-color: {{VALUE}};' ],
                 ] );
                 $this->add_box_controls( 'ai_cards', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-asistente-card, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-item' );
+                $this->add_text_controls( 'ai_asistente_text', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-asistente-card, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-as-name, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-as-info', 'Texto tarjeta asistente' );
+                $this->add_text_controls( 'ai_tips_text', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-item, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-item span', 'Textos e íconos de tips' );
                 $this->add_text_controls( 'ai_messages', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-msg, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-strip-status', 'Mensajes y estados' );
                 $this->end_controls_section();
 
@@ -2538,6 +2600,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $this->add_button_controls( 'ai_primary', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-primary, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-download-btn', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-primary:hover, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-download-btn:hover', 'Botones primarios / descargar' );
                 $this->add_button_controls( 'ai_secondary', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-secondary', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-secondary:hover', 'Botones secundarios' );
                 $this->add_button_controls( 'ai_option', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-opcion', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-opcion:hover', 'Botones de opción de foto' );
+                $this->add_flex_items_align_control( 'ai_option_items_align', 'Alineación horizontal ícono + texto en opciones', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-btn-opcion' );
                 $this->add_responsive_control( 'ai_option_icon_size', [
                     'label'      => 'Tamaño ícono opción',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -2555,6 +2618,8 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'range'      => [ 'px' => [ 'min' => 0, 'max' => 60 ], 'em' => [ 'min' => 0, 'max' => 5 ] ],
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-foto-tips' => 'gap: {{SIZE}}{{UNIT}};' ],
                 ] );
+                $this->add_flex_justify_control( 'ai_tips_row_align', 'Alineación del grupo de tips', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-foto-tips' );
+                $this->add_flex_items_align_control( 'ai_tips_items_align', 'Alineación interna tips ícono + texto', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-tip-item' );
                 $this->add_responsive_control( 'ai_strip_gap', [
                     'label'      => 'Separación tira fotos',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -2562,6 +2627,8 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'range'      => [ 'px' => [ 'min' => 0, 'max' => 60 ], 'em' => [ 'min' => 0, 'max' => 5 ] ],
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-foto-strip' => 'gap: {{SIZE}}{{UNIT}};' ],
                 ] );
+                $this->add_flex_justify_control( 'ai_strip_align', 'Alineación tira de fotos cargadas', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-foto-strip' );
+                $this->add_text_align_control( 'ai_strip_label_align', 'Alineación labels de fotos cargadas', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-strip-label' );
                 $this->add_responsive_control( 'ai_strip_item_size', [
                     'label'      => 'Tamaño mini foto cargada',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -2578,6 +2645,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-guide-frame, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-cam-view-frame' => 'max-width: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_box_controls( 'ai_frame', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-guide-frame, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-cam-view-frame' );
+                $this->add_text_controls( 'ai_cam_label', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-cam-label', 'Texto dentro del óvalo de cámara' );
                 $this->add_responsive_control( 'ai_oval_width', [
                     'label'      => 'Ancho óvalo rostro',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -2614,6 +2682,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'size_units' => [ 'px', '%', 'em' ],
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-loading-wrap, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-wrap' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
                 ] );
+                $this->add_text_align_control( 'ai_loading_success_align', 'Alineación textos e íconos carga/éxito', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-loading-wrap, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-wrap' );
                 $this->add_responsive_control( 'ai_spinner_size', [
                     'label'      => 'Tamaño spinner',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -2685,6 +2754,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'range'      => [ 'px' => [ 'min' => 120, 'max' => 1200 ], 'vh' => [ 'min' => 10, 'max' => 100 ] ],
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-result-slide img' => 'max-height: {{SIZE}}{{UNIT}};' ],
                 ] );
+                $this->add_flex_justify_control( 'ai_results_nav_row_align', 'Alineación fila contador/flechas resultados', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-results-nav-row' );
                 $this->add_button_controls( 'ai_results_nav', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-results-nav-btn', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-results-nav-btn:hover', 'Flechas resultados IA' );
                 $this->end_controls_section();
             }
