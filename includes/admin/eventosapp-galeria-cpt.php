@@ -3321,6 +3321,19 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                         '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-media-image' => 'width: {{SIZE}}{{UNIT}}; height: {{SIZE}}{{UNIT}};',
                     ],
                 ] );
+                $this->add_responsive_control( 'ai_success_image_size', [
+                    'label'       => 'Tamaño imagen/GIF fotos recibidas',
+                    'type'        => \Elementor\Controls_Manager::SLIDER,
+                    'size_units'  => [ 'px', 'em' ],
+                    'range'       => [
+                        'px' => [ 'min' => 24, 'max' => 420 ],
+                        'em' => [ 'min' => 1, 'max' => 24 ],
+                    ],
+                    'description' => 'Control dedicado para cambiar el tamaño de la imagen o GIF que reemplaza el emoticon en el paso “¡Ya tenemos todo!”.',
+                    'selectors'   => [
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-media-image' => 'width: {{SIZE}}{{UNIT}}; height: {{SIZE}}{{UNIT}}; max-width: 100%;',
+                    ],
+                ] );
                 $this->add_control( 'ai_progress_bg', [
                     'label'     => 'Fondo barra progreso',
                     'type'      => \Elementor\Controls_Manager::COLOR,
