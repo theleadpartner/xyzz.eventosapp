@@ -560,6 +560,8 @@ if ( ! function_exists( 'evapp_galeria_ia_default_texts' ) ) {
             'save_server_error'           => '❌ Error al guardar las fotos. Por favor intenta de nuevo.',
 
             'success_icon'                => '🎉',
+            'success_image_url'           => '',
+            'success_image_alt'           => '',
             'success_title'               => '¡Ya tenemos todo!',
             'success_desc'                => 'Vamos a comenzar la búsqueda de tus fotos usando Inteligencia Artificial.',
             'success_button'              => '🔍 Buscar mis fotos',
@@ -699,6 +701,22 @@ if ( ! function_exists( 'evapp_galeria_ia_tip_media_html' ) ) {
 
         $icon = isset( $texts[ $icon_key ] ) && $texts[ $icon_key ] !== '' ? $texts[ $icon_key ] : '';
         return '<span class="evapp-gi-tip-media evapp-gi-tip-icon">' . esc_html( $icon ) . '</span>';
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_ia_success_media_html' ) ) {
+    function evapp_galeria_ia_success_media_html( $texts ) {
+        $image_url = isset( $texts['success_image_url'] ) ? esc_url( $texts['success_image_url'] ) : '';
+        $image_alt = isset( $texts['success_image_alt'] ) && $texts['success_image_alt'] !== ''
+            ? $texts['success_image_alt']
+            : ( isset( $texts['success_title'] ) ? $texts['success_title'] : '' );
+
+        if ( $image_url ) {
+            return '<div class="evapp-gi-success-media evapp-gi-success-media-image"><img src="' . $image_url . '" alt="' . esc_attr( $image_alt ) . '" loading="lazy" /></div>';
+        }
+
+        $icon = isset( $texts['success_icon'] ) && $texts['success_icon'] !== '' ? $texts['success_icon'] : '🎉';
+        return '<div class="evapp-gi-success-icon">' . esc_html( $icon ) . '</div>';
     }
 }
 
@@ -1145,7 +1163,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 <!-- ── ÉXITO ── -->
                 <div class="evapp-gi-step evapp-gi-step-success" data-step="success" style="display:none;">
                     <div class="evapp-gi-success-wrap">
-                        <div class="evapp-gi-success-icon"><?php echo esc_html( $gi_text['success_icon'] ); ?></div>
+                        <?php echo evapp_galeria_ia_success_media_html( $gi_text ); ?>
                         <h3 class="evapp-gi-success-title"><?php echo esc_html( $gi_text['success_title'] ); ?></h3>
                         <p class="evapp-gi-success-desc"><?php echo esc_html( $gi_text['success_desc'] ); ?></p>
                         <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-continuar"><?php echo esc_html( $gi_text['success_button'] ); ?></button>
@@ -1283,6 +1301,8 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         /* Éxito */
         .evapp-gi-success-wrap { text-align:center; padding:40px 20px; }
         .evapp-gi-success-icon { font-size:62px; margin-bottom:16px; display:block; animation:evapp-gi-pop .45s cubic-bezier(.34,1.56,.64,1) both; }
+        .evapp-gi-success-media { width:82px; height:82px; margin:0 auto 16px; display:flex; align-items:center; justify-content:center; animation:evapp-gi-pop .45s cubic-bezier(.34,1.56,.64,1) both; }
+        .evapp-gi-success-media img { display:block; width:100%; height:100%; object-fit:contain; }
         @keyframes evapp-gi-pop { 0%{transform:scale(.4);opacity:0} 100%{transform:scale(1);opacity:1} }
         .evapp-gi-success-title { font-size:24px; font-weight:800; color:#111827; margin:0 0 10px; }
         .evapp-gi-success-desc { font-size:15px; color:#555; margin-bottom:24px; }
@@ -2704,6 +2724,12 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
 
                 $this->add_ai_text_heading( 'Fotos recibidas / éxito' );
                 $this->add_ai_text_control( 'success_icon', 'Emoticon de fotos recibidas' );
+                $this->add_control( 'success_image', [
+                    'label'       => 'Imagen o GIF de fotos recibidas',
+                    'type'        => \Elementor\Controls_Manager::MEDIA,
+                    'description' => 'Reemplaza el emoticon del paso “¡Ya tenemos todo!”. Si no subes imagen o GIF, se seguirá usando el emoticon configurado arriba.',
+                ] );
+                $this->add_ai_text_control( 'success_image_alt', 'Texto alternativo imagen/GIF fotos recibidas' );
                 $this->add_ai_text_control( 'success_title', 'Título fotos recibidas' );
                 $this->add_ai_text_control( 'success_desc', 'Descripción fotos recibidas', 'textarea' );
                 $this->add_ai_text_control( 'success_button', 'Botón buscar mis fotos' );
@@ -3286,11 +3312,14 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-css, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-spinner-emoji' => 'animation-duration: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_responsive_control( 'ai_success_icon_size', [
-                    'label'      => 'Tamaño icono éxito / sin resultados',
+                    'label'      => 'Tamaño icono/imagen éxito / sin resultados',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
                     'size_units' => [ 'px', 'em' ],
-                    'range'      => [ 'px' => [ 'min' => 20, 'max' => 180 ], 'em' => [ 'min' => 1, 'max' => 12 ] ],
-                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-icon' => 'font-size: {{SIZE}}{{UNIT}};' ],
+                    'range'      => [ 'px' => [ 'min' => 20, 'max' => 220 ], 'em' => [ 'min' => 1, 'max' => 14 ] ],
+                    'selectors'  => [
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-icon'        => 'font-size: {{SIZE}}{{UNIT}};',
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-media-image' => 'width: {{SIZE}}{{UNIT}}; height: {{SIZE}}{{UNIT}};',
+                    ],
                 ] );
                 $this->add_control( 'ai_progress_bg', [
                     'label'     => 'Fondo barra progreso',
@@ -3345,7 +3374,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $defaults        = evapp_galeria_ia_default_texts();
 
                 foreach ( $defaults as $key => $default ) {
-                    if ( $key === 'spinner_image_url' ) {
+                    if ( in_array( $key, [ 'spinner_image_url', 'success_image_url' ], true ) ) {
                         continue;
                     }
                     if ( isset( $settings[ $key ] ) && $settings[ $key ] !== '' ) {
@@ -3381,6 +3410,10 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
 
                 if ( ! empty( $settings['spinner_image']['url'] ) ) {
                     $shortcode_attrs['spinner_image_url'] = esc_url_raw( $settings['spinner_image']['url'] );
+                }
+
+                if ( ! empty( $settings['success_image']['url'] ) ) {
+                    $shortcode_attrs['success_image_url'] = esc_url_raw( $settings['success_image']['url'] );
                 }
 
                 $shortcode = '[eventosapp_galeria';
