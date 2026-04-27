@@ -1258,8 +1258,8 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
 
         <style>
         /* ── Sección contenedor ── */
-        .evapp-gi-finder-section { margin-top:36px; padding:32px 28px; background:linear-gradient(145deg,#f0f4ff,#e8eeff); border-radius:14px; border:1px solid #c7d4ff; }
-        .evapp-gi-trigger-wrap { text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; }
+        .evapp-gi-finder-section { margin-top:36px; padding:32px 28px; background:linear-gradient(145deg,#f0f4ff,#e8eeff); border-radius:14px; border:1px solid #c7d4ff; width:100%; max-width:100%; box-sizing:border-box; overflow:hidden; }
+        .evapp-gi-trigger-wrap { text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
         .evapp-gi-trigger-layout-horizontal { flex-direction:row; flex-wrap:wrap; text-align:left; }
         .evapp-gi-trigger-layout-vertical { flex-direction:column; text-align:center; }
         .evapp-gi-promo-image-wrap { position:relative; display:inline-flex; align-items:center; justify-content:center; width:120px; max-width:100%; flex:0 0 auto; line-height:0; overflow:hidden; }
@@ -1268,17 +1268,17 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-promo-image-normal.has-hover { opacity:1; }
         .evapp-gi-finder-section:hover .evapp-gi-promo-image-normal.has-hover { opacity:0; transform:scale(1.02); }
         .evapp-gi-finder-section:hover .evapp-gi-promo-image-hover { opacity:1; transform:scale(1); }
-        .evapp-gi-promo-text { font-size:16px; color:#444; margin:0; line-height:1.65; flex:0 1 auto; }
+        .evapp-gi-promo-text { font-size:16px; color:#444; margin:0; line-height:1.65; flex:0 1 auto; max-width:100%; min-width:0; overflow-wrap:anywhere; word-break:normal; }
         .evapp-gi-trigger-layout-horizontal .evapp-gi-promo-text { flex:1 1 260px; }
         .evapp-gi-promo-text strong { color:#1c3d8f; }
-        .evapp-gi-btn-abrir { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:14px 40px; background:#1c3d8f; color:#fff; border:none; border-radius:50px; font-size:16px; font-weight:700; cursor:pointer; transition:background .2s,transform .15s,box-shadow .2s; box-shadow:0 4px 14px rgba(28,61,143,.25); flex:0 0 auto; }
+        .evapp-gi-btn-abrir { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:14px 40px; background:#1c3d8f; color:#fff; border:none; border-radius:50px; font-size:16px; font-weight:700; cursor:pointer; transition:background .2s,transform .15s,box-shadow .2s; box-shadow:0 4px 14px rgba(28,61,143,.25); flex:0 0 auto; max-width:100%; white-space:normal; text-align:center; line-height:1.25; }
         .evapp-gi-btn-abrir:hover { background:#122d6e; transform:translateY(-2px); box-shadow:0 6px 20px rgba(28,61,143,.35); }
-        .evapp-gi-wizard { max-width:500px; margin:0 auto; }
+        .evapp-gi-wizard { max-width:500px; width:100%; margin:0 auto; min-width:0; box-sizing:border-box; }
         .evapp-gi-step-header { margin-bottom:14px; }
         .evapp-gi-badge { display:inline-block; background:#1c3d8f; color:#fff; font-size:11px; font-weight:700; padding:3px 12px; border-radius:20px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px; }
         .evapp-gi-badge-ok { background:#15803d; }
-        .evapp-gi-step-title { font-size:22px; font-weight:800; color:#111827; margin:0 0 4px; line-height:1.2; }
-        .evapp-gi-step-desc { color:#5a6377; font-size:14px; line-height:1.65; margin-bottom:22px; }
+        .evapp-gi-step-title { font-size:22px; font-weight:800; color:#111827; margin:0 0 4px; line-height:1.2; overflow-wrap:anywhere; }
+        .evapp-gi-step-desc { color:#5a6377; font-size:14px; line-height:1.65; margin-bottom:22px; overflow-wrap:anywhere; }
         .evapp-gi-field-wrap { margin-bottom:16px; }
         .evapp-gi-label { display:block; font-size:13px; font-weight:700; color:#2d3748; margin-bottom:6px; }
         .evapp-gi-input { width:100%; padding:12px 15px; border:2px solid #d1dafe; border-radius:9px; font-size:15px; color:#111; background:#fff; transition:border-color .2s,box-shadow .2s; box-sizing:border-box; }
@@ -1314,8 +1314,8 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-strip-status.is-ok   { color:#15803d; font-weight:700; }
         .evapp-gi-step3-actions { margin-top:14px; }
         /* Opciones foto */
-        .evapp-gi-foto-opciones { display:flex; gap:14px; margin-bottom:24px; }
-        .evapp-gi-btn-opcion { flex:1; display:flex; flex-direction:column; align-items:center; gap:10px; padding:22px 14px; background:#fff; border:2px solid #d1dafe; border-radius:12px; font-size:14px; font-weight:700; color:#2d3748; cursor:pointer; transition:border-color .2s,box-shadow .2s,transform .15s; }
+        .evapp-gi-foto-opciones { display:flex; gap:14px; margin-bottom:24px; width:100%; min-width:0; }
+        .evapp-gi-btn-opcion { flex:1 1 0; min-width:0; display:flex; flex-direction:column; align-items:center; gap:10px; padding:22px 14px; background:#fff; border:2px solid #d1dafe; border-radius:12px; font-size:14px; font-weight:700; color:#2d3748; cursor:pointer; transition:border-color .2s,box-shadow .2s,transform .15s; text-align:center; }
         .evapp-gi-btn-opcion:hover { border-color:#1c3d8f; box-shadow:0 4px 14px rgba(28,61,143,.14); transform:translateY(-3px); }
         .evapp-gi-btn-opcion-icon { font-size:30px; }
         /* Guide frame */
@@ -1335,7 +1335,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-preview-final-img { width:100%; height:100%; object-fit:cover; display:block; }
         .evapp-gi-paso4-actions, .evapp-gi-guide-actions { display:flex; flex-direction:column; gap:8px; }
         /* Cargando */
-        .evapp-gi-loading-wrap { text-align:center; padding:44px 20px; }
+        .evapp-gi-loading-wrap { text-align:center; padding:44px 20px; max-width:100%; box-sizing:border-box; }
         .evapp-gi-spinner { width:52px; height:52px; border:5px solid #dde8ff; border-top-color:#1c3d8f; border-radius:50%; animation:evapp-gi-spin .75s linear infinite; margin:0 auto 20px; }
         .evapp-gi-spinner-emoji { width:auto; height:auto; border:0; border-radius:0; font-size:52px; line-height:1; animation:evapp-gi-pulse 1s ease-in-out infinite; }
         .evapp-gi-spinner-image { border:0; border-radius:0; background:transparent; animation:none; display:flex; align-items:center; justify-content:center; overflow:hidden; }
@@ -1346,7 +1346,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-loading-title { font-size:18px; font-weight:700; color:#111827; margin:0 0 8px; }
         .evapp-gi-loading-desc { font-size:14px; color:#666; margin:0; }
         /* Éxito */
-        .evapp-gi-success-wrap { text-align:center; padding:40px 20px; }
+        .evapp-gi-success-wrap { text-align:center; padding:40px 20px; max-width:100%; box-sizing:border-box; }
         .evapp-gi-success-icon { font-size:62px; margin-bottom:16px; display:block; animation:evapp-gi-pop .45s cubic-bezier(.34,1.56,.64,1) both; }
         .evapp-gi-success-media { width:82px; height:82px; margin:0 auto 16px; display:flex; align-items:center; justify-content:center; animation:evapp-gi-pop .45s cubic-bezier(.34,1.56,.64,1) both; }
         .evapp-gi-success-media img { display:block; width:100%; height:100%; object-fit:contain; }
@@ -1365,7 +1365,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-results-image { display:block; width:100%; height:auto; max-width:100%; object-fit:contain; }
         .evapp-gi-results-count { font-size:15px; font-weight:700; color:#15803d; margin:0 0 16px; text-align:center; }
         .evapp-gi-results-carousel-wrap { position:relative; }
-        .evapp-gi-results-slides { background:#111; border-radius:12px; overflow:hidden; min-height:260px; display:flex; align-items:center; justify-content:center; }
+        .evapp-gi-results-slides { background:#111; border-radius:12px; overflow:hidden; min-height:260px; display:flex; align-items:center; justify-content:center; width:100%; max-width:100%; box-sizing:border-box; }
         .evapp-gi-result-slide { display:none; width:100%; text-align:center; }
         .evapp-gi-result-slide.active { display:block; }
         .evapp-gi-result-slide img { max-width:100%; max-height:460px; width:auto; height:auto; object-fit:contain; display:block; margin:0 auto; }
@@ -1376,6 +1376,22 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-results-counter { font-size:13px; color:#555; min-width:60px; text-align:center; }
         .evapp-gi-download-btn { display:flex; align-items:center; justify-content:center; gap:6px; margin:12px auto 0; padding:12px 28px; background:#15803d; color:#fff; border:none; border-radius:9px; font-size:14px; font-weight:700; cursor:pointer; text-decoration:none; transition:background .2s; width:fit-content; max-width:100%; box-sizing:border-box; }
         .evapp-gi-download-btn:hover { background:#166534; color:#fff; text-decoration:none; }
+        /* Responsive automático por ancho real del widget */
+        @media (max-width:767px) {
+            .evapp-gi-finder-section { margin-top:clamp(18px,5vw,32px); padding:clamp(20px,5vw,32px) clamp(14px,4vw,26px) !important; min-height:auto !important; }
+            .evapp-gi-trigger-wrap { gap:clamp(12px,4vw,24px) !important; min-height:0 !important; align-content:center; }
+            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; text-align:center; }
+            .evapp-gi-promo-image-wrap { width:clamp(76px,18vw,120px); }
+            .evapp-gi-promo-text { font-size:clamp(16px,4vw,22px) !important; line-height:1.45 !important; }
+            .evapp-gi-btn-abrir { width:min(100%,280px); min-height:48px; padding:13px 24px !important; font-size:clamp(15px,4vw,18px) !important; }
+            .evapp-gi-wizard { max-width:100% !important; }
+            .evapp-gi-step-header { margin-bottom:12px; }
+            .evapp-gi-step-title { font-size:clamp(19px,5vw,24px) !important; line-height:1.18 !important; }
+            .evapp-gi-step-desc { font-size:clamp(13px,3.7vw,15px) !important; line-height:1.55 !important; }
+            .evapp-gi-loading-wrap, .evapp-gi-success-wrap { padding:clamp(28px,8vw,44px) clamp(14px,4vw,20px); }
+            .evapp-gi-results-slides { min-height:clamp(220px,58vw,360px) !important; }
+            .evapp-gi-result-slide img { max-height:min(70vh,420px) !important; }
+        }
         /* Responsive */
         @media (max-width:500px) {
             .evapp-gi-finder-section { padding:22px 16px; }
@@ -2200,14 +2216,27 @@ add_action( 'wp_enqueue_scripts', function () {
     $css = '
 /* ===== EventosApp Galería ===== */
 .evapp-galeria-wrap {
-    max-width: 900px;
+    width: 100%;
+    max-width: min(100%, 900px);
     margin: 0 auto;
     font-family: inherit;
+    box-sizing: border-box;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-x: clip;
+    container-type: inline-size;
     --evapp-g-accent: #0073aa;
     --evapp-g-radius: 8px;
     --evapp-g-shadow: 0 4px 20px rgba(0,0,0,.15);
     display: flex;
     flex-direction: column;
+}
+.evapp-galeria-wrap,
+.evapp-galeria-wrap * {
+    box-sizing: border-box;
+}
+.evapp-galeria-wrap img {
+    max-width: 100%;
 }
 .evapp-galeria-wrap > .evapp-galeria-header { order: 10; }
 .evapp-galeria-wrap > .evapp-galeria-descripcion { order: 20; }
@@ -2223,12 +2252,16 @@ add_action( 'wp_enqueue_scripts', function () {
 }
 /* ── Header informativo ── */
 .evapp-galeria-header {
+    width: 100%;
+    min-width: 0;
     padding: 14px 0 12px;
     border-bottom: 1px solid #e8e8e8;
     margin-bottom: 14px;
 }
 .evapp-galeria-header-top {
     margin-bottom: 8px;
+    width: 100%;
+    min-width: 0;
 }
 .evapp-galeria-header-title {
     font-size: 22px;
@@ -2236,6 +2269,12 @@ add_action( 'wp_enqueue_scripts', function () {
     color: #111;
     margin: 0;
     line-height: 1.25;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    hyphens: auto;
+    text-wrap: balance;
 }
 .evapp-galeria-header-meta {
     display: flex;
@@ -2244,23 +2283,31 @@ add_action( 'wp_enqueue_scripts', function () {
     gap: 6px 16px;
     font-size: 13px;
     color: #555;
+    width: 100%;
+    min-width: 0;
 }
 .evapp-gh-meta-item {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    white-space: nowrap;
+    white-space: normal;
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: normal;
 }
 .evapp-gh-icon {
     display: inline-flex;
     align-items: center;
     color: #888;
     flex-shrink: 0;
+    margin-top: 1px;
 }
 .evapp-gh-cliente {
     font-size: 13px;
     color: #444;
     gap: 5px;
+    flex-wrap: wrap;
 }
 .evapp-gh-organizador-label {
     color: #888;
@@ -2296,6 +2343,8 @@ add_action( 'wp_enqueue_scripts', function () {
 .evapp-galeria-main-wrap {
     position: relative;
     display: flex;
+    width: 100%;
+    min-width: 0;
     align-items: center;
     gap: 0;
     background: #111;
@@ -2303,7 +2352,9 @@ add_action( 'wp_enqueue_scripts', function () {
     overflow: hidden;
 }
 .evapp-galeria-slides-wrap {
-    flex: 1;
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
     position: relative;
     min-height: 300px;
     max-height: 600px;
@@ -2316,6 +2367,7 @@ add_action( 'wp_enqueue_scripts', function () {
 .evapp-galeria-slide {
     display: none;
     width: 100%;
+    min-width: 0;
     text-align: center;
 }
 .evapp-galeria-slide.active {
@@ -2369,6 +2421,9 @@ add_action( 'wp_enqueue_scripts', function () {
 /* ── Miniaturas ── */
 .evapp-galeria-thumbs-wrap,
 .evapp-galeria-thumbs {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     display: flex;
     gap: 6px;
     overflow-x: auto;
@@ -2417,6 +2472,7 @@ add_action( 'wp_enqueue_scripts', function () {
     box-sizing: border-box;
 }
 .evapp-galeria-lb-img-wrap {
+    width: 100%;
     max-width: 90vw;
     max-height: 88vh;
     position: relative;
@@ -2465,6 +2521,144 @@ add_action( 'wp_enqueue_scripts', function () {
 }
 .evapp-galeria-lb-prev:hover,
 .evapp-galeria-lb-next:hover { background: rgba(255,255,255,.25); }
+/* ── Responsive automático por ancho real del widget ── */
+@supports (container-type: inline-size) {
+    @container (max-width: 720px) {
+        .evapp-galeria-header {
+            padding-top: clamp(10px, 3cqw, 18px) !important;
+            padding-bottom: clamp(10px, 3cqw, 18px) !important;
+            margin-bottom: clamp(10px, 3cqw, 16px) !important;
+        }
+        body .evapp-galeria-wrap .evapp-galeria-header-title {
+            font-size: clamp(26px, 8.2cqw, 42px) !important;
+            line-height: 1.08 !important;
+            letter-spacing: -0.035em;
+        }
+        .evapp-galeria-header-meta {
+            justify-content: center;
+            align-items: center;
+            gap: clamp(6px, 2cqw, 12px) clamp(12px, 4cqw, 22px) !important;
+        }
+        .evapp-gh-meta-item {
+            flex: 0 1 auto;
+            justify-content: center;
+            line-height: 1.35;
+        }
+        .evapp-gh-cliente {
+            flex: 1 1 100%;
+        }
+        .evapp-galeria-descripcion {
+            font-size: clamp(14px, 3.8cqw, 16px) !important;
+        }
+        .evapp-galeria-main-wrap {
+            border-radius: clamp(6px, 2cqw, 12px) !important;
+        }
+        .evapp-galeria-nav {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: clamp(38px, 8cqw, 52px);
+            min-height: 0 !important;
+            padding: 0 !important;
+            align-self: stretch;
+            z-index: 4;
+            font-size: clamp(28px, 8cqw, 42px) !important;
+            background: rgba(0,0,0,.38);
+        }
+        .evapp-galeria-prev { left: 0; }
+        .evapp-galeria-next { right: 0; }
+        .evapp-galeria-slides-wrap {
+            min-height: clamp(220px, 62cqw, 430px) !important;
+            max-height: min(72vh, 620px) !important;
+        }
+        .evapp-galeria-slide img {
+            width: auto !important;
+            height: auto !important;
+            max-width: 100% !important;
+            max-height: min(72vh, 620px) !important;
+        }
+        .evapp-galeria-thumb {
+            width: clamp(54px, 12cqw, 72px) !important;
+            height: clamp(54px, 12cqw, 72px) !important;
+        }
+        .evapp-galeria-thumbs-wrap {
+            padding-left: max(0px, env(safe-area-inset-left));
+            padding-right: max(0px, env(safe-area-inset-right));
+        }
+        .evapp-gi-finder-section {
+            margin-top: clamp(18px, 5cqw, 32px) !important;
+            padding: clamp(20px, 5cqw, 32px) clamp(14px, 4cqw, 26px) !important;
+            min-height: auto !important;
+        }
+        .evapp-gi-trigger-wrap {
+            gap: clamp(12px, 4cqw, 24px) !important;
+            min-height: 0 !important;
+        }
+        .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal {
+            flex-direction: column;
+            text-align: center;
+        }
+        .evapp-gi-promo-image-wrap {
+            width: clamp(76px, 18cqw, 120px) !important;
+        }
+        .evapp-gi-promo-text {
+            font-size: clamp(16px, 4.2cqw, 22px) !important;
+            line-height: 1.45 !important;
+        }
+        .evapp-gi-btn-abrir {
+            width: min(100%, 280px);
+            min-height: 48px;
+            padding: 13px 24px !important;
+            font-size: clamp(15px, 4cqw, 18px) !important;
+        }
+        .evapp-gi-wizard {
+            max-width: 100% !important;
+        }
+    }
+}
+/* ── Responsive fallback por viewport ── */
+@media (max-width: 767px) {
+    body .evapp-galeria-wrap .evapp-galeria-header-title {
+        font-size: clamp(26px, 8.2vw, 42px) !important;
+        line-height: 1.08 !important;
+        letter-spacing: -0.035em;
+    }
+    .evapp-galeria-header-meta {
+        justify-content: center;
+        gap: 6px 14px !important;
+    }
+    .evapp-gh-meta-item {
+        justify-content: center;
+        line-height: 1.35;
+    }
+    .evapp-gh-cliente {
+        flex: 1 1 100%;
+    }
+    .evapp-galeria-nav {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: clamp(38px, 8vw, 52px);
+        min-height: 0 !important;
+        padding: 0 !important;
+        align-self: stretch;
+        z-index: 4;
+        font-size: clamp(28px, 8vw, 42px) !important;
+        background: rgba(0,0,0,.38);
+    }
+    .evapp-galeria-prev { left: 0; }
+    .evapp-galeria-next { right: 0; }
+    .evapp-galeria-slides-wrap {
+        min-height: clamp(220px, 62vw, 430px) !important;
+        max-height: min(72vh, 620px) !important;
+    }
+    .evapp-galeria-slide img {
+        width: auto !important;
+        height: auto !important;
+        max-width: 100% !important;
+        max-height: min(72vh, 620px) !important;
+    }
+}
 /* ── Responsive ── */
 @media (max-width: 600px) {
     .evapp-galeria-nav { font-size: 28px; padding: 0 8px; }
