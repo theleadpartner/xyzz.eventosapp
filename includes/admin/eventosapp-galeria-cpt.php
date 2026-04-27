@@ -1534,6 +1534,39 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 }
                 return value;
             }
+            function evappGiScrollToActiveStep(activeStep) {
+                if ( ! activeStep || ! finder || typeof window === 'undefined' ) return;
+
+                window.requestAnimationFrame(function(){
+                    window.requestAnimationFrame(function(){
+                        var target = finder;
+                        var rect   = target.getBoundingClientRect();
+                        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+
+                        // Si la caja completa del flujo cabe en pantalla, se centra suavemente.
+                        // Si la caja es más alta que la pantalla, se encuadra desde arriba para no cortar el inicio del paso.
+                        var wpAdminBar  = document.getElementById('wpadminbar');
+                        var adminOffset = wpAdminBar ? wpAdminBar.offsetHeight : 0;
+                        var safeOffset  = adminOffset + 18;
+                        var absoluteTop = rect.top + ( window.pageYOffset || document.documentElement.scrollTop || 0 );
+                        var targetTop;
+
+                        if ( viewportHeight && rect.height < ( viewportHeight - safeOffset - 24 ) ) {
+                            targetTop = absoluteTop - Math.max( safeOffset, Math.round( ( viewportHeight - rect.height ) / 2 ) );
+                        } else {
+                            targetTop = absoluteTop - safeOffset;
+                        }
+
+                        targetTop = Math.max( 0, targetTop );
+
+                        try {
+                            window.scrollTo({ top: targetTop, behavior: 'smooth' });
+                        } catch(e) {
+                            window.scrollTo(0, targetTop);
+                        }
+                    });
+                });
+            }
             function showStep(cls) {
                 wizard.querySelectorAll('.evapp-gi-step').forEach(function(s){ s.style.display = 'none'; });
                 var el = wizard.querySelector('.' + cls);
@@ -1546,6 +1579,8 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                         wrap.classList.remove('evapp-gi-final-response-active');
                     }
                 }
+
+                evappGiScrollToActiveStep(el);
             }
             function showMsg(el, txt, tipo) {
                 el.textContent = txt;
