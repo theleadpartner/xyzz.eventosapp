@@ -213,7 +213,7 @@ function evapp_galeria_render_metabox_fotos( $post ) {
         border-radius:4px;
         display:inline-block;
     }
-    .evapp-galeria-item:hover { border-color:#0073aa !important; }
+    .evapp-galeria-item:hover { border-color:#0073aa; }
     </style>
     <?php
 }
@@ -1259,10 +1259,10 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         <style>
         /* ── Sección contenedor ── */
         .evapp-gi-finder-section { margin-top:36px; padding:32px 28px; background:linear-gradient(145deg,#f0f4ff,#e8eeff); border-radius:14px; border:1px solid #c7d4ff; width:100%; max-width:100%; box-sizing:border-box; overflow:hidden; }
-        .evapp-gi-trigger-wrap { text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
-        .evapp-gi-trigger-layout-horizontal { flex-direction:row; flex-wrap:wrap; text-align:left; }
-        .evapp-gi-trigger-layout-vertical { flex-direction:column; text-align:center; }
-        .evapp-gi-promo-image-wrap { position:relative; display:inline-flex; align-items:center; justify-content:center; width:120px; max-width:100%; flex:0 0 auto; line-height:0; overflow:hidden; }
+        .evapp-gi-trigger-wrap { text-align:var(--evapp-gi-cta-text-align, center); display:flex; flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); gap:18px; width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
+        .evapp-gi-trigger-layout-horizontal { flex-direction:row; flex-wrap:wrap; align-items:center; justify-content:var(--evapp-gi-cta-justify-content, center); text-align:var(--evapp-gi-cta-text-align, left); }
+        .evapp-gi-trigger-layout-vertical { flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:center; text-align:var(--evapp-gi-cta-text-align, center); }
+        .evapp-gi-promo-image-wrap { position:relative; display:inline-flex; align-items:center; justify-content:center; width:min(var(--evapp-gi-cta-image-width, 120px), 100%); max-width:100%; flex:0 0 auto; line-height:0; overflow:hidden; }
         .evapp-gi-promo-image { display:block; width:100%; height:auto; max-width:100%; object-fit:contain; transition:opacity .32s ease, transform .32s ease; }
         .evapp-gi-promo-image-hover { position:absolute; inset:0; opacity:0; transform:scale(.98); }
         .evapp-gi-promo-image-normal.has-hover { opacity:1; }
@@ -1378,25 +1378,25 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-download-btn:hover { background:#166534; color:#fff; text-decoration:none; }
         /* Responsive automático por ancho real del widget */
         @media (max-width:767px) {
-            .evapp-gi-finder-section { margin-top:clamp(18px,5vw,32px); padding:clamp(20px,5vw,32px) clamp(14px,4vw,26px) !important; min-height:auto !important; }
-            .evapp-gi-trigger-wrap { gap:clamp(12px,4vw,24px) !important; min-height:0 !important; align-content:center; }
-            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; text-align:center; }
-            .evapp-gi-promo-image-wrap { width:clamp(76px,18vw,120px); }
-            .evapp-gi-promo-text { font-size:clamp(16px,4vw,22px) !important; line-height:1.45 !important; }
-            .evapp-gi-btn-abrir { width:min(100%,280px); min-height:48px; padding:13px 24px !important; font-size:clamp(15px,4vw,18px) !important; }
-            .evapp-gi-wizard { max-width:100% !important; }
+            .evapp-gi-finder-section { margin-top:clamp(18px,5vw,32px); padding:clamp(20px,5vw,32px) clamp(14px,4vw,26px); min-height:auto; }
+            .evapp-gi-trigger-wrap { gap:clamp(12px,4vw,24px); min-height:0; align-content:center; }
+            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:center; text-align:var(--evapp-gi-cta-text-align, center); }
+            .evapp-gi-promo-image-wrap { --evapp-gi-cta-image-width:clamp(76px,18vw,120px); }
+            .evapp-gi-promo-text { font-size:clamp(16px,4vw,22px); line-height:1.45; }
+            .evapp-gi-btn-abrir { width:min(100%,280px); min-height:48px; padding:13px 24px; font-size:clamp(15px,4vw,18px); }
+            .evapp-gi-wizard { max-width:100%; }
             .evapp-gi-step-header { margin-bottom:12px; }
-            .evapp-gi-step-title { font-size:clamp(19px,5vw,24px) !important; line-height:1.18 !important; }
-            .evapp-gi-step-desc { font-size:clamp(13px,3.7vw,15px) !important; line-height:1.55 !important; }
+            .evapp-gi-step-title { font-size:clamp(19px,5vw,24px); line-height:1.18; }
+            .evapp-gi-step-desc { font-size:clamp(13px,3.7vw,15px); line-height:1.55; }
             .evapp-gi-loading-wrap, .evapp-gi-success-wrap { padding:clamp(28px,8vw,44px) clamp(14px,4vw,20px); }
-            .evapp-gi-results-slides { min-height:clamp(220px,58vw,360px) !important; }
-            .evapp-gi-result-slide img { max-height:min(70vh,420px) !important; }
+            .evapp-gi-results-slides { min-height:clamp(220px,58vw,360px); }
+            .evapp-gi-result-slide img { max-height:min(70vh,420px); }
         }
         /* Responsive */
         @media (max-width:500px) {
             .evapp-gi-finder-section { padding:22px 16px; }
-            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; text-align:center; }
-            .evapp-gi-promo-image-wrap { width:96px; }
+            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:center; text-align:var(--evapp-gi-cta-text-align, center); }
+            .evapp-gi-promo-image-wrap { --evapp-gi-cta-image-width:96px; }
             .evapp-gi-step-title { font-size:19px; }
             .evapp-gi-foto-opciones { flex-direction:column; gap:10px; }
             .evapp-gi-btn-opcion { padding:16px 12px; }
@@ -2525,19 +2525,19 @@ add_action( 'wp_enqueue_scripts', function () {
 @supports (container-type: inline-size) {
     @container (max-width: 720px) {
         .evapp-galeria-header {
-            padding-top: clamp(10px, 3cqw, 18px) !important;
-            padding-bottom: clamp(10px, 3cqw, 18px) !important;
-            margin-bottom: clamp(10px, 3cqw, 16px) !important;
+            padding-top: clamp(10px, 3cqw, 18px);
+            padding-bottom: clamp(10px, 3cqw, 18px);
+            margin-bottom: clamp(10px, 3cqw, 16px);
         }
-        body .evapp-galeria-wrap .evapp-galeria-header-title {
-            font-size: clamp(26px, 8.2cqw, 42px) !important;
-            line-height: 1.08 !important;
+        .evapp-galeria-header-title {
+            font-size: clamp(26px, 8.2cqw, 42px);
+            line-height: 1.08;
             letter-spacing: -0.035em;
         }
         .evapp-galeria-header-meta {
             justify-content: center;
             align-items: center;
-            gap: clamp(6px, 2cqw, 12px) clamp(12px, 4cqw, 22px) !important;
+            gap: clamp(6px, 2cqw, 12px) clamp(12px, 4cqw, 22px);
         }
         .evapp-gh-meta-item {
             flex: 0 1 auto;
@@ -2548,84 +2548,86 @@ add_action( 'wp_enqueue_scripts', function () {
             flex: 1 1 100%;
         }
         .evapp-galeria-descripcion {
-            font-size: clamp(14px, 3.8cqw, 16px) !important;
+            font-size: clamp(14px, 3.8cqw, 16px);
         }
         .evapp-galeria-main-wrap {
-            border-radius: clamp(6px, 2cqw, 12px) !important;
+            border-radius: clamp(6px, 2cqw, 12px);
         }
         .evapp-galeria-nav {
             position: absolute;
             top: 0;
             bottom: 0;
             width: clamp(38px, 8cqw, 52px);
-            min-height: 0 !important;
-            padding: 0 !important;
+            min-height: 0;
+            padding: 0;
             align-self: stretch;
             z-index: 4;
-            font-size: clamp(28px, 8cqw, 42px) !important;
+            font-size: clamp(28px, 8cqw, 42px);
             background: rgba(0,0,0,.38);
         }
         .evapp-galeria-prev { left: 0; }
         .evapp-galeria-next { right: 0; }
         .evapp-galeria-slides-wrap {
-            min-height: clamp(220px, 62cqw, 430px) !important;
-            max-height: min(72vh, 620px) !important;
+            min-height: clamp(220px, 62cqw, 430px);
+            max-height: min(72vh, 620px);
         }
         .evapp-galeria-slide img {
-            width: auto !important;
-            height: auto !important;
-            max-width: 100% !important;
-            max-height: min(72vh, 620px) !important;
+            width: auto;
+            height: auto;
+            max-width: 100%;
+            max-height: min(72vh, 620px);
         }
         .evapp-galeria-thumb {
-            width: clamp(54px, 12cqw, 72px) !important;
-            height: clamp(54px, 12cqw, 72px) !important;
+            width: clamp(54px, 12cqw, 72px);
+            height: clamp(54px, 12cqw, 72px);
         }
         .evapp-galeria-thumbs-wrap {
             padding-left: max(0px, env(safe-area-inset-left));
             padding-right: max(0px, env(safe-area-inset-right));
         }
         .evapp-gi-finder-section {
-            margin-top: clamp(18px, 5cqw, 32px) !important;
-            padding: clamp(20px, 5cqw, 32px) clamp(14px, 4cqw, 26px) !important;
-            min-height: auto !important;
+            margin-top: clamp(18px, 5cqw, 32px);
+            padding: clamp(20px, 5cqw, 32px) clamp(14px, 4cqw, 26px);
+            min-height: auto;
         }
         .evapp-gi-trigger-wrap {
-            gap: clamp(12px, 4cqw, 24px) !important;
-            min-height: 0 !important;
+            gap: clamp(12px, 4cqw, 24px);
+            min-height: 0;
         }
         .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal {
             flex-direction: column;
-            text-align: center;
+            align-items: var(--evapp-gi-cta-align-items, center);
+            justify-content: center;
+            text-align: var(--evapp-gi-cta-text-align, center);
         }
         .evapp-gi-promo-image-wrap {
-            width: clamp(76px, 18cqw, 120px) !important;
+            --evapp-gi-cta-image-width: clamp(76px, 18cqw, 120px);
         }
         .evapp-gi-promo-text {
-            font-size: clamp(16px, 4.2cqw, 22px) !important;
-            line-height: 1.45 !important;
+            font-size: clamp(16px, 4.2cqw, 22px);
+            line-height: 1.45;
         }
         .evapp-gi-btn-abrir {
             width: min(100%, 280px);
             min-height: 48px;
-            padding: 13px 24px !important;
-            font-size: clamp(15px, 4cqw, 18px) !important;
+            padding: 13px 24px;
+            font-size: clamp(15px, 4cqw, 18px);
         }
         .evapp-gi-wizard {
-            max-width: 100% !important;
+            max-width: 100%;
         }
     }
 }
 /* ── Responsive fallback por viewport ── */
 @media (max-width: 767px) {
-    body .evapp-galeria-wrap .evapp-galeria-header-title {
-        font-size: clamp(26px, 8.2vw, 42px) !important;
-        line-height: 1.08 !important;
+    .evapp-galeria-header-title {
+        font-size: clamp(26px, 8.2vw, 42px);
+        line-height: 1.08;
         letter-spacing: -0.035em;
     }
     .evapp-galeria-header-meta {
         justify-content: center;
-        gap: 6px 14px !important;
+        gap: 6px 14px;
     }
     .evapp-gh-meta-item {
         justify-content: center;
@@ -2639,24 +2641,24 @@ add_action( 'wp_enqueue_scripts', function () {
         top: 0;
         bottom: 0;
         width: clamp(38px, 8vw, 52px);
-        min-height: 0 !important;
-        padding: 0 !important;
+        min-height: 0;
+        padding: 0;
         align-self: stretch;
         z-index: 4;
-        font-size: clamp(28px, 8vw, 42px) !important;
+        font-size: clamp(28px, 8vw, 42px);
         background: rgba(0,0,0,.38);
     }
     .evapp-galeria-prev { left: 0; }
     .evapp-galeria-next { right: 0; }
     .evapp-galeria-slides-wrap {
-        min-height: clamp(220px, 62vw, 430px) !important;
-        max-height: min(72vh, 620px) !important;
+        min-height: clamp(220px, 62vw, 430px);
+        max-height: min(72vh, 620px);
     }
     .evapp-galeria-slide img {
-        width: auto !important;
-        height: auto !important;
-        max-width: 100% !important;
-        max-height: min(72vh, 620px) !important;
+        width: auto;
+        height: auto;
+        max-width: 100%;
+        max-height: min(72vh, 620px);
     }
 }
 /* ── Responsive ── */
@@ -2834,6 +2836,26 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                         'right'  => [ 'title' => 'Derecha',   'icon' => 'eicon-text-align-right' ],
                     ],
                     'selectors' => [ $selector => 'text-align: {{VALUE}};' ],
+                    'toggle'    => true,
+                ] );
+            }
+
+
+            private function add_block_alignment_control( $control_id, $label, $selector ) {
+                $this->add_responsive_control( $control_id, [
+                    'label'     => $label,
+                    'type'      => \Elementor\Controls_Manager::CHOOSE,
+                    'options'   => [
+                        'left'   => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                        'center' => [ 'title' => 'Centro',    'icon' => 'eicon-text-align-center' ],
+                        'right'  => [ 'title' => 'Derecha',   'icon' => 'eicon-text-align-right' ],
+                    ],
+                    'selectors' => [ $selector => '{{VALUE}}' ],
+                    'selectors_dictionary' => [
+                        'left'   => '--evapp-gi-cta-align-items:flex-start; --evapp-gi-cta-justify-content:flex-start; --evapp-gi-cta-text-align:left;',
+                        'center' => '--evapp-gi-cta-align-items:center; --evapp-gi-cta-justify-content:center; --evapp-gi-cta-text-align:center;',
+                        'right'  => '--evapp-gi-cta-align-items:flex-end; --evapp-gi-cta-justify-content:flex-end; --evapp-gi-cta-text-align:right;',
+                    ],
                     'toggle'    => true,
                 ] );
             }
@@ -3555,7 +3577,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
 
                 $this->start_controls_section( 'style_ai_container', [ 'label' => 'Flujo IA: contenedor y CTA', 'tab' => \Elementor\Controls_Manager::TAB_STYLE ] );
                 $this->add_box_controls( 'ai_container', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-finder-section' );
-                $this->add_text_align_control( 'ai_trigger_wrap_align', 'Alineación del bloque CTA', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' );
+                $this->add_block_alignment_control( 'ai_trigger_wrap_align', 'Alineación del bloque CTA', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' );
                 $this->add_responsive_control( 'ai_cta_elements_gap', [
                     'label'      => 'Separación entre imagen, frases y botón',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
@@ -3568,7 +3590,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     'type'       => \Elementor\Controls_Manager::SLIDER,
                     'size_units' => [ 'px', '%', 'em' ],
                     'range'      => [ 'px' => [ 'min' => 32, 'max' => 520 ], '%' => [ 'min' => 5, 'max' => 100 ], 'em' => [ 'min' => 2, 'max' => 32 ] ],
-                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap' => 'width: {{SIZE}}{{UNIT}};' ],
+                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap' => '--evapp-gi-cta-image-width: {{SIZE}}{{UNIT}}; width: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_box_controls( 'ai_cta_image_box', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap', false );
                 $this->add_text_controls( 'ai_promo', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text strong', 'Texto CTA inicial' );
