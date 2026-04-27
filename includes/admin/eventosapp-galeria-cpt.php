@@ -654,6 +654,43 @@ if ( ! function_exists( 'evapp_galeria_ia_sanitize_cta_settings' ) ) {
 }
 
 
+if ( ! function_exists( 'evapp_galeria_ia_default_results_settings' ) ) {
+    function evapp_galeria_ia_default_results_settings() {
+        return [
+            'results_image_url'       => '',
+            'results_image_alt'       => '',
+            'results_order_image'     => 5,
+            'results_order_badge'     => 10,
+            'results_order_title'     => 20,
+            'results_order_subtitle'  => 30,
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_ia_sanitize_results_settings' ) ) {
+    function evapp_galeria_ia_sanitize_results_settings( $atts ) {
+        $defaults = evapp_galeria_ia_default_results_settings();
+        $settings = [];
+
+        $settings['results_image_url'] = isset( $atts['results_image_url'] )
+            ? esc_url_raw( $atts['results_image_url'] )
+            : '';
+
+        $settings['results_image_alt'] = isset( $atts['results_image_alt'] )
+            ? sanitize_text_field( $atts['results_image_alt'] )
+            : '';
+
+        foreach ( [ 'results_order_image', 'results_order_badge', 'results_order_title', 'results_order_subtitle' ] as $order_key ) {
+            $settings[ $order_key ] = ( isset( $atts[ $order_key ] ) && $atts[ $order_key ] !== '' )
+                ? absint( $atts[ $order_key ] )
+                : (int) $defaults[ $order_key ];
+        }
+
+        return $settings;
+    }
+}
+
+
 if ( ! function_exists( 'evapp_galeria_ia_spinner_html' ) ) {
     function evapp_galeria_ia_spinner_html( $texts ) {
         $type = isset( $texts['spinner_type'] ) ? sanitize_key( $texts['spinner_type'] ) : 'css';
@@ -725,7 +762,8 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         array_merge(
             [ 'id' => 0 ],
             evapp_galeria_ia_default_texts(),
-            evapp_galeria_ia_default_cta_settings()
+            evapp_galeria_ia_default_cta_settings(),
+            evapp_galeria_ia_default_results_settings()
         ),
         $atts,
         'eventosapp_galeria'
@@ -733,6 +771,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     $galeria_id = absint( $atts['id'] );
     $gi_text    = evapp_galeria_ia_sanitize_texts( $atts );
     $gi_cta     = evapp_galeria_ia_sanitize_cta_settings( $atts );
+    $gi_results = evapp_galeria_ia_sanitize_results_settings( $atts );
 
     if ( ! $galeria_id ) {
         return '<p style="color:#c00;">⚠️ Shortcode: falta el atributo <code>id</code>.</p>';
@@ -1184,11 +1223,19 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
 
                 <!-- ── RESULTADOS ── -->
                 <div class="evapp-gi-step evapp-gi-step-results" data-step="results" style="display:none;">
-                    <div class="evapp-gi-step-header">
-                        <span class="evapp-gi-badge evapp-gi-badge-ok"><?php echo esc_html( $gi_text['results_badge'] ); ?></span>
-                        <h3 class="evapp-gi-step-title"><?php echo esc_html( $gi_text['results_title'] ); ?></h3>
+                    <div class="evapp-gi-final-response-heading evapp-gi-step-header">
+                        <?php if ( ! empty( $gi_results['results_image_url'] ) ) : ?>
+                            <div class="evapp-gi-results-image-wrap evapp-gi-final-response-el" style="order:<?php echo esc_attr( $gi_results['results_order_image'] ); ?>;">
+                                <img class="evapp-gi-results-image"
+                                     src="<?php echo esc_url( $gi_results['results_image_url'] ); ?>"
+                                     alt="<?php echo esc_attr( $gi_results['results_image_alt'] ?: $gi_text['results_title'] ); ?>"
+                                     loading="lazy" />
+                            </div>
+                        <?php endif; ?>
+                        <span class="evapp-gi-badge evapp-gi-badge-ok evapp-gi-final-response-el" style="order:<?php echo esc_attr( $gi_results['results_order_badge'] ); ?>;"><?php echo esc_html( $gi_text['results_badge'] ); ?></span>
+                        <h3 class="evapp-gi-step-title evapp-gi-final-response-el" style="order:<?php echo esc_attr( $gi_results['results_order_title'] ); ?>;"><?php echo esc_html( $gi_text['results_title'] ); ?></h3>
+                        <p class="evapp-gi-results-count evapp-gi-final-response-el" style="order:<?php echo esc_attr( $gi_results['results_order_subtitle'] ); ?>;"></p>
                     </div>
-                    <p class="evapp-gi-results-count"></p>
                     <div class="evapp-gi-results-carousel-wrap"><!-- Se llena desde JS --></div>
                     <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-nueva-busqueda" style="margin-top:18px;"><?php echo esc_html( $gi_text['back_start_button'] ); ?></button>
                 </div>
@@ -1310,6 +1357,12 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-search-bar-wrap { width:100%; background:#dde8ff; border-radius:50px; height:8px; margin:18px auto 0; max-width:320px; overflow:hidden; }
         .evapp-gi-search-bar-inner { height:100%; background:linear-gradient(90deg,#1c3d8f,#4f7cff); border-radius:50px; width:0%; transition:width .4s ease; }
         /* Resultados */
+        .evapp-gi-final-response-heading { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; margin-bottom:16px; }
+        .evapp-gi-final-response-heading .evapp-gi-badge,
+        .evapp-gi-final-response-heading .evapp-gi-step-title,
+        .evapp-gi-final-response-heading .evapp-gi-results-count { margin-top:0; margin-bottom:0; }
+        .evapp-gi-results-image-wrap { width:96px; max-width:100%; margin:0 auto 2px; line-height:0; display:flex; align-items:center; justify-content:center; }
+        .evapp-gi-results-image { display:block; width:100%; height:auto; max-width:100%; object-fit:contain; }
         .evapp-gi-results-count { font-size:15px; font-weight:700; color:#15803d; margin:0 0 16px; text-align:center; }
         .evapp-gi-results-carousel-wrap { position:relative; }
         .evapp-gi-results-slides { background:#111; border-radius:12px; overflow:hidden; min-height:260px; display:flex; align-items:center; justify-content:center; }
@@ -1485,6 +1538,14 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 wizard.querySelectorAll('.evapp-gi-step').forEach(function(s){ s.style.display = 'none'; });
                 var el = wizard.querySelector('.' + cls);
                 if ( el ) el.style.display = '';
+
+                if ( wrap ) {
+                    if ( cls === 'evapp-gi-step-results' || cls === 'evapp-gi-step-no-results' ) {
+                        wrap.classList.add('evapp-gi-final-response-active');
+                    } else {
+                        wrap.classList.remove('evapp-gi-final-response-active');
+                    }
+                }
             }
             function showMsg(el, txt, tipo) {
                 el.textContent = txt;
@@ -2043,6 +2104,11 @@ add_action( 'wp_enqueue_scripts', function () {
 .evapp-galeria-wrap > .evapp-galeria-thumbs-wrap { order: 50; }
 .evapp-galeria-wrap > .evapp-gi-finder-section { order: 60; }
 .evapp-galeria-wrap > .evapp-galeria-lightbox { order: 999; }
+.evapp-galeria-wrap.evapp-gi-final-response-active > .evapp-galeria-main-wrap,
+.evapp-galeria-wrap.evapp-gi-final-response-active > .evapp-galeria-counter,
+.evapp-galeria-wrap.evapp-gi-final-response-active > .evapp-galeria-thumbs-wrap {
+    display: none !important;
+}
 /* ── Header informativo ── */
 .evapp-galeria-header {
     padding: 14px 0 12px;
@@ -2746,9 +2812,58 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
 
                 $this->add_ai_text_heading( 'Resultados' );
                 $this->add_ai_text_control( 'results_badge', 'Etiqueta búsqueda completada' );
+                $this->add_control( 'results_image', [
+                    'label'       => 'Imagen superior resultado final',
+                    'type'        => \Elementor\Controls_Manager::MEDIA,
+                    'description' => 'Imagen o GIF opcional para mostrar encima del indicador, título y subtítulo del resultado final.',
+                ] );
+                $this->add_control( 'results_image_alt', [
+                    'label'       => 'Texto alternativo imagen resultado final',
+                    'type'        => \Elementor\Controls_Manager::TEXT,
+                    'default'     => '',
+                    'label_block' => true,
+                ] );
                 $this->add_ai_text_control( 'results_title', 'Título resultados' );
                 $this->add_ai_text_control( 'results_count_one', 'Texto resultado 1 foto' );
                 $this->add_ai_text_control( 'results_count_many', 'Texto resultados varias fotos. Usa {count}' );
+                $this->add_control( 'results_order_heading', [
+                    'label'     => 'Orden de elementos del resultado final',
+                    'type'      => \Elementor\Controls_Manager::HEADING,
+                    'separator' => 'before',
+                ] );
+                $this->add_control( 'results_order_image', [
+                    'label'       => 'Orden: imagen superior',
+                    'type'        => \Elementor\Controls_Manager::NUMBER,
+                    'default'     => 5,
+                    'min'         => 0,
+                    'max'         => 999,
+                    'step'        => 1,
+                    'description' => 'El número más bajo aparece primero. Si no subes imagen, este orden no se usa.',
+                ] );
+                $this->add_control( 'results_order_badge', [
+                    'label'   => 'Orden: indicador del paso',
+                    'type'    => \Elementor\Controls_Manager::NUMBER,
+                    'default' => 10,
+                    'min'     => 0,
+                    'max'     => 999,
+                    'step'    => 1,
+                ] );
+                $this->add_control( 'results_order_title', [
+                    'label'   => 'Orden: título',
+                    'type'    => \Elementor\Controls_Manager::NUMBER,
+                    'default' => 20,
+                    'min'     => 0,
+                    'max'     => 999,
+                    'step'    => 1,
+                ] );
+                $this->add_control( 'results_order_subtitle', [
+                    'label'   => 'Orden: subtítulo / contador encontrado',
+                    'type'    => \Elementor\Controls_Manager::NUMBER,
+                    'default' => 30,
+                    'min'     => 0,
+                    'max'     => 999,
+                    'step'    => 1,
+                ] );
                 $this->add_ai_text_control( 'results_prev_label', 'Aria flecha anterior' );
                 $this->add_ai_text_control( 'results_next_label', 'Aria flecha siguiente' );
                 $this->add_ai_text_control( 'download_button', 'Botón descargar foto' );
@@ -3334,6 +3449,20 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                         '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-success-media-image' => 'width: {{SIZE}}{{UNIT}}; height: {{SIZE}}{{UNIT}}; max-width: 100%;',
                     ],
                 ] );
+                $this->add_responsive_control( 'ai_results_top_image_size', [
+                    'label'       => 'Tamaño imagen superior resultado final',
+                    'type'        => \Elementor\Controls_Manager::SLIDER,
+                    'size_units'  => [ 'px', 'em', '%' ],
+                    'range'       => [
+                        'px' => [ 'min' => 24, 'max' => 520 ],
+                        'em' => [ 'min' => 1, 'max' => 28 ],
+                        '%'  => [ 'min' => 5, 'max' => 100 ],
+                    ],
+                    'description' => 'Controla el tamaño de la nueva imagen superior del último paso de resultados.',
+                    'selectors'   => [
+                        '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-results-image-wrap' => 'width: {{SIZE}}{{UNIT}};',
+                    ],
+                ] );
                 $this->add_control( 'ai_progress_bg', [
                     'label'     => 'Fondo barra progreso',
                     'type'      => \Elementor\Controls_Manager::COLOR,
@@ -3404,6 +3533,15 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                     }
                 }
 
+                $results_defaults = evapp_galeria_ia_default_results_settings();
+                foreach ( [ 'results_image_alt', 'results_order_image', 'results_order_badge', 'results_order_title', 'results_order_subtitle' ] as $results_key ) {
+                    if ( isset( $settings[ $results_key ] ) && $settings[ $results_key ] !== '' ) {
+                        $shortcode_attrs[ $results_key ] = $settings[ $results_key ];
+                    } elseif ( isset( $results_defaults[ $results_key ] ) ) {
+                        $shortcode_attrs[ $results_key ] = $results_defaults[ $results_key ];
+                    }
+                }
+
                 if ( ! empty( $settings['cta_image']['url'] ) ) {
                     $shortcode_attrs['cta_image_url'] = esc_url_raw( $settings['cta_image']['url'] );
                 }
@@ -3427,6 +3565,10 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
 
                 if ( ! empty( $settings['success_image']['url'] ) ) {
                     $shortcode_attrs['success_image_url'] = esc_url_raw( $settings['success_image']['url'] );
+                }
+
+                if ( ! empty( $settings['results_image']['url'] ) ) {
+                    $shortcode_attrs['results_image_url'] = esc_url_raw( $settings['results_image']['url'] );
                 }
 
                 $shortcode = '[eventosapp_galeria';
