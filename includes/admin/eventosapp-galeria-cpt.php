@@ -1534,52 +1534,109 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 }
                 return value;
             }
-            function evappGiScrollToActiveStep(activeStep) {
-                if ( ! activeStep || ! finder || typeof window === 'undefined' ) return;
+            function evappGiGetScrollTop() {
+                return window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+            }
 
-                window.requestAnimationFrame(function(){
-                    window.requestAnimationFrame(function(){
-                        var target = finder;
-                        var rect   = target.getBoundingClientRect();
-                        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            function evappGiGetSafeTopOffset() {
+                var reservedBottom = 0;
+                var adminBar = document.getElementById('wpadminbar');
 
-                        // Si la caja completa del flujo cabe en pantalla, se centra suavemente.
-                        // Si la caja es más alta que la pantalla, se encuadra desde arriba para no cortar el inicio del paso.
-                        var wpAdminBar  = document.getElementById('wpadminbar');
-                        var adminOffset = wpAdminBar ? wpAdminBar.offsetHeight : 0;
-                        var safeOffset  = adminOffset + 18;
-                        var absoluteTop = rect.top + ( window.pageYOffset || document.documentElement.scrollTop || 0 );
-                        var targetTop;
+                if ( adminBar ) {
+                    var adminRect = adminBar.getBoundingClientRect();
+                    if ( adminRect.height > 0 ) {
+                        reservedBottom = Math.max( reservedBottom, adminRect.bottom );
+                    }
+                }
 
-                        if ( viewportHeight && rect.height < ( viewportHeight - safeOffset - 24 ) ) {
-                            targetTop = absoluteTop - Math.max( safeOffset, Math.round( ( viewportHeight - rect.height ) / 2 ) );
-                        } else {
-                            targetTop = absoluteTop - safeOffset;
-                        }
+                var stickySelectors = [
+                    'body > header',
+                    'header',
+                    '#masthead',
+                    '.site-header',
+                    '.elementor-location-header',
+                    '.elementor-sticky--active',
+                    '.main-header',
+                    '.navbar',
+                    '.navbar-fixed-top',
+                    '.evapp-header'
+                ];
 
-                        targetTop = Math.max( 0, targetTop );
-
-                        try {
-                            window.scrollTo({ top: targetTop, behavior: 'smooth' });
-                        } catch(e) {
-                            window.scrollTo(0, targetTop);
+                stickySelectors.forEach(function(selector){
+                    document.querySelectorAll(selector).forEach(function(el){
+                        if ( ! el || el === adminBar ) return;
+                        var style = window.getComputedStyle(el);
+                        if ( ! style || ( style.position !== 'fixed' && style.position !== 'sticky' ) ) return;
+                        var rect = el.getBoundingClientRect();
+                        if ( rect.height <= 0 || rect.bottom <= 0 ) return;
+                        if ( rect.top <= reservedBottom + 12 ) {
+                            reservedBottom = Math.max( reservedBottom, rect.bottom );
                         }
                     });
                 });
+
+                return Math.max(0, Math.ceil(reservedBottom)) + 22;
             }
+
+            function evappGiScrollToElement(target, preferCenter) {
+                if ( ! target || typeof window === 'undefined' ) return;
+
+                var runScroll = function(){
+                    var rect = target.getBoundingClientRect();
+                    if ( ! rect || ( rect.height <= 0 && rect.width <= 0 ) ) return;
+
+                    var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                    var safeOffset     = evappGiGetSafeTopOffset();
+                    var bottomPadding  = 22;
+                    var available      = Math.max( 160, viewportHeight - safeOffset - bottomPadding );
+                    var absoluteTop    = rect.top + evappGiGetScrollTop();
+                    var targetTop;
+
+                    if ( preferCenter && viewportHeight && rect.height < available ) {
+                        targetTop = absoluteTop - safeOffset - Math.round( ( available - rect.height ) / 2 );
+                    } else {
+                        targetTop = absoluteTop - safeOffset;
+                    }
+
+                    targetTop = Math.max(0, targetTop);
+
+                    try {
+                        window.scrollTo({ top: targetTop, behavior: 'smooth' });
+                    } catch(e) {
+                        window.scrollTo(0, targetTop);
+                    }
+                };
+
+                window.requestAnimationFrame(function(){
+                    window.requestAnimationFrame(function(){
+                        runScroll();
+                        window.setTimeout(runScroll, 140);
+                    });
+                });
+            }
+
+            function evappGiScrollToActiveStep(activeStep) {
+                if ( ! activeStep || ! finder ) return;
+                evappGiScrollToElement(finder, true);
+            }
+
+            function evappGiScrollToGalleryStart() {
+                if ( ! wrap ) return;
+                var galleryTarget = wrap.querySelector('.evapp-galeria-main-wrap') || wrap;
+                evappGiScrollToElement(galleryTarget, false);
+            }
+
+            function evappGiSetFinalResponseMode(isFinalResponse) {
+                if ( ! wrap ) return;
+                wrap.classList.toggle('evapp-gi-final-response-active', !! isFinalResponse);
+            }
+
             function showStep(cls) {
                 wizard.querySelectorAll('.evapp-gi-step').forEach(function(s){ s.style.display = 'none'; });
                 var el = wizard.querySelector('.' + cls);
                 if ( el ) el.style.display = '';
 
-                if ( wrap ) {
-                    if ( cls === 'evapp-gi-step-results' || cls === 'evapp-gi-step-no-results' ) {
-                        wrap.classList.add('evapp-gi-final-response-active');
-                    } else {
-                        wrap.classList.remove('evapp-gi-final-response-active');
-                    }
-                }
-
+                evappGiSetFinalResponseMode(cls === 'evapp-gi-step-results' || cls === 'evapp-gi-step-no-results');
                 evappGiScrollToActiveStep(el);
             }
             function showMsg(el, txt, tipo) {
@@ -2068,16 +2125,36 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             // ── Reset completo ────────────────────────────────────────────────
             function evappGiResetWizard() {
                 fotoDataUrl = null; fotosDataUrls = []; ticketId = null; cedulaVal = ''; faceDescsQuery = [];
+                detenerCamara();
+                evappGiSetFinalResponseMode(false);
+
                 if ( inputCedula ) inputCedula.value = '';
                 if ( inputApell  ) inputApell.value  = '';
                 if ( uploadGuide  ) uploadGuide.style.display  = 'none';
                 if ( camWrap      ) camWrap.style.display      = 'none';
                 if ( fotoOpciones ) fotoOpciones.style.display = '';
+
+                wizard.querySelectorAll('.evapp-gi-msg').forEach(function(msg){ hideMsg(msg); });
+
                 var fi = wizard.querySelector('.evapp-gi-file-input');
                 if ( fi ) fi.value = '';
+
+                var uploadImg = wizard.querySelector('.evapp-gi-upload-preview-img');
+                if ( uploadImg ) uploadImg.removeAttribute('src');
+
+                var previewImg = wizard.querySelector('.evapp-gi-preview-final-img');
+                if ( previewImg ) previewImg.removeAttribute('src');
+
+                var resultsCount = wizard.querySelector('.evapp-gi-results-count');
+                if ( resultsCount ) resultsCount.textContent = '';
+
+                var resultsCarousel = wizard.querySelector('.evapp-gi-results-carousel-wrap');
+                if ( resultsCarousel ) resultsCarousel.innerHTML = '';
+
                 evappGiActualizarStrip();
                 wizard.style.display      = 'none';
                 triggerWrap.style.display = '';
+                evappGiScrollToGalleryStart();
             }
 
             var btnNuevaBusqueda = wizard.querySelector('.evapp-gi-btn-nueva-busqueda');
