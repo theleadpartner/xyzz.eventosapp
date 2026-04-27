@@ -623,6 +623,7 @@ if ( ! function_exists( 'evapp_galeria_ia_default_cta_settings' ) ) {
     function evapp_galeria_ia_default_cta_settings() {
         return [
             'cta_layout'          => 'vertical',
+            'cta_mobile_layout'   => 'vertical',
             'cta_image_url'       => '',
             'cta_image_hover_url' => '',
             'cta_image_alt'       => '',
@@ -640,6 +641,9 @@ if ( ! function_exists( 'evapp_galeria_ia_sanitize_cta_settings' ) ) {
 
         $layout = isset( $atts['cta_layout'] ) ? sanitize_key( $atts['cta_layout'] ) : $defaults['cta_layout'];
         $settings['cta_layout'] = in_array( $layout, [ 'vertical', 'horizontal' ], true ) ? $layout : 'vertical';
+
+        $mobile_layout = isset( $atts['cta_mobile_layout'] ) ? sanitize_key( $atts['cta_mobile_layout'] ) : $defaults['cta_mobile_layout'];
+        $settings['cta_mobile_layout'] = in_array( $mobile_layout, [ 'vertical', 'horizontal' ], true ) ? $mobile_layout : 'vertical';
 
         $settings['cta_image_url']       = isset( $atts['cta_image_url'] ) ? esc_url_raw( $atts['cta_image_url'] ) : '';
         $settings['cta_image_hover_url'] = isset( $atts['cta_image_hover_url'] ) ? esc_url_raw( $atts['cta_image_hover_url'] ) : '';
@@ -1041,7 +1045,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         <div class="evapp-gi-finder-section" id="<?php echo esc_attr( $uid ); ?>-finder">
 
             <!-- CTA inicial -->
-            <div class="evapp-gi-trigger-wrap evapp-gi-trigger-layout-<?php echo esc_attr( $gi_cta['cta_layout'] ); ?>" id="<?php echo esc_attr( $uid ); ?>-trigger">
+            <div class="evapp-gi-trigger-wrap evapp-gi-trigger-layout-<?php echo esc_attr( $gi_cta['cta_layout'] ); ?> evapp-gi-trigger-mobile-layout-<?php echo esc_attr( $gi_cta['cta_mobile_layout'] ); ?>" id="<?php echo esc_attr( $uid ); ?>-trigger">
                 <?php if ( ! empty( $gi_cta['cta_image_url'] ) ) : ?>
                     <div class="evapp-gi-promo-image-wrap" style="order:<?php echo esc_attr( $gi_cta['cta_order_image'] ); ?>;">
                         <img class="evapp-gi-promo-image evapp-gi-promo-image-normal<?php echo ! empty( $gi_cta['cta_image_hover_url'] ) ? ' has-hover' : ''; ?>"
@@ -1259,9 +1263,9 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         <style>
         /* ── Sección contenedor ── */
         .evapp-gi-finder-section { margin-top:36px; padding:32px 28px; background:linear-gradient(145deg,#f0f4ff,#e8eeff); border-radius:14px; border:1px solid #c7d4ff; width:100%; max-width:100%; box-sizing:border-box; overflow:hidden; }
-        .evapp-gi-trigger-wrap { text-align:var(--evapp-gi-cta-text-align, center); display:flex; flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); gap:18px; width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
-        .evapp-gi-trigger-layout-horizontal { flex-direction:row; flex-wrap:wrap; align-items:center; justify-content:var(--evapp-gi-cta-justify-content, center); text-align:var(--evapp-gi-cta-text-align, left); }
-        .evapp-gi-trigger-layout-vertical { flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:center; text-align:var(--evapp-gi-cta-text-align, center); }
+        .evapp-gi-trigger-wrap { text-align:var(--evapp-gi-cta-text-align, center); display:flex; flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); align-content:center; row-gap:var(--evapp-gi-cta-row-gap, 18px); column-gap:var(--evapp-gi-cta-column-gap, 18px); width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
+        .evapp-gi-trigger-layout-horizontal { flex-direction:row; flex-wrap:wrap; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); align-content:center; text-align:var(--evapp-gi-cta-text-align, left); }
+        .evapp-gi-trigger-layout-vertical { flex-direction:column; flex-wrap:nowrap; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); text-align:var(--evapp-gi-cta-text-align, center); }
         .evapp-gi-promo-image-wrap { position:relative; display:inline-flex; align-items:center; justify-content:center; width:min(var(--evapp-gi-cta-image-width, 120px), 100%); max-width:100%; flex:0 0 auto; line-height:0; overflow:hidden; }
         .evapp-gi-promo-image { display:block; width:100%; height:auto; max-width:100%; object-fit:contain; transition:opacity .32s ease, transform .32s ease; }
         .evapp-gi-promo-image-hover { position:absolute; inset:0; opacity:0; transform:scale(.98); }
@@ -1377,11 +1381,24 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-download-btn { display:flex; align-items:center; justify-content:center; gap:6px; margin:12px auto 0; padding:12px 28px; background:#15803d; color:#fff; border:none; border-radius:9px; font-size:14px; font-weight:700; cursor:pointer; text-decoration:none; transition:background .2s; width:fit-content; max-width:100%; box-sizing:border-box; }
         .evapp-gi-download-btn:hover { background:#166534; color:#fff; text-decoration:none; }
         /* Responsive automático por ancho real del widget */
+        @supports (container-type:inline-size) {
+            @container (max-width:720px) {
+                .evapp-gi-finder-section { margin-top:clamp(18px,5cqw,32px); padding:clamp(20px,5cqw,32px) clamp(14px,4cqw,26px); min-height:auto; }
+                .evapp-gi-trigger-wrap { row-gap:var(--evapp-gi-cta-row-gap, clamp(12px,4cqw,24px)); column-gap:var(--evapp-gi-cta-column-gap, clamp(12px,4cqw,24px)); min-height:0; align-content:center; }
+                .evapp-gi-trigger-wrap.evapp-gi-trigger-mobile-layout-vertical { flex-direction:column; flex-wrap:nowrap; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); text-align:var(--evapp-gi-cta-text-align, center); }
+                .evapp-gi-trigger-wrap.evapp-gi-trigger-mobile-layout-horizontal { flex-direction:row; flex-wrap:wrap; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); text-align:var(--evapp-gi-cta-text-align, center); }
+                .evapp-gi-promo-image-wrap { width:min(var(--evapp-gi-cta-image-width, clamp(76px,18cqw,120px)), 100%); }
+                .evapp-gi-promo-text { font-size:clamp(16px,4.2cqw,22px); line-height:1.45; }
+                .evapp-gi-btn-abrir { width:min(100%,280px); min-height:48px; padding:13px 24px; font-size:clamp(15px,4cqw,18px); }
+                .evapp-gi-wizard { max-width:100%; }
+            }
+        }
         @media (max-width:767px) {
             .evapp-gi-finder-section { margin-top:clamp(18px,5vw,32px); padding:clamp(20px,5vw,32px) clamp(14px,4vw,26px); min-height:auto; }
-            .evapp-gi-trigger-wrap { gap:clamp(12px,4vw,24px); min-height:0; align-content:center; }
-            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:center; text-align:var(--evapp-gi-cta-text-align, center); }
-            .evapp-gi-promo-image-wrap { --evapp-gi-cta-image-width:clamp(76px,18vw,120px); }
+            .evapp-gi-trigger-wrap { row-gap:var(--evapp-gi-cta-row-gap, clamp(12px,4vw,24px)); column-gap:var(--evapp-gi-cta-column-gap, clamp(12px,4vw,24px)); min-height:0; align-content:center; }
+            .evapp-gi-trigger-wrap.evapp-gi-trigger-mobile-layout-vertical { flex-direction:column; flex-wrap:nowrap; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); text-align:var(--evapp-gi-cta-text-align, center); }
+            .evapp-gi-trigger-wrap.evapp-gi-trigger-mobile-layout-horizontal { flex-direction:row; flex-wrap:wrap; align-items:var(--evapp-gi-cta-align-items, center); justify-content:var(--evapp-gi-cta-justify-content, center); text-align:var(--evapp-gi-cta-text-align, center); }
+            .evapp-gi-promo-image-wrap { width:min(var(--evapp-gi-cta-image-width, clamp(76px,18vw,120px)), 100%); }
             .evapp-gi-promo-text { font-size:clamp(16px,4vw,22px); line-height:1.45; }
             .evapp-gi-btn-abrir { width:min(100%,280px); min-height:48px; padding:13px 24px; font-size:clamp(15px,4vw,18px); }
             .evapp-gi-wizard { max-width:100%; }
@@ -1395,8 +1412,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         /* Responsive */
         @media (max-width:500px) {
             .evapp-gi-finder-section { padding:22px 16px; }
-            .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal { flex-direction:column; align-items:var(--evapp-gi-cta-align-items, center); justify-content:center; text-align:var(--evapp-gi-cta-text-align, center); }
-            .evapp-gi-promo-image-wrap { --evapp-gi-cta-image-width:96px; }
+            .evapp-gi-promo-image-wrap { width:min(var(--evapp-gi-cta-image-width, 96px), 100%); }
             .evapp-gi-step-title { font-size:19px; }
             .evapp-gi-foto-opciones { flex-direction:column; gap:10px; }
             .evapp-gi-btn-opcion { padding:16px 12px; }
@@ -2591,17 +2607,27 @@ add_action( 'wp_enqueue_scripts', function () {
             min-height: auto;
         }
         .evapp-gi-trigger-wrap {
-            gap: clamp(12px, 4cqw, 24px);
+            row-gap: var(--evapp-gi-cta-row-gap, clamp(12px, 4cqw, 24px));
+            column-gap: var(--evapp-gi-cta-column-gap, clamp(12px, 4cqw, 24px));
             min-height: 0;
+            align-content: center;
         }
-        .evapp-gi-trigger-wrap.evapp-gi-trigger-layout-horizontal {
+        .evapp-gi-trigger-wrap.evapp-gi-trigger-mobile-layout-vertical {
             flex-direction: column;
+            flex-wrap: nowrap;
             align-items: var(--evapp-gi-cta-align-items, center);
-            justify-content: center;
+            justify-content: var(--evapp-gi-cta-justify-content, center);
+            text-align: var(--evapp-gi-cta-text-align, center);
+        }
+        .evapp-gi-trigger-wrap.evapp-gi-trigger-mobile-layout-horizontal {
+            flex-direction: row;
+            flex-wrap: wrap;
+            align-items: var(--evapp-gi-cta-align-items, center);
+            justify-content: var(--evapp-gi-cta-justify-content, center);
             text-align: var(--evapp-gi-cta-text-align, center);
         }
         .evapp-gi-promo-image-wrap {
-            --evapp-gi-cta-image-width: clamp(76px, 18cqw, 120px);
+            width: min(var(--evapp-gi-cta-image-width, clamp(76px, 18cqw, 120px)), 100%);
         }
         .evapp-gi-promo-text {
             font-size: clamp(16px, 4.2cqw, 22px);
@@ -3286,6 +3312,16 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                         'horizontal' => 'Horizontal',
                     ],
                 ] );
+                $this->add_control( 'cta_mobile_layout', [
+                    'label'       => 'Orientación del CTA en móviles',
+                    'type'        => \Elementor\Controls_Manager::SELECT,
+                    'default'     => 'vertical',
+                    'options'     => [
+                        'vertical'   => 'Vertical',
+                        'horizontal' => 'Horizontal',
+                    ],
+                    'description' => 'Se aplica cuando el ancho real del widget es de móvil, incluyendo la vista responsive de Elementor. Por defecto queda vertical para evitar saltos y separaciones desproporcionadas.',
+                ] );
                 $this->add_control( 'cta_image', [
                     'label'       => 'Imagen inicial del CTA',
                     'type'        => \Elementor\Controls_Manager::MEDIA,
@@ -3579,18 +3615,34 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $this->add_box_controls( 'ai_container', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-finder-section' );
                 $this->add_block_alignment_control( 'ai_trigger_wrap_align', 'Alineación del bloque CTA', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' );
                 $this->add_responsive_control( 'ai_cta_elements_gap', [
-                    'label'      => 'Separación entre imagen, frases y botón',
+                    'label'       => 'Separación general entre imagen, frases y botón',
+                    'type'        => \Elementor\Controls_Manager::SLIDER,
+                    'size_units'  => [ 'px', 'em' ],
+                    'range'       => [ 'px' => [ 'min' => 0, 'max' => 120 ], 'em' => [ 'min' => 0, 'max' => 8 ] ],
+                    'description' => 'Mantiene compatibilidad con configuraciones anteriores y define la separación base en ambos ejes.',
+                    'selectors'   => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' => '--evapp-gi-cta-row-gap: {{SIZE}}{{UNIT}}; --evapp-gi-cta-column-gap: {{SIZE}}{{UNIT}};' ],
+                ] );
+                $this->add_responsive_control( 'ai_cta_vertical_gap', [
+                    'label'       => 'Separación vertical entre elementos CTA',
+                    'type'        => \Elementor\Controls_Manager::SLIDER,
+                    'size_units'  => [ 'px', 'em' ],
+                    'range'       => [ 'px' => [ 'min' => 0, 'max' => 180 ], 'em' => [ 'min' => 0, 'max' => 12 ] ],
+                    'description' => 'Controla únicamente la distancia vertical. Este es el control que debes ajustar en vista móvil cuando el CTA está en vertical.',
+                    'selectors'   => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' => '--evapp-gi-cta-row-gap: {{SIZE}}{{UNIT}};' ],
+                ] );
+                $this->add_responsive_control( 'ai_cta_horizontal_gap', [
+                    'label'      => 'Separación horizontal entre elementos CTA',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
                     'size_units' => [ 'px', 'em' ],
-                    'range'      => [ 'px' => [ 'min' => 0, 'max' => 120 ], 'em' => [ 'min' => 0, 'max' => 8 ] ],
-                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' => 'gap: {{SIZE}}{{UNIT}};' ],
+                    'range'      => [ 'px' => [ 'min' => 0, 'max' => 180 ], 'em' => [ 'min' => 0, 'max' => 12 ] ],
+                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-trigger-wrap' => '--evapp-gi-cta-column-gap: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_responsive_control( 'ai_cta_image_width', [
                     'label'      => 'Ancho imagen CTA',
                     'type'       => \Elementor\Controls_Manager::SLIDER,
                     'size_units' => [ 'px', '%', 'em' ],
                     'range'      => [ 'px' => [ 'min' => 32, 'max' => 520 ], '%' => [ 'min' => 5, 'max' => 100 ], 'em' => [ 'min' => 2, 'max' => 32 ] ],
-                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap' => '--evapp-gi-cta-image-width: {{SIZE}}{{UNIT}}; width: {{SIZE}}{{UNIT}};' ],
+                    'selectors'  => [ '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap' => '--evapp-gi-cta-image-width: {{SIZE}}{{UNIT}};' ],
                 ] );
                 $this->add_box_controls( 'ai_cta_image_box', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-image-wrap', false );
                 $this->add_text_controls( 'ai_promo', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-promo-text strong', 'Texto CTA inicial' );
@@ -3853,7 +3905,7 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 }
 
                 $cta_defaults = evapp_galeria_ia_default_cta_settings();
-                foreach ( [ 'cta_layout', 'cta_image_alt', 'cta_order_image', 'cta_order_text', 'cta_order_button' ] as $cta_key ) {
+                foreach ( [ 'cta_layout', 'cta_mobile_layout', 'cta_image_alt', 'cta_order_image', 'cta_order_text', 'cta_order_button' ] as $cta_key ) {
                     if ( isset( $settings[ $cta_key ] ) && $settings[ $cta_key ] !== '' ) {
                         $shortcode_attrs[ $cta_key ] = $settings[ $cta_key ];
                     } elseif ( isset( $cta_defaults[ $cta_key ] ) ) {
