@@ -68,7 +68,7 @@ add_action( 'admin_head', function () {
 } );
 
 // ============================================================
-// 2.1 HELPERS: Correo electrónico alternativo del asistente
+// 2.1 HELPERS: Correo electrónico alternativo + historial vía tickets
 // ============================================================
 
 if ( ! function_exists( 'evapp_asistente_normalize_email_compare' ) ) {
@@ -94,19 +94,183 @@ if ( ! function_exists( 'evapp_asistente_get_request_ip' ) ) {
     }
 }
 
+if ( ! function_exists( 'evapp_asistente_email_alt_source_label' ) ) {
+    function evapp_asistente_email_alt_source_label( $source ) {
+        $source = sanitize_key( $source );
+        $labels = [
+            'galeria_envio_fotos_sin_marca' => 'Flujo público de galería: solicitud de fotos sin marca de agua',
+            'galeria_envio_fotos'           => 'Flujo público de galería',
+            'admin_asistente_metabox'       => 'Edición manual desde el administrador del asistente',
+            'unknown'                       => 'Origen no identificado',
+        ];
+        return $labels[ $source ] ?? ucwords( str_replace( '_', ' ', $source ) );
+    }
+}
+
+if ( ! function_exists( 'evapp_asistente_safe_title_by_id' ) ) {
+    function evapp_asistente_safe_title_by_id( $post_id ) {
+        $post_id = absint( $post_id );
+        if ( ! $post_id ) return '';
+        $title = get_the_title( $post_id );
+        return $title ? wp_strip_all_tags( $title ) : '';
+    }
+}
+
+if ( ! function_exists( 'evapp_asistente_append_ticket_update_history' ) ) {
+    /**
+     * Agrega una entrada al metabox "📋 Historial de Actualizaciones (vía Tickets)".
+     */
+    function evapp_asistente_append_ticket_update_history( $asistente_id, $data = [] ) {
+        $asistente_id = absint( $asistente_id );
+        $post         = $asistente_id ? get_post( $asistente_id ) : null;
+
+        if ( ! $post || $post->post_type !== 'eventosapp_asistente' ) {
+            return new WP_Error( 'evapp_asistente_historial_invalido', 'Asistente inválido para registrar historial.' );
+        }
+
+        $ticket_id  = isset( $data['ticket_id'] ) ? absint( $data['ticket_id'] ) : 0;
+        $galeria_id = isset( $data['galeria_id'] ) ? absint( $data['galeria_id'] ) : 0;
+        $evento_id  = isset( $data['evento_id'] ) ? absint( $data['evento_id'] ) : 0;
+
+        if ( ! $evento_id && $ticket_id ) {
+            $evento_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        }
+        if ( ! $evento_id && $galeria_id ) {
+            $evento_id = absint( get_post_meta( $galeria_id, '_galeria_evento_id', true ) );
+        }
+
+        $source       = isset( $data['source'] ) ? sanitize_key( $data['source'] ) : 'unknown';
+        $source_label = ! empty( $data['source_label'] )
+            ? sanitize_text_field( $data['source_label'] )
+            : evapp_asistente_email_alt_source_label( $source );
+
+        $entry = [
+            'fecha'             => current_time( 'mysql' ),
+            'tipo'              => isset( $data['tipo'] ) ? sanitize_key( $data['tipo'] ) : 'actualizacion',
+            'accion'            => isset( $data['accion'] ) ? sanitize_key( $data['accion'] ) : 'actualizacion',
+            'titulo'            => isset( $data['titulo'] ) && $data['titulo'] !== '' ? sanitize_text_field( $data['titulo'] ) : 'Actualización registrada desde ticket',
+            'resultado'         => isset( $data['resultado'] ) ? sanitize_key( $data['resultado'] ) : '',
+            'detalle'           => isset( $data['detalle'] ) ? sanitize_textarea_field( $data['detalle'] ) : '',
+            'source'            => $source,
+            'source_label'      => $source_label,
+            'flow'              => isset( $data['flow'] ) ? sanitize_key( $data['flow'] ) : '',
+            'ticket_id'         => $ticket_id,
+            'ticket_title'      => ! empty( $data['ticket_title'] ) ? sanitize_text_field( $data['ticket_title'] ) : evapp_asistente_safe_title_by_id( $ticket_id ),
+            'evento_id'         => $evento_id,
+            'evento_title'      => ! empty( $data['evento_title'] ) ? sanitize_text_field( $data['evento_title'] ) : evapp_asistente_safe_title_by_id( $evento_id ),
+            'galeria_id'        => $galeria_id,
+            'galeria_title'     => ! empty( $data['galeria_title'] ) ? sanitize_text_field( $data['galeria_title'] ) : evapp_asistente_safe_title_by_id( $galeria_id ),
+            'email_principal'   => isset( $data['email_principal'] ) ? sanitize_email( $data['email_principal'] ) : sanitize_email( get_post_meta( $asistente_id, '_asistente_email', true ) ),
+            'email_alternativo' => isset( $data['email_alternativo'] ) ? sanitize_email( $data['email_alternativo'] ) : sanitize_email( $data['email'] ?? '' ),
+            'email_anterior'    => isset( $data['email_anterior'] ) ? sanitize_email( $data['email_anterior'] ) : '',
+            'cantidad_fotos'    => isset( $data['cantidad_fotos'] ) ? absint( $data['cantidad_fotos'] ) : 0,
+            'user_id'           => get_current_user_id(),
+            'ip'                => evapp_asistente_get_request_ip(),
+        ];
+
+        $history = get_post_meta( $asistente_id, '_asistente_historial_actualizaciones_tickets', true );
+        if ( ! is_array( $history ) ) {
+            $history = [];
+        }
+
+        $history[] = $entry;
+        if ( count( $history ) > 150 ) {
+            $history = array_slice( $history, -150 );
+        }
+
+        update_post_meta( $asistente_id, '_asistente_historial_actualizaciones_tickets', $history );
+
+        error_log(
+            '[EventosApp Asistentes] Historial vía tickets registrado | Asistente ID:' . $asistente_id .
+            ' | Acción:' . $entry['accion'] .
+            ' | Source:' . $entry['source'] .
+            ' | Ticket ID:' . $entry['ticket_id'] .
+            ' | Galería ID:' . $entry['galeria_id'] .
+            ' | Evento ID:' . $entry['evento_id'] .
+            ' | Email alt:' . $entry['email_alternativo']
+        );
+
+        return $entry;
+    }
+}
+
+if ( ! function_exists( 'evapp_asistente_append_email_alternativo_log' ) ) {
+    /**
+     * Registra historial específico del correo alternativo y lo refleja en el historial vía tickets.
+     */
+    function evapp_asistente_append_email_alternativo_log( $asistente_id, $data = [] ) {
+        $asistente_id = absint( $asistente_id );
+        $post         = $asistente_id ? get_post( $asistente_id ) : null;
+
+        if ( ! $post || $post->post_type !== 'eventosapp_asistente' ) {
+            return new WP_Error( 'evapp_asistente_invalido', 'Asistente inválido.' );
+        }
+
+        $source       = isset( $data['source'] ) ? sanitize_key( $data['source'] ) : 'unknown';
+        $email        = isset( $data['email'] ) ? sanitize_email( $data['email'] ) : sanitize_email( $data['email_alternativo'] ?? '' );
+        $accion       = isset( $data['accion'] ) ? sanitize_key( $data['accion'] ) : 'correo_alternativo_registro';
+        $resultado    = isset( $data['resultado'] ) ? sanitize_key( $data['resultado'] ) : 'registrado';
+        $source_label = ! empty( $data['source_label'] ) ? sanitize_text_field( $data['source_label'] ) : evapp_asistente_email_alt_source_label( $source );
+
+        $entry = [
+            'fecha'             => current_time( 'mysql' ),
+            'accion'            => $accion,
+            'resultado'         => $resultado,
+            'email'             => $email,
+            'email_anterior'    => isset( $data['email_anterior'] ) ? sanitize_email( $data['email_anterior'] ) : '',
+            'email_principal'   => isset( $data['email_principal'] ) ? sanitize_email( $data['email_principal'] ) : sanitize_email( get_post_meta( $asistente_id, '_asistente_email', true ) ),
+            'source'            => $source,
+            'source_label'      => $source_label,
+            'flow'              => isset( $data['flow'] ) ? sanitize_key( $data['flow'] ) : '',
+            'ticket_id'         => isset( $data['ticket_id'] ) ? absint( $data['ticket_id'] ) : 0,
+            'ticket_title'      => ! empty( $data['ticket_title'] ) ? sanitize_text_field( $data['ticket_title'] ) : '',
+            'galeria_id'        => isset( $data['galeria_id'] ) ? absint( $data['galeria_id'] ) : 0,
+            'galeria_title'     => ! empty( $data['galeria_title'] ) ? sanitize_text_field( $data['galeria_title'] ) : '',
+            'evento_id'         => isset( $data['evento_id'] ) ? absint( $data['evento_id'] ) : 0,
+            'evento_title'      => ! empty( $data['evento_title'] ) ? sanitize_text_field( $data['evento_title'] ) : '',
+            'cantidad_fotos'    => isset( $data['cantidad_fotos'] ) ? absint( $data['cantidad_fotos'] ) : 0,
+            'detalle'           => isset( $data['detalle'] ) ? sanitize_textarea_field( $data['detalle'] ) : '',
+            'user_id'           => get_current_user_id(),
+            'ip'                => evapp_asistente_get_request_ip(),
+        ];
+
+        $log = get_post_meta( $asistente_id, '_asistente_email_alternativo_log', true );
+        if ( ! is_array( $log ) ) {
+            $log = [];
+        }
+
+        $log[] = $entry;
+        if ( count( $log ) > 100 ) {
+            $log = array_slice( $log, -100 );
+        }
+
+        update_post_meta( $asistente_id, '_asistente_email_alternativo_log', $log );
+
+        if ( function_exists( 'evapp_asistente_append_ticket_update_history' ) ) {
+            evapp_asistente_append_ticket_update_history( $asistente_id, array_merge( $entry, [
+                'tipo'              => 'correo_alternativo',
+                'titulo'            => 'Correo alternativo capturado',
+                'email_alternativo' => $email,
+            ] ) );
+        }
+
+        error_log(
+            '[EventosApp Asistentes] Historial correo alternativo | Asistente ID:' . $asistente_id .
+            ' | Acción:' . $entry['accion'] .
+            ' | Resultado:' . $entry['resultado'] .
+            ' | Source:' . $entry['source'] .
+            ' | Email:' . $entry['email'] .
+            ' | Ticket ID:' . $entry['ticket_id'] .
+            ' | Galería ID:' . $entry['galeria_id']
+        );
+
+        return $entry;
+    }
+}
+
 if ( ! function_exists( 'evapp_asistente_guardar_email_alternativo' ) ) {
     /**
      * Guarda un correo alternativo para el CPT asistente sin reemplazar el correo principal.
-     *
-     * Reglas:
-     * - No guarda si el correo alternativo es igual al correo principal.
-     * - No vuelve a guardar si ya es el correo alternativo existente.
-     * - Si guarda un correo nuevo, registra un historial en _asistente_email_alternativo_log.
-     *
-     * @param int    $asistente_id ID del CPT eventosapp_asistente.
-     * @param string $nuevo_email  Correo alternativo solicitado.
-     * @param array  $contexto     Contexto opcional: source, ticket_id, galeria_id, evento_id.
-     * @return array|WP_Error
      */
     function evapp_asistente_guardar_email_alternativo( $asistente_id, $nuevo_email, $contexto = [] ) {
         $asistente_id = absint( $asistente_id );
@@ -128,63 +292,68 @@ if ( ! function_exists( 'evapp_asistente_guardar_email_alternativo' ) ) {
         $principal_cmp = evapp_asistente_normalize_email_compare( $email_principal );
         $actual_cmp    = evapp_asistente_normalize_email_compare( $email_actual );
 
+        $log_if_unchanged = ! empty( $contexto['log_if_unchanged'] );
+        $base_log_context = array_merge( $contexto, [
+            'email'           => $nuevo_email,
+            'email_anterior'  => $email_actual,
+            'email_principal' => $email_principal,
+        ] );
+
         if ( $principal_cmp && $nuevo_cmp === $principal_cmp ) {
+            $log_entry = null;
+            if ( $log_if_unchanged && function_exists( 'evapp_asistente_append_email_alternativo_log' ) ) {
+                $log_entry = evapp_asistente_append_email_alternativo_log( $asistente_id, array_merge( $base_log_context, [
+                    'accion'    => 'correo_alternativo_no_guardado',
+                    'resultado' => 'coincide_con_principal',
+                    'detalle'   => 'El usuario indicó este correo desde el flujo, pero no se guardó como alternativo porque coincide con el correo principal del ticket/asistente. No se reemplazó el correo principal.',
+                ] ) );
+            }
+
             return [
-                'saved'  => false,
-                'reason' => 'same_as_primary',
-                'email'  => $email_principal,
+                'saved'     => false,
+                'logged'    => ! empty( $log_entry ) && ! is_wp_error( $log_entry ),
+                'reason'    => 'same_as_primary',
+                'email'     => $email_principal,
+                'log_entry' => $log_entry,
             ];
         }
 
         if ( $actual_cmp && $nuevo_cmp === $actual_cmp ) {
+            $log_entry = null;
+            if ( $log_if_unchanged && function_exists( 'evapp_asistente_append_email_alternativo_log' ) ) {
+                $log_entry = evapp_asistente_append_email_alternativo_log( $asistente_id, array_merge( $base_log_context, [
+                    'accion'    => 'correo_alternativo_ya_existia',
+                    'resultado' => 'ya_existia',
+                    'detalle'   => 'El usuario indicó este correo desde el flujo y ya estaba registrado como correo alternativo. No se creó un duplicado.',
+                ] ) );
+            }
+
             return [
-                'saved'  => false,
-                'reason' => 'same_as_existing_alternate',
-                'email'  => $email_actual,
+                'saved'     => false,
+                'logged'    => ! empty( $log_entry ) && ! is_wp_error( $log_entry ),
+                'reason'    => 'same_as_existing_alternate',
+                'email'     => $email_actual,
+                'log_entry' => $log_entry,
             ];
         }
 
         update_post_meta( $asistente_id, '_asistente_email_alternativo', $nuevo_email );
 
-        $log = get_post_meta( $asistente_id, '_asistente_email_alternativo_log', true );
-        if ( ! is_array( $log ) ) {
-            $log = [];
-        }
-
-        $entry = [
-            'fecha'          => current_time( 'mysql' ),
-            'email'          => $nuevo_email,
-            'email_anterior' => $email_actual,
-            'source'         => isset( $contexto['source'] ) ? sanitize_key( $contexto['source'] ) : 'unknown',
-            'ticket_id'      => isset( $contexto['ticket_id'] ) ? absint( $contexto['ticket_id'] ) : 0,
-            'galeria_id'     => isset( $contexto['galeria_id'] ) ? absint( $contexto['galeria_id'] ) : 0,
-            'evento_id'      => isset( $contexto['evento_id'] ) ? absint( $contexto['evento_id'] ) : 0,
-            'user_id'        => get_current_user_id(),
-            'ip'             => evapp_asistente_get_request_ip(),
-        ];
-
-        $log[] = $entry;
-        if ( count( $log ) > 50 ) {
-            $log = array_slice( $log, -50 );
-        }
-
-        update_post_meta( $asistente_id, '_asistente_email_alternativo_log', $log );
-
-        error_log(
-            '[EventosApp Asistentes] Correo alternativo guardado | Asistente ID:' . $asistente_id .
-            ' | Email:' . $nuevo_email .
-            ' | Source:' . $entry['source'] .
-            ' | Ticket ID:' . $entry['ticket_id'] .
-            ' | Galería ID:' . $entry['galeria_id'] .
-            ' | Evento ID:' . $entry['evento_id']
-        );
+        $log_entry = evapp_asistente_append_email_alternativo_log( $asistente_id, array_merge( $base_log_context, [
+            'accion'    => 'correo_alternativo_guardado',
+            'resultado' => 'guardado',
+            'detalle'   => ! empty( $contexto['detalle'] )
+                ? $contexto['detalle']
+                : 'Se guardó un nuevo correo alternativo sin reemplazar el correo principal del asistente.',
+        ] ) );
 
         return [
             'saved'     => true,
+            'logged'    => ! is_wp_error( $log_entry ),
             'reason'    => 'stored',
             'email'     => $nuevo_email,
             'old_email' => $email_actual,
-            'log_entry' => $entry,
+            'log_entry' => $log_entry,
         ];
     }
 }
@@ -251,13 +420,28 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
 
     // ── Correo alternativo: no reemplaza el correo principal ────────────────
     if ( isset( $_POST['_asistente_email_alternativo'] ) ) {
-        $email_alt = sanitize_email( wp_unslash( $_POST['_asistente_email_alternativo'] ) );
+        $email_alt            = sanitize_email( wp_unslash( $_POST['_asistente_email_alternativo'] ) );
+        $email_alt_previo     = sanitize_email( get_post_meta( $post_id, '_asistente_email_alternativo', true ) );
+        $email_principal_meta = sanitize_email( get_post_meta( $post_id, '_asistente_email', true ) );
 
         if ( $email_alt === '' ) {
+            if ( $email_alt_previo !== '' && function_exists( 'evapp_asistente_append_email_alternativo_log' ) ) {
+                evapp_asistente_append_email_alternativo_log( $post_id, [
+                    'accion'          => 'correo_alternativo_eliminado',
+                    'resultado'       => 'eliminado',
+                    'email'           => '',
+                    'email_anterior'  => $email_alt_previo,
+                    'email_principal' => $email_principal_meta,
+                    'source'          => 'admin_asistente_metabox',
+                    'detalle'         => 'El correo alternativo fue eliminado manualmente desde el administrador del asistente.',
+                ] );
+            }
             delete_post_meta( $post_id, '_asistente_email_alternativo' );
         } elseif ( is_email( $email_alt ) && function_exists( 'evapp_asistente_guardar_email_alternativo' ) ) {
             evapp_asistente_guardar_email_alternativo( $post_id, $email_alt, [
-                'source' => 'admin_asistente_metabox',
+                'source'           => 'admin_asistente_metabox',
+                'log_if_unchanged' => false,
+                'detalle'          => 'El correo alternativo fue guardado manualmente desde la pantalla de edición del asistente.',
             ] );
         }
     }
@@ -405,6 +589,24 @@ add_action( 'add_meta_boxes', function () {
         'eventosapp_asistente',
         'normal',
         'high'
+    );
+
+    add_meta_box(
+        'eventosapp_asistente_tickets_asociados',
+        '🎟️ Tickets Asociados',
+        'eventosapp_asistente_tickets_asociados_metabox',
+        'eventosapp_asistente',
+        'normal',
+        'default'
+    );
+
+    add_meta_box(
+        'eventosapp_asistente_historial_actualizaciones',
+        '📋 Historial de Actualizaciones (vía Tickets)',
+        'eventosapp_asistente_historial_actualizaciones_metabox',
+        'eventosapp_asistente',
+        'normal',
+        'default'
     );
 
     add_meta_box(
@@ -664,6 +866,234 @@ function eventosapp_asistente_datos_metabox( $post ) {
     })(jQuery);
     </script>
     <?php
+}
+
+// ============================================================
+// 4.2 RENDER: Metabox Tickets Asociados
+// ============================================================
+
+if ( ! function_exists( 'evapp_asistente_get_related_ticket_ids' ) ) {
+    function evapp_asistente_get_related_ticket_ids( $asistente_id ) {
+        $asistente_id = absint( $asistente_id );
+        $ids          = [];
+
+        $guardados = get_post_meta( $asistente_id, '_asistente_tickets_asociados', true );
+        if ( is_array( $guardados ) ) {
+            $ids = array_merge( $ids, array_map( 'absint', $guardados ) );
+        }
+
+        $por_asistente = get_posts( [
+            'post_type'      => 'eventosapp_ticket',
+            'post_status'    => 'any',
+            'fields'         => 'ids',
+            'posts_per_page' => 100,
+            'meta_query'     => [
+                [
+                    'key'     => '_eventosapp_ticket_asistente_cpt_id',
+                    'value'   => $asistente_id,
+                    'compare' => '=',
+                ],
+            ],
+        ] );
+
+        if ( ! empty( $por_asistente ) ) {
+            $ids = array_merge( $ids, array_map( 'absint', $por_asistente ) );
+        }
+
+        $cedula = sanitize_text_field( get_post_meta( $asistente_id, '_asistente_cedula', true ) );
+        if ( $cedula !== '' ) {
+            $por_cedula = get_posts( [
+                'post_type'      => 'eventosapp_ticket',
+                'post_status'    => 'any',
+                'fields'         => 'ids',
+                'posts_per_page' => 100,
+                'meta_query'     => [
+                    [
+                        'key'     => '_eventosapp_asistente_cc',
+                        'value'   => $cedula,
+                        'compare' => '=',
+                    ],
+                ],
+            ] );
+
+            if ( ! empty( $por_cedula ) ) {
+                $ids = array_merge( $ids, array_map( 'absint', $por_cedula ) );
+            }
+        }
+
+        $ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
+
+        usort( $ids, function( $a, $b ) {
+            return strtotime( get_post_field( 'post_date', $b ) ) <=> strtotime( get_post_field( 'post_date', $a ) );
+        } );
+
+        return $ids;
+    }
+}
+
+function eventosapp_asistente_tickets_asociados_metabox( $post ) {
+    $ticket_ids = evapp_asistente_get_related_ticket_ids( $post->ID );
+
+    if ( empty( $ticket_ids ) ) {
+        echo '<p style="color:#888; padding:8px 0;">No hay tickets asociados a este asistente.</p>';
+        return;
+    }
+
+    echo '<table class="widefat striped" style="margin-top:6px;">';
+    echo '<thead><tr>';
+    echo '<th>Ticket ID</th>';
+    echo '<th>Evento</th>';
+    echo '<th>Fecha del Evento</th>';
+    echo '<th>Check-In</th>';
+    echo '<th>Ir al Evento</th>';
+    echo '</tr></thead><tbody>';
+
+    foreach ( $ticket_ids as $ticket_id ) {
+        $evento_id    = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        $evento_title = $evento_id ? get_the_title( $evento_id ) : '—';
+        $fecha_evento = $evento_id ? get_post_meta( $evento_id, '_eventosapp_event_fecha', true ) : '';
+        if ( ! $fecha_evento && $evento_id ) {
+            $fecha_evento = get_post_meta( $evento_id, '_event_fecha', true );
+        }
+
+        $checkin_status = get_post_meta( $ticket_id, '_eventosapp_checkin_status', true );
+        $checkin_done   = in_array( $checkin_status, [ 'checked_in', 'si', 'yes', '1' ], true );
+
+        echo '<tr>';
+        echo '<td><code>' . esc_html( get_the_title( $ticket_id ) ?: $ticket_id ) . '</code></td>';
+        echo '<td>' . esc_html( $evento_title ?: '—' ) . '</td>';
+        echo '<td>' . esc_html( $fecha_evento ?: '—' ) . '</td>';
+        echo '<td>' . ( $checkin_done ? '<span style="color:#008a20;">✓ Sí</span>' : '<span style="color:#777;">—</span>' ) . '</td>';
+        echo '<td>';
+        if ( $evento_id && current_user_can( 'edit_post', $evento_id ) ) {
+            echo '<a class="button button-primary button-small" href="' . esc_url( get_edit_post_link( $evento_id ) ) . '">Ver Evento ➜</a>';
+        } else {
+            echo '—';
+        }
+        echo '</td>';
+        echo '</tr>';
+    }
+
+    echo '</tbody></table>';
+    echo '<p style="color:#666;font-size:12px;margin:8px 0 0;">Total de tickets asociados: ' . esc_html( count( $ticket_ids ) ) . '</p>';
+}
+
+// ============================================================
+// 4.3 RENDER: Historial de Actualizaciones (vía Tickets)
+// ============================================================
+
+function eventosapp_asistente_historial_actualizaciones_metabox( $post ) {
+    $history = get_post_meta( $post->ID, '_asistente_historial_actualizaciones_tickets', true );
+    if ( ! is_array( $history ) ) {
+        $history = [];
+    }
+
+    // Fallback: si existían registros anteriores solo en el historial específico de correo alternativo,
+    // se muestran aquí para que no queden invisibles dentro del metabox solicitado.
+    if ( empty( $history ) ) {
+        $legacy_email_log = get_post_meta( $post->ID, '_asistente_email_alternativo_log', true );
+        if ( is_array( $legacy_email_log ) ) {
+            foreach ( $legacy_email_log as $legacy ) {
+                if ( ! is_array( $legacy ) ) continue;
+                $history[] = [
+                    'fecha'             => $legacy['fecha'] ?? '',
+                    'tipo'              => 'correo_alternativo',
+                    'accion'            => $legacy['accion'] ?? 'correo_alternativo_registro',
+                    'titulo'            => 'Correo alternativo capturado',
+                    'resultado'         => $legacy['resultado'] ?? 'registrado',
+                    'detalle'           => $legacy['detalle'] ?? 'Registro importado desde el historial específico del correo alternativo.',
+                    'source'            => $legacy['source'] ?? 'unknown',
+                    'source_label'      => $legacy['source_label'] ?? ( function_exists( 'evapp_asistente_email_alt_source_label' ) ? evapp_asistente_email_alt_source_label( $legacy['source'] ?? 'unknown' ) : '' ),
+                    'flow'              => $legacy['flow'] ?? '',
+                    'ticket_id'         => absint( $legacy['ticket_id'] ?? 0 ),
+                    'ticket_title'      => $legacy['ticket_title'] ?? '',
+                    'evento_id'         => absint( $legacy['evento_id'] ?? 0 ),
+                    'evento_title'      => $legacy['evento_title'] ?? '',
+                    'galeria_id'        => absint( $legacy['galeria_id'] ?? 0 ),
+                    'galeria_title'     => $legacy['galeria_title'] ?? '',
+                    'email_principal'   => $legacy['email_principal'] ?? '',
+                    'email_alternativo' => $legacy['email'] ?? '',
+                    'email_anterior'    => $legacy['email_anterior'] ?? '',
+                    'cantidad_fotos'    => absint( $legacy['cantidad_fotos'] ?? 0 ),
+                    'user_id'           => absint( $legacy['user_id'] ?? 0 ),
+                    'ip'                => $legacy['ip'] ?? '',
+                ];
+            }
+        }
+    }
+
+    if ( empty( $history ) ) {
+        echo '<p style="color:#888; padding:8px 0;">No hay historial de actualizaciones registradas mediante tickets.</p>';
+        return;
+    }
+
+    $history = array_reverse( $history );
+
+    echo '<style>
+        .evapp-update-history-card{border-left:4px solid #2271b1;background:#fff;margin:0 0 10px;padding:10px 12px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+        .evapp-update-history-card.is-warning{border-left-color:#dba617}
+        .evapp-update-history-card.is-success{border-left-color:#00a32a}
+        .evapp-update-history-card.is-deleted{border-left-color:#d63638}
+        .evapp-update-history-title{display:flex;justify-content:space-between;gap:12px;font-weight:700;color:#1d2327;margin-bottom:6px}
+        .evapp-update-history-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px;font-size:12px;color:#50575e;margin-top:8px}
+        .evapp-update-history-detail{font-size:13px;color:#2c3338;margin-top:6px;line-height:1.45}
+        .evapp-update-history-badge{display:inline-block;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;background:#eef5ff;color:#135e96;margin-right:4px}
+        @media(max-width:782px){.evapp-update-history-meta{grid-template-columns:1fr}.evapp-update-history-title{display:block}}
+    </style>';
+
+    foreach ( $history as $entry ) {
+        if ( ! is_array( $entry ) ) continue;
+
+        $resultado = sanitize_key( $entry['resultado'] ?? '' );
+        $cls       = 'evapp-update-history-card';
+        if ( in_array( $resultado, [ 'guardado', 'registrado' ], true ) ) $cls .= ' is-success';
+        if ( in_array( $resultado, [ 'coincide_con_principal', 'ya_existia' ], true ) ) $cls .= ' is-warning';
+        if ( in_array( $resultado, [ 'eliminado' ], true ) ) $cls .= ' is-deleted';
+
+        $ticket_id  = absint( $entry['ticket_id'] ?? 0 );
+        $evento_id  = absint( $entry['evento_id'] ?? 0 );
+        $galeria_id = absint( $entry['galeria_id'] ?? 0 );
+        $user_id    = absint( $entry['user_id'] ?? 0 );
+        $user       = $user_id ? get_userdata( $user_id ) : null;
+
+        $ticket_title  = ! empty( $entry['ticket_title'] ) ? $entry['ticket_title'] : ( $ticket_id ? get_the_title( $ticket_id ) : '' );
+        $evento_title  = ! empty( $entry['evento_title'] ) ? $entry['evento_title'] : ( $evento_id ? get_the_title( $evento_id ) : '' );
+        $galeria_title = ! empty( $entry['galeria_title'] ) ? $entry['galeria_title'] : ( $galeria_id ? get_the_title( $galeria_id ) : '' );
+
+        echo '<div class="' . esc_attr( $cls ) . '">';
+        echo '<div class="evapp-update-history-title">';
+        echo '<span>' . esc_html( $entry['titulo'] ?? 'Actualización registrada' ) . '</span>';
+        echo '<span style="font-weight:400;color:#646970;">' . esc_html( $entry['fecha'] ?? '' ) . '</span>';
+        echo '</div>';
+
+        echo '<div>';
+        echo '<span class="evapp-update-history-badge">' . esc_html( str_replace( '_', ' ', sanitize_key( $entry['accion'] ?? '' ) ) ) . '</span>';
+        if ( $resultado !== '' ) {
+            echo '<span class="evapp-update-history-badge">' . esc_html( str_replace( '_', ' ', $resultado ) ) . '</span>';
+        }
+        echo '</div>';
+
+        if ( ! empty( $entry['detalle'] ) ) {
+            echo '<div class="evapp-update-history-detail">' . esc_html( $entry['detalle'] ) . '</div>';
+        }
+
+        echo '<div class="evapp-update-history-meta">';
+        echo '<div><strong>Origen:</strong> ' . esc_html( $entry['source_label'] ?? ( $entry['source'] ?? '—' ) ) . '</div>';
+        echo '<div><strong>Flujo:</strong> ' . esc_html( $entry['flow'] ?? '—' ) . '</div>';
+        echo '<div><strong>Correo principal:</strong> ' . esc_html( sanitize_email( $entry['email_principal'] ?? '' ) ?: '—' ) . '</div>';
+        echo '<div><strong>Correo alternativo:</strong> ' . esc_html( sanitize_email( $entry['email_alternativo'] ?? '' ) ?: '—' ) . '</div>';
+        if ( ! empty( $entry['email_anterior'] ) ) {
+            echo '<div><strong>Correo anterior:</strong> ' . esc_html( sanitize_email( $entry['email_anterior'] ) ) . '</div>';
+        }
+        echo '<div><strong>Ticket:</strong> ' . esc_html( $ticket_title ?: ( $ticket_id ? '#' . $ticket_id : '—' ) ) . '</div>';
+        echo '<div><strong>Evento:</strong> ' . esc_html( $evento_title ?: ( $evento_id ? '#' . $evento_id : '—' ) ) . '</div>';
+        echo '<div><strong>Galería:</strong> ' . esc_html( $galeria_title ?: ( $galeria_id ? '#' . $galeria_id : '—' ) ) . '</div>';
+        echo '<div><strong>Fotos solicitadas:</strong> ' . esc_html( absint( $entry['cantidad_fotos'] ?? 0 ) ) . '</div>';
+        echo '<div><strong>IP:</strong> ' . esc_html( $entry['ip'] ?? '—' ) . '</div>';
+        echo '<div><strong>Usuario:</strong> ' . esc_html( $user ? $user->display_name : ( $user_id ? 'Usuario #' . $user_id : 'No logueado' ) ) . '</div>';
+        echo '</div>';
+        echo '</div>';
+    }
 }
 
 // ============================================================
