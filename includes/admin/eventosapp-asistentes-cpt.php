@@ -592,6 +592,39 @@ add_action( 'add_meta_boxes', function () {
     );
 
     add_meta_box(
+        'eventosapp_asistente_foto',
+        '📷 Foto del Asistente',
+        'eventosapp_asistente_foto_metabox',
+        'eventosapp_asistente',
+        'side',
+        'high'
+    );
+
+} );
+
+/**
+ * Registra una sola versión de los metaboxes de tickets e historial.
+ *
+ * Motivo: algunos módulos de EventosApp también pueden registrar metaboxes con
+ * el mismo título para el CPT de asistentes. Este registro tardío elimina las
+ * versiones duplicadas y deja una única caja canónica para cada sección.
+ */
+add_action( 'add_meta_boxes_eventosapp_asistente', 'eventosapp_asistente_registrar_metaboxes_tickets_historial_unicos', 99999 );
+
+function eventosapp_asistente_registrar_metaboxes_tickets_historial_unicos( $post ) {
+    eventosapp_asistente_eliminar_metaboxes_duplicados_por_titulo(
+        'eventosapp_asistente',
+        [
+            'Tickets Asociados',
+            'Historial de Actualizaciones',
+        ],
+        [
+            'eventosapp_asistente_tickets_asociados',
+            'eventosapp_asistente_historial_actualizaciones',
+        ]
+    );
+
+    add_meta_box(
         'eventosapp_asistente_tickets_asociados',
         '🎟️ Tickets Asociados',
         'eventosapp_asistente_tickets_asociados_metabox',
@@ -608,17 +641,55 @@ add_action( 'add_meta_boxes', function () {
         'normal',
         'default'
     );
+}
 
-    add_meta_box(
-        'eventosapp_asistente_foto',
-        '📷 Foto del Asistente',
-        'eventosapp_asistente_foto_metabox',
-        'eventosapp_asistente',
-        'side',
-        'high'
-    );
+function eventosapp_asistente_eliminar_metaboxes_duplicados_por_titulo( $screen_id, $title_needles = [], $force_ids = [] ) {
+    global $wp_meta_boxes;
 
-} );
+    if ( empty( $screen_id ) || empty( $wp_meta_boxes[ $screen_id ] ) || ! is_array( $wp_meta_boxes[ $screen_id ] ) ) {
+        return;
+    }
+
+    $title_needles = array_filter( array_map( 'strval', (array) $title_needles ) );
+    $force_ids     = array_filter( array_map( 'strval', (array) $force_ids ) );
+
+    foreach ( $wp_meta_boxes[ $screen_id ] as $context => $priorities ) {
+        if ( ! is_array( $priorities ) ) {
+            continue;
+        }
+
+        foreach ( $priorities as $priority => $boxes ) {
+            if ( ! is_array( $boxes ) ) {
+                continue;
+            }
+
+            foreach ( $boxes as $box_id => $box ) {
+                $box_id_string = (string) $box_id;
+                $title         = '';
+
+                if ( is_array( $box ) && isset( $box['title'] ) ) {
+                    $title = wp_strip_all_tags( (string) $box['title'] );
+                    $title = trim( preg_replace( '/\s+/', ' ', $title ) );
+                }
+
+                $remove = in_array( $box_id_string, $force_ids, true );
+
+                if ( ! $remove ) {
+                    foreach ( $title_needles as $needle ) {
+                        if ( $needle !== '' && stripos( $title, $needle ) !== false ) {
+                            $remove = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ( $remove ) {
+                    unset( $wp_meta_boxes[ $screen_id ][ $context ][ $priority ][ $box_id ] );
+                }
+            }
+        }
+    }
+}
 
 // ============================================================
 // 4.1 RENDER: Metabox Datos del Asistente
