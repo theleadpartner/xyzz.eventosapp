@@ -1674,11 +1674,18 @@ function evapp_galeria_watermarked_image_handler() {
 // ============================================================
 
 // ============================================================
-// 5.1.1 AJAX: Validar asistente de galería usando campos configurables por evento
+// 5.1.1 AJAX: Validar asistente de galería usando campos configurables por galería
 // ============================================================
+// IMPORTANTE:
+// El archivo includes/frontend/eventosapp-galeria-ia-buscador.php ya declara la función
+// evapp_galeria_buscar_ticket_handler(). Por eso este CPT NO debe volver a declarar
+// esa misma función, porque genera error fatal "Cannot redeclare".
+// Para aplicar la validación configurable sin romper el frontend existente, este archivo
+// registra un handler con nombre propio y prioridad más alta. Este handler responde y
+// finaliza la petición AJAX antes de que el handler antiguo pueda ejecutarse.
 
-if ( ! function_exists( 'evapp_galeria_buscar_ticket_handler' ) ) {
-    function evapp_galeria_buscar_ticket_handler() {
+if ( ! function_exists( 'evapp_galeria_buscar_ticket_configurable_handler' ) ) {
+    function evapp_galeria_buscar_ticket_configurable_handler() {
         check_ajax_referer( 'evapp_gi_buscar_ticket', 'security' );
 
         $galeria_id = absint( $_POST['galeria_id'] ?? 0 );
@@ -1776,8 +1783,8 @@ if ( ! function_exists( 'evapp_galeria_buscar_ticket_handler' ) ) {
     }
 }
 
-add_action( 'wp_ajax_evapp_galeria_buscar_ticket', 'evapp_galeria_buscar_ticket_handler', 9 );
-add_action( 'wp_ajax_nopriv_evapp_galeria_buscar_ticket', 'evapp_galeria_buscar_ticket_handler', 9 );
+add_action( 'wp_ajax_evapp_galeria_buscar_ticket', 'evapp_galeria_buscar_ticket_configurable_handler', 1 );
+add_action( 'wp_ajax_nopriv_evapp_galeria_buscar_ticket', 'evapp_galeria_buscar_ticket_configurable_handler', 1 );
 
 // ============================================================
 // 5.2 AJAX: Enviar fotos encontradas sin marca de agua al correo del asistente
