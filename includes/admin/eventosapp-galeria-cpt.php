@@ -1772,6 +1772,10 @@ if ( ! function_exists( 'evapp_galeria_ia_default_texts' ) ) {
             'upload_button'               => '📁 Subir una Foto',
             'camera_button'               => '📷 Tomar Foto',
             'upload_guide_text'           => 'Asegúrate que tu cara quede centrada dentro del óvalo antes de continuar:',
+            'face_preview_detecting'      => 'Analizando orientación y rostro para ajustar el encuadre...',
+            'face_preview_detected'       => 'Rostro detectado. Ajustamos el encuadre automáticamente.',
+            'face_preview_fallback'       => 'No pudimos detectar un rostro automáticamente. Revisa visualmente que tu cara quede clara antes de continuar.',
+            'face_preview_processing_button' => 'Procesando foto...',
             'upload_preview_alt'          => 'Vista previa de tu foto',
             'approve_upload_button'       => '✓ La foto se ve bien, continuar',
             'choose_other_button'         => '↩ Elegir otra foto',
@@ -2406,6 +2410,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                             <img class="evapp-gi-upload-preview-img" src="" alt="<?php echo esc_attr( $gi_text['upload_preview_alt'] ); ?>" />
                             <div class="evapp-gi-oval-overlay"><div class="evapp-gi-oval-ring"></div></div>
                         </div>
+                        <p class="evapp-gi-face-status" role="status" aria-live="polite" style="display:none;"></p>
                         <div class="evapp-gi-guide-actions">
                             <button type="button" class="evapp-gi-btn-primary evapp-gi-btn-aprobar-upload"><?php echo esc_html( $gi_text['approve_upload_button'] ); ?></button>
                             <button type="button" class="evapp-gi-btn-secondary evapp-gi-btn-elegir-otra"><?php echo esc_html( $gi_text['choose_other_button'] ); ?></button>
@@ -2580,11 +2585,20 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-btn-opcion:hover { border-color:#1c3d8f; box-shadow:0 4px 14px rgba(28,61,143,.14); transform:translateY(-3px); }
         .evapp-gi-btn-opcion-icon { font-size:30px; }
         /* Guide frame */
-        .evapp-gi-guide-frame { position:relative; width:100%; max-width:320px; margin:0 auto 16px; border-radius:12px; overflow:hidden; background:#111; aspect-ratio:3/4; }
-        .evapp-gi-upload-preview-img { width:100%; height:100%; object-fit:cover; display:block; }
+        .evapp-gi-guide-frame { position:relative; width:100%; max-width:360px; margin:0 auto 12px; border-radius:12px; overflow:hidden; background:#111; aspect-ratio:1/1; transition:max-width .22s ease, aspect-ratio .22s ease; }
+        .evapp-gi-guide-frame.is-portrait { max-width:320px; aspect-ratio:3/4; }
+        .evapp-gi-guide-frame.is-landscape { max-width:440px; aspect-ratio:4/3; }
+        .evapp-gi-guide-frame.is-square { max-width:360px; aspect-ratio:1/1; }
+        .evapp-gi-upload-preview-img { width:100%; height:100%; object-fit:cover; object-position:var(--evapp-gi-face-x, 50%) var(--evapp-gi-face-y, 50%); display:block; transition:object-position .25s ease; }
         .evapp-gi-guide-instruc { font-size:13px; color:#555; margin-bottom:10px; text-align:center; }
         .evapp-gi-oval-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; pointer-events:none; }
-        .evapp-gi-oval-ring { width:190px; height:250px; border-radius:50%; border:3px solid rgba(255,255,255,.92); box-shadow:0 0 0 9999px rgba(0,0,0,.48),0 0 0 4px rgba(255,255,255,.18); }
+        .evapp-gi-oval-ring { width:min(58%,190px); height:min(72%,250px); border-radius:50%; border:3px solid rgba(255,255,255,.92); box-shadow:0 0 0 9999px rgba(0,0,0,.48),0 0 0 4px rgba(255,255,255,.18); }
+        .evapp-gi-guide-frame.is-landscape .evapp-gi-oval-ring { width:min(42%,185px); height:min(76%,245px); }
+        .evapp-gi-guide-frame.is-square .evapp-gi-oval-ring { width:min(58%,200px); height:min(74%,255px); }
+        .evapp-gi-face-status { margin:0 auto 12px; max-width:440px; font-size:12px; line-height:1.45; text-align:center; font-weight:600; }
+        .evapp-gi-face-status.info { color:#1c3d8f; }
+        .evapp-gi-face-status.success { color:#15803d; }
+        .evapp-gi-face-status.warning { color:#92400e; }
         /* Cámara */
         .evapp-gi-cam-view-frame { position:relative; width:100%; max-width:320px; margin:0 auto 16px; border-radius:12px; overflow:hidden; background:#111; aspect-ratio:3/4; }
         .evapp-gi-video { width:100%; height:100%; object-fit:cover; display:block; transform:scaleX(-1); }
@@ -2815,6 +2829,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             var nonceRegistro = <?php echo wp_json_encode( $nonce_registro ); ?>;
             var nonceEnvio    = <?php echo wp_json_encode( $nonce_envio ); ?>;
             var giText        = <?php echo wp_json_encode( $gi_text ); ?>;
+            var faceModelsUrl = <?php echo wp_json_encode( trailingslashit( EVENTOSAPP_PLUGIN_URL ) . 'includes/assets/face-models' ); ?>;
 
             var finder      = document.getElementById(uid + '-finder');
             var wizard      = document.getElementById(uid + '-wizard');
@@ -2968,22 +2983,193 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 el.className = 'evapp-gi-email-status ' + (tipo || 'info');
                 el.style.display = msg ? '' : 'none';
             }
-            function comprimirImagen(dataUrl, callback) {
-                var img = new Image();
-                img.onload = function() {
-                    var MAX = 900, w = img.naturalWidth, h = img.naturalHeight;
-                    if ( w > MAX || h > MAX ) {
-                        if ( w > h ) { h = Math.round(h * MAX / w); w = MAX; }
-                        else         { w = Math.round(w * MAX / h); h = MAX; }
-                    }
-                    var cv = document.createElement('canvas');
-                    cv.width = w; cv.height = h;
-                    cv.getContext('2d').drawImage(img, 0, 0, w, h);
-                    callback( cv.toDataURL('image/jpeg', 0.88) );
-                };
-                img.onerror = function() { callback(dataUrl); };
-                img.src = dataUrl;
+            function evappGiLoadDataImage(dataUrl) {
+                return new Promise(function(resolve, reject) {
+                    var img = new Image();
+                    img.onload = function(){ resolve(img); };
+                    img.onerror = function(){ reject(new Error('No se pudo cargar la imagen de referencia.')); };
+                    img.src = dataUrl;
+                });
             }
+
+            function evappGiResizeImageDataUrl(img, maxSide, quality) {
+                var w = img.naturalWidth || img.width || 0;
+                var h = img.naturalHeight || img.height || 0;
+                if ( ! w || ! h ) return '';
+
+                var outW = w;
+                var outH = h;
+                var max  = parseInt(maxSide, 10) || 1200;
+
+                if ( outW > max || outH > max ) {
+                    if ( outW > outH ) {
+                        outH = Math.round(outH * max / outW);
+                        outW = max;
+                    } else {
+                        outW = Math.round(outW * max / outH);
+                        outH = max;
+                    }
+                }
+
+                var cv = document.createElement('canvas');
+                cv.width  = Math.max(1, outW);
+                cv.height = Math.max(1, outH);
+                cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+                return cv.toDataURL('image/jpeg', quality || 0.88);
+            }
+
+            function comprimirImagen(dataUrl, callback) {
+                evappGiLoadDataImage(dataUrl)
+                    .then(function(img){ callback( evappGiResizeImageDataUrl(img, 900, 0.88) || dataUrl ); })
+                    .catch(function(){ callback(dataUrl); });
+            }
+
+            var evappGiFacePreviewModelsPromise = null;
+
+            function evappGiLoadFaceModelForPreview() {
+                if ( typeof faceapi === 'undefined' || ! faceapi.nets || ! faceapi.nets.ssdMobilenetv1 ) {
+                    return Promise.resolve(false);
+                }
+
+                if ( faceapi.nets.ssdMobilenetv1.isLoaded ) {
+                    return Promise.resolve(true);
+                }
+
+                if ( ! evappGiFacePreviewModelsPromise ) {
+                    evappGiFacePreviewModelsPromise = faceapi.nets.ssdMobilenetv1
+                        .loadFromUri(faceModelsUrl)
+                        .then(function(){ return true; })
+                        .catch(function(err){
+                            console.warn('[EventosApp GaleriaIA] No se pudo cargar el modelo para preview facial:', err && err.message ? err.message : err);
+                            return false;
+                        });
+                }
+
+                return evappGiFacePreviewModelsPromise;
+            }
+
+            function evappGiDetectFaceForPreview(img) {
+                return evappGiLoadFaceModelForPreview().then(function(loaded){
+                    if ( ! loaded || typeof faceapi === 'undefined' ) return null;
+                    return faceapi
+                        .detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.35 }))
+                        .then(function(det){ return det || null; })
+                        .catch(function(err){
+                            console.warn('[EventosApp GaleriaIA] No se pudo detectar rostro en preview:', err && err.message ? err.message : err);
+                            return null;
+                        });
+                });
+            }
+
+            function evappGiGetOrientationClass(width, height) {
+                if ( ! width || ! height ) return 'square';
+                if ( width / height >= 1.12 ) return 'landscape';
+                if ( height / width >= 1.12 ) return 'portrait';
+                return 'square';
+            }
+
+            function evappGiClamp(value, min, max) {
+                return Math.min(Math.max(value, min), max);
+            }
+
+            function evappGiBuildFocusedCrop(img, detection) {
+                var w = img.naturalWidth || img.width || 0;
+                var h = img.naturalHeight || img.height || 0;
+                if ( ! w || ! h ) return null;
+
+                var minSide = Math.min(w, h);
+                var cx = w / 2;
+                var cy = h / 2;
+                var cropSize = minSide;
+                var hasFace = false;
+
+                if ( detection && detection.box ) {
+                    var box = detection.box;
+                    cx = box.x + (box.width / 2);
+                    cy = box.y + (box.height / 2);
+                    cropSize = Math.max(box.width * 3.0, box.height * 2.55, minSide * 0.48);
+                    cropSize = Math.min(cropSize, minSide);
+                    hasFace = true;
+                }
+
+                var left = cx - (cropSize / 2);
+                var top  = hasFace ? (cy - (cropSize * 0.44)) : (cy - (cropSize / 2));
+
+                left = evappGiClamp(left, 0, Math.max(0, w - cropSize));
+                top  = evappGiClamp(top,  0, Math.max(0, h - cropSize));
+
+                var outSize = Math.min(900, Math.max(420, Math.round(cropSize)));
+                var cv = document.createElement('canvas');
+                cv.width = outSize;
+                cv.height = outSize;
+                cv.getContext('2d').drawImage(img, left, top, cropSize, cropSize, 0, 0, outSize, outSize);
+
+                return {
+                    dataUrl: cv.toDataURL('image/jpeg', 0.9),
+                    hasFace: hasFace,
+                    focusX: evappGiClamp((cx / w) * 100, 0, 100),
+                    focusY: evappGiClamp((cy / h) * 100, 0, 100),
+                    orientation: evappGiGetOrientationClass(w, h)
+                };
+            }
+
+            function evappGiSetFaceStatus(message, type) {
+                var statusEl = wizard ? wizard.querySelector('.evapp-gi-face-status') : null;
+                if ( ! statusEl ) return;
+                statusEl.textContent = message || '';
+                statusEl.className = 'evapp-gi-face-status ' + (type || 'info');
+                statusEl.style.display = message ? '' : 'none';
+            }
+
+            function evappGiApplyPreviewFrame(result) {
+                var frame = wizard ? wizard.querySelector('.evapp-gi-guide-frame') : null;
+                if ( ! frame ) return;
+
+                frame.classList.remove('is-portrait', 'is-landscape', 'is-square', 'has-face-focus');
+                frame.classList.add('is-' + (result.orientation || 'square'));
+
+                frame.style.setProperty('--evapp-gi-face-x', (result.focusX || 50) + '%');
+                frame.style.setProperty('--evapp-gi-face-y', (result.focusY || 50) + '%');
+
+                if ( result.hasFace ) {
+                    frame.classList.add('has-face-focus');
+                }
+            }
+
+            function evappGiPrepararFotoReferencia(dataUrl) {
+                return evappGiLoadDataImage(dataUrl).then(function(originalImg){
+                    var previewDataUrl = evappGiResizeImageDataUrl(originalImg, 1300, 0.88) || dataUrl;
+                    return evappGiLoadDataImage(previewDataUrl).then(function(previewImg){
+                        return evappGiDetectFaceForPreview(previewImg).then(function(det){
+                            var focused = evappGiBuildFocusedCrop(previewImg, det);
+                            if ( ! focused ) {
+                                return {
+                                    previewDataUrl: previewDataUrl,
+                                    finalDataUrl: previewDataUrl,
+                                    hasFace: false,
+                                    focusX: 50,
+                                    focusY: 50,
+                                    orientation: evappGiGetOrientationClass(previewImg.naturalWidth || previewImg.width, previewImg.naturalHeight || previewImg.height)
+                                };
+                            }
+                            focused.previewDataUrl = previewDataUrl;
+                            focused.finalDataUrl = focused.hasFace && focused.dataUrl ? focused.dataUrl : previewDataUrl;
+                            return focused;
+                        });
+                    });
+                }).catch(function(err){
+                    console.warn('[EventosApp GaleriaIA] Error preparando preview:', err && err.message ? err.message : err);
+                    return {
+                        previewDataUrl: dataUrl,
+                        finalDataUrl: dataUrl,
+                        hasFace: false,
+                        focusX: 50,
+                        focusY: 50,
+                        orientation: 'square'
+                    };
+                });
+            }
+
             function detenerCamara() {
                 if ( camStream ) {
                     camStream.getTracks().forEach(function(t){ t.stop(); });
@@ -3127,13 +3313,33 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 fileInput.addEventListener('change', function(){
                     var file = fileInput.files[0];
                     if ( ! file ) return;
+
                     var reader = new FileReader();
                     reader.onload = function(e) {
-                        comprimirImagen(e.target.result, function(compressed){
-                            fotoDataUrl            = compressed;
-                            uploadPreview.src      = compressed;
-                            fotoOpciones.style.display = 'none';
-                            uploadGuide.style.display  = '';
+                        fotoDataUrl = null;
+                        if ( uploadPreview ) uploadPreview.src = e.target.result;
+                        if ( fotoOpciones ) fotoOpciones.style.display = 'none';
+                        if ( uploadGuide ) uploadGuide.style.display = '';
+                        if ( btnAprobarUp ) {
+                            btnAprobarUp.disabled = true;
+                            btnAprobarUp.textContent = t('face_preview_processing_button') || t('approve_upload_button');
+                        }
+                        evappGiSetFaceStatus(t('face_preview_detecting'), 'info');
+
+                        evappGiPrepararFotoReferencia(e.target.result).then(function(result){
+                            fotoDataUrl = result.finalDataUrl || result.previewDataUrl || e.target.result;
+                            if ( uploadPreview ) uploadPreview.src = result.previewDataUrl || fotoDataUrl;
+                            evappGiApplyPreviewFrame(result);
+                            evappGiSetFaceStatus(result.hasFace ? t('face_preview_detected') : t('face_preview_fallback'), result.hasFace ? 'success' : 'warning');
+                        }).catch(function(){
+                            fotoDataUrl = e.target.result;
+                            evappGiApplyPreviewFrame({ orientation: 'square', focusX: 50, focusY: 50, hasFace: false });
+                            evappGiSetFaceStatus(t('face_preview_fallback'), 'warning');
+                        }).finally(function(){
+                            if ( btnAprobarUp ) {
+                                btnAprobarUp.disabled = false;
+                                btnAprobarUp.textContent = t('approve_upload_button');
+                            }
                         });
                     };
                     reader.readAsDataURL(file);
@@ -3141,6 +3347,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             }
             if ( btnAprobarUp ) {
                 btnAprobarUp.addEventListener('click', function(){
+                    if ( ! fotoDataUrl ) return;
                     var prevImg = wizard.querySelector('.evapp-gi-preview-final-img');
                     prevImg.src = fotoDataUrl;
                     showStep('evapp-gi-step-4');
@@ -3148,7 +3355,11 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             }
             if ( btnElegirOtra ) {
                 btnElegirOtra.addEventListener('click', function(){
-                    fotoDataUrl = null; fileInput.value = '';
+                    fotoDataUrl = null;
+                    if ( fileInput ) fileInput.value = '';
+                    if ( uploadPreview ) uploadPreview.src = '';
+                    evappGiSetFaceStatus('', 'info');
+                    evappGiApplyPreviewFrame({ orientation: 'square', focusX: 50, focusY: 50, hasFace: false });
                     uploadGuide.style.display  = 'none';
                     fotoOpciones.style.display = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
                 });
@@ -3176,11 +3387,19 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     ctx.drawImage(video, 0, 0);
                     detenerCamara();
                     camWrap.style.display = 'none';
-                    comprimirImagen(canvas.toDataURL('image/jpeg', 0.92), function(compressed){
-                        fotoDataUrl = compressed;
+                    var capturedDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+                    evappGiPrepararFotoReferencia(capturedDataUrl).then(function(result){
+                        fotoDataUrl = result.finalDataUrl || result.previewDataUrl || capturedDataUrl;
                         var prevImg = wizard.querySelector('.evapp-gi-preview-final-img');
-                        prevImg.src = fotoDataUrl;
+                        if ( prevImg ) prevImg.src = fotoDataUrl;
                         showStep('evapp-gi-step-4');
+                    }).catch(function(){
+                        comprimirImagen(capturedDataUrl, function(compressed){
+                            fotoDataUrl = compressed;
+                            var prevImg = wizard.querySelector('.evapp-gi-preview-final-img');
+                            if ( prevImg ) prevImg.src = fotoDataUrl;
+                            showStep('evapp-gi-step-4');
+                        });
                     });
                 });
             }
@@ -3213,6 +3432,9 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     if ( fotoDataUrl ) { fotosDataUrls.push(fotoDataUrl); fotoDataUrl = null; }
                     evappGiActualizarStrip();
                     if ( fileInput    ) fileInput.value = '';
+                    if ( uploadPreview ) uploadPreview.src = '';
+                    evappGiSetFaceStatus('', 'info');
+                    evappGiApplyPreviewFrame({ orientation: 'square', focusX: 50, focusY: 50, hasFace: false });
                     if ( uploadGuide  ) uploadGuide.style.display  = 'none';
                     if ( camWrap      ) camWrap.style.display      = 'none';
                     if ( fotoOpciones ) fotoOpciones.style.display = fotosDataUrls.length < MAX_FOTOS ? '' : 'none';
@@ -3261,7 +3483,6 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
 
             // ── PASO 6: Buscar mis fotos ─────────────────────────────────────
             var btnContinuar  = wizard.querySelector('.evapp-gi-btn-continuar');
-            var faceModelsUrl = <?php echo wp_json_encode( trailingslashit( EVENTOSAPP_PLUGIN_URL ) . 'includes/assets/face-models' ); ?>;
             var progressEl    = document.getElementById(uid + '-search-progress');
             var barEl         = document.getElementById(uid + '-search-bar');
 
