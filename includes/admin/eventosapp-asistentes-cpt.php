@@ -7,7 +7,8 @@
  *   _asistente_nombres    → Nombres
  *   _asistente_apellidos  → Apellidos
  *   _asistente_cedula     → Cédula de Ciudadanía
- *   _asistente_email      → Correo Electrónico
+ *   _asistente_email      → Correo Electrónico principal
+ *   _asistente_email_alternativo → Correo Electrónico alternativo
  *   _asistente_telefono   → Número de Contacto
  *   _asistente_empresa    → Nombre de Empresa
  *   _asistente_cargo      → Cargo
@@ -67,6 +68,128 @@ add_action( 'admin_head', function () {
 } );
 
 // ============================================================
+// 2.1 HELPERS: Correo electrónico alternativo del asistente
+// ============================================================
+
+if ( ! function_exists( 'evapp_asistente_normalize_email_compare' ) ) {
+    function evapp_asistente_normalize_email_compare( $email ) {
+        return strtolower( trim( sanitize_email( (string) $email ) ) );
+    }
+}
+
+if ( ! function_exists( 'evapp_asistente_get_request_ip' ) ) {
+    function evapp_asistente_get_request_ip() {
+        $keys = [ 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' ];
+        foreach ( $keys as $key ) {
+            if ( empty( $_SERVER[ $key ] ) ) continue;
+            $raw = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
+            if ( strpos( $raw, ',' ) !== false ) {
+                $raw = trim( explode( ',', $raw )[0] );
+            }
+            if ( filter_var( $raw, FILTER_VALIDATE_IP ) ) {
+                return $raw;
+            }
+        }
+        return '';
+    }
+}
+
+if ( ! function_exists( 'evapp_asistente_guardar_email_alternativo' ) ) {
+    /**
+     * Guarda un correo alternativo para el CPT asistente sin reemplazar el correo principal.
+     *
+     * Reglas:
+     * - No guarda si el correo alternativo es igual al correo principal.
+     * - No vuelve a guardar si ya es el correo alternativo existente.
+     * - Si guarda un correo nuevo, registra un historial en _asistente_email_alternativo_log.
+     *
+     * @param int    $asistente_id ID del CPT eventosapp_asistente.
+     * @param string $nuevo_email  Correo alternativo solicitado.
+     * @param array  $contexto     Contexto opcional: source, ticket_id, galeria_id, evento_id.
+     * @return array|WP_Error
+     */
+    function evapp_asistente_guardar_email_alternativo( $asistente_id, $nuevo_email, $contexto = [] ) {
+        $asistente_id = absint( $asistente_id );
+        $post         = $asistente_id ? get_post( $asistente_id ) : null;
+
+        if ( ! $post || $post->post_type !== 'eventosapp_asistente' ) {
+            return new WP_Error( 'evapp_asistente_invalido', 'Asistente inválido.' );
+        }
+
+        $nuevo_email = sanitize_email( (string) $nuevo_email );
+        if ( ! $nuevo_email || ! is_email( $nuevo_email ) ) {
+            return new WP_Error( 'evapp_email_alternativo_invalido', 'Correo alternativo inválido.' );
+        }
+
+        $email_principal = sanitize_email( get_post_meta( $asistente_id, '_asistente_email', true ) );
+        $email_actual    = sanitize_email( get_post_meta( $asistente_id, '_asistente_email_alternativo', true ) );
+
+        $nuevo_cmp     = evapp_asistente_normalize_email_compare( $nuevo_email );
+        $principal_cmp = evapp_asistente_normalize_email_compare( $email_principal );
+        $actual_cmp    = evapp_asistente_normalize_email_compare( $email_actual );
+
+        if ( $principal_cmp && $nuevo_cmp === $principal_cmp ) {
+            return [
+                'saved'  => false,
+                'reason' => 'same_as_primary',
+                'email'  => $email_principal,
+            ];
+        }
+
+        if ( $actual_cmp && $nuevo_cmp === $actual_cmp ) {
+            return [
+                'saved'  => false,
+                'reason' => 'same_as_existing_alternate',
+                'email'  => $email_actual,
+            ];
+        }
+
+        update_post_meta( $asistente_id, '_asistente_email_alternativo', $nuevo_email );
+
+        $log = get_post_meta( $asistente_id, '_asistente_email_alternativo_log', true );
+        if ( ! is_array( $log ) ) {
+            $log = [];
+        }
+
+        $entry = [
+            'fecha'          => current_time( 'mysql' ),
+            'email'          => $nuevo_email,
+            'email_anterior' => $email_actual,
+            'source'         => isset( $contexto['source'] ) ? sanitize_key( $contexto['source'] ) : 'unknown',
+            'ticket_id'      => isset( $contexto['ticket_id'] ) ? absint( $contexto['ticket_id'] ) : 0,
+            'galeria_id'     => isset( $contexto['galeria_id'] ) ? absint( $contexto['galeria_id'] ) : 0,
+            'evento_id'      => isset( $contexto['evento_id'] ) ? absint( $contexto['evento_id'] ) : 0,
+            'user_id'        => get_current_user_id(),
+            'ip'             => evapp_asistente_get_request_ip(),
+        ];
+
+        $log[] = $entry;
+        if ( count( $log ) > 50 ) {
+            $log = array_slice( $log, -50 );
+        }
+
+        update_post_meta( $asistente_id, '_asistente_email_alternativo_log', $log );
+
+        error_log(
+            '[EventosApp Asistentes] Correo alternativo guardado | Asistente ID:' . $asistente_id .
+            ' | Email:' . $nuevo_email .
+            ' | Source:' . $entry['source'] .
+            ' | Ticket ID:' . $entry['ticket_id'] .
+            ' | Galería ID:' . $entry['galeria_id'] .
+            ' | Evento ID:' . $entry['evento_id']
+        );
+
+        return [
+            'saved'     => true,
+            'reason'    => 'stored',
+            'email'     => $nuevo_email,
+            'old_email' => $email_actual,
+            'log_entry' => $entry,
+        ];
+    }
+}
+
+// ============================================================
 // 3. GUARDAR CAMPOS Y SINCRONIZAR TÍTULO AL GUARDAR
 // ============================================================
 
@@ -123,6 +246,19 @@ add_action( 'save_post_eventosapp_asistente', function ( $post_id ) {
     foreach ( $campos as $key => $sanitizer ) {
         if ( isset( $_POST[ $key ] ) ) {
             update_post_meta( $post_id, $key, $sanitizer( $_POST[ $key ] ) );
+        }
+    }
+
+    // ── Correo alternativo: no reemplaza el correo principal ────────────────
+    if ( isset( $_POST['_asistente_email_alternativo'] ) ) {
+        $email_alt = sanitize_email( wp_unslash( $_POST['_asistente_email_alternativo'] ) );
+
+        if ( $email_alt === '' ) {
+            delete_post_meta( $post_id, '_asistente_email_alternativo' );
+        } elseif ( is_email( $email_alt ) && function_exists( 'evapp_asistente_guardar_email_alternativo' ) ) {
+            evapp_asistente_guardar_email_alternativo( $post_id, $email_alt, [
+                'source' => 'admin_asistente_metabox',
+            ] );
         }
     }
 
@@ -293,6 +429,7 @@ function eventosapp_asistente_datos_metabox( $post ) {
     $apellidos = get_post_meta( $post->ID, '_asistente_apellidos', true );
     $cedula    = get_post_meta( $post->ID, '_asistente_cedula',    true );
     $email     = get_post_meta( $post->ID, '_asistente_email',     true );
+    $email_alt = get_post_meta( $post->ID, '_asistente_email_alternativo', true );
     $telefono  = get_post_meta( $post->ID, '_asistente_telefono',  true );
     $empresa   = get_post_meta( $post->ID, '_asistente_empresa',   true );
     $cargo     = get_post_meta( $post->ID, '_asistente_cargo',     true );
@@ -404,9 +541,16 @@ function eventosapp_asistente_datos_metabox( $post ) {
         <p class="evapp-asistente-section-title">Información de Contacto</p>
 
         <div>
-            <label for="_asistente_email">Correo Electrónico</label>
+            <label for="_asistente_email">Correo Electrónico principal</label>
             <input type="email" id="_asistente_email" name="_asistente_email"
                    value="<?php echo esc_attr( $email ); ?>" placeholder="correo@ejemplo.com" />
+        </div>
+
+        <div>
+            <label for="_asistente_email_alternativo">Correo Electrónico alternativo</label>
+            <input type="email" id="_asistente_email_alternativo" name="_asistente_email_alternativo"
+                   value="<?php echo esc_attr( $email_alt ); ?>" placeholder="correo-alternativo@ejemplo.com" />
+            <p class="description" style="margin:4px 0 0;">Se usa para envíos solicitados por el asistente sin reemplazar el correo principal.</p>
         </div>
 
         <div>
@@ -870,6 +1014,7 @@ add_filter( 'manage_eventosapp_asistente_posts_columns', function ( $cols ) {
     $new['evapp_ciudad']    = 'Ciudad';
     $new['evapp_pais']      = 'País';
     $new['evapp_email']     = 'Correo';
+    $new['evapp_email_alt'] = 'Correo alt.';
     $new['evapp_telefono']  = 'Teléfono';
     $new['date']            = $cols['date'];
     return $new;
@@ -915,6 +1060,11 @@ add_action( 'manage_eventosapp_asistente_posts_custom_column', function ( $colum
             echo $mail ? '<a href="mailto:' . esc_attr( $mail ) . '">' . esc_html( $mail ) . '</a>' : '—';
             break;
 
+        case 'evapp_email_alt':
+            $mail_alt = get_post_meta( $post_id, '_asistente_email_alternativo', true );
+            echo $mail_alt ? '<a href="mailto:' . esc_attr( $mail_alt ) . '">' . esc_html( $mail_alt ) . '</a>' : '—';
+            break;
+
         case 'evapp_telefono':
             $tel = get_post_meta( $post_id, '_asistente_telefono', true );
             echo $tel ? '<a href="tel:' . esc_attr( $tel ) . '">' . esc_html( $tel ) . '</a>' : '—';
@@ -958,6 +1108,7 @@ if ( ! function_exists( 'eventosapp_get_asistente' ) ) {
             ),
             'cedula'     => get_post_meta( $asistente_id, '_asistente_cedula',    true ),
             'email'      => get_post_meta( $asistente_id, '_asistente_email',     true ),
+            'email_alternativo' => get_post_meta( $asistente_id, '_asistente_email_alternativo', true ),
             'telefono'   => get_post_meta( $asistente_id, '_asistente_telefono',  true ),
             'empresa'    => get_post_meta( $asistente_id, '_asistente_empresa',   true ),
             'cargo'      => get_post_meta( $asistente_id, '_asistente_cargo',     true ),
