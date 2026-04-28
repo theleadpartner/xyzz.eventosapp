@@ -1222,6 +1222,416 @@ function evapp_galeria_watermarked_image_handler() {
 // ============================================================
 
 // ============================================================
+// 5.2 AJAX: Enviar fotos encontradas sin marca de agua al correo del asistente
+// ============================================================
+
+if ( ! function_exists( 'evapp_galeria_email_normalize_compare' ) ) {
+    function evapp_galeria_email_normalize_compare( $email ) {
+        return strtolower( trim( sanitize_email( (string) $email ) ) );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_request_ip' ) ) {
+    function evapp_galeria_request_ip() {
+        $keys = [ 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' ];
+        foreach ( $keys as $key ) {
+            if ( empty( $_SERVER[ $key ] ) ) continue;
+            $raw = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
+            if ( strpos( $raw, ',' ) !== false ) {
+                $raw = trim( explode( ',', $raw )[0] );
+            }
+            if ( filter_var( $raw, FILTER_VALIDATE_IP ) ) {
+                return $raw;
+            }
+        }
+        return '';
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_get_or_create_asistente_from_ticket' ) ) {
+    function evapp_galeria_get_or_create_asistente_from_ticket( $ticket_id, $cedula = '' ) {
+        $ticket_id = absint( $ticket_id );
+        $ticket    = $ticket_id ? get_post( $ticket_id ) : null;
+
+        if ( ! $ticket || $ticket->post_type !== 'eventosapp_ticket' ) {
+            return 0;
+        }
+
+        $asistente_id = (int) get_post_meta( $ticket_id, '_eventosapp_ticket_asistente_cpt_id', true );
+        if ( $asistente_id && get_post_type( $asistente_id ) === 'eventosapp_asistente' ) {
+            return $asistente_id;
+        }
+
+        $cedula = $cedula ? sanitize_text_field( $cedula ) : sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_cc', true ) );
+
+        if ( $cedula && function_exists( 'eventosapp_find_asistente_by_cedula' ) ) {
+            $asistente_id = (int) eventosapp_find_asistente_by_cedula( $cedula );
+            if ( $asistente_id && get_post_type( $asistente_id ) === 'eventosapp_asistente' ) {
+                update_post_meta( $ticket_id, '_eventosapp_ticket_asistente_cpt_id', $asistente_id );
+                $asociados = get_post_meta( $asistente_id, '_asistente_tickets_asociados', true );
+                if ( ! is_array( $asociados ) ) $asociados = [];
+                if ( ! in_array( $ticket_id, $asociados, true ) ) {
+                    $asociados[] = $ticket_id;
+                    update_post_meta( $asistente_id, '_asistente_tickets_asociados', $asociados );
+                }
+                return $asistente_id;
+            }
+        }
+
+        if ( function_exists( 'evapp_crear_asistente_desde_ticket' ) ) {
+            $asistente_id = evapp_crear_asistente_desde_ticket( $ticket_id, $cedula );
+            if ( $asistente_id && ! is_wp_error( $asistente_id ) && get_post_type( $asistente_id ) === 'eventosapp_asistente' ) {
+                update_post_meta( $ticket_id, '_eventosapp_ticket_asistente_cpt_id', (int) $asistente_id );
+                return (int) $asistente_id;
+            }
+        }
+
+        if ( ! post_type_exists( 'eventosapp_asistente' ) ) {
+            return 0;
+        }
+
+        $nombre   = sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true ) );
+        $apellido = sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true ) );
+        $titulo   = trim( $nombre . ' ' . $apellido );
+        if ( $titulo === '' ) {
+            $titulo = $cedula ? 'Asistente ' . $cedula : 'Asistente ticket ' . $ticket_id;
+        }
+
+        $asistente_id = wp_insert_post( [
+            'post_type'   => 'eventosapp_asistente',
+            'post_status' => 'publish',
+            'post_title'  => $titulo,
+        ], true );
+
+        if ( is_wp_error( $asistente_id ) || ! $asistente_id ) {
+            error_log( '[EventosApp Galería] No se pudo crear CPT asistente desde ticket ID:' . $ticket_id );
+            return 0;
+        }
+
+        update_post_meta( $asistente_id, '_asistente_cedula',    $cedula );
+        update_post_meta( $asistente_id, '_asistente_nombres',   $nombre );
+        update_post_meta( $asistente_id, '_asistente_apellidos', $apellido );
+        update_post_meta( $asistente_id, '_asistente_email',     sanitize_email( get_post_meta( $ticket_id, '_eventosapp_asistente_email', true ) ) );
+        update_post_meta( $asistente_id, '_asistente_empresa',   sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_empresa', true ) ) );
+        update_post_meta( $asistente_id, '_asistente_cargo',     sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_cargo', true ) ) );
+        update_post_meta( $asistente_id, '_asistente_telefono',  sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_tel', true ) ) );
+        update_post_meta( $asistente_id, '_asistente_ciudad',    sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_ciudad', true ) ) );
+        update_post_meta( $asistente_id, '_asistente_pais',      sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_pais', true ) ) );
+        update_post_meta( $ticket_id, '_eventosapp_ticket_asistente_cpt_id', $asistente_id );
+        update_post_meta( $asistente_id, '_asistente_tickets_asociados', [ $ticket_id ] );
+
+        error_log( '[EventosApp Galería] CPT asistente creado desde ticket | Asistente ID:' . $asistente_id . ' | Ticket ID:' . $ticket_id );
+
+        return (int) $asistente_id;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_store_alternate_email_fallback' ) ) {
+    function evapp_galeria_store_alternate_email_fallback( $asistente_id, $nuevo_email, $contexto = [] ) {
+        $asistente_id = absint( $asistente_id );
+        $nuevo_email  = sanitize_email( $nuevo_email );
+
+        if ( ! $asistente_id || get_post_type( $asistente_id ) !== 'eventosapp_asistente' || ! is_email( $nuevo_email ) ) {
+            return [ 'saved' => false, 'reason' => 'invalid' ];
+        }
+
+        $principal = sanitize_email( get_post_meta( $asistente_id, '_asistente_email', true ) );
+        $actual    = sanitize_email( get_post_meta( $asistente_id, '_asistente_email_alternativo', true ) );
+
+        $nuevo_cmp     = evapp_galeria_email_normalize_compare( $nuevo_email );
+        $principal_cmp = evapp_galeria_email_normalize_compare( $principal );
+        $actual_cmp    = evapp_galeria_email_normalize_compare( $actual );
+
+        if ( $principal_cmp && $nuevo_cmp === $principal_cmp ) {
+            return [ 'saved' => false, 'reason' => 'same_as_primary', 'email' => $principal ];
+        }
+
+        if ( $actual_cmp && $nuevo_cmp === $actual_cmp ) {
+            return [ 'saved' => false, 'reason' => 'same_as_existing_alternate', 'email' => $actual ];
+        }
+
+        update_post_meta( $asistente_id, '_asistente_email_alternativo', $nuevo_email );
+
+        $log = get_post_meta( $asistente_id, '_asistente_email_alternativo_log', true );
+        if ( ! is_array( $log ) ) $log = [];
+
+        $entry = [
+            'fecha'          => current_time( 'mysql' ),
+            'email'          => $nuevo_email,
+            'email_anterior' => $actual,
+            'source'         => isset( $contexto['source'] ) ? sanitize_key( $contexto['source'] ) : 'galeria_envio_fotos',
+            'ticket_id'      => isset( $contexto['ticket_id'] ) ? absint( $contexto['ticket_id'] ) : 0,
+            'galeria_id'     => isset( $contexto['galeria_id'] ) ? absint( $contexto['galeria_id'] ) : 0,
+            'evento_id'      => isset( $contexto['evento_id'] ) ? absint( $contexto['evento_id'] ) : 0,
+            'user_id'        => get_current_user_id(),
+            'ip'             => evapp_galeria_request_ip(),
+        ];
+
+        $log[] = $entry;
+        if ( count( $log ) > 50 ) $log = array_slice( $log, -50 );
+        update_post_meta( $asistente_id, '_asistente_email_alternativo_log', $log );
+
+        error_log( '[EventosApp Galería] Correo alternativo guardado por fallback | Asistente ID:' . $asistente_id . ' | Email:' . $nuevo_email );
+
+        return [ 'saved' => true, 'reason' => 'stored', 'email' => $nuevo_email, 'log_entry' => $entry ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_build_originals_zip' ) ) {
+    function evapp_galeria_build_originals_zip( $galeria_id, $ticket_id, $files ) {
+        if ( ! class_exists( 'ZipArchive' ) || empty( $files ) || ! is_array( $files ) ) {
+            return '';
+        }
+
+        $uploads = wp_upload_dir();
+        if ( ! empty( $uploads['error'] ) || empty( $uploads['basedir'] ) ) {
+            return '';
+        }
+
+        $dir = trailingslashit( $uploads['basedir'] ) . 'eventosapp-galeria-envios/' . absint( $galeria_id );
+        if ( ! wp_mkdir_p( $dir ) ) {
+            return '';
+        }
+
+        $filename = sanitize_file_name( 'fotos-sin-marca-ticket-' . absint( $ticket_id ) . '-' . time() . '-' . wp_generate_password( 6, false, false ) . '.zip' );
+        $zip_path = trailingslashit( $dir ) . $filename;
+
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
+            return '';
+        }
+
+        foreach ( $files as $item ) {
+            if ( empty( $item['file'] ) || ! file_exists( $item['file'] ) ) continue;
+            $name = ! empty( $item['name'] ) ? sanitize_file_name( $item['name'] ) : basename( $item['file'] );
+            $zip->addFile( $item['file'], $name );
+        }
+
+        $zip->close();
+
+        return file_exists( $zip_path ) ? $zip_path : '';
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_register_photo_email_log' ) ) {
+    function evapp_galeria_register_photo_email_log( $ticket_id, $data ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) return;
+
+        update_post_meta( $ticket_id, '_evapp_galeria_last_unwatermarked_email_at', current_time( 'mysql' ) );
+        update_post_meta( $ticket_id, '_evapp_galeria_last_unwatermarked_email_to', sanitize_email( $data['to'] ?? '' ) );
+        update_post_meta( $ticket_id, '_evapp_galeria_last_unwatermarked_gallery_id', absint( $data['galeria_id'] ?? 0 ) );
+        update_post_meta( $ticket_id, '_evapp_galeria_last_unwatermarked_event_id', absint( $data['evento_id'] ?? 0 ) );
+        update_post_meta( $ticket_id, '_evapp_galeria_last_unwatermarked_count', absint( $data['count'] ?? 0 ) );
+
+        $log = get_post_meta( $ticket_id, '_evapp_galeria_unwatermarked_email_log', true );
+        if ( ! is_array( $log ) ) $log = [];
+
+        $log[] = [
+            'fecha'          => current_time( 'mysql' ),
+            'to'             => sanitize_email( $data['to'] ?? '' ),
+            'source'         => sanitize_key( $data['source'] ?? 'registered' ),
+            'galeria_id'     => absint( $data['galeria_id'] ?? 0 ),
+            'evento_id'      => absint( $data['evento_id'] ?? 0 ),
+            'count'          => absint( $data['count'] ?? 0 ),
+            'attachment_ids' => array_values( array_filter( array_map( 'absint', $data['attachment_ids'] ?? [] ) ) ),
+            'zip'            => sanitize_text_field( $data['zip'] ?? '' ),
+            'user_id'        => get_current_user_id(),
+            'ip'             => evapp_galeria_request_ip(),
+        ];
+
+        if ( count( $log ) > 50 ) $log = array_slice( $log, -50 );
+        update_post_meta( $ticket_id, '_evapp_galeria_unwatermarked_email_log', $log );
+    }
+}
+
+add_action( 'wp_ajax_evapp_galeria_enviar_fotos_sin_marca',        'evapp_galeria_enviar_fotos_sin_marca_handler' );
+add_action( 'wp_ajax_nopriv_evapp_galeria_enviar_fotos_sin_marca', 'evapp_galeria_enviar_fotos_sin_marca_handler' );
+
+function evapp_galeria_enviar_fotos_sin_marca_handler() {
+    check_ajax_referer( 'evapp_gi_enviar_fotos', 'security' );
+
+    $galeria_id    = absint( $_POST['galeria_id'] ?? 0 );
+    $ticket_id     = absint( $_POST['ticket_id'] ?? 0 );
+    $cedula        = sanitize_text_field( wp_unslash( $_POST['cedula'] ?? '' ) );
+    $email_alt     = sanitize_email( wp_unslash( $_POST['email_alternativo'] ?? '' ) );
+    $ids_raw       = wp_unslash( $_POST['attachment_ids'] ?? '[]' );
+    $attachment_ids = json_decode( $ids_raw, true );
+
+    if ( ! is_array( $attachment_ids ) ) {
+        $attachment_ids = array_filter( array_map( 'absint', explode( ',', (string) $ids_raw ) ) );
+    }
+
+    $attachment_ids = array_values( array_unique( array_filter( array_map( 'absint', $attachment_ids ) ) ) );
+
+    if ( ! $galeria_id || ! $ticket_id || empty( $attachment_ids ) ) {
+        wp_send_json_error( [ 'error' => 'No se recibieron los datos completos para enviar las fotos.' ] );
+    }
+
+    $galeria = get_post( $galeria_id );
+    if ( ! $galeria || $galeria->post_type !== 'eventosapp_galeria' ) {
+        wp_send_json_error( [ 'error' => 'Galería no válida.' ] );
+    }
+
+    $ticket = get_post( $ticket_id );
+    if ( ! $ticket || $ticket->post_type !== 'eventosapp_ticket' ) {
+        wp_send_json_error( [ 'error' => 'Ticket no válido.' ] );
+    }
+
+    $evento_id     = (int) get_post_meta( $galeria_id, '_galeria_evento_id', true );
+    $ticket_evento = (int) get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true );
+
+    if ( ! $evento_id || $ticket_evento !== $evento_id ) {
+        wp_send_json_error( [ 'error' => 'El ticket no pertenece al evento asociado a esta galería.' ] );
+    }
+
+    $ticket_cedula = sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_cc', true ) );
+    if ( $cedula && $ticket_cedula && strtolower( trim( $cedula ) ) !== strtolower( trim( $ticket_cedula ) ) ) {
+        wp_send_json_error( [ 'error' => 'Los datos del ticket no coinciden con la solicitud.' ] );
+    }
+
+    $email_principal = sanitize_email( get_post_meta( $ticket_id, '_eventosapp_asistente_email', true ) );
+    if ( ! $email_principal || ! is_email( $email_principal ) ) {
+        wp_send_json_error( [ 'error' => 'El ticket no tiene un correo registrado válido.' ] );
+    }
+
+    $recipient        = $email_principal;
+    $recipient_source = 'registered';
+    $alternate_result = [ 'saved' => false, 'reason' => 'not_requested' ];
+    $asistente_id     = 0;
+
+    if ( $email_alt !== '' ) {
+        if ( ! is_email( $email_alt ) ) {
+            wp_send_json_error( [ 'error' => 'El correo alternativo no es válido.' ] );
+        }
+
+        $recipient        = $email_alt;
+        $recipient_source = 'alternate';
+        $asistente_id     = evapp_galeria_get_or_create_asistente_from_ticket( $ticket_id, $cedula ?: $ticket_cedula );
+
+        if ( $asistente_id ) {
+            $ctx = [
+                'source'     => 'galeria_envio_fotos_sin_marca',
+                'ticket_id'  => $ticket_id,
+                'galeria_id' => $galeria_id,
+                'evento_id'  => $evento_id,
+            ];
+
+            if ( function_exists( 'evapp_asistente_guardar_email_alternativo' ) ) {
+                $alternate_result = evapp_asistente_guardar_email_alternativo( $asistente_id, $email_alt, $ctx );
+                if ( is_wp_error( $alternate_result ) ) {
+                    $alternate_result = [ 'saved' => false, 'reason' => $alternate_result->get_error_code() ];
+                }
+            } else {
+                $alternate_result = evapp_galeria_store_alternate_email_fallback( $asistente_id, $email_alt, $ctx );
+            }
+        }
+    }
+
+    $cooldown_key = 'evapp_galeria_nomarca_' . md5( $ticket_id . '|' . strtolower( $recipient ) );
+    if ( get_transient( $cooldown_key ) ) {
+        wp_send_json_error( [ 'error' => 'Ya enviamos una solicitud recientemente a ese correo. Por favor espera un momento antes de intentarlo de nuevo.' ] );
+    }
+
+    $files = [];
+    $idx   = 1;
+
+    foreach ( $attachment_ids as $att_id ) {
+        if ( ! evapp_galeria_attachment_belongs_to_gallery( $galeria_id, $att_id ) ) {
+            continue;
+        }
+
+        $file = evapp_galeria_get_attachment_file_for_size( $att_id, 'large' );
+        if ( ! $file || ! file_exists( $file ) ) {
+            continue;
+        }
+
+        $ext = pathinfo( $file, PATHINFO_EXTENSION );
+        $ext = $ext ? strtolower( $ext ) : 'jpg';
+
+        $files[] = [
+            'attachment_id' => $att_id,
+            'file'          => $file,
+            'name'          => 'foto-evento-' . $idx . '-' . $att_id . '.' . $ext,
+        ];
+        $idx++;
+    }
+
+    if ( empty( $files ) ) {
+        wp_send_json_error( [ 'error' => 'No se encontraron archivos válidos para enviar.' ] );
+    }
+
+    $zip_file    = evapp_galeria_build_originals_zip( $galeria_id, $ticket_id, $files );
+    $attachments = [];
+
+    if ( $zip_file ) {
+        $attachments[] = $zip_file;
+    } else {
+        foreach ( $files as $item ) {
+            $attachments[] = $item['file'];
+        }
+    }
+
+    $nombre     = trim( get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true ) . ' ' . get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true ) );
+    $evento_txt = $evento_id ? get_the_title( $evento_id ) : get_the_title( $galeria_id );
+    $galeria_txt = get_the_title( $galeria_id );
+
+    $subject = 'Tus fotos del evento ' . $evento_txt;
+    $body  = $nombre ? 'Hola ' . $nombre . ",\n\n" : "Hola,\n\n";
+    $body .= 'Adjuntamos las fotos sin marca de agua que solicitaste desde la galería "' . $galeria_txt . '".' . "\n\n";
+    $body .= $zip_file
+        ? 'Para facilitar la descarga, las fotos van agrupadas en un archivo ZIP.' . "\n\n"
+        : 'Las fotos van adjuntas individualmente en este correo.' . "\n\n";
+    $body .= 'Evento: ' . $evento_txt . "\n";
+    $body .= 'Cantidad de fotos: ' . count( $files ) . "\n";
+    $body .= 'Correo de destino: ' . $recipient . "\n\n";
+
+    if ( $recipient_source === 'alternate' ) {
+        if ( ! empty( $alternate_result['saved'] ) ) {
+            $body .= 'El correo alternativo indicado fue registrado en tu perfil de asistente sin reemplazar tu correo principal.' . "\n\n";
+        } else {
+            $body .= 'El correo alternativo indicado se usó para este envío. Si coincide con el correo principal o con un alternativo ya existente, no se crea un registro duplicado.' . "\n\n";
+        }
+    }
+
+    $body .= "Gracias.\nEventosApp";
+
+    $headers = [ 'Content-Type: text/plain; charset=UTF-8' ];
+    $sent    = wp_mail( $recipient, wp_specialchars_decode( $subject, ENT_QUOTES ), $body, $headers, $attachments );
+
+    if ( ! $sent ) {
+        error_log( '[EventosApp Galería] Error enviando fotos sin marca | Ticket ID:' . $ticket_id . ' | To:' . $recipient . ' | Galería ID:' . $galeria_id );
+        wp_send_json_error( [ 'error' => 'No se pudo enviar el correo en este momento. Por favor intenta nuevamente.' ] );
+    }
+
+    set_transient( $cooldown_key, 1, 2 * MINUTE_IN_SECONDS );
+
+    evapp_galeria_register_photo_email_log( $ticket_id, [
+        'to'             => $recipient,
+        'source'         => $recipient_source,
+        'galeria_id'     => $galeria_id,
+        'evento_id'      => $evento_id,
+        'count'          => count( $files ),
+        'attachment_ids' => wp_list_pluck( $files, 'attachment_id' ),
+        'zip'            => $zip_file ? basename( $zip_file ) : '',
+    ] );
+
+    error_log( '[EventosApp Galería] Fotos sin marca enviadas | Ticket ID:' . $ticket_id . ' | To:' . $recipient . ' | Fotos:' . count( $files ) . ' | Galería ID:' . $galeria_id );
+
+    $message = $recipient_source === 'alternate'
+        ? 'Listo. Enviamos tus fotos sin marca de agua al correo alternativo indicado.'
+        : 'Listo. Enviamos tus fotos sin marca de agua al correo registrado en tu ticket.';
+
+    wp_send_json_success( [
+        'message'           => $message,
+        'sent_to'           => $recipient,
+        'count'             => count( $files ),
+        'alternate_saved'   => ! empty( $alternate_result['saved'] ),
+        'alternate_reason'  => $alternate_result['reason'] ?? '',
+    ] );
+}
+
+// ============================================================
 // 5.1 HELPERS: Textos configurables del flujo IA
 // ============================================================
 
@@ -1322,7 +1732,21 @@ if ( ! function_exists( 'evapp_galeria_ia_default_texts' ) ) {
             'results_count_many'          => '🎉 ¡Encontramos {count} fotos en donde apareces!',
             'results_prev_label'          => 'Anterior',
             'results_next_label'          => 'Siguiente',
-            'download_button'             => '⬇️ Descargar esta foto',
+            'download_button'             => '⬇️ Descargar esta foto con marca de agua',
+            'email_unwatermarked_title'   => '¿Quieres tus fotos sin marca de agua?',
+            'email_unwatermarked_desc'    => 'Podemos enviarte todas las fotos encontradas sin marca de agua al correo registrado en tu ticket: {email}.',
+            'email_registered_fallback'   => 'correo registrado',
+            'email_send_registered_button'=> '📩 Enviar al correo registrado',
+            'email_use_alt_button'        => 'Usar otro correo',
+            'email_alt_label'             => 'Correo alternativo',
+            'email_alt_placeholder'       => 'correo@ejemplo.com',
+            'email_send_alt_button'       => '📩 Enviar a este correo',
+            'email_sending'               => 'Enviando...',
+            'email_success_registered'    => '✅ Tus fotos sin marca de agua fueron enviadas al correo registrado en tu ticket.',
+            'email_success_alt'           => '✅ Tus fotos sin marca de agua fueron enviadas al correo alternativo indicado.',
+            'email_invalid_alt_error'     => '⚠️ Ingresa un correo electrónico válido.',
+            'email_no_matches_error'      => '⚠️ No hay fotos encontradas para enviar.',
+            'email_server_error'          => '❌ No se pudo enviar el correo. Intenta nuevamente.',
             'back_start_button'           => '↩ Volver al inicio',
 
             'no_results_icon'             => '😔',
@@ -1639,6 +2063,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         if ( ! $full_original ) continue;
 
         $imagenes[] = [
+            'id'       => $att_id,
             'full'     => $full ?: $full_original,
             'thumb'    => $thumb ?: ( $thumb_original ?: $full_original ),
             'download' => $download ?: ( $full ?: $full_original ),
@@ -1656,6 +2081,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     // Nonces para el wizard IA (sólo si hay evento vinculado)
     $nonce_buscar   = $evento_id ? wp_create_nonce( 'evapp_gi_buscar_ticket' )  : '';
     $nonce_registro = $evento_id ? wp_create_nonce( 'evapp_gi_registrar_foto' ) : '';
+    $nonce_envio    = $evento_id ? wp_create_nonce( 'evapp_gi_enviar_fotos' )   : '';
 
     ob_start();
     if ( $evento_id ) {
@@ -2125,6 +2551,24 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
         .evapp-gi-results-counter { font-size:13px; color:#555; min-width:60px; text-align:center; }
         .evapp-gi-download-btn { display:flex; align-items:center; justify-content:center; gap:6px; margin:12px auto 0; padding:12px 28px; background:#15803d; color:#fff; border:none; border-radius:9px; font-size:14px; font-weight:700; cursor:pointer; text-decoration:none; transition:background .2s; width:fit-content; max-width:100%; box-sizing:border-box; }
         .evapp-gi-download-btn:hover { background:#166534; color:#fff; text-decoration:none; }
+        .evapp-gi-email-panel { margin:16px auto 0; padding:16px; border:1px solid #c7d4ff; border-radius:12px; background:#fff; box-shadow:0 2px 10px rgba(28,61,143,.07); max-width:460px; box-sizing:border-box; }
+        .evapp-gi-email-title { font-size:15px; font-weight:800; color:#111827; margin:0 0 6px; text-align:center; }
+        .evapp-gi-email-desc { font-size:13px; line-height:1.55; color:#4b5563; margin:0 0 12px; text-align:center; }
+        .evapp-gi-email-actions { display:flex; flex-direction:column; gap:8px; }
+        .evapp-gi-email-inline-btn { display:flex; align-items:center; justify-content:center; width:100%; padding:11px 18px; border-radius:9px; font-size:13px; font-weight:700; cursor:pointer; border:2px solid transparent; transition:background .2s,border-color .2s,color .2s,opacity .2s; box-sizing:border-box; }
+        .evapp-gi-email-send-registered, .evapp-gi-email-send-alt { background:#1c3d8f; color:#fff; border-color:#1c3d8f; }
+        .evapp-gi-email-send-registered:hover, .evapp-gi-email-send-alt:hover { background:#122d6e; border-color:#122d6e; color:#fff; }
+        .evapp-gi-email-toggle-alt { background:#fff; color:#1c3d8f; border-color:#c7d4ff; }
+        .evapp-gi-email-toggle-alt:hover { background:#f0f4ff; border-color:#1c3d8f; color:#1c3d8f; }
+        .evapp-gi-email-inline-btn:disabled { opacity:.6; cursor:not-allowed; }
+        .evapp-gi-email-alt-wrap { margin-top:10px; }
+        .evapp-gi-email-alt-label { display:block; font-size:12px; font-weight:700; color:#374151; margin-bottom:5px; }
+        .evapp-gi-email-alt-input { width:100%; padding:11px 13px; border:2px solid #d1dafe; border-radius:9px; font-size:14px; box-sizing:border-box; margin-bottom:8px; }
+        .evapp-gi-email-alt-input:focus { outline:none; border-color:#1c3d8f; box-shadow:0 0 0 3px rgba(28,61,143,.12); }
+        .evapp-gi-email-status { margin-top:10px; padding:10px 12px; border-radius:8px; font-size:13px; font-weight:600; line-height:1.45; text-align:center; }
+        .evapp-gi-email-status.success { background:#f0fdf4; color:#15803d; border:1px solid #86efac; }
+        .evapp-gi-email-status.error { background:#fef2f2; color:#b91c1c; border:1px solid #fca5a5; }
+        .evapp-gi-email-status.info { background:#eff6ff; color:#1c3d8f; border:1px solid #bfdbfe; }
         /* Responsive automático por ancho real del widget */
         @supports (container-type:inline-size) {
             @container (max-width:720px) {
@@ -2283,6 +2727,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             var galeriaId     = <?php echo wp_json_encode( $galeria_id ); ?>;
             var nonceBuscar   = <?php echo wp_json_encode( $nonce_buscar ); ?>;
             var nonceRegistro = <?php echo wp_json_encode( $nonce_registro ); ?>;
+            var nonceEnvio    = <?php echo wp_json_encode( $nonce_envio ); ?>;
             var giText        = <?php echo wp_json_encode( $gi_text ); ?>;
 
             var finder      = document.getElementById(uid + '-finder');
@@ -2295,6 +2740,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             // ── Estado del wizard ────────────────────────────────────────────
             var ticketId       = null;
             var cedulaVal      = '';
+            var asistenteEmail = '';
             var fotoDataUrl    = null;
             var fotosDataUrls  = [];
             var faceDescsQuery = [];
@@ -2427,6 +2873,15 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             function escHtml(str) {
                 return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
             }
+            function evappGiIsValidEmail(email) {
+                return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+            }
+            function evappGiEmailStatus(el, msg, tipo) {
+                if ( ! el ) return;
+                el.textContent = msg || '';
+                el.className = 'evapp-gi-email-status ' + (tipo || 'info');
+                el.style.display = msg ? '' : 'none';
+            }
             function comprimirImagen(dataUrl, callback) {
                 var img = new Image();
                 img.onload = function() {
@@ -2528,8 +2983,9 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                         .then(function(res){
                             setReady( btnValidar, t('validate_button') );
                             if ( res.success ) {
-                                ticketId  = res.data.ticket_id;
-                                cedulaVal = cedula;
+                                ticketId       = res.data.ticket_id;
+                                cedulaVal      = cedula;
+                                asistenteEmail = res.data.email || '';
                                 var card = wizard.querySelector('.evapp-gi-asistente-card');
                                 card.innerHTML =
                                     '<div class="evapp-gi-as-name">' + escHtml(res.data.nombre_completo) + '</div>' +
@@ -2836,6 +3292,64 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 }
             }
 
+            function evappGiEnviarFotosSinMarca(matches, emailAlternativo, statusEl, btn) {
+                if ( ! matches || ! matches.length ) {
+                    evappGiEmailStatus(statusEl, t('email_no_matches_error'), 'error');
+                    return;
+                }
+
+                var ids = matches.map(function(m){ return m && m.photo && m.photo.id ? parseInt(m.photo.id, 10) : 0; })
+                    .filter(function(id){ return id > 0; });
+
+                if ( ! ids.length ) {
+                    evappGiEmailStatus(statusEl, t('email_no_matches_error'), 'error');
+                    return;
+                }
+
+                var originalText = btn ? btn.textContent : '';
+                if ( btn ) {
+                    btn.disabled = true;
+                    btn.textContent = t('email_sending');
+                }
+                evappGiEmailStatus(statusEl, t('email_sending'), 'info');
+
+                var fd = new FormData();
+                fd.append('action', 'evapp_galeria_enviar_fotos_sin_marca');
+                fd.append('security', nonceEnvio);
+                fd.append('galeria_id', galeriaId);
+                fd.append('ticket_id', ticketId || '');
+                fd.append('cedula', cedulaVal || '');
+                fd.append('attachment_ids', JSON.stringify(ids));
+                if ( emailAlternativo ) {
+                    fd.append('email_alternativo', emailAlternativo);
+                }
+
+                fetch( ajaxUrl, { method: 'POST', body: fd } )
+                    .then(function(r){ return r.json(); })
+                    .then(function(res){
+                        if ( btn ) {
+                            btn.disabled = false;
+                            btn.textContent = originalText;
+                        }
+                        if ( res && res.success ) {
+                            var msg = res.data && res.data.message
+                                ? res.data.message
+                                : (emailAlternativo ? t('email_success_alt') : t('email_success_registered'));
+                            evappGiEmailStatus(statusEl, msg, 'success');
+                        } else {
+                            var err = res && res.data && res.data.error ? res.data.error : t('email_server_error');
+                            evappGiEmailStatus(statusEl, err, 'error');
+                        }
+                    })
+                    .catch(function(){
+                        if ( btn ) {
+                            btn.disabled = false;
+                            btn.textContent = originalText;
+                        }
+                        evappGiEmailStatus(statusEl, t('email_server_error'), 'error');
+                    });
+            }
+
             function evappGiMostrarResultados(matches) {
                 if ( ! matches || ! matches.length ) { showStep('evapp-gi-step-no-results'); return; }
                 matches.sort(function(a, b){ return a.distance - b.distance; });
@@ -2853,12 +3367,27 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                             '<img src="' + escHtml(m.photo.full) + '" alt="' + altTxt + '" loading="' + (idx === 0 ? 'eager' : 'lazy') + '" /></div>';
                 });
                 html += '</div>';
+                var emailDestino = asistenteEmail || t('email_registered_fallback');
                 html += '<div class="evapp-gi-results-nav-row">' +
                         '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-prev" aria-label="' + escHtml(t('results_prev_label')) + '">&#8249;</button>' +
                         '<span class="evapp-gi-results-counter"><span class="evapp-gi-res-cur">1</span> / ' + matches.length + '</span>' +
                         '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-next" aria-label="' + escHtml(t('results_next_label')) + '">&#8250;</button>' +
                         '</div>' +
-                        '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.download || matches[0].photo.full) + '" download target="_blank">' + escHtml(t('download_button')) + '</a>';
+                        '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.download || matches[0].photo.full) + '" download target="_blank">' + escHtml(t('download_button')) + '</a>' +
+                        '<div class="evapp-gi-email-panel">' +
+                            '<p class="evapp-gi-email-title">' + escHtml(t('email_unwatermarked_title')) + '</p>' +
+                            '<p class="evapp-gi-email-desc">' + escHtml(t('email_unwatermarked_desc', { email: emailDestino })) + '</p>' +
+                            '<div class="evapp-gi-email-actions">' +
+                                '<button type="button" class="evapp-gi-email-inline-btn evapp-gi-email-send-registered">' + escHtml(t('email_send_registered_button')) + '</button>' +
+                                '<button type="button" class="evapp-gi-email-inline-btn evapp-gi-email-toggle-alt">' + escHtml(t('email_use_alt_button')) + '</button>' +
+                            '</div>' +
+                            '<div class="evapp-gi-email-alt-wrap" style="display:none;">' +
+                                '<label class="evapp-gi-email-alt-label">' + escHtml(t('email_alt_label')) + '</label>' +
+                                '<input type="email" class="evapp-gi-email-alt-input" placeholder="' + escHtml(t('email_alt_placeholder')) + '" />' +
+                                '<button type="button" class="evapp-gi-email-inline-btn evapp-gi-email-send-alt">' + escHtml(t('email_send_alt_button')) + '</button>' +
+                            '</div>' +
+                            '<div class="evapp-gi-email-status" role="alert" style="display:none;"></div>' +
+                        '</div>';
                 resCarousel.innerHTML = html;
                 var rSlides = resCarousel.querySelectorAll('.evapp-gi-result-slide');
                 var rCur = 0;
@@ -2866,6 +3395,38 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                 var rNext = resCarousel.querySelector('.evapp-gi-res-next');
                 var rCurLbl = resCarousel.querySelector('.evapp-gi-res-cur');
                 var rDlBtn  = resCarousel.querySelector('.evapp-gi-dl-btn');
+                var emailStatus = resCarousel.querySelector('.evapp-gi-email-status');
+                var emailAltWrap = resCarousel.querySelector('.evapp-gi-email-alt-wrap');
+                var emailAltInput = resCarousel.querySelector('.evapp-gi-email-alt-input');
+                var emailSendRegistered = resCarousel.querySelector('.evapp-gi-email-send-registered');
+                var emailToggleAlt = resCarousel.querySelector('.evapp-gi-email-toggle-alt');
+                var emailSendAlt = resCarousel.querySelector('.evapp-gi-email-send-alt');
+
+                if ( emailSendRegistered ) {
+                    emailSendRegistered.addEventListener('click', function(){
+                        evappGiEnviarFotosSinMarca(matches, '', emailStatus, emailSendRegistered);
+                    });
+                }
+                if ( emailToggleAlt ) {
+                    emailToggleAlt.addEventListener('click', function(){
+                        if ( emailAltWrap ) {
+                            emailAltWrap.style.display = emailAltWrap.style.display === 'none' ? '' : 'none';
+                            if ( emailAltWrap.style.display !== 'none' && emailAltInput ) emailAltInput.focus();
+                        }
+                    });
+                }
+                if ( emailSendAlt ) {
+                    emailSendAlt.addEventListener('click', function(){
+                        var altEmail = emailAltInput ? emailAltInput.value.trim() : '';
+                        if ( ! evappGiIsValidEmail(altEmail) ) {
+                            evappGiEmailStatus(emailStatus, t('email_invalid_alt_error'), 'error');
+                            if ( emailAltInput ) emailAltInput.focus();
+                            return;
+                        }
+                        evappGiEnviarFotosSinMarca(matches, altEmail, emailStatus, emailSendAlt);
+                    });
+                }
+
                 function rGoTo(idx) {
                     rSlides[rCur].classList.remove('active');
                     rCur = (idx + matches.length) % matches.length;
@@ -2901,7 +3462,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
 
             // ── Reset completo ────────────────────────────────────────────────
             function evappGiResetWizard() {
-                fotoDataUrl = null; fotosDataUrls = []; ticketId = null; cedulaVal = ''; faceDescsQuery = [];
+                fotoDataUrl = null; fotosDataUrls = []; ticketId = null; cedulaVal = ''; asistenteEmail = ''; faceDescsQuery = [];
                 detenerCamara();
                 evappGiSetFinalResponseMode(false);
 
@@ -3966,6 +4527,21 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 $this->add_ai_text_control( 'results_prev_label', 'Aria flecha anterior' );
                 $this->add_ai_text_control( 'results_next_label', 'Aria flecha siguiente' );
                 $this->add_ai_text_control( 'download_button', 'Botón descargar foto' );
+                $this->add_ai_text_heading( 'Envío de fotos sin marca de agua' );
+                $this->add_ai_text_control( 'email_unwatermarked_title', 'Título envío sin marca' );
+                $this->add_ai_text_control( 'email_unwatermarked_desc', 'Descripción envío sin marca. Usa {email}', 'textarea' );
+                $this->add_ai_text_control( 'email_registered_fallback', 'Texto fallback correo registrado' );
+                $this->add_ai_text_control( 'email_send_registered_button', 'Botón enviar al correo registrado' );
+                $this->add_ai_text_control( 'email_use_alt_button', 'Botón usar otro correo' );
+                $this->add_ai_text_control( 'email_alt_label', 'Label correo alternativo' );
+                $this->add_ai_text_control( 'email_alt_placeholder', 'Placeholder correo alternativo' );
+                $this->add_ai_text_control( 'email_send_alt_button', 'Botón enviar correo alternativo' );
+                $this->add_ai_text_control( 'email_sending', 'Estado enviando' );
+                $this->add_ai_text_control( 'email_success_registered', 'Éxito correo registrado', 'textarea' );
+                $this->add_ai_text_control( 'email_success_alt', 'Éxito correo alternativo', 'textarea' );
+                $this->add_ai_text_control( 'email_invalid_alt_error', 'Error correo alternativo inválido' );
+                $this->add_ai_text_control( 'email_no_matches_error', 'Error sin fotos para enviar' );
+                $this->add_ai_text_control( 'email_server_error', 'Error envío de correo' );
                 $this->add_ai_text_control( 'back_start_button', 'Botón volver al inicio' );
 
                 $this->add_ai_text_heading( 'Sin resultados' );
@@ -4623,6 +5199,9 @@ function evapp_galeria_register_elementor_widget( $widgets_manager ) {
                 ] );
                 $this->add_flex_justify_control( 'ai_results_nav_row_align', 'Alineación fila contador/flechas resultados', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-results-nav-row' );
                 $this->add_button_controls( 'ai_results_nav', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-results-nav-btn', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-results-nav-btn:hover', 'Flechas resultados IA' );
+                $this->add_box_controls( 'ai_email_panel_box', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-panel', true, true );
+                $this->add_text_controls( 'ai_email_panel_text', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-title, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-desc, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-alt-label, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-status', 'Textos panel envío por correo' );
+                $this->add_button_controls( 'ai_email_panel_buttons', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-send-registered, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-send-alt', '{{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-send-registered:hover, {{WRAPPER}} .evapp-galeria-wrap .evapp-gi-email-send-alt:hover', 'Botones envío sin marca' );
                 $this->end_controls_section();
             }
 
