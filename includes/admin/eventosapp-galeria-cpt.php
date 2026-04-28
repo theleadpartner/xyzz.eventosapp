@@ -74,6 +74,15 @@ add_action( 'add_meta_boxes', function () {
     );
 
     add_meta_box(
+        'evapp_galeria_watermark',
+        '💧 Marca de Agua',
+        'evapp_galeria_render_metabox_watermark',
+        'eventosapp_galeria',
+        'normal',
+        'default'
+    );
+
+    add_meta_box(
         'evapp_galeria_shortcode',
         '🔗 Shortcode',
         'evapp_galeria_render_metabox_shortcode',
@@ -219,7 +228,173 @@ function evapp_galeria_render_metabox_fotos( $post ) {
 }
 
 // ============================================================
-// 2.3 RENDER: Shortcode info
+// 2.3 HELPERS + RENDER: Configuración de marca de agua
+// ============================================================
+
+if ( ! function_exists( 'evapp_galeria_watermark_default_settings' ) ) {
+    function evapp_galeria_watermark_default_settings() {
+        return [
+            'enabled'      => 0,
+            'type'         => 'image',
+            'image_id'     => 0,
+            'text'         => get_bloginfo( 'name' ),
+            'position'     => 'bottom-right',
+            'opacity'      => 35,
+            'size_percent' => 22,
+            'margin_px'    => 24,
+            'quality'      => 90,
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_watermark_sanitize_settings' ) ) {
+    function evapp_galeria_watermark_sanitize_settings( $settings ) {
+        $defaults = evapp_galeria_watermark_default_settings();
+        $settings = is_array( $settings ) ? $settings : [];
+        $out      = wp_parse_args( $settings, $defaults );
+
+        $out['enabled']      = ! empty( $out['enabled'] ) ? 1 : 0;
+        $out['type']         = in_array( $out['type'], [ 'image', 'text' ], true ) ? $out['type'] : $defaults['type'];
+        $out['image_id']     = absint( $out['image_id'] );
+        $out['text']         = sanitize_text_field( $out['text'] );
+        $out['position']     = in_array( $out['position'], [ 'top-left', 'top-center', 'top-right', 'center-left', 'center', 'center-right', 'bottom-left', 'bottom-center', 'bottom-right' ], true ) ? $out['position'] : $defaults['position'];
+        $out['opacity']      = max( 0, min( 100, absint( $out['opacity'] ) ) );
+        $out['size_percent'] = max( 5, min( 80, absint( $out['size_percent'] ) ) );
+        $out['margin_px']    = max( 0, min( 300, absint( $out['margin_px'] ) ) );
+        $out['quality']      = max( 60, min( 100, absint( $out['quality'] ) ) );
+
+        if ( $out['type'] === 'image' && ! $out['image_id'] ) {
+            $out['enabled'] = 0;
+        }
+
+        if ( $out['type'] === 'text' && $out['text'] === '' ) {
+            $out['enabled'] = 0;
+        }
+
+        return $out;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_get_watermark_settings' ) ) {
+    function evapp_galeria_get_watermark_settings( $galeria_id ) {
+        $raw = get_post_meta( $galeria_id, '_galeria_watermark_settings', true );
+        return evapp_galeria_watermark_sanitize_settings( is_array( $raw ) ? $raw : [] );
+    }
+}
+
+function evapp_galeria_render_metabox_watermark( $post ) {
+    $settings     = evapp_galeria_get_watermark_settings( $post->ID );
+    $preview_url  = $settings['image_id'] ? wp_get_attachment_image_url( $settings['image_id'], [ 160, 80 ] ) : '';
+    $positions    = [
+        'top-left'      => 'Arriba izquierda',
+        'top-center'    => 'Arriba centro',
+        'top-right'     => 'Arriba derecha',
+        'center-left'   => 'Centro izquierda',
+        'center'        => 'Centro',
+        'center-right'  => 'Centro derecha',
+        'bottom-left'   => 'Abajo izquierda',
+        'bottom-center' => 'Abajo centro',
+        'bottom-right'  => 'Abajo derecha',
+    ];
+    ?>
+    <div class="evapp-watermark-admin">
+        <p style="margin:0 0 12px;color:#555;max-width:820px;">
+            Configura una marca de agua para las imágenes que se muestran en la galería, lightbox, resultados de IA y botón de descarga.
+            El archivo original no se modifica; EventosApp genera copias públicas con marca de agua en caché.
+        </p>
+
+        <table class="form-table" style="width:100%;">
+            <tr>
+                <th style="width:220px;padding:10px 0;">Activar marca de agua</th>
+                <td style="padding:10px 0;">
+                    <label>
+                        <input type="checkbox" name="_galeria_watermark[enabled]" value="1" <?php checked( $settings['enabled'], 1 ); ?> />
+                        Aplicar marca de agua a las fotos visibles y descargables de esta galería.
+                    </label>
+                </td>
+            </tr>
+
+            <tr>
+                <th style="padding:10px 0;"><label for="_galeria_watermark_type">Tipo de marca</label></th>
+                <td style="padding:10px 0;">
+                    <select name="_galeria_watermark[type]" id="_galeria_watermark_type" style="width:100%;max-width:320px;">
+                        <option value="image" <?php selected( $settings['type'], 'image' ); ?>>Imagen / logo</option>
+                        <option value="text" <?php selected( $settings['type'], 'text' ); ?>>Texto</option>
+                    </select>
+                    <p class="description">La opción más recomendable es usar una imagen PNG transparente con tu logo.</p>
+                </td>
+            </tr>
+
+            <tr class="evapp-watermark-image-row">
+                <th style="padding:10px 0;"><label>Imagen de marca de agua</label></th>
+                <td style="padding:10px 0;">
+                    <input type="hidden" name="_galeria_watermark[image_id]" id="_galeria_watermark_image_id" value="<?php echo esc_attr( $settings['image_id'] ); ?>" />
+                    <div id="evapp-watermark-preview" style="margin-bottom:8px;<?php echo $preview_url ? '' : 'display:none;'; ?>">
+                        <img src="<?php echo esc_url( $preview_url ); ?>" alt="Vista previa marca de agua" style="max-width:180px;max-height:90px;width:auto;height:auto;border:1px solid #ddd;border-radius:4px;background:#f6f7f7;padding:6px;" />
+                    </div>
+                    <button type="button" class="button" id="evapp-watermark-select-btn">Seleccionar imagen</button>
+                    <button type="button" class="button" id="evapp-watermark-clear-btn" <?php disabled( ! $settings['image_id'] ); ?>>Quitar imagen</button>
+                    <p class="description">Usa preferiblemente un PNG transparente. No se reemplaza ni se altera la foto original.</p>
+                </td>
+            </tr>
+
+            <tr class="evapp-watermark-text-row">
+                <th style="padding:10px 0;"><label for="_galeria_watermark_text">Texto de marca de agua</label></th>
+                <td style="padding:10px 0;">
+                    <input type="text" name="_galeria_watermark[text]" id="_galeria_watermark_text" value="<?php echo esc_attr( $settings['text'] ); ?>" style="width:100%;max-width:420px;" placeholder="Nombre del evento o marca" />
+                    <p class="description">Se usa solo cuando el tipo seleccionado es “Texto”.</p>
+                </td>
+            </tr>
+
+            <tr>
+                <th style="padding:10px 0;"><label for="_galeria_watermark_position">Ubicación</label></th>
+                <td style="padding:10px 0;">
+                    <select name="_galeria_watermark[position]" id="_galeria_watermark_position" style="width:100%;max-width:320px;">
+                        <?php foreach ( $positions as $value => $label ) : ?>
+                            <option value="<?php echo esc_attr( $value ); ?>" <?php selected( $settings['position'], $value ); ?>><?php echo esc_html( $label ); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </td>
+            </tr>
+
+            <tr>
+                <th style="padding:10px 0;"><label for="_galeria_watermark_opacity">Transparencia</label></th>
+                <td style="padding:10px 0;">
+                    <input type="range" min="0" max="100" step="1" value="<?php echo esc_attr( $settings['opacity'] ); ?>" id="_galeria_watermark_opacity_range" style="width:260px;max-width:100%;vertical-align:middle;" />
+                    <input type="number" min="0" max="100" step="1" name="_galeria_watermark[opacity]" id="_galeria_watermark_opacity" value="<?php echo esc_attr( $settings['opacity'] ); ?>" style="width:80px;margin-left:8px;" /> %
+                    <p class="description">0% es invisible y 100% es completamente sólido.</p>
+                </td>
+            </tr>
+
+            <tr>
+                <th style="padding:10px 0;"><label for="_galeria_watermark_size_percent">Tamaño</label></th>
+                <td style="padding:10px 0;">
+                    <input type="number" min="5" max="80" step="1" name="_galeria_watermark[size_percent]" id="_galeria_watermark_size_percent" value="<?php echo esc_attr( $settings['size_percent'] ); ?>" style="width:90px;" /> % del ancho de la foto
+                    <p class="description">Controla el ancho de la marca de agua en relación con cada foto.</p>
+                </td>
+            </tr>
+
+            <tr>
+                <th style="padding:10px 0;"><label for="_galeria_watermark_margin_px">Separación del borde</label></th>
+                <td style="padding:10px 0;">
+                    <input type="number" min="0" max="300" step="1" name="_galeria_watermark[margin_px]" id="_galeria_watermark_margin_px" value="<?php echo esc_attr( $settings['margin_px'] ); ?>" style="width:90px;" /> px
+                </td>
+            </tr>
+
+            <tr>
+                <th style="padding:10px 0;"><label for="_galeria_watermark_quality">Calidad de salida</label></th>
+                <td style="padding:10px 0;">
+                    <input type="number" min="60" max="100" step="1" name="_galeria_watermark[quality]" id="_galeria_watermark_quality" value="<?php echo esc_attr( $settings['quality'] ); ?>" style="width:90px;" /> %
+                    <p class="description">Recomendado: 85–92. Al cambiar la configuración, se regenerará automáticamente una nueva copia en caché.</p>
+                </td>
+            </tr>
+        </table>
+    </div>
+    <?php
+}
+
+// ============================================================
+// 2.4 RENDER: Shortcode info
 // ============================================================
 
 function evapp_galeria_render_metabox_shortcode( $post ) {
@@ -287,6 +462,11 @@ add_action( 'save_post_eventosapp_galeria', function ( $post_id ) {
     // Sanitizar: solo integers positivos
     $fotos_arr = array_values( array_filter( array_map( 'absint', $fotos_arr ) ) );
     update_post_meta( $post_id, '_galeria_fotos', wp_json_encode( $fotos_arr ) );
+
+    // Configuración de marca de agua
+    $watermark_raw      = isset( $_POST['_galeria_watermark'] ) && is_array( $_POST['_galeria_watermark'] ) ? wp_unslash( $_POST['_galeria_watermark'] ) : [];
+    $watermark_settings = evapp_galeria_watermark_sanitize_settings( $watermark_raw );
+    update_post_meta( $post_id, '_galeria_watermark_settings', $watermark_settings );
 
 } , 20 );
 
@@ -395,6 +575,71 @@ add_action( 'admin_footer', function () {
             $emptyMsg.toggle( count === 0 );
         }
 
+        // ── Metabox marca de agua: seleccionar/quitar imagen ──────────────
+        var watermarkFrame;
+        var $wmImageId     = $('#_galeria_watermark_image_id');
+        var $wmPreview     = $('#evapp-watermark-preview');
+        var $wmSelectBtn   = $('#evapp-watermark-select-btn');
+        var $wmClearBtn    = $('#evapp-watermark-clear-btn');
+        var $wmType        = $('#_galeria_watermark_type');
+        var $wmOpacity     = $('#_galeria_watermark_opacity');
+        var $wmOpacityRng  = $('#_galeria_watermark_opacity_range');
+
+        function evappToggleWatermarkRows(){
+            var type = $wmType.val() || 'image';
+            $('.evapp-watermark-image-row').toggle(type === 'image');
+            $('.evapp-watermark-text-row').toggle(type === 'text');
+        }
+
+        if ( $wmSelectBtn.length ) {
+            $wmSelectBtn.on('click', function(e){
+                e.preventDefault();
+
+                if ( watermarkFrame ) {
+                    watermarkFrame.open();
+                    return;
+                }
+
+                watermarkFrame = wp.media({
+                    title   : 'Seleccionar marca de agua',
+                    button  : { text: 'Usar como marca de agua' },
+                    multiple: false,
+                    library : { type: 'image' }
+                });
+
+                watermarkFrame.on('select', function(){
+                    var attachment = watermarkFrame.state().get('selection').first();
+                    if ( ! attachment ) return;
+
+                    var att = attachment.toJSON();
+                    var preview = att.sizes && att.sizes.medium ? att.sizes.medium.url : att.url;
+
+                    $wmImageId.val(att.id);
+                    $wmPreview.html('<img src="' + preview + '" alt="Vista previa marca de agua" style="max-width:180px;max-height:90px;width:auto;height:auto;border:1px solid #ddd;border-radius:4px;background:#f6f7f7;padding:6px;" />').show();
+                    $wmClearBtn.prop('disabled', false);
+                });
+
+                watermarkFrame.open();
+            });
+
+            $wmClearBtn.on('click', function(e){
+                e.preventDefault();
+                $wmImageId.val('');
+                $wmPreview.empty().hide();
+                $wmClearBtn.prop('disabled', true);
+            });
+        }
+
+        if ( $wmType.length ) {
+            $wmType.on('change', evappToggleWatermarkRows);
+            evappToggleWatermarkRows();
+        }
+
+        if ( $wmOpacity.length && $wmOpacityRng.length ) {
+            $wmOpacity.on('input change', function(){ $wmOpacityRng.val( $wmOpacity.val() ); });
+            $wmOpacityRng.on('input change', function(){ $wmOpacity.val( $wmOpacityRng.val() ); });
+        }
+
         // Sincronizar al cargar
         syncIds();
         toggleEmpty();
@@ -472,6 +717,502 @@ add_action( 'manage_eventosapp_galeria_posts_custom_column', function ( $column,
             break;
     }
 }, 10, 2 );
+
+// ============================================================
+// 5.1 MOTOR PÚBLICO: Imágenes con marca de agua
+// ============================================================
+
+if ( ! function_exists( 'evapp_galeria_watermark_signature' ) ) {
+    function evapp_galeria_watermark_signature( $galeria_id, $attachment_id, $size ) {
+        $settings_hash = md5( wp_json_encode( evapp_galeria_get_watermark_settings( absint( $galeria_id ) ) ) );
+        return wp_hash( 'evapp-galeria-watermark|' . absint( $galeria_id ) . '|' . absint( $attachment_id ) . '|' . sanitize_key( $size ) . '|' . $settings_hash );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_attachment_belongs_to_gallery' ) ) {
+    function evapp_galeria_attachment_belongs_to_gallery( $galeria_id, $attachment_id ) {
+        $galeria_id    = absint( $galeria_id );
+        $attachment_id = absint( $attachment_id );
+
+        if ( ! $galeria_id || ! $attachment_id ) {
+            return false;
+        }
+
+        $post = get_post( $galeria_id );
+        if ( ! $post || $post->post_type !== 'eventosapp_galeria' ) {
+            return false;
+        }
+
+        $fotos_raw = get_post_meta( $galeria_id, '_galeria_fotos', true );
+        $fotos_ids = [];
+
+        if ( $fotos_raw ) {
+            $decoded = json_decode( $fotos_raw, true );
+            if ( is_array( $decoded ) ) {
+                $fotos_ids = array_values( array_filter( array_map( 'absint', $decoded ) ) );
+            }
+        }
+
+        return in_array( $attachment_id, $fotos_ids, true );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_get_attachment_file_for_size' ) ) {
+    function evapp_galeria_get_attachment_file_for_size( $attachment_id, $size = 'large' ) {
+        $attachment_id = absint( $attachment_id );
+        $size          = sanitize_key( $size ?: 'large' );
+        $original_file = get_attached_file( $attachment_id );
+
+        if ( ! $original_file || ! file_exists( $original_file ) ) {
+            return '';
+        }
+
+        if ( $size !== 'full' ) {
+            $intermediate = image_get_intermediate_size( $attachment_id, $size );
+            if ( is_array( $intermediate ) && ! empty( $intermediate['file'] ) ) {
+                $candidate = trailingslashit( dirname( $original_file ) ) . $intermediate['file'];
+                if ( file_exists( $candidate ) ) {
+                    return $candidate;
+                }
+            }
+        }
+
+        return $original_file;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_gd_create_from_path' ) ) {
+    function evapp_galeria_gd_create_from_path( $file ) {
+        if ( ! $file || ! file_exists( $file ) || ! function_exists( 'getimagesize' ) ) {
+            return false;
+        }
+
+        $info = @getimagesize( $file );
+        if ( ! $info || empty( $info[2] ) ) {
+            return false;
+        }
+
+        switch ( (int) $info[2] ) {
+            case IMAGETYPE_JPEG:
+                return function_exists( 'imagecreatefromjpeg' ) ? @imagecreatefromjpeg( $file ) : false;
+            case IMAGETYPE_PNG:
+                return function_exists( 'imagecreatefrompng' ) ? @imagecreatefrompng( $file ) : false;
+            case IMAGETYPE_GIF:
+                return function_exists( 'imagecreatefromgif' ) ? @imagecreatefromgif( $file ) : false;
+            case IMAGETYPE_WEBP:
+                return function_exists( 'imagecreatefromwebp' ) ? @imagecreatefromwebp( $file ) : false;
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_apply_global_opacity' ) ) {
+    function evapp_galeria_apply_global_opacity( $image, $opacity ) {
+        $opacity = max( 0, min( 100, (int) $opacity ) );
+
+        if ( ! $image || $opacity >= 100 ) {
+            return $image;
+        }
+
+        $w = imagesx( $image );
+        $h = imagesy( $image );
+
+        imagealphablending( $image, false );
+        imagesavealpha( $image, true );
+
+        for ( $x = 0; $x < $w; $x++ ) {
+            for ( $y = 0; $y < $h; $y++ ) {
+                $rgba  = imagecolorat( $image, $x, $y );
+                $alpha = ( $rgba & 0x7F000000 ) >> 24;
+                $red   = ( $rgba >> 16 ) & 0xFF;
+                $green = ( $rgba >> 8 ) & 0xFF;
+                $blue  = $rgba & 0xFF;
+
+                $new_alpha = 127 - (int) round( ( 127 - $alpha ) * ( $opacity / 100 ) );
+                $color     = imagecolorallocatealpha( $image, $red, $green, $blue, $new_alpha );
+                imagesetpixel( $image, $x, $y, $color );
+            }
+        }
+
+        imagealphablending( $image, true );
+        return $image;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_watermark_coordinates' ) ) {
+    function evapp_galeria_watermark_coordinates( $base_w, $base_h, $wm_w, $wm_h, $position, $margin ) {
+        $margin = max( 0, (int) $margin );
+        $x      = $base_w - $wm_w - $margin;
+        $y      = $base_h - $wm_h - $margin;
+
+        switch ( $position ) {
+            case 'top-left':
+                $x = $margin;
+                $y = $margin;
+                break;
+            case 'top-center':
+                $x = (int) round( ( $base_w - $wm_w ) / 2 );
+                $y = $margin;
+                break;
+            case 'top-right':
+                $x = $base_w - $wm_w - $margin;
+                $y = $margin;
+                break;
+            case 'center-left':
+                $x = $margin;
+                $y = (int) round( ( $base_h - $wm_h ) / 2 );
+                break;
+            case 'center':
+                $x = (int) round( ( $base_w - $wm_w ) / 2 );
+                $y = (int) round( ( $base_h - $wm_h ) / 2 );
+                break;
+            case 'center-right':
+                $x = $base_w - $wm_w - $margin;
+                $y = (int) round( ( $base_h - $wm_h ) / 2 );
+                break;
+            case 'bottom-left':
+                $x = $margin;
+                $y = $base_h - $wm_h - $margin;
+                break;
+            case 'bottom-center':
+                $x = (int) round( ( $base_w - $wm_w ) / 2 );
+                $y = $base_h - $wm_h - $margin;
+                break;
+            case 'bottom-right':
+            default:
+                $x = $base_w - $wm_w - $margin;
+                $y = $base_h - $wm_h - $margin;
+                break;
+        }
+
+        return [ max( 0, $x ), max( 0, $y ) ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_watermark_font_path' ) ) {
+    function evapp_galeria_watermark_font_path() {
+        $candidates = [
+            ABSPATH . 'wp-includes/fonts/DejaVuSans-Bold.ttf',
+            ABSPATH . 'wp-includes/fonts/Inter-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            '/Library/Fonts/Arial Bold.ttf',
+            'C:\\Windows\\Fonts\\arialbd.ttf',
+        ];
+
+        foreach ( $candidates as $font ) {
+            if ( $font && file_exists( $font ) ) {
+                return $font;
+            }
+        }
+
+        return '';
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_create_text_watermark_layer' ) ) {
+    function evapp_galeria_create_text_watermark_layer( $text, $target_width, $opacity ) {
+        $text = trim( wp_strip_all_tags( (string) $text ) );
+        if ( $text === '' ) {
+            return false;
+        }
+
+        $target_width = max( 80, (int) $target_width );
+        $font_path    = evapp_galeria_watermark_font_path();
+
+        if ( $font_path && function_exists( 'imagettfbbox' ) && function_exists( 'imagettftext' ) ) {
+            $font_size = 32;
+            $bbox      = imagettfbbox( $font_size, 0, $font_path, $text );
+            $text_w    = abs( $bbox[2] - $bbox[0] );
+
+            if ( $text_w > 0 ) {
+                $font_size = max( 12, min( 180, (int) round( $font_size * ( $target_width / $text_w ) ) ) );
+            }
+
+            $bbox   = imagettfbbox( $font_size, 0, $font_path, $text );
+            $text_w = abs( $bbox[2] - $bbox[0] );
+            $text_h = abs( $bbox[7] - $bbox[1] );
+            $pad    = max( 10, (int) round( $font_size * 0.35 ) );
+            $w      = max( 1, $text_w + ( $pad * 2 ) );
+            $h      = max( 1, $text_h + ( $pad * 2 ) );
+            $layer  = imagecreatetruecolor( $w, $h );
+
+            imagealphablending( $layer, false );
+            imagesavealpha( $layer, true );
+            $transparent = imagecolorallocatealpha( $layer, 255, 255, 255, 127 );
+            imagefill( $layer, 0, 0, $transparent );
+            imagealphablending( $layer, true );
+
+            $shadow = imagecolorallocatealpha( $layer, 0, 0, 0, 55 );
+            $white  = imagecolorallocatealpha( $layer, 255, 255, 255, 0 );
+            $x      = $pad;
+            $y      = $pad + $text_h;
+
+            imagettftext( $layer, $font_size, 0, $x + 2, $y + 2, $shadow, $font_path, $text );
+            imagettftext( $layer, $font_size, 0, $x, $y, $white, $font_path, $text );
+
+            return evapp_galeria_apply_global_opacity( $layer, $opacity );
+        }
+
+        $font       = 5;
+        $char_w     = imagefontwidth( $font );
+        $char_h     = imagefontheight( $font );
+        $raw_w      = max( 1, strlen( $text ) * $char_w + 20 );
+        $raw_h      = $char_h + 20;
+        $raw_layer  = imagecreatetruecolor( $raw_w, $raw_h );
+
+        imagealphablending( $raw_layer, false );
+        imagesavealpha( $raw_layer, true );
+        $transparent = imagecolorallocatealpha( $raw_layer, 255, 255, 255, 127 );
+        imagefill( $raw_layer, 0, 0, $transparent );
+        imagealphablending( $raw_layer, true );
+
+        $shadow = imagecolorallocatealpha( $raw_layer, 0, 0, 0, 55 );
+        $white  = imagecolorallocatealpha( $raw_layer, 255, 255, 255, 0 );
+        imagestring( $raw_layer, $font, 12, 12, $text, $shadow );
+        imagestring( $raw_layer, $font, 10, 10, $text, $white );
+
+        $scale_h = max( 1, (int) round( $raw_h * ( $target_width / $raw_w ) ) );
+        $layer   = imagecreatetruecolor( $target_width, $scale_h );
+        imagealphablending( $layer, false );
+        imagesavealpha( $layer, true );
+        imagefill( $layer, 0, 0, $transparent );
+        imagecopyresampled( $layer, $raw_layer, 0, 0, 0, 0, $target_width, $scale_h, $raw_w, $raw_h );
+        imagedestroy( $raw_layer );
+
+        return evapp_galeria_apply_global_opacity( $layer, $opacity );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_generate_watermarked_image' ) ) {
+    function evapp_galeria_generate_watermarked_image( $galeria_id, $attachment_id, $size = 'large' ) {
+        if ( ! function_exists( 'imagecreatetruecolor' ) || ! function_exists( 'imagejpeg' ) ) {
+            return false;
+        }
+
+        $galeria_id    = absint( $galeria_id );
+        $attachment_id = absint( $attachment_id );
+        $size          = sanitize_key( $size ?: 'large' );
+        $settings      = evapp_galeria_get_watermark_settings( $galeria_id );
+
+        if ( empty( $settings['enabled'] ) ) {
+            return false;
+        }
+
+        $base_file = evapp_galeria_get_attachment_file_for_size( $attachment_id, $size );
+        if ( ! $base_file || ! file_exists( $base_file ) ) {
+            return false;
+        }
+
+        $wm_file = '';
+        if ( $settings['type'] === 'image' ) {
+            $wm_file = get_attached_file( absint( $settings['image_id'] ) );
+            if ( ! $wm_file || ! file_exists( $wm_file ) ) {
+                return false;
+            }
+        }
+
+        $uploads = wp_upload_dir();
+        if ( ! empty( $uploads['error'] ) || empty( $uploads['basedir'] ) || empty( $uploads['baseurl'] ) ) {
+            return false;
+        }
+
+        $hash_source = wp_json_encode( $settings ) . '|' . @filemtime( $base_file ) . '|' . ( $wm_file ? @filemtime( $wm_file ) : '' );
+        $hash        = substr( md5( $hash_source ), 0, 14 );
+        $safe_size   = preg_replace( '/[^a-zA-Z0-9_-]/', '_', $size );
+        $dir         = trailingslashit( $uploads['basedir'] ) . 'eventosapp-galeria-watermarks/' . $galeria_id;
+        $url_dir     = trailingslashit( $uploads['baseurl'] ) . 'eventosapp-galeria-watermarks/' . $galeria_id;
+        $filename    = $attachment_id . '-' . $safe_size . '-' . $hash . '.jpg';
+        $cache_file  = trailingslashit( $dir ) . $filename;
+        $cache_url   = trailingslashit( $url_dir ) . $filename;
+
+        if ( file_exists( $cache_file ) ) {
+            return [
+                'file' => $cache_file,
+                'url'  => $cache_url,
+                'mime' => 'image/jpeg',
+                'name' => sanitize_file_name( 'foto-evento-' . $attachment_id . '-watermark.jpg' ),
+            ];
+        }
+
+        if ( ! wp_mkdir_p( $dir ) ) {
+            return false;
+        }
+
+        $old_files = glob( trailingslashit( $dir ) . $attachment_id . '-' . $safe_size . '-*.jpg' );
+        if ( is_array( $old_files ) ) {
+            foreach ( $old_files as $old_file ) {
+                if ( $old_file !== $cache_file && is_file( $old_file ) ) {
+                    @unlink( $old_file );
+                }
+            }
+        }
+
+        $src = evapp_galeria_gd_create_from_path( $base_file );
+        if ( ! $src ) {
+            return false;
+        }
+
+        $base_w = imagesx( $src );
+        $base_h = imagesy( $src );
+        $base   = imagecreatetruecolor( $base_w, $base_h );
+
+        $white = imagecolorallocate( $base, 255, 255, 255 );
+        imagefill( $base, 0, 0, $white );
+        imagecopy( $base, $src, 0, 0, 0, 0, $base_w, $base_h );
+        imagedestroy( $src );
+
+        $target_w = max( 20, (int) round( $base_w * ( $settings['size_percent'] / 100 ) ) );
+        $layer    = false;
+
+        if ( $settings['type'] === 'image' ) {
+            $wm_src = evapp_galeria_gd_create_from_path( $wm_file );
+            if ( $wm_src ) {
+                $wm_w = imagesx( $wm_src );
+                $wm_h = imagesy( $wm_src );
+                if ( $wm_w > 0 && $wm_h > 0 ) {
+                    $target_h = max( 1, (int) round( $target_w * ( $wm_h / $wm_w ) ) );
+                    if ( $target_h > ( $base_h * 0.7 ) ) {
+                        $target_h = max( 1, (int) round( $base_h * 0.7 ) );
+                        $target_w = max( 1, (int) round( $target_h * ( $wm_w / $wm_h ) ) );
+                    }
+
+                    $layer = imagecreatetruecolor( $target_w, $target_h );
+                    imagealphablending( $layer, false );
+                    imagesavealpha( $layer, true );
+                    $transparent = imagecolorallocatealpha( $layer, 255, 255, 255, 127 );
+                    imagefill( $layer, 0, 0, $transparent );
+                    imagecopyresampled( $layer, $wm_src, 0, 0, 0, 0, $target_w, $target_h, $wm_w, $wm_h );
+                    evapp_galeria_apply_global_opacity( $layer, $settings['opacity'] );
+                }
+                imagedestroy( $wm_src );
+            }
+        } else {
+            $layer = evapp_galeria_create_text_watermark_layer( $settings['text'], $target_w, $settings['opacity'] );
+        }
+
+        if ( $layer ) {
+            $wm_w = imagesx( $layer );
+            $wm_h = imagesy( $layer );
+            [ $x, $y ] = evapp_galeria_watermark_coordinates( $base_w, $base_h, $wm_w, $wm_h, $settings['position'], $settings['margin_px'] );
+            imagealphablending( $base, true );
+            imagecopy( $base, $layer, $x, $y, 0, 0, $wm_w, $wm_h );
+            imagedestroy( $layer );
+        }
+
+        $saved = imagejpeg( $base, $cache_file, $settings['quality'] );
+        imagedestroy( $base );
+
+        if ( ! $saved || ! file_exists( $cache_file ) ) {
+            return false;
+        }
+
+        return [
+            'file' => $cache_file,
+            'url'  => $cache_url,
+            'mime' => 'image/jpeg',
+            'name' => sanitize_file_name( 'foto-evento-' . $attachment_id . '-watermark.jpg' ),
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_get_watermarked_image_url' ) ) {
+    function evapp_galeria_get_watermarked_image_url( $galeria_id, $attachment_id, $size = 'large', $download = false ) {
+        $galeria_id    = absint( $galeria_id );
+        $attachment_id = absint( $attachment_id );
+        $size          = sanitize_key( $size ?: 'large' );
+        $original_url  = wp_get_attachment_image_url( $attachment_id, $size );
+        $settings      = evapp_galeria_get_watermark_settings( $galeria_id );
+
+        if ( ! $original_url ) {
+            return '';
+        }
+
+        if ( empty( $settings['enabled'] ) || ! function_exists( 'imagecreatetruecolor' ) ) {
+            return $original_url;
+        }
+
+        return add_query_arg(
+            [
+                'action'        => 'evapp_galeria_watermarked_image',
+                'galeria_id'    => $galeria_id,
+                'attachment_id' => $attachment_id,
+                'size'          => $size,
+                'download'      => $download ? 1 : 0,
+                'sig'           => evapp_galeria_watermark_signature( $galeria_id, $attachment_id, $size ),
+            ],
+            admin_url( 'admin-ajax.php' )
+        );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_stream_or_redirect_file' ) ) {
+    function evapp_galeria_stream_or_redirect_file( $file, $url, $download = false, $download_name = 'foto-evento.jpg', $mime = 'image/jpeg' ) {
+        if ( $download && $file && file_exists( $file ) ) {
+            while ( ob_get_level() ) {
+                ob_end_clean();
+            }
+
+            nocache_headers();
+            header( 'Content-Type: ' . $mime );
+            header( 'Content-Length: ' . filesize( $file ) );
+            header( 'Content-Disposition: attachment; filename="' . sanitize_file_name( $download_name ) . '"' );
+            readfile( $file );
+            exit;
+        }
+
+        if ( $url ) {
+            wp_redirect( $url, 302 );
+            exit;
+        }
+
+        status_header( 404 );
+        exit;
+    }
+}
+
+add_action( 'wp_ajax_evapp_galeria_watermarked_image', 'evapp_galeria_watermarked_image_handler' );
+add_action( 'wp_ajax_nopriv_evapp_galeria_watermarked_image', 'evapp_galeria_watermarked_image_handler' );
+
+function evapp_galeria_watermarked_image_handler() {
+    $galeria_id    = absint( $_GET['galeria_id'] ?? 0 );
+    $attachment_id = absint( $_GET['attachment_id'] ?? 0 );
+    $size          = sanitize_key( $_GET['size'] ?? 'large' );
+    $download      = ! empty( $_GET['download'] );
+    $sig           = sanitize_text_field( wp_unslash( $_GET['sig'] ?? '' ) );
+
+    if ( ! $galeria_id || ! $attachment_id || ! $size ) {
+        status_header( 404 );
+        exit;
+    }
+
+    $expected_sig = evapp_galeria_watermark_signature( $galeria_id, $attachment_id, $size );
+    if ( ! hash_equals( $expected_sig, $sig ) ) {
+        status_header( 403 );
+        exit;
+    }
+
+    if ( ! evapp_galeria_attachment_belongs_to_gallery( $galeria_id, $attachment_id ) ) {
+        status_header( 403 );
+        exit;
+    }
+
+    $settings     = evapp_galeria_get_watermark_settings( $galeria_id );
+    $original_url = wp_get_attachment_image_url( $attachment_id, $size );
+    $original     = evapp_galeria_get_attachment_file_for_size( $attachment_id, $size );
+
+    if ( empty( $settings['enabled'] ) ) {
+        evapp_galeria_stream_or_redirect_file( $original, $original_url, $download, 'foto-evento-' . $attachment_id . '.jpg', get_post_mime_type( $attachment_id ) ?: 'image/jpeg' );
+    }
+
+    $generated = evapp_galeria_generate_watermarked_image( $galeria_id, $attachment_id, $size );
+    if ( is_array( $generated ) && ! empty( $generated['file'] ) && ! empty( $generated['url'] ) ) {
+        evapp_galeria_stream_or_redirect_file( $generated['file'], $generated['url'], $download, $generated['name'], $generated['mime'] );
+    }
+
+    evapp_galeria_stream_or_redirect_file( $original, $original_url, $download, 'foto-evento-' . $attachment_id . '.jpg', get_post_mime_type( $attachment_id ) ?: 'image/jpeg' );
+}
 
 // ============================================================
 // 6. SHORTCODE: [eventosapp_galeria id="POST_ID"]
@@ -887,18 +1628,22 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     // Construir datos de imágenes
     $imagenes = [];
     foreach ( $fotos_ids as $att_id ) {
-        $full    = wp_get_attachment_image_url( $att_id, 'large' );
-        $thumb   = wp_get_attachment_image_url( $att_id, 'thumbnail' );
-        $alt     = get_post_meta( $att_id, '_wp_attachment_image_alt', true );
-        $caption = wp_get_attachment_caption( $att_id );
+        $full_original  = wp_get_attachment_image_url( $att_id, 'large' );
+        $thumb_original = wp_get_attachment_image_url( $att_id, 'thumbnail' );
+        $full           = evapp_galeria_get_watermarked_image_url( $galeria_id, $att_id, 'large', false );
+        $thumb          = evapp_galeria_get_watermarked_image_url( $galeria_id, $att_id, 'thumbnail', false );
+        $download       = evapp_galeria_get_watermarked_image_url( $galeria_id, $att_id, 'large', true );
+        $alt            = get_post_meta( $att_id, '_wp_attachment_image_alt', true );
+        $caption        = wp_get_attachment_caption( $att_id );
 
-        if ( ! $full ) continue;
+        if ( ! $full_original ) continue;
 
         $imagenes[] = [
-            'full'    => $full,
-            'thumb'   => $thumb ?: $full,
-            'alt'     => $alt ?: get_the_title( $galeria_id ),
-            'caption' => $caption,
+            'full'     => $full ?: $full_original,
+            'thumb'    => $thumb ?: ( $thumb_original ?: $full_original ),
+            'download' => $download ?: ( $full ?: $full_original ),
+            'alt'      => $alt ?: get_the_title( $galeria_id ),
+            'caption'  => $caption,
         ];
     }
 
@@ -2113,7 +2858,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                         '<span class="evapp-gi-results-counter"><span class="evapp-gi-res-cur">1</span> / ' + matches.length + '</span>' +
                         '<button type="button" class="evapp-gi-results-nav-btn evapp-gi-res-next" aria-label="' + escHtml(t('results_next_label')) + '">&#8250;</button>' +
                         '</div>' +
-                        '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.full) + '" download target="_blank">' + escHtml(t('download_button')) + '</a>';
+                        '<a class="evapp-gi-download-btn evapp-gi-dl-btn" href="' + escHtml(matches[0].photo.download || matches[0].photo.full) + '" download target="_blank">' + escHtml(t('download_button')) + '</a>';
                 resCarousel.innerHTML = html;
                 var rSlides = resCarousel.querySelectorAll('.evapp-gi-result-slide');
                 var rCur = 0;
@@ -2126,7 +2871,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     rCur = (idx + matches.length) % matches.length;
                     rSlides[rCur].classList.add('active');
                     if ( rCurLbl ) rCurLbl.textContent = rCur + 1;
-                    if ( rDlBtn  ) rDlBtn.href = matches[rCur].photo.full;
+                    if ( rDlBtn  ) rDlBtn.href = matches[rCur].photo.download || matches[rCur].photo.full;
                 }
                 if ( matches.length <= 1 ) {
                     if ( rPrev ) rPrev.style.display = 'none';
