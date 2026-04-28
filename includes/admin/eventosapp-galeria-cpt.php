@@ -92,17 +92,17 @@ add_action( 'add_meta_boxes', function () {
     );
 
     add_meta_box(
-        'evapp_galeria_event_auth',
+        'evapp_galeria_auth',
         '🔐 Validación de Asistente para Galería IA',
-        'evapp_galeria_render_event_auth_metabox',
-        'eventosapp_event',
+        'evapp_galeria_render_auth_metabox',
+        'eventosapp_galeria',
         'normal',
         'default'
     );
 } );
 
 // ============================================================
-// 2.0 CONFIGURACIÓN DE VALIDACIÓN DE ASISTENTE POR EVENTO
+// 2.0 CONFIGURACIÓN DE VALIDACIÓN DE ASISTENTE POR GALERÍA
 // ============================================================
 
 if ( ! function_exists( 'evapp_galeria_auth_standard_fields' ) ) {
@@ -221,13 +221,8 @@ if ( ! function_exists( 'evapp_galeria_auth_field_options' ) ) {
     }
 }
 
-if ( ! function_exists( 'evapp_galeria_auth_get_event_config' ) ) {
-    function evapp_galeria_auth_get_event_config( $evento_id = 0 ) {
-        $options = evapp_galeria_auth_field_options( $evento_id );
-
-        $field_1 = $evento_id ? get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_1', true ) : '';
-        $field_2 = $evento_id ? get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_2', true ) : '';
-
+if ( ! function_exists( 'evapp_galeria_auth_normalize_config_fields' ) ) {
+    function evapp_galeria_auth_normalize_config_fields( $field_1, $field_2, $options ) {
         $field_1 = sanitize_key( $field_1 ?: 'cc' );
         $field_2 = sanitize_key( $field_2 ?: 'apellido' );
 
@@ -235,21 +230,86 @@ if ( ! function_exists( 'evapp_galeria_auth_get_event_config' ) ) {
             $field_1 = 'cc';
         }
 
+        if ( ! isset( $options[ $field_1 ] ) ) {
+            $keys    = array_keys( $options );
+            $field_1 = isset( $keys[0] ) ? $keys[0] : '';
+        }
+
         if ( ! isset( $options[ $field_2 ] ) || $field_2 === $field_1 ) {
             $field_2 = ( $field_1 === 'apellido' ) ? 'cc' : 'apellido';
         }
 
-        if ( ! isset( $options[ $field_2 ] ) ) {
-            $keys    = array_keys( $options );
-            $field_2 = isset( $keys[1] ) ? $keys[1] : $field_1;
+        if ( ! isset( $options[ $field_2 ] ) || $field_2 === $field_1 ) {
+            foreach ( array_keys( $options ) as $candidate ) {
+                if ( $candidate !== $field_1 ) {
+                    $field_2 = $candidate;
+                    break;
+                }
+            }
         }
+
+        return [ $field_1, $field_2 ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_get_gallery_config' ) ) {
+    function evapp_galeria_auth_get_gallery_config( $galeria_id = 0, $evento_id = 0 ) {
+        $galeria_id = absint( $galeria_id );
+        $evento_id  = absint( $evento_id );
+
+        if ( ! $evento_id && $galeria_id ) {
+            $evento_id = absint( get_post_meta( $galeria_id, '_galeria_evento_id', true ) );
+        }
+
+        $options = evapp_galeria_auth_field_options( $evento_id );
+
+        $field_1 = $galeria_id ? get_post_meta( $galeria_id, '_galeria_auth_field_1', true ) : '';
+        $field_2 = $galeria_id ? get_post_meta( $galeria_id, '_galeria_auth_field_2', true ) : '';
+
+        // Compatibilidad: si en alguna versión anterior se guardó la configuración en el evento,
+        // se usa solo como respaldo cuando la galería todavía no tiene su propio mapeo.
+        if ( ( ! $field_1 || ! $field_2 ) && $evento_id ) {
+            $legacy_field_1 = get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_1', true );
+            $legacy_field_2 = get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_2', true );
+
+            if ( ! $field_1 && $legacy_field_1 ) {
+                $field_1 = $legacy_field_1;
+            }
+            if ( ! $field_2 && $legacy_field_2 ) {
+                $field_2 = $legacy_field_2;
+            }
+        }
+
+        [ $field_1, $field_2 ] = evapp_galeria_auth_normalize_config_fields( $field_1, $field_2, $options );
 
         return [
             'field_1_key' => $field_1,
             'field_2_key' => $field_2,
-            'field_1'     => $options[ $field_1 ],
-            'field_2'     => $options[ $field_2 ],
+            'field_1'     => isset( $options[ $field_1 ] ) ? $options[ $field_1 ] : [ 'label' => 'Número de Identificación', 'meta_key' => '_eventosapp_asistente_cc', 'placeholder' => 'Ej: 1234567890', 'html_type' => 'text' ],
+            'field_2'     => isset( $options[ $field_2 ] ) ? $options[ $field_2 ] : [ 'label' => 'Apellidos', 'meta_key' => '_eventosapp_asistente_apellido', 'placeholder' => 'Ej: García López', 'html_type' => 'text' ],
             'options'     => $options,
+            'evento_id'   => $evento_id,
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_get_event_config' ) ) {
+    function evapp_galeria_auth_get_event_config( $evento_id = 0 ) {
+        $evento_id = absint( $evento_id );
+        $options   = evapp_galeria_auth_field_options( $evento_id );
+
+        $field_1 = $evento_id ? get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_1', true ) : '';
+        $field_2 = $evento_id ? get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_2', true ) : '';
+
+        [ $field_1, $field_2 ] = evapp_galeria_auth_normalize_config_fields( $field_1, $field_2, $options );
+
+        return [
+            'field_1_key' => $field_1,
+            'field_2_key' => $field_2,
+            'field_1'     => isset( $options[ $field_1 ] ) ? $options[ $field_1 ] : [ 'label' => 'Número de Identificación', 'meta_key' => '_eventosapp_asistente_cc', 'placeholder' => 'Ej: 1234567890', 'html_type' => 'text' ],
+            'field_2'     => isset( $options[ $field_2 ] ) ? $options[ $field_2 ] : [ 'label' => 'Apellidos', 'meta_key' => '_eventosapp_asistente_apellido', 'placeholder' => 'Ej: García López', 'html_type' => 'text' ],
+            'options'     => $options,
+            'evento_id'   => $evento_id,
         ];
     }
 }
@@ -331,10 +391,11 @@ if ( ! function_exists( 'evapp_galeria_auth_get_ticket_field_value' ) ) {
     }
 }
 
-if ( ! function_exists( 'evapp_galeria_render_event_auth_metabox' ) ) {
-    function evapp_galeria_render_event_auth_metabox( $post ) {
-        $config  = evapp_galeria_auth_get_event_config( $post->ID );
-        $options = $config['options'];
+if ( ! function_exists( 'evapp_galeria_render_auth_metabox' ) ) {
+    function evapp_galeria_render_auth_metabox( $post ) {
+        $evento_id = absint( get_post_meta( $post->ID, '_galeria_evento_id', true ) );
+        $config    = evapp_galeria_auth_get_gallery_config( $post->ID, $evento_id );
+        $options   = $config['options'];
 
         wp_nonce_field( 'evapp_galeria_auth_guardar', '_evapp_galeria_auth_nonce' );
         ?>
@@ -344,7 +405,7 @@ if ( ! function_exists( 'evapp_galeria_render_event_auth_metabox' ) ) {
                 background: #f9fafb;
                 border-radius: 10px;
                 padding: 14px 16px;
-                max-width: 760px;
+                max-width: 820px;
             }
             .evapp-auth-grid {
                 display: grid;
@@ -366,6 +427,13 @@ if ( ! function_exists( 'evapp_galeria_render_event_auth_metabox' ) ) {
                 font-size: 12px;
                 margin: 8px 0 0;
             }
+            .evapp-auth-warning {
+                margin: 10px 0 0;
+                padding: 10px 12px;
+                border-left: 4px solid #dba617;
+                background: #fff8e5;
+                color: #554000;
+            }
             @media (max-width: 782px) {
                 .evapp-auth-grid { grid-template-columns: 1fr; }
             }
@@ -376,9 +444,21 @@ if ( ! function_exists( 'evapp_galeria_render_event_auth_metabox' ) ) {
                 <strong>Define los dos datos que el visitante debe ingresar para validar que es asistente del evento.</strong>
             </p>
             <p class="evapp-auth-note">
-                Estos campos se usan en el flujo público de la galería IA. Por defecto se valida con
-                <strong>Número de Identificación</strong> + <strong>Apellidos</strong>. También puedes usar campos adicionales creados para este evento.
+                Esta configuración pertenece a esta galería. Por defecto se valida con
+                <strong>Número de Identificación</strong> + <strong>Apellidos</strong>, pero puedes usar cualquier dato disponible del asistente:
+                nombre, apellidos, identificación, email, teléfono, empresa, NIT, cargo, ciudad, país, localidad, ID del ticket, QR preimpreso o campos adicionales del evento asociado.
             </p>
+
+            <?php if ( ! $evento_id ) : ?>
+                <div class="evapp-auth-warning">
+                    Esta galería todavía no tiene un evento asociado. Puedes escoger campos básicos del asistente ahora; si necesitas mapear campos adicionales del evento, primero selecciona el evento en “Datos de la Galería” y actualiza la galería para refrescar esta lista.
+                </div>
+            <?php else : ?>
+                <p class="evapp-auth-note">
+                    Evento asociado actual: <strong><?php echo esc_html( get_the_title( $evento_id ) ); ?></strong>.
+                    Si cambias el evento asociado, actualiza la galería para refrescar los campos adicionales disponibles.
+                </p>
+            <?php endif; ?>
 
             <div class="evapp-auth-grid">
                 <div>
@@ -405,7 +485,7 @@ if ( ! function_exists( 'evapp_galeria_render_event_auth_metabox' ) ) {
 
             <p class="evapp-auth-note">
                 Recomendación: combina un dato difícil de repetir, como identificación, correo, NIT, teléfono o ID de ticket,
-                con un segundo dato de confirmación. Si eliges el mismo campo en ambos selectores, el sistema conservará una combinación válida automáticamente.
+                con un segundo dato de confirmación. El sistema evita que ambos selectores queden con el mismo campo.
             </p>
         </div>
 
@@ -442,27 +522,27 @@ if ( ! function_exists( 'evapp_galeria_render_event_auth_metabox' ) ) {
     }
 }
 
-add_action( 'save_post_eventosapp_event', function ( $post_id ) {
+add_action( 'save_post_eventosapp_galeria', function ( $post_id ) {
     if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
     if ( wp_is_post_revision( $post_id ) ) return;
     if ( ! isset( $_POST['_evapp_galeria_auth_nonce'] ) || ! wp_verify_nonce( $_POST['_evapp_galeria_auth_nonce'], 'evapp_galeria_auth_guardar' ) ) return;
     if ( ! current_user_can( 'edit_post', $post_id ) ) return;
 
-    $options = evapp_galeria_auth_field_options( $post_id );
+    $evento_id = absint( get_post_meta( $post_id, '_galeria_evento_id', true ) );
+    if ( ! $evento_id && isset( $_POST['_galeria_evento_id'] ) ) {
+        $evento_id = absint( $_POST['_galeria_evento_id'] );
+    }
+
+    $options = evapp_galeria_auth_field_options( $evento_id );
     $field_1 = sanitize_key( wp_unslash( $_POST['evapp_gallery_auth_field_1'] ?? 'cc' ) );
     $field_2 = sanitize_key( wp_unslash( $_POST['evapp_gallery_auth_field_2'] ?? 'apellido' ) );
 
-    if ( ! isset( $options[ $field_1 ] ) ) {
-        $field_1 = 'cc';
-    }
+    [ $field_1, $field_2 ] = evapp_galeria_auth_normalize_config_fields( $field_1, $field_2, $options );
 
-    if ( ! isset( $options[ $field_2 ] ) || $field_2 === $field_1 ) {
-        $field_2 = ( $field_1 === 'apellido' ) ? 'cc' : 'apellido';
-    }
-
-    update_post_meta( $post_id, '_eventosapp_gallery_auth_field_1', $field_1 );
-    update_post_meta( $post_id, '_eventosapp_gallery_auth_field_2', $field_2 );
+    update_post_meta( $post_id, '_galeria_auth_field_1', $field_1 );
+    update_post_meta( $post_id, '_galeria_auth_field_2', $field_2 );
 }, 30 );
+
 
 // ============================================================
 // 2.1 RENDER: Datos generales
@@ -1616,7 +1696,7 @@ if ( ! function_exists( 'evapp_galeria_buscar_ticket_handler' ) ) {
             wp_send_json_error( [ 'message' => 'Esta galería no tiene un evento asociado.' ], 400 );
         }
 
-        $config  = evapp_galeria_auth_get_event_config( $evento_id );
+        $config  = evapp_galeria_auth_get_gallery_config( $galeria_id, $evento_id );
         $field_1 = sanitize_key( $config['field_1_key'] ?? 'cc' );
         $field_2 = sanitize_key( $config['field_2_key'] ?? 'apellido' );
 
@@ -2539,8 +2619,8 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     $uid         = 'evapp-galeria-' . $galeria_id;
 
     // Configuración dinámica de los dos campos de autenticación del asistente.
-    $auth_config = function_exists( 'evapp_galeria_auth_get_event_config' )
-        ? evapp_galeria_auth_get_event_config( $evento_id )
+    $auth_config = function_exists( 'evapp_galeria_auth_get_gallery_config' )
+        ? evapp_galeria_auth_get_gallery_config( $galeria_id, $evento_id )
         : [
             'field_1_key' => 'cc',
             'field_2_key' => 'apellido',
