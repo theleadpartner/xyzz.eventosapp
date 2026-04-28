@@ -90,7 +90,379 @@ add_action( 'add_meta_boxes', function () {
         'side',
         'high'
     );
+
+    add_meta_box(
+        'evapp_galeria_event_auth',
+        '🔐 Validación de Asistente para Galería IA',
+        'evapp_galeria_render_event_auth_metabox',
+        'eventosapp_event',
+        'normal',
+        'default'
+    );
 } );
+
+// ============================================================
+// 2.0 CONFIGURACIÓN DE VALIDACIÓN DE ASISTENTE POR EVENTO
+// ============================================================
+
+if ( ! function_exists( 'evapp_galeria_auth_standard_fields' ) ) {
+    function evapp_galeria_auth_standard_fields() {
+        return [
+            'nombre' => [
+                'label'       => 'Nombre',
+                'meta_key'    => '_eventosapp_asistente_nombre',
+                'placeholder' => 'Ej: Ana María',
+                'html_type'   => 'text',
+            ],
+            'apellido' => [
+                'label'       => 'Apellidos',
+                'meta_key'    => '_eventosapp_asistente_apellido',
+                'placeholder' => 'Ej: García López',
+                'html_type'   => 'text',
+            ],
+            'cc' => [
+                'label'       => 'Número de Identificación',
+                'meta_key'    => '_eventosapp_asistente_cc',
+                'placeholder' => 'Ej: 1234567890',
+                'html_type'   => 'text',
+            ],
+            'email' => [
+                'label'       => 'Correo electrónico',
+                'meta_key'    => '_eventosapp_asistente_email',
+                'placeholder' => 'Ej: correo@dominio.com',
+                'html_type'   => 'email',
+            ],
+            'tel' => [
+                'label'       => 'Teléfono',
+                'meta_key'    => '_eventosapp_asistente_tel',
+                'placeholder' => 'Ej: 3001234567',
+                'html_type'   => 'text',
+            ],
+            'empresa' => [
+                'label'       => 'Empresa',
+                'meta_key'    => '_eventosapp_asistente_empresa',
+                'placeholder' => 'Ej: Empresa S.A.S.',
+                'html_type'   => 'text',
+            ],
+            'nit' => [
+                'label'       => 'NIT',
+                'meta_key'    => '_eventosapp_asistente_nit',
+                'placeholder' => 'Ej: 900123456',
+                'html_type'   => 'text',
+            ],
+            'cargo' => [
+                'label'       => 'Cargo',
+                'meta_key'    => '_eventosapp_asistente_cargo',
+                'placeholder' => 'Ej: Gerente Comercial',
+                'html_type'   => 'text',
+            ],
+            'ciudad' => [
+                'label'       => 'Ciudad',
+                'meta_key'    => '_eventosapp_asistente_ciudad',
+                'placeholder' => 'Ej: Barranquilla',
+                'html_type'   => 'text',
+            ],
+            'pais' => [
+                'label'       => 'País',
+                'meta_key'    => '_eventosapp_asistente_pais',
+                'placeholder' => 'Ej: Colombia',
+                'html_type'   => 'text',
+            ],
+            'localidad' => [
+                'label'       => 'Localidad',
+                'meta_key'    => '_eventosapp_asistente_localidad',
+                'placeholder' => 'Ej: General',
+                'html_type'   => 'text',
+            ],
+            'ticket_id' => [
+                'label'       => 'ID del Ticket',
+                'meta_key'    => 'eventosapp_ticketID',
+                'placeholder' => 'Ej: ID del ticket',
+                'html_type'   => 'text',
+            ],
+            'preprinted_id' => [
+                'label'       => 'ID QR preimpreso',
+                'meta_key'    => 'eventosapp_ticket_preprintedID',
+                'placeholder' => 'Ej: Código preimpreso',
+                'html_type'   => 'text',
+            ],
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_field_options' ) ) {
+    function evapp_galeria_auth_field_options( $evento_id = 0 ) {
+        $options = evapp_galeria_auth_standard_fields();
+
+        if ( $evento_id && function_exists( 'eventosapp_get_event_extra_fields' ) ) {
+            $extras = eventosapp_get_event_extra_fields( $evento_id );
+            if ( is_array( $extras ) ) {
+                foreach ( $extras as $extra ) {
+                    if ( empty( $extra['key'] ) ) continue;
+
+                    $extra_key = sanitize_key( (string) $extra['key'] );
+                    if ( ! $extra_key ) continue;
+
+                    $option_key = 'extra_' . $extra_key;
+                    $label      = ! empty( $extra['label'] ) ? sanitize_text_field( (string) $extra['label'] ) : $extra_key;
+                    $type       = ! empty( $extra['type'] ) ? sanitize_key( (string) $extra['type'] ) : 'text';
+
+                    $options[ $option_key ] = [
+                        'label'       => 'Campo adicional: ' . $label,
+                        'meta_key'    => '_eventosapp_extra_' . $extra_key,
+                        'placeholder' => 'Ingresa ' . $label,
+                        'html_type'   => ( $type === 'email' ? 'email' : 'text' ),
+                    ];
+                }
+            }
+        }
+
+        return $options;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_get_event_config' ) ) {
+    function evapp_galeria_auth_get_event_config( $evento_id = 0 ) {
+        $options = evapp_galeria_auth_field_options( $evento_id );
+
+        $field_1 = $evento_id ? get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_1', true ) : '';
+        $field_2 = $evento_id ? get_post_meta( $evento_id, '_eventosapp_gallery_auth_field_2', true ) : '';
+
+        $field_1 = sanitize_key( $field_1 ?: 'cc' );
+        $field_2 = sanitize_key( $field_2 ?: 'apellido' );
+
+        if ( ! isset( $options[ $field_1 ] ) ) {
+            $field_1 = 'cc';
+        }
+
+        if ( ! isset( $options[ $field_2 ] ) || $field_2 === $field_1 ) {
+            $field_2 = ( $field_1 === 'apellido' ) ? 'cc' : 'apellido';
+        }
+
+        if ( ! isset( $options[ $field_2 ] ) ) {
+            $keys    = array_keys( $options );
+            $field_2 = isset( $keys[1] ) ? $keys[1] : $field_1;
+        }
+
+        return [
+            'field_1_key' => $field_1,
+            'field_2_key' => $field_2,
+            'field_1'     => $options[ $field_1 ],
+            'field_2'     => $options[ $field_2 ],
+            'options'     => $options,
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_lower_label' ) ) {
+    function evapp_galeria_auth_lower_label( $label ) {
+        $label = (string) $label;
+        if ( function_exists( 'mb_strtolower' ) ) {
+            return mb_strtolower( $label );
+        }
+        return strtolower( remove_accents( $label ) );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_normalize_value' ) ) {
+    function evapp_galeria_auth_normalize_value( $value, $field_key = '' ) {
+        if ( is_array( $value ) || is_object( $value ) ) {
+            $value = wp_json_encode( $value );
+        }
+
+        $value = is_scalar( $value ) ? (string) $value : '';
+        $value = wp_strip_all_tags( $value );
+        $value = html_entity_decode( $value, ENT_QUOTES, get_bloginfo( 'charset' ) ?: 'UTF-8' );
+        $value = remove_accents( $value );
+        $value = strtolower( trim( $value ) );
+        $value = preg_replace( '/\s+/', ' ', $value );
+
+        return (string) $value;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_compact_value' ) ) {
+    function evapp_galeria_auth_compact_value( $value, $field_key = '' ) {
+        $value = evapp_galeria_auth_normalize_value( $value, $field_key );
+        return preg_replace( '/[^a-z0-9@._+\-]/', '', $value );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_value_matches' ) ) {
+    function evapp_galeria_auth_value_matches( $stored, $submitted, $field_key = '' ) {
+        $stored_norm    = evapp_galeria_auth_normalize_value( $stored, $field_key );
+        $submitted_norm = evapp_galeria_auth_normalize_value( $submitted, $field_key );
+
+        if ( $stored_norm === '' || $submitted_norm === '' ) {
+            return false;
+        }
+
+        if ( hash_equals( $stored_norm, $submitted_norm ) ) {
+            return true;
+        }
+
+        $compact_fields = [ 'cc', 'tel', 'nit', 'ticket_id', 'preprinted_id' ];
+        if ( in_array( $field_key, $compact_fields, true ) || strpos( $field_key, 'extra_' ) === 0 ) {
+            $stored_compact    = evapp_galeria_auth_compact_value( $stored, $field_key );
+            $submitted_compact = evapp_galeria_auth_compact_value( $submitted, $field_key );
+
+            return ( $stored_compact !== '' && $submitted_compact !== '' && hash_equals( $stored_compact, $submitted_compact ) );
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_auth_get_ticket_field_value' ) ) {
+    function evapp_galeria_auth_get_ticket_field_value( $ticket_id, $field_key, $evento_id = 0 ) {
+        $ticket_id = absint( $ticket_id );
+        $field_key = sanitize_key( (string) $field_key );
+
+        if ( ! $ticket_id || ! $field_key ) {
+            return '';
+        }
+
+        $options = evapp_galeria_auth_field_options( $evento_id );
+        if ( empty( $options[ $field_key ]['meta_key'] ) ) {
+            return '';
+        }
+
+        return get_post_meta( $ticket_id, $options[ $field_key ]['meta_key'], true );
+    }
+}
+
+if ( ! function_exists( 'evapp_galeria_render_event_auth_metabox' ) ) {
+    function evapp_galeria_render_event_auth_metabox( $post ) {
+        $config  = evapp_galeria_auth_get_event_config( $post->ID );
+        $options = $config['options'];
+
+        wp_nonce_field( 'evapp_galeria_auth_guardar', '_evapp_galeria_auth_nonce' );
+        ?>
+        <style>
+            .evapp-auth-box {
+                border: 1px solid #e5e7eb;
+                background: #f9fafb;
+                border-radius: 10px;
+                padding: 14px 16px;
+                max-width: 760px;
+            }
+            .evapp-auth-grid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 14px;
+                margin-top: 12px;
+            }
+            .evapp-auth-grid label {
+                display: block;
+                font-weight: 600;
+                margin-bottom: 5px;
+            }
+            .evapp-auth-grid select {
+                width: 100%;
+                max-width: 100%;
+            }
+            .evapp-auth-note {
+                color: #646970;
+                font-size: 12px;
+                margin: 8px 0 0;
+            }
+            @media (max-width: 782px) {
+                .evapp-auth-grid { grid-template-columns: 1fr; }
+            }
+        </style>
+
+        <div class="evapp-auth-box">
+            <p style="margin-top:0;">
+                <strong>Define los dos datos que el visitante debe ingresar para validar que es asistente del evento.</strong>
+            </p>
+            <p class="evapp-auth-note">
+                Estos campos se usan en el flujo público de la galería IA. Por defecto se valida con
+                <strong>Número de Identificación</strong> + <strong>Apellidos</strong>. También puedes usar campos adicionales creados para este evento.
+            </p>
+
+            <div class="evapp-auth-grid">
+                <div>
+                    <label for="evapp_gallery_auth_field_1">Campo de autenticación 1</label>
+                    <select id="evapp_gallery_auth_field_1" name="evapp_gallery_auth_field_1">
+                        <?php foreach ( $options as $key => $option ) : ?>
+                            <option value="<?php echo esc_attr( $key ); ?>" <?php selected( $config['field_1_key'], $key ); ?>>
+                                <?php echo esc_html( $option['label'] ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div>
+                    <label for="evapp_gallery_auth_field_2">Campo de autenticación 2</label>
+                    <select id="evapp_gallery_auth_field_2" name="evapp_gallery_auth_field_2">
+                        <?php foreach ( $options as $key => $option ) : ?>
+                            <option value="<?php echo esc_attr( $key ); ?>" <?php selected( $config['field_2_key'], $key ); ?>>
+                                <?php echo esc_html( $option['label'] ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </div>
+
+            <p class="evapp-auth-note">
+                Recomendación: combina un dato difícil de repetir, como identificación, correo, NIT, teléfono o ID de ticket,
+                con un segundo dato de confirmación. Si eliges el mismo campo en ambos selectores, el sistema conservará una combinación válida automáticamente.
+            </p>
+        </div>
+
+        <script>
+        jQuery(function($){
+            var $field1 = $('#evapp_gallery_auth_field_1');
+            var $field2 = $('#evapp_gallery_auth_field_2');
+
+            function evappAvoidDuplicatedAuthFields(changed){
+                if ($field1.val() !== $field2.val()) return;
+
+                var $target = changed === 1 ? $field2 : $field1;
+                var current = changed === 1 ? $field1.val() : $field2.val();
+
+                var fallback = '';
+                $target.find('option').each(function(){
+                    var val = $(this).attr('value');
+                    if (val && val !== current) {
+                        fallback = val;
+                        return false;
+                    }
+                });
+
+                if (fallback) {
+                    $target.val(fallback);
+                }
+            }
+
+            $field1.on('change', function(){ evappAvoidDuplicatedAuthFields(1); });
+            $field2.on('change', function(){ evappAvoidDuplicatedAuthFields(2); });
+        });
+        </script>
+        <?php
+    }
+}
+
+add_action( 'save_post_eventosapp_event', function ( $post_id ) {
+    if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
+    if ( wp_is_post_revision( $post_id ) ) return;
+    if ( ! isset( $_POST['_evapp_galeria_auth_nonce'] ) || ! wp_verify_nonce( $_POST['_evapp_galeria_auth_nonce'], 'evapp_galeria_auth_guardar' ) ) return;
+    if ( ! current_user_can( 'edit_post', $post_id ) ) return;
+
+    $options = evapp_galeria_auth_field_options( $post_id );
+    $field_1 = sanitize_key( wp_unslash( $_POST['evapp_gallery_auth_field_1'] ?? 'cc' ) );
+    $field_2 = sanitize_key( wp_unslash( $_POST['evapp_gallery_auth_field_2'] ?? 'apellido' ) );
+
+    if ( ! isset( $options[ $field_1 ] ) ) {
+        $field_1 = 'cc';
+    }
+
+    if ( ! isset( $options[ $field_2 ] ) || $field_2 === $field_1 ) {
+        $field_2 = ( $field_1 === 'apellido' ) ? 'cc' : 'apellido';
+    }
+
+    update_post_meta( $post_id, '_eventosapp_gallery_auth_field_1', $field_1 );
+    update_post_meta( $post_id, '_eventosapp_gallery_auth_field_2', $field_2 );
+}, 30 );
 
 // ============================================================
 // 2.1 RENDER: Datos generales
@@ -1222,6 +1594,112 @@ function evapp_galeria_watermarked_image_handler() {
 // ============================================================
 
 // ============================================================
+// 5.1.1 AJAX: Validar asistente de galería usando campos configurables por evento
+// ============================================================
+
+if ( ! function_exists( 'evapp_galeria_buscar_ticket_handler' ) ) {
+    function evapp_galeria_buscar_ticket_handler() {
+        check_ajax_referer( 'evapp_gi_buscar_ticket', 'security' );
+
+        $galeria_id = absint( $_POST['galeria_id'] ?? 0 );
+        if ( ! $galeria_id ) {
+            wp_send_json_error( [ 'message' => 'Galería inválida.' ], 400 );
+        }
+
+        $galeria = get_post( $galeria_id );
+        if ( ! $galeria || $galeria->post_type !== 'eventosapp_galeria' ) {
+            wp_send_json_error( [ 'message' => 'Galería no encontrada.' ], 404 );
+        }
+
+        $evento_id = (int) get_post_meta( $galeria_id, '_galeria_evento_id', true );
+        if ( ! $evento_id ) {
+            wp_send_json_error( [ 'message' => 'Esta galería no tiene un evento asociado.' ], 400 );
+        }
+
+        $config  = evapp_galeria_auth_get_event_config( $evento_id );
+        $field_1 = sanitize_key( $config['field_1_key'] ?? 'cc' );
+        $field_2 = sanitize_key( $config['field_2_key'] ?? 'apellido' );
+
+        $value_1 = isset( $_POST['auth_value_1'] )
+            ? sanitize_text_field( wp_unslash( $_POST['auth_value_1'] ) )
+            : sanitize_text_field( wp_unslash( $_POST['cedula'] ?? '' ) );
+
+        $value_2 = isset( $_POST['auth_value_2'] )
+            ? sanitize_text_field( wp_unslash( $_POST['auth_value_2'] ) )
+            : sanitize_text_field( wp_unslash( $_POST['apellidos'] ?? '' ) );
+
+        if ( $value_1 === '' || $value_2 === '' ) {
+            wp_send_json_error( [ 'message' => 'Campos incompletos.' ], 400 );
+        }
+
+        $tickets = get_posts( [
+            'post_type'      => 'eventosapp_ticket',
+            'post_status'    => 'any',
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                [
+                    'key'     => '_eventosapp_ticket_evento_id',
+                    'value'   => $evento_id,
+                    'compare' => '=',
+                    'type'    => 'NUMERIC',
+                ],
+            ],
+        ] );
+
+        $matched_ticket_id = 0;
+
+        foreach ( $tickets as $ticket_id ) {
+            $stored_1 = evapp_galeria_auth_get_ticket_field_value( $ticket_id, $field_1, $evento_id );
+            if ( ! evapp_galeria_auth_value_matches( $stored_1, $value_1, $field_1 ) ) {
+                continue;
+            }
+
+            $stored_2 = evapp_galeria_auth_get_ticket_field_value( $ticket_id, $field_2, $evento_id );
+            if ( ! evapp_galeria_auth_value_matches( $stored_2, $value_2, $field_2 ) ) {
+                continue;
+            }
+
+            $matched_ticket_id = (int) $ticket_id;
+            break;
+        }
+
+        if ( ! $matched_ticket_id ) {
+            wp_send_json_error( [ 'message' => '❌ No encontramos un asistente con esos datos. Intenta de nuevo.' ], 404 );
+        }
+
+        $nombre   = get_post_meta( $matched_ticket_id, '_eventosapp_asistente_nombre', true );
+        $apellido = get_post_meta( $matched_ticket_id, '_eventosapp_asistente_apellido', true );
+        $email    = get_post_meta( $matched_ticket_id, '_eventosapp_asistente_email', true );
+        $empresa  = get_post_meta( $matched_ticket_id, '_eventosapp_asistente_empresa', true );
+        $cargo    = get_post_meta( $matched_ticket_id, '_eventosapp_asistente_cargo', true );
+        $cedula   = get_post_meta( $matched_ticket_id, '_eventosapp_asistente_cc', true );
+
+        $nombre_completo = trim( $nombre . ' ' . $apellido );
+        if ( $nombre_completo === '' ) {
+            $nombre_completo = get_the_title( $matched_ticket_id );
+        }
+
+        wp_send_json_success( [
+            'ticket_id'       => $matched_ticket_id,
+            'cedula'          => sanitize_text_field( $cedula ),
+            'nombre'          => sanitize_text_field( $nombre ),
+            'apellido'        => sanitize_text_field( $apellido ),
+            'nombre_completo' => sanitize_text_field( $nombre_completo ),
+            'email'           => sanitize_email( $email ),
+            'empresa'         => sanitize_text_field( $empresa ),
+            'cargo'           => sanitize_text_field( $cargo ),
+            'field_1'         => $field_1,
+            'field_2'         => $field_2,
+        ] );
+    }
+}
+
+add_action( 'wp_ajax_evapp_galeria_buscar_ticket', 'evapp_galeria_buscar_ticket_handler', 9 );
+add_action( 'wp_ajax_nopriv_evapp_galeria_buscar_ticket', 'evapp_galeria_buscar_ticket_handler', 9 );
+
+// ============================================================
 // 5.2 AJAX: Enviar fotos encontradas sin marca de agua al correo del asistente
 // ============================================================
 
@@ -2060,6 +2538,44 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
     $evento_id   = (int) get_post_meta( $galeria_id, '_galeria_evento_id', true );
     $uid         = 'evapp-galeria-' . $galeria_id;
 
+    // Configuración dinámica de los dos campos de autenticación del asistente.
+    $auth_config = function_exists( 'evapp_galeria_auth_get_event_config' )
+        ? evapp_galeria_auth_get_event_config( $evento_id )
+        : [
+            'field_1_key' => 'cc',
+            'field_2_key' => 'apellido',
+            'field_1'     => [ 'label' => 'Número de Identificación', 'placeholder' => 'Ej: 1234567890', 'html_type' => 'text' ],
+            'field_2'     => [ 'label' => 'Apellidos', 'placeholder' => 'Ej: García López', 'html_type' => 'text' ],
+        ];
+
+    $auth_field_1_label       = $auth_config['field_1']['label'] ?? 'Número de Identificación';
+    $auth_field_2_label       = $auth_config['field_2']['label'] ?? 'Apellidos';
+    $auth_field_1_placeholder = $auth_config['field_1']['placeholder'] ?? '';
+    $auth_field_2_placeholder = $auth_config['field_2']['placeholder'] ?? '';
+    $auth_field_1_type        = in_array( ( $auth_config['field_1']['html_type'] ?? 'text' ), [ 'text', 'email' ], true ) ? $auth_config['field_1']['html_type'] : 'text';
+    $auth_field_2_type        = in_array( ( $auth_config['field_2']['html_type'] ?? 'text' ), [ 'text', 'email' ], true ) ? $auth_config['field_2']['html_type'] : 'text';
+
+    $default_gi_text = evapp_galeria_ia_default_texts();
+    if ( ( $gi_text['cedula_label'] ?? '' ) === ( $default_gi_text['cedula_label'] ?? '' ) ) {
+        $gi_text['cedula_label'] = $auth_field_1_label;
+    }
+    if ( ( $gi_text['cedula_placeholder'] ?? '' ) === ( $default_gi_text['cedula_placeholder'] ?? '' ) ) {
+        $gi_text['cedula_placeholder'] = $auth_field_1_placeholder;
+    }
+    if ( ( $gi_text['apellidos_label'] ?? '' ) === ( $default_gi_text['apellidos_label'] ?? '' ) ) {
+        $gi_text['apellidos_label'] = $auth_field_2_label;
+    }
+    if ( ( $gi_text['apellidos_placeholder'] ?? '' ) === ( $default_gi_text['apellidos_placeholder'] ?? '' ) ) {
+        $gi_text['apellidos_placeholder'] = $auth_field_2_placeholder;
+    }
+    if ( ( $gi_text['validate_empty_error'] ?? '' ) === ( $default_gi_text['validate_empty_error'] ?? '' ) ) {
+        $gi_text['validate_empty_error'] = sprintf(
+            '⚠️ Por favor ingresa %s y %s.',
+            evapp_galeria_auth_lower_label( $auth_field_1_label ),
+            evapp_galeria_auth_lower_label( $auth_field_2_label )
+        );
+    }
+
     // ── Datos del evento y cliente para el header informativo ────────────
     $header_titulo       = $post->post_title; // título de la galería
     $header_fecha_dia    = '';
@@ -2346,15 +2862,17 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                     </p>
                     <div class="evapp-gi-field-wrap">
                         <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-cedula"><?php echo esc_html( $gi_text['cedula_label'] ); ?></label>
-                        <input type="text" id="<?php echo esc_attr($uid); ?>-cedula"
+                        <input type="<?php echo esc_attr( $auth_field_1_type ); ?>" id="<?php echo esc_attr($uid); ?>-cedula"
                                class="evapp-gi-input evapp-gi-cedula"
+                               data-auth-field="<?php echo esc_attr( $auth_config['field_1_key'] ?? 'cc' ); ?>"
                                placeholder="<?php echo esc_attr( $gi_text['cedula_placeholder'] ); ?>" autocomplete="off" inputmode="text" />
                     </div>
                     <div class="evapp-gi-field-wrap">
                         <label class="evapp-gi-label" for="<?php echo esc_attr($uid); ?>-apellidos"><?php echo esc_html( $gi_text['apellidos_label'] ); ?></label>
-                        <input type="text" id="<?php echo esc_attr($uid); ?>-apellidos"
+                        <input type="<?php echo esc_attr( $auth_field_2_type ); ?>" id="<?php echo esc_attr($uid); ?>-apellidos"
                                class="evapp-gi-input evapp-gi-apellidos"
-                               placeholder="<?php echo esc_attr( $gi_text['apellidos_placeholder'] ); ?>" autocomplete="off" />
+                               data-auth-field="<?php echo esc_attr( $auth_config['field_2_key'] ?? 'apellido' ); ?>"
+                               placeholder="<?php echo esc_attr( $gi_text['apellidos_placeholder'] ); ?>" autocomplete="off" inputmode="text" />
                     </div>
                     <p class="evapp-gi-hint-text"><?php echo esc_html( $gi_text['step1_hint'] ); ?></p>
                     <div class="evapp-gi-msg evapp-gi-msg-1" role="alert" style="display:none;"></div>
@@ -2829,6 +3347,12 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
             var nonceRegistro = <?php echo wp_json_encode( $nonce_registro ); ?>;
             var nonceEnvio    = <?php echo wp_json_encode( $nonce_envio ); ?>;
             var giText        = <?php echo wp_json_encode( $gi_text ); ?>;
+            var authConfig    = <?php echo wp_json_encode( [
+                'field_1_key'   => $auth_config['field_1_key'] ?? 'cc',
+                'field_2_key'   => $auth_config['field_2_key'] ?? 'apellido',
+                'field_1_label' => $auth_field_1_label,
+                'field_2_label' => $auth_field_2_label,
+            ] ); ?>;
             var faceModelsUrl = <?php echo wp_json_encode( trailingslashit( EVENTOSAPP_PLUGIN_URL ) . 'includes/assets/face-models' ); ?>;
 
             var finder      = document.getElementById(uid + '-finder');
@@ -3230,33 +3754,45 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
 
             // ── PASO 1: Validar ticket ────────────────────────────────────────
             var btnValidar  = wizard.querySelector('.evapp-gi-btn-validar');
-            var inputCedula = wizard.querySelector('.evapp-gi-cedula');
-            var inputApell  = wizard.querySelector('.evapp-gi-apellidos');
+            var inputAuth1  = wizard.querySelector('.evapp-gi-cedula');
+            var inputAuth2  = wizard.querySelector('.evapp-gi-apellidos');
+            var inputCedula = inputAuth1; // Alias de compatibilidad para el resto del flujo.
+            var inputApell  = inputAuth2; // Alias de compatibilidad para el resto del flujo.
             var msg1        = wizard.querySelector('.evapp-gi-msg-1');
 
             if ( btnValidar ) {
                 btnValidar.addEventListener('click', function(){
-                    var cedula    = inputCedula.value.trim();
-                    var apellidos = inputApell.value.trim();
-                    if ( ! cedula || ! apellidos ) {
+                    var authValue1 = inputAuth1 ? inputAuth1.value.trim() : '';
+                    var authValue2 = inputAuth2 ? inputAuth2.value.trim() : '';
+
+                    if ( ! authValue1 || ! authValue2 ) {
                         showMsg( msg1, t('validate_empty_error'), 'error' );
                         return;
                     }
+
                     hideMsg( msg1 );
                     setLoading( btnValidar, t('validate_loading') );
+
                     var fd = new FormData();
                     fd.append('action', 'evapp_galeria_buscar_ticket');
                     fd.append('security', nonceBuscar);
                     fd.append('galeria_id', galeriaId);
-                    fd.append('cedula', cedula);
-                    fd.append('apellidos', apellidos);
+                    fd.append('auth_field_1', authConfig.field_1_key || '');
+                    fd.append('auth_field_2', authConfig.field_2_key || '');
+                    fd.append('auth_value_1', authValue1);
+                    fd.append('auth_value_2', authValue2);
+
+                    // Compatibilidad hacia atrás: si existiera un handler antiguo, seguirá recibiendo cedula/apellidos.
+                    fd.append('cedula', authValue1);
+                    fd.append('apellidos', authValue2);
+
                     fetch( ajaxUrl, { method: 'POST', body: fd } )
                         .then(function(r){ return r.json(); })
                         .then(function(res){
                             setReady( btnValidar, t('validate_button') );
                             if ( res.success ) {
                                 ticketId       = res.data.ticket_id;
-                                cedulaVal      = cedula;
+                                cedulaVal      = res.data.cedula || '';
                                 asistenteEmail = res.data.email || '';
                                 var card = wizard.querySelector('.evapp-gi-asistente-card');
                                 card.innerHTML =
@@ -3268,7 +3804,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                                     '</div>';
                                 showStep('evapp-gi-step-2');
                             } else {
-                                showMsg( msg1, t('validate_server_error'), 'error' );
+                                showMsg( msg1, ( res.data && res.data.message ) ? res.data.message : t('validate_server_error'), 'error' );
                             }
                         })
                         .catch(function(){
@@ -3276,7 +3812,7 @@ add_shortcode( 'eventosapp_galeria', function ( $atts ) {
                             showMsg( msg1, t('connection_error'), 'error' );
                         });
                 });
-                [inputCedula, inputApell].forEach(function(inp){
+                [inputAuth1, inputAuth2].filter(Boolean).forEach(function(inp){
                     inp.addEventListener('keydown', function(e){ if ( e.key === 'Enter' ) btnValidar.click(); });
                 });
             }
