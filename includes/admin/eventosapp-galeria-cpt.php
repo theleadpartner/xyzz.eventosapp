@@ -1326,6 +1326,63 @@ if ( ! function_exists( 'evapp_galeria_get_or_create_asistente_from_ticket' ) ) 
     }
 }
 
+if ( ! function_exists( 'evapp_galeria_append_asistente_update_history_fallback' ) ) {
+    function evapp_galeria_append_asistente_update_history_fallback( $asistente_id, $entry ) {
+        $asistente_id = absint( $asistente_id );
+        if ( ! $asistente_id || get_post_type( $asistente_id ) !== 'eventosapp_asistente' ) {
+            return false;
+        }
+
+        $historial = get_post_meta( $asistente_id, '_asistente_historial_actualizaciones_tickets', true );
+        if ( ! is_array( $historial ) ) $historial = [];
+
+        $ticket_id  = absint( $entry['ticket_id'] ?? 0 );
+        $galeria_id = absint( $entry['galeria_id'] ?? 0 );
+        $evento_id  = absint( $entry['evento_id'] ?? 0 );
+
+        if ( ! $evento_id && $ticket_id ) {
+            $evento_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        }
+        if ( ! $evento_id && $galeria_id ) {
+            $evento_id = absint( get_post_meta( $galeria_id, '_galeria_evento_id', true ) );
+        }
+
+        $source = sanitize_key( $entry['source'] ?? 'galeria_envio_fotos_sin_marca' );
+        $source_label = ! empty( $entry['source_label'] )
+            ? sanitize_text_field( $entry['source_label'] )
+            : 'Flujo público de galería: solicitud de fotos sin marca de agua';
+
+        $historial[] = [
+            'fecha'             => current_time( 'mysql' ),
+            'tipo'              => 'correo_alternativo',
+            'accion'            => sanitize_key( $entry['accion'] ?? 'correo_alternativo_guardado' ),
+            'titulo'            => 'Correo alternativo capturado',
+            'resultado'         => sanitize_key( $entry['resultado'] ?? 'guardado' ),
+            'detalle'           => sanitize_textarea_field( $entry['detalle'] ?? 'El usuario solicitó recibir fotos sin marca de agua en un correo alternativo desde la galería pública. El correo principal no fue reemplazado.' ),
+            'source'            => $source,
+            'source_label'      => $source_label,
+            'flow'              => sanitize_key( $entry['flow'] ?? 'galeria_fotos_sin_marca' ),
+            'ticket_id'         => $ticket_id,
+            'ticket_title'      => ! empty( $entry['ticket_title'] ) ? sanitize_text_field( $entry['ticket_title'] ) : ( $ticket_id ? get_the_title( $ticket_id ) : '' ),
+            'evento_id'         => $evento_id,
+            'evento_title'      => ! empty( $entry['evento_title'] ) ? sanitize_text_field( $entry['evento_title'] ) : ( $evento_id ? get_the_title( $evento_id ) : '' ),
+            'galeria_id'        => $galeria_id,
+            'galeria_title'     => ! empty( $entry['galeria_title'] ) ? sanitize_text_field( $entry['galeria_title'] ) : ( $galeria_id ? get_the_title( $galeria_id ) : '' ),
+            'email_principal'   => sanitize_email( $entry['email_principal'] ?? get_post_meta( $asistente_id, '_asistente_email', true ) ),
+            'email_alternativo' => sanitize_email( $entry['email'] ?? $entry['email_alternativo'] ?? '' ),
+            'email_anterior'    => sanitize_email( $entry['email_anterior'] ?? '' ),
+            'cantidad_fotos'    => absint( $entry['cantidad_fotos'] ?? 0 ),
+            'user_id'           => get_current_user_id(),
+            'ip'                => evapp_galeria_request_ip(),
+        ];
+
+        if ( count( $historial ) > 150 ) $historial = array_slice( $historial, -150 );
+        update_post_meta( $asistente_id, '_asistente_historial_actualizaciones_tickets', $historial );
+
+        return true;
+    }
+}
+
 if ( ! function_exists( 'evapp_galeria_store_alternate_email_fallback' ) ) {
     function evapp_galeria_store_alternate_email_fallback( $asistente_id, $nuevo_email, $contexto = [] ) {
         $asistente_id = absint( $asistente_id );
@@ -1342,38 +1399,59 @@ if ( ! function_exists( 'evapp_galeria_store_alternate_email_fallback' ) ) {
         $principal_cmp = evapp_galeria_email_normalize_compare( $principal );
         $actual_cmp    = evapp_galeria_email_normalize_compare( $actual );
 
+        $base_entry = array_merge( $contexto, [
+            'email'           => $nuevo_email,
+            'email_anterior'  => $actual,
+            'email_principal' => $principal,
+            'source'          => $contexto['source'] ?? 'galeria_envio_fotos_sin_marca',
+            'source_label'    => $contexto['source_label'] ?? 'Flujo público de galería: solicitud de fotos sin marca de agua',
+            'flow'            => $contexto['flow'] ?? 'galeria_fotos_sin_marca',
+        ] );
+
         if ( $principal_cmp && $nuevo_cmp === $principal_cmp ) {
-            return [ 'saved' => false, 'reason' => 'same_as_primary', 'email' => $principal ];
+            if ( ! empty( $contexto['log_if_unchanged'] ) ) {
+                evapp_galeria_append_asistente_update_history_fallback( $asistente_id, array_merge( $base_entry, [
+                    'accion'    => 'correo_alternativo_no_guardado',
+                    'resultado' => 'coincide_con_principal',
+                    'detalle'   => 'El usuario indicó este correo desde el flujo, pero no se guardó como alternativo porque coincide con el correo principal del ticket/asistente. No se reemplazó el correo principal.',
+                ] ) );
+            }
+            return [ 'saved' => false, 'logged' => ! empty( $contexto['log_if_unchanged'] ), 'reason' => 'same_as_primary', 'email' => $principal ];
         }
 
         if ( $actual_cmp && $nuevo_cmp === $actual_cmp ) {
-            return [ 'saved' => false, 'reason' => 'same_as_existing_alternate', 'email' => $actual ];
+            if ( ! empty( $contexto['log_if_unchanged'] ) ) {
+                evapp_galeria_append_asistente_update_history_fallback( $asistente_id, array_merge( $base_entry, [
+                    'accion'    => 'correo_alternativo_ya_existia',
+                    'resultado' => 'ya_existia',
+                    'detalle'   => 'El usuario indicó este correo desde el flujo y ya estaba registrado como correo alternativo. No se creó un duplicado.',
+                ] ) );
+            }
+            return [ 'saved' => false, 'logged' => ! empty( $contexto['log_if_unchanged'] ), 'reason' => 'same_as_existing_alternate', 'email' => $actual ];
         }
 
         update_post_meta( $asistente_id, '_asistente_email_alternativo', $nuevo_email );
 
+        $entry = array_merge( $base_entry, [
+            'fecha'     => current_time( 'mysql' ),
+            'accion'    => 'correo_alternativo_guardado',
+            'resultado' => 'guardado',
+            'detalle'   => $contexto['detalle'] ?? 'El usuario solicitó recibir fotos sin marca de agua en un correo alternativo desde la galería pública. El correo principal del ticket/asistente no fue reemplazado.',
+            'user_id'   => get_current_user_id(),
+            'ip'        => evapp_galeria_request_ip(),
+        ] );
+
         $log = get_post_meta( $asistente_id, '_asistente_email_alternativo_log', true );
         if ( ! is_array( $log ) ) $log = [];
-
-        $entry = [
-            'fecha'          => current_time( 'mysql' ),
-            'email'          => $nuevo_email,
-            'email_anterior' => $actual,
-            'source'         => isset( $contexto['source'] ) ? sanitize_key( $contexto['source'] ) : 'galeria_envio_fotos',
-            'ticket_id'      => isset( $contexto['ticket_id'] ) ? absint( $contexto['ticket_id'] ) : 0,
-            'galeria_id'     => isset( $contexto['galeria_id'] ) ? absint( $contexto['galeria_id'] ) : 0,
-            'evento_id'      => isset( $contexto['evento_id'] ) ? absint( $contexto['evento_id'] ) : 0,
-            'user_id'        => get_current_user_id(),
-            'ip'             => evapp_galeria_request_ip(),
-        ];
-
         $log[] = $entry;
-        if ( count( $log ) > 50 ) $log = array_slice( $log, -50 );
+        if ( count( $log ) > 100 ) $log = array_slice( $log, -100 );
         update_post_meta( $asistente_id, '_asistente_email_alternativo_log', $log );
 
-        error_log( '[EventosApp Galería] Correo alternativo guardado por fallback | Asistente ID:' . $asistente_id . ' | Email:' . $nuevo_email );
+        evapp_galeria_append_asistente_update_history_fallback( $asistente_id, $entry );
 
-        return [ 'saved' => true, 'reason' => 'stored', 'email' => $nuevo_email, 'log_entry' => $entry ];
+        error_log( '[EventosApp Galería] Correo alternativo guardado por fallback e historial vía tickets actualizado | Asistente ID:' . $asistente_id . ' | Email:' . $nuevo_email );
+
+        return [ 'saved' => true, 'logged' => true, 'reason' => 'stored', 'email' => $nuevo_email, 'log_entry' => $entry ];
     }
 }
 
@@ -1511,10 +1589,18 @@ function evapp_galeria_enviar_fotos_sin_marca_handler() {
 
         if ( $asistente_id ) {
             $ctx = [
-                'source'     => 'galeria_envio_fotos_sin_marca',
-                'ticket_id'  => $ticket_id,
-                'galeria_id' => $galeria_id,
-                'evento_id'  => $evento_id,
+                'source'           => 'galeria_envio_fotos_sin_marca',
+                'source_label'     => 'Flujo público de galería: solicitud de fotos sin marca de agua',
+                'flow'             => 'galeria_fotos_sin_marca',
+                'ticket_id'        => $ticket_id,
+                'ticket_title'     => get_the_title( $ticket_id ),
+                'galeria_id'       => $galeria_id,
+                'galeria_title'    => get_the_title( $galeria_id ),
+                'evento_id'        => $evento_id,
+                'evento_title'     => $evento_id ? get_the_title( $evento_id ) : '',
+                'cantidad_fotos'   => count( $attachment_ids ),
+                'log_if_unchanged' => true,
+                'detalle'          => 'El usuario solicitó recibir fotos sin marca de agua en un correo alternativo desde la galería pública. El correo principal del ticket/asistente no fue reemplazado.',
             ];
 
             if ( function_exists( 'evapp_asistente_guardar_email_alternativo' ) ) {
