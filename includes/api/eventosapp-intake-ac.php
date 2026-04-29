@@ -115,6 +115,138 @@ if (!function_exists('evapp_boolish')) {
   }
 }
 
+/**
+ * Sanitiza claves de campos adicionales provenientes del webhook.
+ */
+if (!function_exists('evapp_sanitize_extra_key')) {
+  function evapp_sanitize_extra_key($key) : string {
+    $key = sanitize_key((string)$key);
+    return trim($key);
+  }
+}
+
+/**
+ * Sanitiza valores de extras manteniendo compatibilidad con listas/arrays.
+ */
+if (!function_exists('evapp_sanitize_extra_value')) {
+  function evapp_sanitize_extra_value($value) {
+    if (is_array($value)) {
+      $clean = [];
+      foreach ($value as $k => $v) {
+        $clean_key = is_string($k) ? sanitize_key($k) : $k;
+        $clean[$clean_key] = evapp_sanitize_extra_value($v);
+      }
+      return $clean;
+    }
+
+    if (is_bool($value)) {
+      return $value ? '1' : '0';
+    }
+
+    if ($value === null) {
+      return '';
+    }
+
+    return is_scalar($value) ? sanitize_text_field((string)$value) : '';
+  }
+}
+
+/**
+ * Integra un contenedor de extras al arreglo final.
+ */
+if (!function_exists('evapp_merge_extra_container')) {
+  function evapp_merge_extra_container(array &$extras, $container) : void {
+    if (!is_array($container)) return;
+
+    foreach ($container as $key => $value) {
+      $clean_key = evapp_sanitize_extra_key($key);
+      if ($clean_key === '') continue;
+      $extras[$clean_key] = evapp_sanitize_extra_value($value);
+    }
+  }
+}
+
+/**
+ * Recopila extras desde:
+ * - eventosapp_extra
+ * - extra
+ * - extras
+ * - custom_fields
+ * - contact.custom_fields
+ * - claves planas extra_xxx
+ * - campos adicionales configurados en el evento
+ */
+if (!function_exists('evapp_collect_payload_extras')) {
+  function evapp_collect_payload_extras(array $data, int $evento_id) : array {
+    $extras = [];
+
+    foreach (['eventosapp_extra', 'extra', 'extras', 'custom_fields'] as $container_key) {
+      if (isset($data[$container_key]) && is_array($data[$container_key])) {
+        evapp_merge_extra_container($extras, $data[$container_key]);
+      }
+    }
+
+    $contact_custom = evapp_arr_get($data, 'contact.custom_fields');
+    if (is_array($contact_custom)) {
+      evapp_merge_extra_container($extras, $contact_custom);
+    }
+
+    foreach ($data as $key => $value) {
+      if (!is_string($key)) continue;
+      if (strpos($key, 'extra_') !== 0) continue;
+
+      $clean_key = evapp_sanitize_extra_key(substr($key, 6));
+      if ($clean_key === '') continue;
+
+      $extras[$clean_key] = evapp_sanitize_extra_value($value);
+    }
+
+    // Los extras definidos en el evento mandan sobre el valor crudo porque pueden tener normalización por tipo.
+    if (function_exists('eventosapp_get_event_extra_fields')) {
+      $schema = (array) eventosapp_get_event_extra_fields($evento_id);
+      foreach ($schema as $fld) {
+        if (empty($fld['key'])) continue;
+
+        $k = evapp_sanitize_extra_key($fld['key']);
+        if ($k === '') continue;
+
+        $raw = evapp_pick_extra($data, $k);
+        if (function_exists('eventosapp_normalize_extra_value')) {
+          $val = eventosapp_normalize_extra_value($fld, $raw);
+        } else {
+          $val = evapp_sanitize_extra_value($raw);
+        }
+
+        $extras[$k] = evapp_sanitize_extra_value($val);
+      }
+    }
+
+    return $extras;
+  }
+}
+
+/**
+ * Guarda extras en formato individual y también en arreglo.
+ * El arreglo _eventosapp_ticket_extras es importante para condicionales/debug,
+ * especialmente cuando llegan extras en el payload aunque no estén visibles todavía en otros metaboxes.
+ */
+if (!function_exists('evapp_save_ticket_extras_from_payload')) {
+  function evapp_save_ticket_extras_from_payload(int $ticket_id, int $evento_id, array $data) : array {
+    $extras = evapp_collect_payload_extras($data, $evento_id);
+
+    foreach ($extras as $key => $value) {
+      $clean_key = evapp_sanitize_extra_key($key);
+      if ($clean_key === '') continue;
+      update_post_meta($ticket_id, '_eventosapp_extra_' . $clean_key, $value);
+    }
+
+    update_post_meta($ticket_id, '_eventosapp_ticket_extras', $extras);
+    update_post_meta($ticket_id, '_eventosapp_ticket_extras_last_sync', current_time('mysql'));
+
+    return $extras;
+  }
+}
+
 /** ---------------------------------------------------------------------------
  * Agrega una entrada al log de auditoría del ticket.
  * Guarda un historial de máximo 50 entradas en el meta _eventosapp_ticket_audit_log.
@@ -231,6 +363,9 @@ function eventosapp_ac_webhook_handler(\WP_REST_Request $req){
   $dedupe_pref = strtolower((string)($req->get_param('dedupe') ?? $pick(['dedupe','dedupe_mode'], 'external_id')));
   if (!in_array($dedupe_pref, ['external_id','email','none'], true)) $dedupe_pref = 'external_id';
   $force_new = evapp_boolish( $req->get_param('force_new') ?? $pick(['force_new','create_new','new'], '') );
+
+  // Permite devolver el detalle de evaluación de condicionales en la respuesta REST solo cuando se pida explícitamente.
+  $debug_conditionals = evapp_boolish($req->get_param('debug_conditionals') ?? $pick(['debug_conditionals','conditionals_debug'], ''));
 
   // Para deduplicar opcionalmente por envío de la plataforma
   $external_id = sanitize_text_field($pick(['submission_id','ac_submission_id','external_id','id','payload_id']));
@@ -451,13 +586,21 @@ if ($existing) {
    */
   do_action( 'eventosapp_ticket_updated_via_webhook', $ticket_id, $data );
 
-  return array_merge([
+  $response = array_merge([
     'ok'         => true,
     'ticket_id'  => $ticket_id,
     'updated'    => true,
     'fields_changed' => array_keys($changed_fields),
     'audit_logged'   => !empty($changed_fields),
+    'conditional_matched' => is_array($conditional_result_upd) && !empty($conditional_result_upd['matched_rule']),
+    'template_used' => (is_array($conditional_result_upd) && !empty($conditional_result_upd['template'])) ? $conditional_result_upd['template'] : 'default',
   ], $email_result);
+
+  if ($debug_conditionals && is_array($conditional_result_upd) && isset($conditional_result_upd['debug'])) {
+    $response['conditional_debug'] = $conditional_result_upd['debug'];
+  }
+
+  return $response;
 }
 
 
@@ -519,6 +662,9 @@ if ($existing) {
       update_post_meta($post_id, '_eventosapp_extra_'.$k, $val);
     }
   }
+
+  // Guardar también un índice consolidado de extras para que las condicionales puedan leerlos de forma confiable.
+  $webhook_extras_saved = evapp_save_ticket_extras_from_payload((int)$post_id, (int)$evento_id, $data);
 
   // Inicializar check-in por día
   $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
@@ -667,10 +813,16 @@ if ($existing) {
   do_action('eventosapp_ticket_created_via_webhook', $post_id, $data);
 
   // Respuesta REST incluyendo el resultado del correo
-  return array_merge(
+  $response = array_merge(
     ['ok'=>true, 'ticket_id'=>$post_id, 'public_id'=>$ticket_public_id],
     $email_result
   );
+
+  if ($debug_conditionals && is_array($conditional_result) && isset($conditional_result['debug'])) {
+    $response['conditional_debug'] = $conditional_result['debug'];
+  }
+
+  return $response;
 }
 
 /** Reutilizable: actualiza un ticket existente con nuevo payload */
@@ -705,6 +857,9 @@ function eventosapp_update_ticket_from_payload($post_id, array $flat, array $dat
       update_post_meta($post_id, '_eventosapp_extra_'.$k, $val);
     }
   }
+
+  // Guardar también un índice consolidado de extras para evaluación de condicionales y diagnóstico.
+  evapp_save_ticket_extras_from_payload((int)$post_id, (int)$evento_id, $data);
 
   // Recalcular accesos por localidad si hay esquema de sesiones
   $sesiones_upd = get_post_meta((int)$evento_id, '_eventosapp_sesiones_internas', true);
