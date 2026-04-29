@@ -17,6 +17,96 @@
 if (!defined('ABSPATH')) exit;
 
 /**
+ * Convierte un valor de condición a texto seguro para comparar.
+ * Permite que los campos tipo lista/array también puedan evaluarse.
+ */
+function eventosapp_condition_value_to_string($value) {
+    if (is_array($value)) {
+        $parts = [];
+        array_walk_recursive($value, function($item) use (&$parts) {
+            if (is_scalar($item) || $item === null) {
+                $parts[] = (string) $item;
+            }
+        });
+        return implode(', ', $parts);
+    }
+
+    if (is_bool($value)) {
+        return $value ? '1' : '0';
+    }
+
+    if ($value === null) {
+        return '';
+    }
+
+    return is_scalar($value) ? (string) $value : '';
+}
+
+/**
+ * Normaliza texto para condicionales:
+ * - quita HTML
+ * - decodifica entidades
+ * - elimina tildes cuando WordPress lo permite
+ * - convierte a minúsculas
+ * - compacta espacios
+ */
+function eventosapp_condition_normalize_text($value) {
+    $value = eventosapp_condition_value_to_string($value);
+    $value = html_entity_decode(wp_strip_all_tags($value), ENT_QUOTES, get_bloginfo('charset') ?: 'UTF-8');
+    $value = trim($value);
+
+    if (function_exists('remove_accents')) {
+        $value = remove_accents($value);
+    }
+
+    if (function_exists('mb_strtolower')) {
+        $value = mb_strtolower($value, 'UTF-8');
+    } else {
+        $value = strtolower($value);
+    }
+
+    $value = preg_replace('/\s+/u', ' ', $value);
+    return trim((string) $value);
+}
+
+/**
+ * Divide el valor configurado cuando se quieren aceptar varios valores.
+ * Uso recomendado en el metabox: Virtual|Presencial|Híbrido.
+ */
+function eventosapp_condition_compare_values($compare_value) {
+    $raw = eventosapp_condition_value_to_string($compare_value);
+    if ($raw === '') {
+        return [''];
+    }
+
+    $parts = preg_split('/\s*\|\s*/', $raw);
+    $parts = array_map('trim', is_array($parts) ? $parts : [$raw]);
+    $parts = array_values(array_filter($parts, function($item) {
+        return $item !== '';
+    }));
+
+    return $parts ?: [''];
+}
+
+/**
+ * Devuelve una etiqueta legible para logs y diagnóstico.
+ */
+function eventosapp_condition_operator_label($operator) {
+    $labels = [
+        'equals'       => 'Es igual a',
+        'not_equals'   => 'No es igual a',
+        'contains'     => 'Contiene',
+        'not_contains' => 'No contiene',
+        'starts_with'  => 'Comienza con',
+        'ends_with'    => 'Termina con',
+        'is_empty'     => 'Está vacío',
+        'is_not_empty' => 'No está vacío',
+    ];
+
+    return $labels[$operator] ?? $operator;
+}
+
+/**
  * Obtiene las plantillas de correo disponibles
  */
 function eventosapp_get_available_email_templates() {
@@ -60,59 +150,129 @@ function eventosapp_get_conditional_fields($event_id) {
         'localidad' => 'Localidad',
     ];
 
-    // Agregar campos extras del evento si existen
+    // Alias aceptados por el webhook para evitar que una regla vieja quede apuntando a un campo vacío.
+    $fields['first_name']       = 'Nombre (alias webhook first_name)';
+    $fields['last_name']        = 'Apellido (alias webhook last_name)';
+    $fields['phone']            = 'Teléfono (alias webhook phone)';
+    $fields['company']          = 'Empresa (alias webhook company)';
+    $fields['city']             = 'Ciudad (alias webhook city)';
+    $fields['country']          = 'País (alias webhook country)';
+    $fields['ticket_localidad'] = 'Localidad (alias webhook ticket_localidad)';
+    $fields['external_id']      = 'External ID / ID externo';
+
+    // Agregar campos extras del evento si existen.
     if (function_exists('eventosapp_get_event_extra_fields') && $event_id) {
         $extras = eventosapp_get_event_extra_fields($event_id);
         if (is_array($extras)) {
             foreach ($extras as $extra) {
-                if (isset($extra['key']) && isset($extra['label'])) {
-                    $fields['extra_' . $extra['key']] = $extra['label'] . ' (extra)';
+                if (empty($extra['key'])) {
+                    continue;
                 }
+
+                $key   = sanitize_key((string) $extra['key']);
+                $label = !empty($extra['label']) ? (string) $extra['label'] : $key;
+
+                if ($key === '') {
+                    continue;
+                }
+
+                $fields['extra_' . $key] = $label . ' (extra)';
             }
         }
     }
 
-    return $fields;
+    /**
+     * Permite que otros módulos agreguen campos a las condicionales.
+     */
+    $fields = apply_filters('eventosapp_webhook_conditional_fields', $fields, $event_id);
+
+    return is_array($fields) ? $fields : [];
 }
 
 /**
- * Obtiene el valor de un campo del ticket
+ * Obtiene el valor de un campo del ticket.
+ *
+ * Importante:
+ * - Las condicionales se evalúan después de crear/actualizar el ticket.
+ * - Por eso aquí se lee desde post meta, no desde el payload crudo.
+ * - Se agregan alias para los nombres usados por el webhook: first_name, company, city, etc.
+ * - Para extras se soporta tanto extra_modalidad como modalidad.
  */
 function eventosapp_get_ticket_field_value($ticket_id, $field_key) {
-    // Mapeo de campos base a sus meta_keys
-    $meta_map = [
-        'email'     => '_eventosapp_asistente_email',
-        'nombre'    => '_eventosapp_asistente_nombre',
-        'apellido'  => '_eventosapp_asistente_apellido',
-        'cc'        => '_eventosapp_asistente_cc',
-        'nit'       => '_eventosapp_asistente_nit',
-        'empresa'   => '_eventosapp_asistente_empresa',
-        'cargo'     => '_eventosapp_asistente_cargo',
-        'tel'       => '_eventosapp_asistente_tel',
-        'ciudad'    => '_eventosapp_asistente_ciudad',
-        'pais'      => '_eventosapp_asistente_pais',
-        'localidad' => '_eventosapp_asistente_localidad',
+    $field_key = sanitize_text_field((string) $field_key);
+
+    // Alias de payload webhook -> campos internos del ticket.
+    $aliases = [
+        'first_name'       => 'nombre',
+        'firstname'        => 'nombre',
+        'last_name'        => 'apellido',
+        'lastname'         => 'apellido',
+        'phone'            => 'tel',
+        'telefono'         => 'tel',
+        'celular'          => 'tel',
+        'company'          => 'empresa',
+        'city'             => 'ciudad',
+        'country'          => 'pais',
+        'ticket_localidad' => 'localidad',
+        'submission_id'    => 'external_id',
+        'ac_submission_id' => 'external_id',
+        'payload_id'       => 'external_id',
     ];
 
-    // Si es un campo base
-    if (isset($meta_map[$field_key])) {
-        return (string) get_post_meta($ticket_id, $meta_map[$field_key], true);
+    if (isset($aliases[$field_key])) {
+        $field_key = $aliases[$field_key];
     }
 
-    // Si es un campo extra (formato: extra_nombredelcampo)
-    if (strpos($field_key, 'extra_') === 0) {
-        $extra_key = substr($field_key, 6); // Quitar 'extra_'
+    // Mapeo de campos base a sus meta_keys.
+    $meta_map = [
+        'email'       => '_eventosapp_asistente_email',
+        'correo'      => '_eventosapp_asistente_email',
+        'nombre'      => '_eventosapp_asistente_nombre',
+        'apellido'    => '_eventosapp_asistente_apellido',
+        'cc'          => '_eventosapp_asistente_cc',
+        'cedula'      => '_eventosapp_asistente_cc',
+        'nit'         => '_eventosapp_asistente_nit',
+        'empresa'     => '_eventosapp_asistente_empresa',
+        'cargo'       => '_eventosapp_asistente_cargo',
+        'tel'         => '_eventosapp_asistente_tel',
+        'ciudad'      => '_eventosapp_asistente_ciudad',
+        'pais'        => '_eventosapp_asistente_pais',
+        'localidad'   => '_eventosapp_asistente_localidad',
+        'external_id' => '_eventosapp_external_id',
+    ];
 
-        // Formato usado por eventosapp-intake-ac.php: meta individual por campo
+    // Si es un campo base.
+    if (isset($meta_map[$field_key])) {
+        return eventosapp_condition_value_to_string(get_post_meta($ticket_id, $meta_map[$field_key], true));
+    }
+
+    // Si es un campo extra (formato: extra_nombredelcampo).
+    $extra_key = $field_key;
+    if (strpos($extra_key, 'extra_') === 0) {
+        $extra_key = substr($extra_key, 6);
+    }
+
+    $extra_key = sanitize_key((string) $extra_key);
+    if ($extra_key !== '') {
+        // Formato principal usado por eventosapp-intake-ac.php: meta individual por campo.
         $value = get_post_meta($ticket_id, '_eventosapp_extra_' . $extra_key, true);
-        if ($value !== '' && $value !== false) {
-            return (string) $value;
+        if ($value !== '' && $value !== false && $value !== null) {
+            return eventosapp_condition_value_to_string($value);
         }
 
-        // Fallback: formato alternativo de array (por si se usó el otro sistema)
+        // Fallback: formato array para extras capturados desde webhook.
         $extras = get_post_meta($ticket_id, '_eventosapp_ticket_extras', true);
-        if (is_array($extras) && isset($extras[$extra_key])) {
-            return (string) $extras[$extra_key];
+        if (is_array($extras)) {
+            if (array_key_exists($extra_key, $extras)) {
+                return eventosapp_condition_value_to_string($extras[$extra_key]);
+            }
+
+            // Fallback defensivo: búsqueda sin distinguir mayúsculas/minúsculas.
+            foreach ($extras as $key => $item_value) {
+                if (sanitize_key((string) $key) === $extra_key) {
+                    return eventosapp_condition_value_to_string($item_value);
+                }
+            }
         }
     }
 
@@ -120,38 +280,80 @@ function eventosapp_get_ticket_field_value($ticket_id, $field_key) {
 }
 
 /**
- * Evalúa un operador de comparación
+ * Evalúa un operador de comparación.
+ *
+ * La comparación ahora es tolerante a:
+ * - mayúsculas/minúsculas
+ * - tildes: "sí" y "si" se consideran equivalentes
+ * - espacios duplicados o invisibles
+ * - valores tipo array/lista
  */
 function eventosapp_evaluate_condition_operator($field_value, $operator, $compare_value) {
-    $field_value   = is_scalar($field_value) ? trim((string) $field_value) : '';
-    $compare_value = is_scalar($compare_value) ? trim((string) $compare_value) : '';
+    $raw_field   = trim(eventosapp_condition_value_to_string($field_value));
+    $raw_compare = trim(eventosapp_condition_value_to_string($compare_value));
+
+    $field_norm = eventosapp_condition_normalize_text($raw_field);
+    $compare_values = eventosapp_condition_compare_values($raw_compare);
+    $compare_norms = array_map('eventosapp_condition_normalize_text', $compare_values);
 
     switch ($operator) {
         case 'equals':
-            return strcasecmp($field_value, $compare_value) === 0;
+            foreach ($compare_norms as $compare_norm) {
+                if ($field_norm === $compare_norm) {
+                    return true;
+                }
+            }
+            return false;
 
         case 'not_equals':
-            return strcasecmp($field_value, $compare_value) !== 0;
+            foreach ($compare_norms as $compare_norm) {
+                if ($field_norm === $compare_norm) {
+                    return false;
+                }
+            }
+            return true;
 
         case 'contains':
-            return stripos($field_value, $compare_value) !== false;
+            foreach ($compare_norms as $compare_norm) {
+                if ($compare_norm !== '' && strpos($field_norm, $compare_norm) !== false) {
+                    return true;
+                }
+            }
+            return false;
 
         case 'not_contains':
-            return stripos($field_value, $compare_value) === false;
+            foreach ($compare_norms as $compare_norm) {
+                if ($compare_norm !== '' && strpos($field_norm, $compare_norm) !== false) {
+                    return false;
+                }
+            }
+            return true;
 
         case 'starts_with':
-            return stripos($field_value, $compare_value) === 0;
+            foreach ($compare_norms as $compare_norm) {
+                if ($compare_norm !== '' && strpos($field_norm, $compare_norm) === 0) {
+                    return true;
+                }
+            }
+            return false;
 
         case 'ends_with':
-            $len = strlen($compare_value);
-            if ($len === 0) return true;
-            return strcasecmp(substr($field_value, -$len), $compare_value) === 0;
+            foreach ($compare_norms as $compare_norm) {
+                if ($compare_norm === '') {
+                    continue;
+                }
+                $len = strlen($compare_norm);
+                if (substr($field_norm, -$len) === $compare_norm) {
+                    return true;
+                }
+            }
+            return false;
 
         case 'is_empty':
-            return $field_value === '';
+            return $raw_field === '';
 
         case 'is_not_empty':
-            return $field_value !== '';
+            return $raw_field !== '';
 
         default:
             return false;
@@ -232,42 +434,75 @@ function eventosapp_normalize_webhook_rule($rule) {
 }
 
 /**
- * Evalúa una sola regla contra un ticket
+ * Evalúa una regla y devuelve detalle completo para depurar.
  */
-function eventosapp_evaluate_webhook_rule($ticket_id, $rule) {
+function eventosapp_evaluate_webhook_rule_detail($ticket_id, $rule) {
     $rule = eventosapp_normalize_webhook_rule($rule);
     if (!$rule) {
-        return false;
+        return [
+            'matched'    => false,
+            'match_mode' => 'all',
+            'conditions' => [],
+            'rule'       => null,
+        ];
     }
 
     $conditions = isset($rule['conditions']) && is_array($rule['conditions']) ? $rule['conditions'] : [];
     if (empty($conditions)) {
-        return false;
+        return [
+            'matched'    => false,
+            'match_mode' => isset($rule['match']) ? $rule['match'] : 'all',
+            'conditions' => [],
+            'rule'       => $rule,
+        ];
     }
 
     $match_mode = isset($rule['match']) && $rule['match'] === 'any' ? 'any' : 'all';
+    $details    = [];
     $results    = [];
 
     foreach ($conditions as $condition) {
-        $field_value   = eventosapp_get_ticket_field_value($ticket_id, $condition['field']);
+        $field_key     = isset($condition['field']) ? (string) $condition['field'] : '';
+        $operator      = isset($condition['operator']) ? (string) $condition['operator'] : '';
+        $field_value   = eventosapp_get_ticket_field_value($ticket_id, $field_key);
         $compare_value = isset($condition['value']) ? $condition['value'] : '';
+        $matched       = eventosapp_evaluate_condition_operator($field_value, $operator, $compare_value);
 
-        $results[] = eventosapp_evaluate_condition_operator(
-            $field_value,
-            $condition['operator'],
-            $compare_value
-        );
+        $results[] = $matched;
+        $details[] = [
+            'field'               => $field_key,
+            'operator'            => $operator,
+            'operator_label'      => eventosapp_condition_operator_label($operator),
+            'expected'            => eventosapp_condition_value_to_string($compare_value),
+            'actual'              => eventosapp_condition_value_to_string($field_value),
+            'expected_normalized' => eventosapp_condition_normalize_text($compare_value),
+            'actual_normalized'   => eventosapp_condition_normalize_text($field_value),
+            'matched'             => $matched,
+        ];
     }
 
-    if ($match_mode === 'any') {
-        return in_array(true, $results, true);
-    }
+    $matched_rule = ($match_mode === 'any')
+        ? in_array(true, $results, true)
+        : !in_array(false, $results, true);
 
-    return !in_array(false, $results, true);
+    return [
+        'matched'    => $matched_rule,
+        'match_mode' => $match_mode,
+        'conditions' => $details,
+        'rule'       => $rule,
+    ];
 }
 
 /**
- * Evalúa las condicionales del webhook para un ticket
+ * Evalúa una sola regla contra un ticket.
+ */
+function eventosapp_evaluate_webhook_rule($ticket_id, $rule) {
+    $detail = eventosapp_evaluate_webhook_rule_detail($ticket_id, $rule);
+    return !empty($detail['matched']);
+}
+
+/**
+ * Evalúa las condicionales del webhook para un ticket.
  * Retorna: ['send_email' => bool, 'template' => string|null, 'matched_rule' => array|null]
  */
 function eventosapp_evaluate_webhook_conditionals($ticket_id, $event_id) {
@@ -275,35 +510,66 @@ function eventosapp_evaluate_webhook_conditionals($ticket_id, $event_id) {
         'send_email'   => true,
         'template'     => null, // null = usar plantilla por defecto del evento
         'matched_rule' => null,
+        'debug'        => [
+            'enabled'       => false,
+            'rules_count'   => 0,
+            'matched_index' => null,
+            'rules'         => [],
+        ],
     ];
 
-    // Obtener configuración de condicionales del evento
+    $ticket_id = absint($ticket_id);
+    $event_id  = absint($event_id);
+
+    // Obtener configuración de condicionales del evento.
     $config = get_post_meta($event_id, '_eventosapp_webhook_conditionals', true);
 
-    // Si no hay configuración o no está habilitada, comportamiento por defecto
     if (!is_array($config) || empty($config['enabled'])) {
+        update_post_meta($ticket_id, '_eventosapp_webhook_conditional_last_debug', $default_result['debug']);
         return $default_result;
     }
 
     $rules = isset($config['rules']) && is_array($config['rules']) ? $config['rules'] : [];
+    $debug = [
+        'enabled'       => true,
+        'rules_count'   => count($rules),
+        'matched_index' => null,
+        'rules'         => [],
+        'evaluated_at'  => current_time('mysql'),
+    ];
 
-    // Si no hay reglas, comportamiento por defecto
     if (empty($rules)) {
+        $default_result['debug'] = $debug;
+        update_post_meta($ticket_id, '_eventosapp_webhook_conditional_last_debug', $debug);
         return $default_result;
     }
 
-    // Evaluar reglas en orden (primera coincidencia gana)
+    // Evaluar reglas en orden (primera coincidencia gana).
     foreach ($rules as $index => $raw_rule) {
         $rule = eventosapp_normalize_webhook_rule($raw_rule);
         if (!$rule) {
+            $debug['rules'][] = [
+                'index'   => (int) $index,
+                'valid'   => false,
+                'matched' => false,
+                'reason'  => 'Regla incompleta o inválida',
+            ];
             continue;
         }
 
-        $condition_met = eventosapp_evaluate_webhook_rule($ticket_id, $rule);
+        $detail = eventosapp_evaluate_webhook_rule_detail($ticket_id, $rule);
+        $debug['rules'][] = array_merge([
+            'index' => (int) $index,
+            'valid' => true,
+        ], $detail);
 
-        // Si la regla coincide, ejecutar la acción
-        if ($condition_met) {
-            $result = ['matched_rule' => $rule];
+        if (!empty($detail['matched'])) {
+            $debug['matched_index'] = (int) $index;
+
+            $result = [
+                'matched_rule' => $rule,
+                'debug'        => $debug,
+            ];
 
             if ($rule['action'] === 'no_email') {
                 $result['send_email'] = false;
@@ -312,14 +578,29 @@ function eventosapp_evaluate_webhook_conditionals($ticket_id, $event_id) {
                 $result['send_email'] = true;
                 $result['template']   = !empty($rule['template']) ? $rule['template'] : null;
             } else {
+                $default_result['debug'] = $debug;
+                update_post_meta($ticket_id, '_eventosapp_webhook_conditional_last_debug', $debug);
                 return $default_result;
             }
+
+            update_post_meta($ticket_id, '_eventosapp_webhook_conditional_last_debug', $debug);
+            update_post_meta($ticket_id, '_eventosapp_webhook_conditional_matched', $rule);
+            update_post_meta($ticket_id, '_eventosapp_webhook_conditional_matched_index', (int) $index);
+
+            error_log('[EventosApp] Webhook conditional MATCH ticket=' . $ticket_id . ' event=' . $event_id . ' rule_index=' . $index . ' action=' . $rule['action'] . (!empty($rule['template']) ? ' template=' . $rule['template'] : ''));
 
             return $result;
         }
     }
 
-    // Ninguna regla coincidió, comportamiento por defecto
+    // Ninguna regla coincidió, comportamiento por defecto.
+    $default_result['debug'] = $debug;
+    update_post_meta($ticket_id, '_eventosapp_webhook_conditional_last_debug', $debug);
+    delete_post_meta($ticket_id, '_eventosapp_webhook_conditional_matched');
+    delete_post_meta($ticket_id, '_eventosapp_webhook_conditional_matched_index');
+
+    error_log('[EventosApp] Webhook conditional NO MATCH ticket=' . $ticket_id . ' event=' . $event_id . ' rules=' . count($rules));
+
     return $default_result;
 }
 
@@ -420,7 +701,7 @@ function eventosapp_render_single_webhook_rule($index, $rule, $available_fields,
                                 name="evapp_cond_rules[<?php echo esc_attr($index); ?>][conditions][<?php echo esc_attr($condition_index); ?>][value]"
                                 value="<?php echo esc_attr(isset($condition['value']) ? $condition['value'] : ''); ?>"
                                 placeholder="Ej: si, premium, test, Barranquilla, etc.">
-                            <span class="help-text">No distingue mayúsculas/minúsculas. Deja vacío si el operador es "está vacío" o "no está vacío".</span>
+                            <span class="help-text">No distingue mayúsculas/minúsculas ni tildes. Para aceptar varios valores usa barra vertical: Virtual|Presencial. Deja vacío si el operador es "está vacío" o "no está vacío".</span>
                         </div>
                     </div>
                 </div>
@@ -559,6 +840,37 @@ function eventosapp_render_webhook_conditionals_metabox($post) {
             <strong>Múltiples criterios por regla:</strong> Dentro de cada regla puedes agregar varios criterios y escoger si deben cumplirse <strong>TODOS</strong> o <strong>AL MENOS UNO</strong>.
         </div>
 
+        <?php
+        $last_ticket_debug = null;
+        $latest_ticket_ids = get_posts([
+            'post_type'      => 'eventosapp_ticket',
+            'post_status'    => 'any',
+            'fields'         => 'ids',
+            'posts_per_page' => 1,
+            'meta_query'     => [
+                [
+                    'key'   => '_eventosapp_ticket_evento_id',
+                    'value' => $post->ID,
+                ],
+            ],
+            'orderby'        => 'ID',
+            'order'          => 'DESC',
+            'no_found_rows'  => true,
+        ]);
+        if (!empty($latest_ticket_ids[0])) {
+            $last_ticket_debug = get_post_meta((int) $latest_ticket_ids[0], '_eventosapp_webhook_conditional_last_debug', true);
+        }
+        ?>
+        <div class="intro" style="border-left-color:#72aee6;">
+            <strong>Diagnóstico rápido:</strong><br>
+            Condicionales guardadas: <strong><?php echo $enabled ? 'activadas' : 'desactivadas'; ?></strong> · Reglas guardadas: <strong><?php echo esc_html(count($rules)); ?></strong>.<br>
+            <?php if (is_array($last_ticket_debug)): ?>
+                Última evaluación detectada: reglas evaluadas <strong><?php echo esc_html(isset($last_ticket_debug['rules_count']) ? (int) $last_ticket_debug['rules_count'] : 0); ?></strong> · regla coincidente: <strong><?php echo isset($last_ticket_debug['matched_index']) && $last_ticket_debug['matched_index'] !== null ? '#' . esc_html((int) $last_ticket_debug['matched_index'] + 1) : 'ninguna'; ?></strong>.
+            <?php else: ?>
+                Todavía no hay diagnóstico guardado en tickets recientes de este evento. Se generará automáticamente al recibir el próximo webhook.
+            <?php endif; ?>
+        </div>
+
         <div class="enable-toggle">
             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                 <input type="checkbox" name="evapp_cond_enabled" value="1" <?php checked($enabled); ?> id="evapp_cond_enabled">
@@ -645,7 +957,7 @@ function eventosapp_render_webhook_conditionals_metabox($post) {
                         '<div class="field-group value-field">' +
                             '<label>Valor a comparar</label>' +
                             '<input type="text" name="evapp_cond_rules[' + ruleIdx + '][conditions][' + conditionIdx + '][value]" placeholder="Ej: si, premium, test, Barranquilla, etc.">' +
-                            '<span class="help-text">No distingue mayúsculas/minúsculas. Deja vacío si el operador es "está vacío" o "no está vacío".</span>' +
+                            '<span class="help-text">No distingue mayúsculas/minúsculas ni tildes. Para aceptar varios valores usa barra vertical: Virtual|Presencial. Deja vacío si el operador es "está vacío" o "no está vacío".</span>' +
                         '</div>' +
                     '</div>' +
                 '</div>';
@@ -881,8 +1193,9 @@ add_action('save_post_eventosapp_event', function($post_id) {
 
     // Guardar configuración
     $config = [
-        'enabled' => $enabled,
-        'rules'   => $rules,
+        'enabled'    => $enabled,
+        'rules'      => $rules,
+        'updated_at' => current_time('mysql'),
     ];
 
     update_post_meta($post_id, '_eventosapp_webhook_conditionals', $config);
