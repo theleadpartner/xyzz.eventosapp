@@ -4,7 +4,7 @@
  * Sistema de actualización por lote en segundo plano
  * 
  * @package EventosApp
- * @version 3.0.2 - CORREGIDO
+ * @version 4.0.0 - Refresh personalizado con selección de recursos
  */
 
 if (!defined('ABSPATH')) exit;
@@ -86,6 +86,21 @@ class EventosApp_Batch_Processor {
         // Verificar si hay un proceso en curso
         $current_process = $this->get_current_process();
         
+        // Recursos disponibles para refresh personalizado.
+        // La función principal vive en eventosapp-batch-refresh.php; se deja fallback para evitar errores si el archivo aún no cargó.
+        $available_assets = function_exists('eventosapp_batch_refresh_available_assets')
+            ? eventosapp_batch_refresh_available_assets()
+            : [
+                'qrs'            => ['label' => 'Todos los QR', 'description' => 'Regenera todos los QR del ticket.'],
+                'pdf'            => ['label' => 'PDF', 'description' => 'Regenera el PDF del ticket.'],
+                'ics'            => ['label' => 'ICS', 'description' => 'Regenera el archivo calendario ICS.'],
+                'android_wallet' => ['label' => 'Android Wallet / Google Wallet', 'description' => 'Regenera el enlace de Google Wallet.'],
+                'apple_wallet'   => ['label' => 'Apple Wallet', 'description' => 'Regenera el archivo PKPASS de Apple Wallet.'],
+                'search_blob'    => ['label' => 'Índice de búsqueda', 'description' => 'Reconstruye el índice interno de búsqueda.'],
+            ];
+
+        $custom_asset_keys = ['qrs', 'pdf', 'ics', 'android_wallet', 'apple_wallet', 'search_blob'];
+        
         // Crear nonce
         $nonce = wp_create_nonce('eventosapp_batch_processor');
         $ajax_url = admin_url('admin-ajax.php');
@@ -141,18 +156,55 @@ class EventosApp_Batch_Processor {
                                             <input type="radio" name="batch_mode" id="mode-complete" value="complete" checked>
                                             <strong>Regeneración Completa</strong>
                                             <p class="description" style="margin-left: 25px;">
-                                                Regenera TODO: Wallets (Google + Apple), PDF, ICS, QR codes y búsqueda
+                                                Regenera TODO lo activo para el evento: Wallets (Google + Apple), PDF, ICS, QR codes e índice de búsqueda. Si ya existe un enlace, se conserva.
                                             </p>
                                         </label>
                                         
-                                        <label style="display: block;">
+                                        <label style="display: block; margin-bottom: 10px;">
                                             <input type="radio" name="batch_mode" id="mode-qr-missing" value="qr_missing">
                                             <strong>Solo QR Faltantes</strong>
                                             <p class="description" style="margin-left: 25px;">
-                                                Genera únicamente los QR nuevos que no existen. No toca QR existentes ni legacy.
+                                                Crea únicamente los QR que falten o cuyo archivo físico ya no exista. No toca QR existentes válidos.
+                                            </p>
+                                        </label>
+
+                                        <label style="display: block;">
+                                            <input type="radio" name="batch_mode" id="mode-custom" value="custom">
+                                            <strong>Refresh Personalizado</strong>
+                                            <p class="description" style="margin-left: 25px;">
+                                                Permite escoger exactamente qué recursos regenerar: QRs, PDF, ICS, Android Wallet, Apple Wallet e índice de búsqueda.
                                             </p>
                                         </label>
                                     </fieldset>
+                                </td>
+                            </tr>
+
+                            <tr id="custom-assets-row" style="display: none;">
+                                <th scope="row">
+                                    <label>Recursos a regenerar</label>
+                                </th>
+                                <td>
+                                    <div id="batch-custom-assets-panel" class="batch-custom-assets-panel">
+                                        <?php foreach ($custom_asset_keys as $asset_key): ?>
+                                            <?php if (empty($available_assets[$asset_key])) continue; ?>
+                                            <?php
+                                            $asset_label = isset($available_assets[$asset_key]['label']) ? $available_assets[$asset_key]['label'] : $asset_key;
+                                            $asset_description = isset($available_assets[$asset_key]['description']) ? $available_assets[$asset_key]['description'] : '';
+                                            ?>
+                                            <label class="batch-asset-option">
+                                                <input type="checkbox" class="batch-custom-asset" name="batch_assets[]" value="<?php echo esc_attr($asset_key); ?>" checked <?php echo $current_process ? 'disabled' : ''; ?>>
+                                                <span>
+                                                    <strong><?php echo esc_html($asset_label); ?></strong>
+                                                    <?php if ($asset_description): ?>
+                                                        <small><?php echo esc_html($asset_description); ?></small>
+                                                    <?php endif; ?>
+                                                </span>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <p class="description">
+                                        En refresh personalizado solo se procesarán los recursos marcados. Si el archivo no existe se crea; si ya existe se regenera conservando la URL pública previa.
+                                    </p>
                                 </td>
                             </tr>
                             
@@ -351,6 +403,38 @@ class EventosApp_Batch_Processor {
         
         .button .dashicons {
             margin-top: 2px;
+        }
+        
+        .batch-custom-assets-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 10px;
+            margin: 8px 0 10px;
+        }
+
+        .batch-asset-option {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 12px;
+            background: #f6f7f7;
+            border: 1px solid #dcdcde;
+            border-radius: 4px;
+        }
+
+        .batch-asset-option input {
+            margin-top: 2px;
+        }
+
+        .batch-asset-option span {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .batch-asset-option small {
+            color: #646970;
+            line-height: 1.35;
         }
         
         #ticket-count-info {
@@ -572,6 +656,7 @@ class EventosApp_Batch_Processor {
             
             const ajaxUrl = <?php echo json_encode($ajax_url); ?>;
             const nonce = <?php echo json_encode($nonce); ?>;
+            const availableAssets = <?php echo wp_json_encode($available_assets); ?>;
             
             console.log('AJAX URL:', ajaxUrl);
             console.log('Nonce:', nonce);
@@ -609,6 +694,13 @@ class EventosApp_Batch_Processor {
                     addLog('error', 'Error al contar tickets: ' + error);
                 });
             });
+
+            // Evento: Cambiar modo para mostrar/ocultar recursos personalizados
+            $('input[name="batch_mode"]').on('change', function() {
+                toggleCustomAssets();
+            });
+
+            toggleCustomAssets();
             
             // Evento: Iniciar proceso
             $('#batch-start-btn').on('click', function() {
@@ -617,22 +709,33 @@ class EventosApp_Batch_Processor {
                 const eventId = $('#batch-event-select').val();
                 const mode = $('input[name="batch_mode"]:checked').val();
                 const batchSize = $('#batch-size-select').val();
+                const selectedAssets = mode === 'custom' ? getSelectedAssets() : [];
                 
-                console.log('Parámetros:', { eventId, mode, batchSize });
+                console.log('Parámetros:', { eventId, mode, batchSize, selectedAssets });
                 
                 if (!eventId) {
                     alert('Por favor selecciona un evento');
                     return;
                 }
-                
-                const eventName = $('#batch-event-select option:selected').text();
-                const modeName = mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes';
-                
-                if (!confirm('¿Iniciar actualización por lote?\n\nEvento: ' + eventName + '\nModo: ' + modeName)) {
+
+                if (mode === 'custom' && selectedAssets.length === 0) {
+                    alert('Selecciona al menos un recurso para ejecutar el refresh personalizado.');
                     return;
                 }
                 
-                startBatchProcess(eventId, mode, batchSize);
+                const eventName = $('#batch-event-select option:selected').text();
+                const modeName = getModeName(mode, selectedAssets);
+                let confirmMessage = '¿Iniciar actualización por lote?\n\nEvento: ' + eventName + '\nModo: ' + modeName;
+
+                if (mode === 'custom') {
+                    confirmMessage += '\nRecursos: ' + getAssetLabels(selectedAssets).join(', ');
+                }
+                
+                if (!confirm(confirmMessage)) {
+                    return;
+                }
+                
+                startBatchProcess(eventId, mode, batchSize, selectedAssets);
             });
             
             // Evento: Cancelar proceso
@@ -666,11 +769,13 @@ class EventosApp_Batch_Processor {
             /**
              * Iniciar proceso de actualización por lote
              */
-            function startBatchProcess(eventId, mode, batchSize) {
+            function startBatchProcess(eventId, mode, batchSize, selectedAssets) {
+                selectedAssets = Array.isArray(selectedAssets) ? selectedAssets : [];
                 console.log('=== INICIANDO PROCESO ===');
                 console.log('Event ID:', eventId);
                 console.log('Mode:', mode);
                 console.log('Batch Size:', batchSize);
+                console.log('Selected Assets:', selectedAssets);
                 
                 addLog('batch', '═══════════════════════════════════════════════════');
                 addLog('batch', 'INICIANDO PROCESO DE ACTUALIZACIÓN POR LOTE');
@@ -688,7 +793,8 @@ class EventosApp_Batch_Processor {
                         nonce: nonce,
                         event_id: eventId,
                         mode: mode,
-                        batch_size: batchSize
+                        batch_size: batchSize,
+                        assets: selectedAssets
                     },
                     success: function(response) {
                         console.log('Respuesta de inicio:', response);
@@ -699,7 +805,10 @@ class EventosApp_Batch_Processor {
                             
                             addLog('success', 'Proceso iniciado correctamente');
                             addLog('info', 'Evento: ' + $('#batch-event-select option:selected').text());
-                            addLog('info', 'Modo: ' + (mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes'));
+                            addLog('info', 'Modo: ' + getModeName(currentProcess.mode, currentProcess.assets || selectedAssets));
+                            if (currentProcess.mode === 'custom') {
+                                addLog('info', 'Recursos seleccionados: ' + getAssetLabels(currentProcess.assets || selectedAssets).join(', '));
+                            }
                             addLog('info', 'Total de tickets: ' + currentProcess.total);
                             addLog('info', 'Tamaño de lote: ' + batchSize);
                             
@@ -850,6 +959,8 @@ class EventosApp_Batch_Processor {
                 
                 // Resetear modo a completo
                 $('#mode-complete').prop('checked', true);
+                $('.batch-custom-asset').prop('checked', true);
+                toggleCustomAssets();
                 
                 // Resetear tamaño de lote al recomendado
                 $('#batch-size-select').val('50');
@@ -909,6 +1020,23 @@ class EventosApp_Batch_Processor {
                 console.log('Cargando proceso existente:', process);
                 currentProcess = process;
                 startTime = new Date(process.start_time * 1000);
+
+                if (process.event_id) {
+                    $('#batch-event-select').val(String(process.event_id));
+                }
+
+                if (process.mode) {
+                    $('input[name="batch_mode"][value="' + process.mode + '"]').prop('checked', true);
+                }
+
+                if (process.mode === 'custom' && Array.isArray(process.assets)) {
+                    $('.batch-custom-asset').prop('checked', false);
+                    process.assets.forEach(function(asset) {
+                        $('.batch-custom-asset[value="' + asset + '"]').prop('checked', true);
+                    });
+                }
+
+                toggleCustomAssets();
                 updateUI();
                 updateProgress();
                 
@@ -927,12 +1055,12 @@ class EventosApp_Batch_Processor {
                     console.log('Mostrando panel de progreso. Estado:', currentProcess.status);
                     
                     // Deshabilitar configuración
-                    $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn').prop('disabled', true);
+                    $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn, .batch-custom-asset').prop('disabled', true);
                     $('#batch-progress-panel').show(); // FORZAR mostrar el panel
                     
                     // Actualizar información del evento
                     $('#progress-event-name').text($('#batch-event-select option:selected').text());
-                    $('#progress-mode').text(currentProcess.mode === 'complete' ? 'Regeneración Completa' : 'Solo QR Faltantes');
+                    $('#progress-mode').text(getModeName(currentProcess.mode, currentProcess.assets || []));
                     
                     // Estado y manejo de botones según estado del proceso
                     const statusBadge = $('#progress-status');
@@ -964,8 +1092,9 @@ class EventosApp_Batch_Processor {
                     console.log('Ocultando panel de progreso');
                     
                     // Habilitar configuración
-                    $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn').prop('disabled', false);
+                    $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn, .batch-custom-asset').prop('disabled', false);
                     $('#batch-start-btn').html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
+                    toggleCustomAssets();
                     $('#batch-cancel-btn').hide();
                     $('#batch-new-btn').hide();
                     
@@ -1029,6 +1158,56 @@ class EventosApp_Batch_Processor {
             }
             
             /**
+             * Mostrar u ocultar el panel de recursos del refresh personalizado.
+             */
+            function toggleCustomAssets() {
+                const mode = $('input[name="batch_mode"]:checked').val();
+                const shouldShow = mode === 'custom';
+                $('#custom-assets-row').toggle(shouldShow);
+            }
+
+            /**
+             * Obtener recursos personalizados seleccionados.
+             */
+            function getSelectedAssets() {
+                const assets = [];
+                $('.batch-custom-asset:checked').each(function() {
+                    assets.push($(this).val());
+                });
+                return assets;
+            }
+
+            /**
+             * Obtener etiquetas legibles para recursos seleccionados.
+             */
+            function getAssetLabels(assets) {
+                assets = Array.isArray(assets) ? assets : [];
+                return assets.map(function(asset) {
+                    if (availableAssets && availableAssets[asset] && availableAssets[asset].label) {
+                        return availableAssets[asset].label;
+                    }
+                    return asset;
+                });
+            }
+
+            /**
+             * Nombre legible del modo.
+             */
+            function getModeName(mode, assets) {
+                if (mode === 'complete') {
+                    return 'Regeneración Completa';
+                }
+                if (mode === 'qr_missing') {
+                    return 'Solo QR Faltantes';
+                }
+                if (mode === 'custom') {
+                    const labels = getAssetLabels(assets || []);
+                    return labels.length ? 'Refresh Personalizado (' + labels.join(', ') + ')' : 'Refresh Personalizado';
+                }
+                return mode || '-';
+            }
+
+            /**
              * Agregar entrada al log
              */
             function addLog(type, message) {
@@ -1063,15 +1242,24 @@ class EventosApp_Batch_Processor {
         }
         
         $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
-        $mode = isset($_POST['mode']) ? sanitize_text_field($_POST['mode']) : 'complete';
+        $mode = isset($_POST['mode']) ? sanitize_key(wp_unslash($_POST['mode'])) : 'complete';
         $batch_size = isset($_POST['batch_size']) ? absint($_POST['batch_size']) : self::DEFAULT_BATCH_SIZE;
+        $assets = [];
         
         if (!$event_id) {
             wp_send_json_error(['message' => 'ID de evento inválido']);
         }
         
-        if (!in_array($mode, ['complete', 'qr_missing'], true)) {
+        if (!in_array($mode, ['complete', 'qr_missing', 'custom'], true)) {
             $mode = 'complete';
+        }
+
+        if ($mode === 'custom') {
+            $assets = $this->sanitize_assets_from_request(isset($_POST['assets']) ? wp_unslash($_POST['assets']) : []);
+
+            if (empty($assets)) {
+                wp_send_json_error(['message' => 'Selecciona al menos un recurso para ejecutar el refresh personalizado']);
+            }
         }
         
         if (!in_array($batch_size, self::BATCH_SIZES, true)) {
@@ -1097,6 +1285,8 @@ class EventosApp_Batch_Processor {
             'id' => $process_id,
             'event_id' => $event_id,
             'mode' => $mode,
+            'assets' => $assets,
+            'asset_labels' => $this->get_asset_labels($assets),
             'batch_size' => $batch_size,
             'total' => $total,
             'processed' => 0,
@@ -1146,26 +1336,29 @@ class EventosApp_Batch_Processor {
         $batch_skipped = 0;
         $batch_failed = 0;
         
+        $process_assets = isset($process['assets']) && is_array($process['assets']) ? $process['assets'] : [];
+
         foreach ($tickets as $ticket_id) {
-            $result = $this->process_ticket($ticket_id, $process['mode']);
+            $result = $this->process_ticket($ticket_id, $process['mode'], $process_assets);
+            $result_message = isset($result['message']) && $result['message'] !== '' ? ': ' . $result['message'] : '';
             
             if ($result['status'] === 'success') {
                 $batch_success++;
                 $batch_log[] = [
                     'type' => 'success',
-                    'message' => "✓ Ticket #{$ticket_id} procesado correctamente"
+                    'message' => "✓ Ticket #{$ticket_id} procesado correctamente" . $result_message
                 ];
             } elseif ($result['status'] === 'skipped') {
                 $batch_skipped++;
                 $batch_log[] = [
                     'type' => 'warning',
-                    'message' => "⊘ Ticket #{$ticket_id} omitido: " . $result['message']
+                    'message' => "⊘ Ticket #{$ticket_id} omitido" . $result_message
                 ];
             } else {
                 $batch_failed++;
                 $batch_log[] = [
                     'type' => 'error',
-                    'message' => "✗ Ticket #{$ticket_id} falló: " . $result['message']
+                    'message' => "✗ Ticket #{$ticket_id} falló" . $result_message
                 ];
             }
         }
@@ -1275,28 +1468,133 @@ class EventosApp_Batch_Processor {
     }
     
     /**
-     * Procesar un ticket individual
+     * Sanitizar recursos recibidos desde AJAX.
      */
-    private function process_ticket($ticket_id, $mode) {
+    private function sanitize_assets_from_request($assets) {
+        if (function_exists('eventosapp_batch_refresh_sanitize_assets')) {
+            return eventosapp_batch_refresh_sanitize_assets($assets);
+        }
+
+        if (is_string($assets)) {
+            $assets = preg_split('/[\s,;|]+/', $assets);
+        }
+
+        if (!is_array($assets)) {
+            return [];
+        }
+
+        $allowed = ['qrs', 'pdf', 'ics', 'android_wallet', 'apple_wallet', 'search_blob'];
+        $clean = [];
+
+        foreach ($assets as $asset) {
+            if (is_array($asset)) {
+                continue;
+            }
+
+            $asset = sanitize_key((string) $asset);
+            if (in_array($asset, $allowed, true) && !in_array($asset, $clean, true)) {
+                $clean[] = $asset;
+            }
+        }
+
+        return $clean;
+    }
+
+    /**
+     * Etiquetas legibles de recursos para guardar en el estado del proceso.
+     */
+    private function get_asset_labels($assets) {
+        $assets = is_array($assets) ? $assets : [];
+        $available = function_exists('eventosapp_batch_refresh_available_assets') ? eventosapp_batch_refresh_available_assets() : [];
+        $labels = [];
+
+        foreach ($assets as $asset) {
+            if (isset($available[$asset]['label'])) {
+                $labels[] = $available[$asset]['label'];
+            } else {
+                $labels[] = $asset;
+            }
+        }
+
+        return $labels;
+    }
+
+    /**
+     * Resume estadísticas retornadas por eventosapp-batch-refresh.php.
+     */
+    private function summarize_refresh_stats($stats) {
+        if (!is_array($stats)) {
+            return '';
+        }
+
+        $parts = [];
+        $map = [
+            'generated'   => 'creados',
+            'regenerated' => 'regenerados',
+            'preserved'   => 'enlaces conservados',
+            'skipped'     => 'omitidos',
+            'failed'      => 'errores',
+        ];
+
+        foreach ($map as $key => $label) {
+            $value = isset($stats[$key]) ? absint($stats[$key]) : 0;
+            if ($value > 0) {
+                $parts[] = $value . ' ' . $label;
+            }
+        }
+
+        return $parts ? implode(', ', $parts) : '';
+    }
+
+    /**
+     * Procesar un ticket individual.
+     */
+    private function process_ticket($ticket_id, $mode, $assets = []) {
         // Importar la función de batch-refresh si existe
         if (function_exists('eventosapp_refresh_ticket_full')) {
             try {
-                $result = eventosapp_refresh_ticket_full($ticket_id, $mode);
+                if ($mode === 'custom') {
+                    $result = eventosapp_refresh_ticket_full($ticket_id, 'custom', ['assets' => $assets]);
+                } else {
+                    $result = eventosapp_refresh_ticket_full($ticket_id, $mode);
+                }
                 
                 if ($result === true) {
                     return ['status' => 'success'];
-                } elseif (is_array($result)) {
-                    // Modo qr_missing retorna estadísticas
-                    if (isset($result['generated']) && $result['generated'] > 0) {
-                        return ['status' => 'success'];
-                    } elseif (isset($result['skipped']) && $result['skipped'] > 0) {
-                        return ['status' => 'skipped', 'message' => 'QR ya existían'];
+                }
+
+                if ($result === false) {
+                    return ['status' => 'error', 'message' => 'El refresco devolvió false. Verifica el ticket y el evento asociado.'];
+                }
+
+                if (is_array($result)) {
+                    $summary = $this->summarize_refresh_stats($result);
+                    $failed = isset($result['failed']) ? absint($result['failed']) : 0;
+                    $generated = isset($result['generated']) ? absint($result['generated']) : 0;
+                    $regenerated = isset($result['regenerated']) ? absint($result['regenerated']) : 0;
+                    $preserved = isset($result['preserved']) ? absint($result['preserved']) : 0;
+                    $skipped = isset($result['skipped']) ? absint($result['skipped']) : 0;
+
+                    if ($failed > 0) {
+                        return ['status' => 'error', 'message' => $summary ?: 'Uno o más recursos fallaron'];
                     }
+
+                    if (($generated + $regenerated + $preserved) > 0) {
+                        return ['status' => 'success', 'message' => $summary];
+                    }
+
+                    if ($skipped > 0) {
+                        return ['status' => 'skipped', 'message' => $summary ?: 'Sin recursos nuevos que procesar'];
+                    }
+
+                    return ['status' => 'success', 'message' => $summary];
                 }
                 
                 return ['status' => 'success'];
                 
             } catch (Exception $e) {
+                return ['status' => 'error', 'message' => $e->getMessage()];
+            } catch (\Throwable $e) {
                 return ['status' => 'error', 'message' => $e->getMessage()];
             }
         }
