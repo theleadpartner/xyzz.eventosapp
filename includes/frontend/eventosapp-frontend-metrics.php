@@ -2,6 +2,15 @@
 // includes/frontend/eventosapp-frontend-metrics.php
 if ( ! defined('ABSPATH') ) exit;
 
+// Cargar helper de métricas personalizadas si está disponible.
+// Ruta esperada del nuevo archivo: includes/admin/eventosapp-event-custom-metrics-metabox.php
+if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
+    $evapp_custom_metrics_file = dirname(__DIR__) . '/admin/eventosapp-event-custom-metrics-metabox.php';
+    if ( file_exists($evapp_custom_metrics_file) ) {
+        require_once $evapp_custom_metrics_file;
+    }
+}
+
 /**
  * Shortcode: [eventosapp_front_metrics]
  * - Requiere login y rol organizador/administrator
@@ -109,6 +118,27 @@ add_shortcode('eventosapp_front_metrics', function(){
         .evapp-qr-pie { grid-column: span 6; }
         .evapp-qr-table { grid-column: span 6; }
       }
+
+      /* Métricas personalizadas configuradas por evento */
+      .evapp-custom-metrics { grid-column: span 12; display:none; gap:12px; }
+      .evapp-custom-metrics.is-visible { display:grid; }
+      .evapp-custom-title { grid-column: span 12; margin:8px 0 0; color:#eaf1ff; font-size:1.05rem; font-weight:900; }
+      .evapp-custom-row { display:grid; grid-template-columns:repeat(12,1fr); gap:12px; }
+      .evapp-custom-slot { grid-column: span 12; min-height:160px; }
+      .evapp-custom-slot.span-1 { grid-column: span 12; }
+      .evapp-custom-slot.span-2 { grid-column: span 12; }
+      @media(min-width:740px){
+        .evapp-custom-slot.span-1 { grid-column: span 6; }
+        .evapp-custom-slot.span-2 { grid-column: span 12; }
+      }
+      .evapp-custom-card-value { font-size:2.4rem; font-weight:900; line-height:1.05; margin-top:8px; }
+      .evapp-custom-card-label { color:#a9b6d3; margin-top:5px; }
+      .evapp-custom-table { width:100%; border-collapse:separate; border-spacing:0; }
+      .evapp-custom-table th, .evapp-custom-table td { text-align:left; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.08); vertical-align:top; }
+      .evapp-custom-table thead th { background:#0f1835; color:#cfe0ff; position:sticky; top:0; z-index:1; }
+      .evapp-custom-table tbody tr:nth-child(odd){ background:#0a1329; }
+      .evapp-custom-table tbody tr:nth-child(even){ background:#0c1733; }
+      .evapp-custom-empty { color:#a9b6d3; font-size:.92rem; padding:8px 0; }
     </style>
 
     <div class="evapp-metrics-wrap" data-event="<?php echo esc_attr($active_event); ?>">
@@ -229,6 +259,9 @@ add_shortcode('eventosapp_front_metrics', function(){
             </table>
           </div>
         </div>
+
+        <!-- Métricas personalizadas del evento -->
+        <div class="evapp-custom-metrics" id="evappCustomMetrics"></div>
       </div>
     </div>
     <?php
@@ -267,6 +300,9 @@ $js = <<<'JS'
         const qrPieHint = document.getElementById('evappQrPieHint');
         const qrTableBody = document.getElementById('evappQrTableBody');
 
+        // Métricas personalizadas configuradas por evento
+        const customMetricsWrap = document.getElementById('evappCustomMetrics');
+
         // Filtros
         const modeSel = document.getElementById('evappMode');
         const gFrom   = document.getElementById('grpFrom');
@@ -295,6 +331,7 @@ $js = <<<'JS'
         let pieChart = null;
         let barChart = null;
         let qrPieChart = null; // NUEVO: Chart para tipos de QR
+        let customCharts = {}; // Charts dinámicos configurados por evento
 
         // Color estable por nombre de sesión
         function colorFor(text){
@@ -541,6 +578,157 @@ $js = <<<'JS'
             qrTableBody.innerHTML = bodyHTML;
         }
 
+        function destroyCustomCharts(){
+            Object.keys(customCharts).forEach(function(id){
+                if (customCharts[id] && typeof customCharts[id].destroy === 'function') {
+                    customCharts[id].destroy();
+                }
+            });
+            customCharts = {};
+        }
+
+        function formatMetricNumber(value){
+            const n = Number(value || 0);
+            if (!Number.isFinite(n)) return '0';
+            if (Math.abs(n % 1) > 0) {
+                return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+            }
+            return n.toLocaleString();
+        }
+
+        function renderCustomTable(slot){
+            const cols = Array.isArray(slot.columns) ? slot.columns : [];
+            const rows = Array.isArray(slot.rows) ? slot.rows : [];
+            if (!cols.length || !rows.length) {
+                return '<div class="evapp-custom-empty">' + escapeHTML(slot.message || 'Sin datos para esta tabla.') + '</div>';
+            }
+
+            let html = '<div style="overflow:auto"><table class="evapp-custom-table"><thead><tr>';
+            cols.forEach(function(col){ html += '<th>' + escapeHTML(col) + '</th>'; });
+            html += '</tr></thead><tbody>';
+            rows.forEach(function(row){
+                html += '<tr>';
+                cols.forEach(function(_, index){
+                    html += '<td>' + escapeHTML((row && typeof row[index] !== 'undefined') ? row[index] : '') + '</td>';
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+            return html;
+        }
+
+        function renderCustomMetricShell(slot, chartId){
+            const span = parseInt(slot.span || 1, 10) === 2 ? 2 : 1;
+            let html = '<div class="evapp-card evapp-custom-slot span-' + span + '">';
+            html += '<h3>' + escapeHTML(slot.title || 'Métrica personalizada') + '</h3>';
+
+            if (slot.empty) {
+                html += '<div class="evapp-custom-empty">' + escapeHTML(slot.message || 'Sin datos para esta configuración.') + '</div>';
+                html += '</div>';
+                return html;
+            }
+
+            if (slot.chart_type === 'number_card') {
+                html += '<div class="evapp-custom-card-value">' + escapeHTML(formatMetricNumber(slot.metric_value)) + '</div>';
+                html += '<div class="evapp-custom-card-label">' + escapeHTML(slot.metric_label || 'Cantidad') + '</div>';
+                html += '<div class="evapp-hint">Tickets evaluados: ' + escapeHTML(fmt(slot.filtered_count || 0)) + '</div>';
+            } else if (slot.chart_type === 'table') {
+                html += renderCustomTable(slot);
+            } else {
+                html += '<canvas id="' + escapeHTML(chartId) + '"></canvas>';
+                if (slot.filtered_count !== undefined) {
+                    html += '<div class="evapp-hint">Tickets evaluados: ' + escapeHTML(fmt(slot.filtered_count || 0)) + '</div>';
+                }
+            }
+
+            html += '</div>';
+            return html;
+        }
+
+        function renderCustomMetrics(customMetrics){
+            if (!customMetricsWrap) return;
+            destroyCustomCharts();
+
+            const rows = customMetrics && Array.isArray(customMetrics.rows) ? customMetrics.rows : [];
+            if (!rows.length) {
+                customMetricsWrap.classList.remove('is-visible');
+                customMetricsWrap.innerHTML = '';
+                return;
+            }
+
+            let html = '<div class="evapp-custom-title">Métricas personalizadas del evento</div>';
+            const chartJobs = [];
+
+            rows.forEach(function(row, rIndex){
+                const slots = row && Array.isArray(row.slots) ? row.slots : [];
+                if (!slots.length) return;
+                html += '<div class="evapp-custom-row">';
+                slots.forEach(function(slot, sIndex){
+                    const chartId = 'evappCustomChart_' + rIndex + '_' + sIndex;
+                    html += renderCustomMetricShell(slot, chartId);
+                    if (!slot.empty && (slot.chart_type === 'column' || slot.chart_type === 'pie')) {
+                        chartJobs.push({ id: chartId, slot: slot });
+                    }
+                });
+                html += '</div>';
+            });
+
+            customMetricsWrap.innerHTML = html;
+            customMetricsWrap.classList.add('is-visible');
+
+            chartJobs.forEach(function(job){
+                const el = document.getElementById(job.id);
+                if (!el) return;
+
+                const labels = Array.isArray(job.slot.labels) ? job.slot.labels : [];
+                const values = Array.isArray(job.slot.values) ? job.slot.values : [];
+                if (!labels.length || !values.length) {
+                    el.insertAdjacentHTML('afterend', '<div class="evapp-custom-empty">Sin datos para graficar.</div>');
+                    return;
+                }
+
+                const chartType = job.slot.chart_type === 'pie' ? 'pie' : 'bar';
+                const bg = labels.map(function(label){ return colorFor(label); });
+                const cfg = {
+                    type: chartType,
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: job.slot.value_title || 'Cantidad',
+                            data: values,
+                            backgroundColor: bg,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                display: chartType === 'pie' ? !!job.slot.show_legend : false,
+                                position: 'bottom',
+                                labels: { color:'#eaf1ff' }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context){
+                                        const label = context.label || context.dataset.label || '';
+                                        const value = chartType === 'pie' ? (context.parsed || 0) : (context.parsed && context.parsed.y !== undefined ? context.parsed.y : 0);
+                                        return label + ': ' + fmt(value);
+                                    }
+                                }
+                            }
+                        },
+                        scales: chartType === 'pie' ? {} : {
+                            x: { ticks:{ color:'#cfe0ff' }, grid:{ color:'rgba(255,255,255,.08)'} },
+                            y: { beginAtZero:true, ticks:{ color:'#cfe0ff' }, grid:{ color:'rgba(255,255,255,.08)'} }
+                        }
+                    }
+                };
+
+                customCharts[job.id] = new Chart(el.getContext('2d'), cfg);
+            });
+        }
+
         function setKpis(total, checked){
             kpiTotal.textContent   = fmt(total||0);
             kpiChecked.textContent = fmt(checked||0) + ' Checked In';
@@ -581,10 +769,14 @@ $js = <<<'JS'
                 // NUEVO: Renderizar gráfico y tabla de tipos de QR
                 renderQrPie(d.qr_stats);
                 renderQrTable(d.qr_stats);
+
+                // Métricas personalizadas configuradas desde el evento
+                renderCustomMetrics(d.custom_metrics);
             } catch(e){
                 console.error(e);
                 tableBody.innerHTML = '<tr><td colspan="6" class="evapp-bad">No se pudieron cargar las métricas.</td></tr>';
                 qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-bad">Error al cargar datos de QR.</td></tr>';
+                renderCustomMetrics(null);
             }
         }
 
@@ -857,7 +1049,10 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         'qr_stats' => [ // NUEVO: Estadísticas de tipos de QR
             'types' => $qr_stats_filtered,
             'total' => $qr_total
-        ]
+        ],
+        'custom_metrics' => function_exists('eventosapp_custom_metrics_get_payload')
+            ? eventosapp_custom_metrics_get_payload($event_id)
+            : ['rows' => [], 'has_metrics' => false]
     ];
 
     wp_send_json_success($out);
