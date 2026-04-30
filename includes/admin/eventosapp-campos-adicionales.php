@@ -1,6 +1,15 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+// Carga segura del metabox de métricas personalizadas del evento.
+// Se deja aquí para integrarlo sin modificar el archivo principal del plugin.
+if ( is_admin() ) {
+    $evapp_custom_metrics_metabox_file = __DIR__ . '/eventosapp-event-custom-metrics-metabox.php';
+    if ( file_exists($evapp_custom_metrics_metabox_file) ) {
+        require_once $evapp_custom_metrics_metabox_file;
+    }
+}
+
 /**
  * Devuelve el esquema de campos extra para un evento.
  * Estructura normalizada por campo:
@@ -202,12 +211,3 @@ add_action('save_post_eventosapp_event', function($post_id){
     }
     update_post_meta($post_id, '_eventosapp_extra_fields', $result);
 }, 20);
-
-// Cargar metabox independiente de métricas personalizadas del evento, si existe.
-// Archivo esperado en el plugin: includes/admin/eventosapp-event-custom-metrics-metabox.php
-if ( is_admin() && ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
-    $evapp_custom_metrics_metabox_file = __DIR__ . '/eventosapp-event-custom-metrics-metabox.php';
-    if ( file_exists($evapp_custom_metrics_metabox_file) ) {
-        require_once $evapp_custom_metrics_metabox_file;
-    }
-}
