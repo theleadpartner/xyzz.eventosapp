@@ -886,6 +886,30 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
     $ids = $q->posts;
     $total = count($ids);
 
+    // Fechas válidas del evento activo.
+    // Evita que un check-in heredado de otro evento o de una fecha incorrecta contamine métricas.
+    $event_days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($event_id) : [];
+    $event_days = array_values(array_filter($event_days, function($d) use ($is_date){ return $is_date($d); }));
+    $event_days_lookup = array_fill_keys($event_days, true);
+
+    $date_is_current_event_day = function($fecha) use ($event_days_lookup) {
+        if (empty($event_days_lookup)) return true; // fallback legacy si el evento no expone fechas
+        return is_string($fecha) && isset($event_days_lookup[$fecha]);
+    };
+
+    $ticket_has_valid_main_checkin = function($status_arr) use ($event_days_lookup) {
+        if (!is_array($status_arr)) return false;
+        if (empty($event_days_lookup)) {
+            return in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true);
+        }
+        foreach ($status_arr as $status_day => $status_value) {
+            if (($status_value === 'checked_in' || $status_value === 'checked-in') && isset($event_days_lookup[$status_day])) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     // Agregadores
     $checked_total    = 0;
     $hourly_main      = array_fill(0, 24, 0);
@@ -939,7 +963,7 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         $status_arr = get_post_meta($tid, '_eventosapp_checkin_status', true);
         if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
         if (!is_array($status_arr)) $status_arr = [];
-        $any_checked = in_array('checked_in', $status_arr, true);
+        $any_checked = $ticket_has_valid_main_checkin($status_arr);
         if ($any_checked) {
             $checked_total++;
             $loc_checked[$loc]++;
@@ -958,12 +982,14 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             $hora  = isset($row['hora'])  ? $row['hora']  : '';
             $status= isset($row['status'])? $row['status']: '';
             $ses   = isset($row['sesion'])? $row['sesion']: '';
+            $entry_event_date = $fecha ?: (isset($row['dia']) ? $row['dia'] : '');
+            $entry_is_valid_event_day = $date_is_current_event_day($entry_event_date);
             $H     = ($hora && preg_match('/^\d{2}/', $hora)) ? intval(substr($hora,0,2)) : null;
 
             if ($H === null || $H < 0 || $H > 23) $H = null;
 
-            if ($in_filter($fecha) && $H !== null) {
-                if ($status === 'checked_in') {
+            if ($entry_is_valid_event_day && $in_filter($fecha) && $H !== null) {
+                if ($status === 'checked_in' || $status === 'checked-in') {
                     $hourly_main[$H] = (isset($hourly_main[$H]) ? $hourly_main[$H] : 0) + 1;
                 } elseif ($status === 'session_checked_in' && $ses) {
                     if (!isset($hourly_ses[$ses])) $hourly_ses[$ses] = array_fill(0,24,0);
@@ -972,13 +998,13 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             }
 
             // Un asistente cuenta 1 sola vez para sesiones (en cualquier fecha)
-            if ($status === 'session_checked_in') {
+            if ($status === 'session_checked_in' && $entry_is_valid_event_day) {
                 $loc_ses_uniques[$loc][$tid] = true;
             }
 
             // Contar tipos de QR: UNA SOLA VEZ por ticket (primer check-in principal)
             // Esto garantiza que el total de QR sea igual al total de checked_in general
-            if ($status === 'checked_in' && !$qr_type_ya_contado) {
+            if (($status === 'checked_in' || $status === 'checked-in') && !$qr_type_ya_contado && $entry_is_valid_event_day) {
                 $qr_type_ya_contado = true;
                 if (isset($row['qr_type_label']) && $row['qr_type_label'] !== '') {
                     $qr_label = $row['qr_type_label'];
@@ -1323,6 +1349,20 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
         sort($event_days);
     }
 
+    $event_days_lookup = array_fill_keys($event_days, true);
+    $ticket_has_valid_main_checkin = function($status_arr) use ($event_days_lookup) {
+        if (!is_array($status_arr)) return false;
+        if (empty($event_days_lookup)) {
+            return in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true);
+        }
+        foreach ($status_arr as $status_day => $status_value) {
+            if (($status_value === 'checked_in' || $status_value === 'checked-in') && isset($event_days_lookup[$status_day])) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     // === 2) SESIONES (detección robusta) ===
     $extract_names = function($raw){
         $out = [];
@@ -1464,7 +1504,7 @@ $headers[] = 'Fecha creación';
         $status_arr = get_post_meta($tid, '_eventosapp_checkin_status', true);
         if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
         if (!is_array($status_arr)) $status_arr = [];
-        $any_checked = (in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true)) ? 'SI' : 'NO';
+        $any_checked = $ticket_has_valid_main_checkin($status_arr) ? 'SI' : 'NO';
 
         $acc = get_post_meta($tid, '_eventosapp_ticket_sesiones_acceso', true);
         if (!is_array($acc)) $acc = [];
