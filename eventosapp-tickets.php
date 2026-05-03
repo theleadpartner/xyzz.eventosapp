@@ -400,6 +400,87 @@ function eventosapp_ticket_email_metabox_render($post) {
 
 
 
+
+/**
+ * Helpers internos para normalizar y limpiar el historial de check-in.
+ * Se mantienen en este archivo para no crear dependencias nuevas y evitar romper instalaciones existentes.
+ */
+if ( ! function_exists('eventosapp_ticket_meta_array') ) {
+    function eventosapp_ticket_meta_array($post_id, $meta_key) {
+        $value = get_post_meta($post_id, $meta_key, true);
+        if (is_string($value)) {
+            $maybe = @unserialize($value);
+            if ($maybe !== false || $value === 'b:0;') {
+                $value = $maybe;
+            }
+        }
+        return is_array($value) ? $value : [];
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_log_entry_event_date') ) {
+    function eventosapp_ticket_log_entry_event_date($entry) {
+        if (!is_array($entry)) return '';
+        foreach (['dia', 'fecha'] as $key) {
+            if (!empty($entry[$key]) && is_string($entry[$key]) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $entry[$key])) {
+                return $entry[$key];
+            }
+        }
+        return '';
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_is_primary_checkin_log') ) {
+    function eventosapp_ticket_is_primary_checkin_log($entry) {
+        if (!is_array($entry)) return false;
+        $status = isset($entry['status']) ? (string) $entry['status'] : '';
+        return in_array($status, ['checked_in', 'checked-in'], true);
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_is_session_checkin_log') ) {
+    function eventosapp_ticket_is_session_checkin_log($entry) {
+        if (!is_array($entry)) return false;
+        return (isset($entry['status']) && (string) $entry['status'] === 'session_checked_in');
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_session_has_remaining_log') ) {
+    function eventosapp_ticket_session_has_remaining_log($log, $session_name, $valid_days_lookup = []) {
+        if (!is_array($log) || $session_name === '') return false;
+        foreach ($log as $entry) {
+            if (!eventosapp_ticket_is_session_checkin_log($entry)) continue;
+            if ((string)($entry['sesion'] ?? '') !== (string)$session_name) continue;
+            $entry_date = eventosapp_ticket_log_entry_event_date($entry);
+            if (!empty($valid_days_lookup) && $entry_date !== '' && !isset($valid_days_lookup[$entry_date])) continue;
+            return true;
+        }
+        return false;
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_register_checkin_cleanup') ) {
+    function eventosapp_ticket_register_checkin_cleanup($ticket_id, $summary, $removed_log_entries = 0, $extra = []) {
+        $summary = trim((string) $summary);
+        if ($summary === '') return;
+
+        $audit = eventosapp_ticket_meta_array($ticket_id, '_eventosapp_checkin_cleanup_audit');
+        $user  = wp_get_current_user();
+        $audit_entry = [
+            'timestamp'           => current_time('mysql'),
+            'user'                => ($user && $user->exists()) ? ($user->display_name . ' (' . $user->user_email . ')') : 'Sistema',
+            'summary'             => $summary,
+            'removed_log_entries' => (int) $removed_log_entries,
+        ];
+        if (!empty($extra) && is_array($extra)) {
+            $audit_entry['extra'] = $extra;
+        }
+        array_unshift($audit, $audit_entry);
+        $audit = array_slice($audit, 0, 20);
+        update_post_meta($ticket_id, '_eventosapp_checkin_cleanup_audit', $audit);
+    }
+}
+
 function eventosapp_ticket_status_metabox($post) {
     $evento_id = (int) get_post_meta($post->ID, '_eventosapp_ticket_evento_id', true);
     $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
@@ -409,16 +490,42 @@ function eventosapp_ticket_status_metabox($post) {
     }
 
     // Estado por día
-    $status_arr = get_post_meta($post->ID, '_eventosapp_checkin_status', true);
-    if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
-    if (!is_array($status_arr)) $status_arr = [];
+    $status_arr = eventosapp_ticket_meta_array($post->ID, '_eventosapp_checkin_status');
 
     // Log
-    $log = get_post_meta($post->ID, '_eventosapp_checkin_log', true);
-    if (is_string($log)) $log = @unserialize($log);
-    if (!is_array($log)) $log = [];
+    $log = eventosapp_ticket_meta_array($post->ID, '_eventosapp_checkin_log');
+
+    $valid_days_lookup = array_fill_keys($days, true);
+    $has_invalid_checkins = false;
+    foreach ($status_arr as $saved_day => $saved_status) {
+        if (($saved_status === 'checked_in' || $saved_status === 'checked-in') && !isset($valid_days_lookup[$saved_day])) {
+            $has_invalid_checkins = true;
+            break;
+        }
+    }
+    if (!$has_invalid_checkins) {
+        foreach ($log as $entry) {
+            $entry_status = is_array($entry) ? (string)($entry['status'] ?? '') : '';
+            if (!in_array($entry_status, ['checked_in', 'checked-in', 'session_checked_in'], true)) continue;
+            $entry_day = eventosapp_ticket_log_entry_event_date($entry);
+            if ($entry_day && !isset($valid_days_lookup[$entry_day])) {
+                $has_invalid_checkins = true;
+                break;
+            }
+        }
+    }
+
+    wp_nonce_field('eventosapp_checkin_cleanup_guardar', 'eventosapp_checkin_cleanup_nonce');
 
     echo '<b>Check-in por día (editable):</b><br>';
+    echo '<small style="color:#666;display:block;margin:4px 0 10px;line-height:1.35">Marca una opción de limpieza y luego presiona <b>Actualizar</b>. Al limpiar un check-in se cambia el estado a <b>Not Checked In</b> y se eliminan las entradas del log que alimentan métricas y exportación.</small>';
+
+    if ($has_invalid_checkins) {
+        echo '<div style="margin:8px 0 12px;padding:9px 10px;background:#fff8e5;border:1px solid #f0c36d;border-radius:6px;font-size:12px;line-height:1.35">';
+        echo '<strong>⚠️ Este ticket tiene registros de check-in fuera de las fechas actuales del evento.</strong><br>';
+        echo '<label style="display:block;margin-top:7px;color:#7a4b00"><input type="checkbox" name="eventosapp_clear_checkin_invalid_dates" value="1"> Limpiar registros huérfanos fuera de las fechas de este evento</label>';
+        echo '</div>';
+    }
     foreach ($days as $day) {
         $status = $status_arr[$day] ?? 'not_checked_in';
         $field_name = "eventosapp_checkin_status[".$day."]";
@@ -462,8 +569,27 @@ function eventosapp_ticket_status_metabox($post) {
             }
         }
         
+        $day_has_primary_log = false;
+        foreach ($log as $entry) {
+            if (!eventosapp_ticket_is_primary_checkin_log($entry)) continue;
+            if (eventosapp_ticket_log_entry_event_date($entry) === $day) {
+                $day_has_primary_log = true;
+                break;
+            }
+        }
+        if ($status === 'checked_in' || $status === 'checked-in' || $day_has_primary_log) {
+            echo '<label style="display:block;margin-top:8px;padding:6px 8px;background:#fff5f5;border:1px solid #f2b8b8;border-radius:5px;color:#8a1f1f;font-size:12px;line-height:1.3">';
+            echo '<input type="checkbox" name="eventosapp_clear_checkin_days[]" value="' . esc_attr($day) . '"> Borrar check-in principal y log de este día';
+            echo '</label>';
+        }
+
         echo "</div>";
     }
+    echo '<div style="margin:10px 0;padding:9px 10px;background:#fff5f5;border:1px solid #f2b8b8;border-radius:6px;font-size:12px;line-height:1.35">';
+    echo '<strong style="color:#8a1f1f">Zona de limpieza manual</strong><br>';
+    echo '<label style="display:block;margin-top:6px;color:#8a1f1f"><input type="checkbox" name="eventosapp_clear_checkin_all" value="1"> Borrar todos los check-ins principales de este ticket</label>';
+    echo '<small style="display:block;margin-top:5px;color:#666">No borra accesos ni check-ins de sesiones internas; esos se limpian en el metabox de sesiones.</small>';
+    echo '</div>';
     echo '<small style="color:#666;display:block;margin:6px 0 10px">Puedes cambiar el estado manualmente para corregir lecturas accidentales. Se registrará en el log.</small>';
 
     // LOG - MODIFICADO: Mostrar información del tipo de QR
@@ -586,6 +712,27 @@ function eventosapp_ticket_status_metabox($post) {
             }
             echo '</div>';
         }
+    }
+
+    $cleanup_audit = eventosapp_ticket_meta_array($post->ID, '_eventosapp_checkin_cleanup_audit');
+    if (!empty($cleanup_audit)) {
+        echo '<hr style="margin:15px 0 10px;">';
+        echo '<b>🧹 Últimas limpiezas de check-in:</b>';
+        echo '<div style="font-size:11px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:5px;margin-top:8px;padding:8px;max-height:130px;overflow:auto">';
+        foreach (array_slice($cleanup_audit, 0, 5) as $entry) {
+            if (!is_array($entry)) continue;
+            echo '<div style="margin-bottom:7px;padding-bottom:7px;border-bottom:1px solid #eef2f7">';
+            echo '<strong>' . esc_html($entry['timestamp'] ?? '') . '</strong><br>';
+            echo esc_html($entry['summary'] ?? 'Limpieza ejecutada');
+            if (isset($entry['removed_log_entries'])) {
+                echo ' · Entradas eliminadas: ' . intval($entry['removed_log_entries']);
+            }
+            if (!empty($entry['user'])) {
+                echo '<br><span style="color:#64748b">' . esc_html($entry['user']) . '</span>';
+            }
+            echo '</div>';
+        }
+        echo '</div>';
     }
 }
 
@@ -1021,7 +1168,13 @@ function eventosapp_ticket_sesiones_metabox($post) {
     }
 
     wp_nonce_field('eventosapp_ticket_sesiones_guardar', 'eventosapp_ticket_sesiones_nonce');
-    echo '<strong>Selecciona a qué espacios internos tiene acceso este ticket:</strong><br><br>';
+    echo '<strong>Selecciona a qué espacios internos tiene acceso este ticket:</strong><br>';
+    echo '<small style="display:block;color:#666;margin:5px 0 10px;line-height:1.35">Para borrar un check-in de sesión, marca la casilla de limpieza y luego presiona <b>Actualizar</b>. Esto elimina también las entradas de log de esa sesión.</small>';
+    echo '<div style="margin:8px 0 12px;padding:8px 10px;background:#fff5f5;border:1px solid #f2b8b8;border-radius:6px;font-size:12px;line-height:1.35">';
+    echo '<strong style="color:#8a1f1f">Zona de limpieza de sesiones</strong><br>';
+    echo '<label style="display:block;margin-top:6px;color:#8a1f1f"><input type="checkbox" name="eventosapp_clear_session_checkins_all" value="1"> Borrar todos los check-ins de sesiones internas</label>';
+    echo '</div>';
+
     foreach ($nombres_sesiones as $s) {
         $checked = in_array($s, $accesos) ? 'checked' : '';
         $status = isset($checkin_sesiones[$s]) ? $checkin_sesiones[$s] : 'not_checked_in';
@@ -1034,6 +1187,11 @@ function eventosapp_ticket_sesiones_metabox($post) {
                 <option value="not_checked_in" '.selected($status, 'not_checked_in', false).'>No</option>
                 <option value="checked_in" '.selected($status, 'checked_in', false).'>Sí</option>
               </select>';
+        if ($status === 'checked_in' || $status === 'checked-in') {
+            echo '<label style="display:block;margin-top:7px;padding:5px 7px;background:#fff5f5;border:1px solid #f2b8b8;border-radius:5px;color:#8a1f1f;font-size:12px;line-height:1.3">';
+            echo '<input type="checkbox" name="eventosapp_clear_session_checkins[]" value="'.esc_attr($s).'"> Borrar check-in y log de esta sesión';
+            echo '</label>';
+        }
         echo '</div>';
     }
 }
@@ -1279,12 +1437,158 @@ function eventosapp_save_ticket($post_id, $post, $update) {
 
     try { $now = new DateTime('now', wp_timezone()); } catch(Exception $e) { $now = new DateTime('now'); }
 
+    // 9.1) Limpieza manual de check-ins/logs desde el admin.
+    // Importante: se ejecuta ANTES de guardar los selects para que una limpieza no sea revertida
+    // por el valor anterior que queda seleccionado en el metabox.
+    $valid_days_lookup = array_fill_keys($days, true);
+
+    $clear_all_main = !empty($_POST['eventosapp_clear_checkin_all']);
+    $clear_invalid_dates = !empty($_POST['eventosapp_clear_checkin_invalid_dates'])
+        && isset($_POST['eventosapp_checkin_cleanup_nonce'])
+        && wp_verify_nonce($_POST['eventosapp_checkin_cleanup_nonce'], 'eventosapp_checkin_cleanup_guardar');
+
+    $clear_days = [];
+    if (!empty($_POST['eventosapp_clear_checkin_days']) && is_array($_POST['eventosapp_clear_checkin_days'])) {
+        foreach ($_POST['eventosapp_clear_checkin_days'] as $raw_day) {
+            $raw_day = sanitize_text_field(wp_unslash($raw_day));
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw_day)) {
+                $clear_days[$raw_day] = true;
+            }
+        }
+    }
+
+    $session_clear_all = !empty($_POST['eventosapp_clear_session_checkins_all']);
+    $session_clear_names = [];
+    if (!empty($_POST['eventosapp_clear_session_checkins']) && is_array($_POST['eventosapp_clear_session_checkins'])) {
+        foreach ($_POST['eventosapp_clear_session_checkins'] as $raw_session) {
+            $raw_session = sanitize_text_field(wp_unslash($raw_session));
+            if ($raw_session !== '') {
+                $session_clear_names[$raw_session] = true;
+            }
+        }
+    }
+
+    $cleanup_labels = [];
+    $removed_log_entries = 0;
+
+    if ($clear_all_main || !empty($clear_days) || $clear_invalid_dates || $session_clear_all || !empty($session_clear_names)) {
+        if ($clear_all_main) {
+            foreach ($days as $d) {
+                $status_arr[$d] = 'not_checked_in';
+            }
+            foreach (array_keys($status_arr) as $saved_day) {
+                if (!isset($valid_days_lookup[$saved_day])) {
+                    unset($status_arr[$saved_day]);
+                }
+            }
+            $cleanup_labels[] = 'check-ins principales completos';
+        }
+
+        if (!empty($clear_days)) {
+            foreach (array_keys($clear_days) as $d) {
+                $status_arr[$d] = 'not_checked_in';
+            }
+            $cleanup_labels[] = 'check-ins principales por día: ' . implode(', ', array_keys($clear_days));
+        }
+
+        if ($clear_invalid_dates && !empty($valid_days_lookup)) {
+            foreach (array_keys($status_arr) as $saved_day) {
+                if (!isset($valid_days_lookup[$saved_day])) {
+                    unset($status_arr[$saved_day]);
+                }
+            }
+            $cleanup_labels[] = 'registros fuera de fechas del evento';
+        }
+
+        $filtered_log = [];
+        foreach ($log as $entry) {
+            if (!is_array($entry)) {
+                $filtered_log[] = $entry;
+                continue;
+            }
+
+            $entry_date = eventosapp_ticket_log_entry_event_date($entry);
+            $is_primary = eventosapp_ticket_is_primary_checkin_log($entry);
+            $is_session = eventosapp_ticket_is_session_checkin_log($entry);
+            $entry_session = (string)($entry['sesion'] ?? '');
+            $remove_entry = false;
+
+            if ($clear_invalid_dates && $entry_date !== '' && !isset($valid_days_lookup[$entry_date]) && ($is_primary || $is_session)) {
+                $remove_entry = true;
+            }
+
+            if (!$remove_entry && $is_primary && $clear_all_main) {
+                $remove_entry = true;
+            }
+
+            if (!$remove_entry && $is_primary && $entry_date !== '' && isset($clear_days[$entry_date])) {
+                $remove_entry = true;
+            }
+
+            if (!$remove_entry && $is_session && $session_clear_all) {
+                $remove_entry = true;
+            }
+
+            if (!$remove_entry && $is_session && $entry_session !== '' && isset($session_clear_names[$entry_session])) {
+                $remove_entry = true;
+            }
+
+            if ($remove_entry) {
+                $removed_log_entries++;
+                continue;
+            }
+
+            $filtered_log[] = $entry;
+        }
+        $log = array_values($filtered_log);
+
+        update_post_meta($post_id, '_eventosapp_checkin_status', $status_arr);
+        update_post_meta($post_id, '_eventosapp_checkin_log', $log);
+
+        if ($session_clear_all || !empty($session_clear_names) || $clear_invalid_dates) {
+            $current_session_statuses = eventosapp_ticket_meta_array($post_id, '_eventosapp_ticket_checkin_sesiones');
+            foreach ($current_session_statuses as $session_name => $session_status) {
+                if ($session_clear_all || isset($session_clear_names[$session_name])) {
+                    $current_session_statuses[$session_name] = 'not_checked_in';
+                    continue;
+                }
+                if ($clear_invalid_dates && ($session_status === 'checked_in' || $session_status === 'checked-in')) {
+                    if (!eventosapp_ticket_session_has_remaining_log($log, (string)$session_name, $valid_days_lookup)) {
+                        $current_session_statuses[$session_name] = 'not_checked_in';
+                    }
+                }
+            }
+            update_post_meta($post_id, '_eventosapp_ticket_checkin_sesiones', $current_session_statuses);
+            if ($session_clear_all) {
+                $cleanup_labels[] = 'check-ins de sesiones completos';
+            } elseif (!empty($session_clear_names)) {
+                $cleanup_labels[] = 'check-ins de sesiones: ' . implode(', ', array_keys($session_clear_names));
+            }
+        }
+
+        if (!empty($cleanup_labels)) {
+            eventosapp_ticket_register_checkin_cleanup(
+                $post_id,
+                'Limpieza ejecutada: ' . implode(' · ', $cleanup_labels),
+                $removed_log_entries,
+                [
+                    'days'     => array_keys($clear_days),
+                    'sessions' => array_keys($session_clear_names),
+                ]
+            );
+        }
+    }
+
     if (isset($_POST['eventosapp_checkin_status']) && is_array($_POST['eventosapp_checkin_status'])) {
         foreach ($days as $day) {
             if (!array_key_exists($day, $_POST['eventosapp_checkin_status'])) continue;
             $prev  = $status_arr[$day] ?? 'not_checked_in';
-            $nuevo = sanitize_text_field($_POST['eventosapp_checkin_status'][$day]);
-            if (!in_array($nuevo, ['checked_in','not_checked_in'], true)) $nuevo = $prev;
+            if ($clear_all_main || isset($clear_days[$day])) {
+                $nuevo = 'not_checked_in';
+            } else {
+                $nuevo = sanitize_text_field($_POST['eventosapp_checkin_status'][$day]);
+                if (!in_array($nuevo, ['checked_in','not_checked_in'], true)) $nuevo = $prev;
+            }
 
             if ($nuevo !== $prev) {
                 $status_arr[$day] = $nuevo;
@@ -1337,7 +1641,31 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     if (isset($_POST['eventosapp_ticket_checkin_sesiones']) && is_array($_POST['eventosapp_ticket_checkin_sesiones'])) {
         $statuses = [];
         foreach ($_POST['eventosapp_ticket_checkin_sesiones'] as $s => $v) {
+            $s = sanitize_text_field(wp_unslash($s));
+            $v = sanitize_text_field(wp_unslash($v));
+
+            if ($session_clear_all || isset($session_clear_names[$s])) {
+                $statuses[$s] = 'not_checked_in';
+                continue;
+            }
+
+            if ($clear_invalid_dates && ($v === 'checked_in' || $v === 'checked-in')) {
+                $statuses[$s] = eventosapp_ticket_session_has_remaining_log($log, $s, $valid_days_lookup) ? 'checked_in' : 'not_checked_in';
+                continue;
+            }
+
             $statuses[$s] = in_array($v, ['checked_in', 'not_checked_in'], true) ? $v : 'not_checked_in';
+        }
+        update_post_meta($post_id, '_eventosapp_ticket_checkin_sesiones', $statuses);
+    } elseif ($session_clear_all || !empty($session_clear_names) || $clear_invalid_dates) {
+        // Fallback por si el metabox de sesiones no se imprimió en pantalla, pero existía meta previo.
+        $statuses = eventosapp_ticket_meta_array($post_id, '_eventosapp_ticket_checkin_sesiones');
+        foreach ($statuses as $s => $v) {
+            if ($session_clear_all || isset($session_clear_names[$s])) {
+                $statuses[$s] = 'not_checked_in';
+            } elseif ($clear_invalid_dates && ($v === 'checked_in' || $v === 'checked-in')) {
+                $statuses[$s] = eventosapp_ticket_session_has_remaining_log($log, (string)$s, $valid_days_lookup) ? 'checked_in' : 'not_checked_in';
+            }
         }
         update_post_meta($post_id, '_eventosapp_ticket_checkin_sesiones', $statuses);
     }
