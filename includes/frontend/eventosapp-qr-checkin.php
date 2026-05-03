@@ -23,6 +23,46 @@ if ( ! function_exists('eventosapp_current_user_can_checkin') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_qr_checkin_event_datetime') ) {
+    function eventosapp_qr_checkin_event_datetime($event_id) {
+        $event_tz = get_post_meta((int)$event_id, '_eventosapp_zona_horaria', true);
+        if (!$event_tz) {
+            $event_tz = wp_timezone_string();
+            if (!$event_tz || $event_tz === 'UTC') {
+                $offset = get_option('gmt_offset');
+                $event_tz = $offset ? timezone_name_from_abbr('', $offset * 3600, 0) ?: 'UTC' : 'UTC';
+            }
+        }
+        try {
+            return new DateTime('now', new DateTimeZone($event_tz));
+        } catch (Exception $e) {
+            return new DateTime('now', wp_timezone());
+        }
+    }
+}
+
+if ( ! function_exists('eventosapp_qr_checkin_validate_event_day') ) {
+    function eventosapp_qr_checkin_validate_event_day($event_id) {
+        $dt = eventosapp_qr_checkin_event_datetime((int)$event_id);
+        $today = $dt->format('Y-m-d');
+        $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days((int)$event_id) : [];
+
+        if (empty($days) || !in_array($today, $days, true)) {
+            return [
+                'valid' => false,
+                'today' => $today,
+                'error' => 'El check-in solo está permitido en las fechas del evento. Hoy no corresponde.',
+            ];
+        }
+
+        return [
+            'valid' => true,
+            'today' => $today,
+            'datetime' => $dt,
+        ];
+    }
+}
+
 // === Shortcode: Check-In general ===
 add_shortcode('eventosapp_qr_checkin', function($atts){
 // 🔒 Requiere permiso para "qr" (botón Check-In con QR)
@@ -1876,6 +1916,11 @@ add_action('wp_ajax_eventosapp_qr_sesion_lookup', function(){
 
     if (!$scanned || !$event_id || !$session) wp_send_json_error(['error'=>'Datos incompletos']);
 
+    $day_validation = eventosapp_qr_checkin_validate_event_day($event_id);
+    if (empty($day_validation['valid'])) {
+        wp_send_json_error(['error' => $day_validation['error'] ?? 'El check-in solo está permitido en las fechas del evento.']);
+    }
+
     global $wpdb;
 
     $ticket_post_id = 0;
@@ -1988,6 +2033,11 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
 
     if (!$ticket_id || !$event_id || !$session) wp_send_json_error(['error'=>'Datos incompletos']);
 
+    $day_validation = eventosapp_qr_checkin_validate_event_day($event_id);
+    if (empty($day_validation['valid'])) {
+        wp_send_json_error(['error' => $day_validation['error'] ?? 'El check-in solo está permitido en las fechas del evento.']);
+    }
+
     // Verificar pertenencia
     $ticket_event = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
     if ($ticket_event !== (int) $event_id) wp_send_json_error(['error'=>'El ticket no pertenece al evento activo']);
@@ -2016,13 +2066,16 @@ if ($already) {
     if (is_string($log)) $log = @unserialize($log);
     if (!is_array($log)) $log = [];
 
-    try { $dt = new DateTime('now', wp_timezone()); } catch(Exception $e){ $dt = new DateTime('now'); }
+    $dt = (!empty($day_validation['datetime']) && $day_validation['datetime'] instanceof DateTime)
+        ? $day_validation['datetime']
+        : eventosapp_qr_checkin_event_datetime($event_id);
     $u = wp_get_current_user();
     $usuario = ($u && $u->exists()) ? ($u->display_name.' ('.$u->user_email.')') : 'Sistema';
 
     $log[] = [
         'fecha'   => $dt->format('Y-m-d'),
         'hora'    => $dt->format('H:i:s'),
+        'dia'     => $dt->format('Y-m-d'),
         'status'  => 'session_checked_in',
         'sesion'  => $session,
         'usuario' => $usuario,
