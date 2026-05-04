@@ -274,6 +274,267 @@ if ( ! function_exists('eventosapp_add_ticket_audit_log') ) {
   }
 }
 
+
+/** ---------------------------------------------------------------------------
+ * Helpers de deduplicación segura por evento para el webhook
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Construye una llave explícita para que un external_id solo sea reutilizable
+ * dentro del mismo evento. Esto evita que una cédula usada como external_id
+ * actualice tickets de eventos anteriores o futuros.
+ */
+if (!function_exists('evapp_build_webhook_scope_key')) {
+  function evapp_build_webhook_scope_key(int $evento_id, $external_id) : string {
+    $evento_id = absint($evento_id);
+    $external_id = sanitize_text_field((string)$external_id);
+    if (!$evento_id || $external_id === '') return '';
+    return $evento_id . '|' . md5($external_id);
+  }
+}
+
+/** Busca ticket por external_id, SIEMPRE limitado al evento recibido. */
+if (!function_exists('evapp_find_ticket_by_external_id_evento')) {
+  function evapp_find_ticket_by_external_id_evento($external_id, $evento_id) {
+    $external_id = sanitize_text_field((string)$external_id);
+    $evento_id   = absint($evento_id);
+    if ($external_id === '' || !$evento_id) return false;
+
+    $scope_key = evapp_build_webhook_scope_key($evento_id, $external_id);
+
+    // 1) Preferir la llave compuesta nueva cuando exista.
+    if ($scope_key !== '') {
+      $q_scope = new WP_Query([
+        'post_type'      => 'eventosapp_ticket',
+        'post_status'    => 'any',
+        'fields'         => 'ids',
+        'posts_per_page' => 1,
+        'orderby'        => 'ID',
+        'order'          => 'DESC',
+        'no_found_rows'  => true,
+        'meta_query'     => [
+          'relation' => 'AND',
+          [
+            'key'     => '_eventosapp_ticket_evento_id',
+            'value'   => $evento_id,
+            'type'    => 'NUMERIC',
+            'compare' => '=',
+          ],
+          [
+            'key'     => '_eventosapp_external_scope_key',
+            'value'   => $scope_key,
+            'compare' => '=',
+          ],
+        ],
+      ]);
+
+      if (!empty($q_scope->posts)) {
+        return (int)$q_scope->posts[0];
+      }
+    }
+
+    // 2) Compatibilidad con tickets existentes: external_id + evento.
+    $q = new WP_Query([
+      'post_type'      => 'eventosapp_ticket',
+      'post_status'    => 'any',
+      'fields'         => 'ids',
+      'posts_per_page' => 1,
+      'orderby'        => 'ID',
+      'order'          => 'DESC',
+      'no_found_rows'  => true,
+      'meta_query'     => [
+        'relation' => 'AND',
+        [
+          'key'     => '_eventosapp_ticket_evento_id',
+          'value'   => $evento_id,
+          'type'    => 'NUMERIC',
+          'compare' => '=',
+        ],
+        [
+          'key'     => '_eventosapp_external_id',
+          'value'   => $external_id,
+          'compare' => '=',
+        ],
+      ],
+    ]);
+
+    return !empty($q->posts) ? (int)$q->posts[0] : false;
+  }
+}
+
+/** Busca ticket por email dentro del mismo evento. */
+if (!function_exists('evapp_find_ticket_by_email_evento')) {
+  function evapp_find_ticket_by_email_evento($email, $evento_id) {
+    $email     = sanitize_email((string)$email);
+    $evento_id = absint($evento_id);
+    if ($email === '' || !$evento_id) return false;
+
+    $q = new WP_Query([
+      'post_type'      => 'eventosapp_ticket',
+      'post_status'    => 'any',
+      'fields'         => 'ids',
+      'posts_per_page' => 1,
+      'orderby'        => 'ID',
+      'order'          => 'DESC',
+      'no_found_rows'  => true,
+      'meta_query'     => [
+        'relation' => 'AND',
+        [
+          'key'     => '_eventosapp_ticket_evento_id',
+          'value'   => $evento_id,
+          'type'    => 'NUMERIC',
+          'compare' => '=',
+        ],
+        [
+          'key'     => '_eventosapp_asistente_email',
+          'value'   => $email,
+          'compare' => '=',
+        ],
+      ],
+    ]);
+
+    return !empty($q->posts) ? (int)$q->posts[0] : false;
+  }
+}
+
+/** Verifica defensivamente que un ticket encontrado sí pertenezca al evento del webhook. */
+if (!function_exists('evapp_webhook_ticket_matches_event')) {
+  function evapp_webhook_ticket_matches_event($ticket_id, $evento_id) : bool {
+    $ticket_id = absint($ticket_id);
+    $evento_id = absint($evento_id);
+    if (!$ticket_id || !$evento_id) return false;
+    if (get_post_type($ticket_id) !== 'eventosapp_ticket') return false;
+    $ticket_event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+    return $ticket_event_id === $evento_id;
+  }
+}
+
+/**
+ * Regenera/actualiza anexos en actualizaciones vía webhook del mismo evento.
+ * No se usa para permitir cambios de evento; solo se ejecuta cuando el ticket
+ * encontrado ya pertenece al evento recibido.
+ */
+if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
+  function evapp_webhook_refresh_ticket_assets($ticket_id, $evento_id, $context = 'webhook_update') : array {
+    $ticket_id = absint($ticket_id);
+    $evento_id = absint($evento_id);
+
+    $result = [
+      'qr'             => null,
+      'pdf'            => null,
+      'ics'            => null,
+      'wallet_android' => null,
+      'wallet_apple'   => null,
+      'search_index'   => null,
+      'errors'         => [],
+    ];
+
+    if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+      $result['errors'][] = 'ticket_invalido';
+      return $result;
+    }
+
+    if (!evapp_webhook_ticket_matches_event($ticket_id, $evento_id)) {
+      $result['errors'][] = 'evento_no_coincide';
+      error_log('[EventosApp] Webhook assets SKIPPED: ticket '.$ticket_id.' no pertenece al evento '.$evento_id);
+      return $result;
+    }
+
+    // QR: completar faltantes sin cambiar URLs existentes.
+    if (class_exists('EventosApp_QR_Manager')) {
+      try {
+        $qr_manager = method_exists('EventosApp_QR_Manager', 'get_instance')
+          ? EventosApp_QR_Manager::get_instance()
+          : new EventosApp_QR_Manager();
+
+        if ($qr_manager && method_exists($qr_manager, 'generate_missing_qr_codes')) {
+          $result['qr'] = $qr_manager->generate_missing_qr_codes($ticket_id);
+        } elseif ($qr_manager && method_exists($qr_manager, 'generate_all_qr_codes')) {
+          $qr_manager->generate_all_qr_codes($ticket_id);
+          $result['qr'] = 'checked';
+        }
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'qr: '.$e->getMessage();
+      }
+    }
+
+    // PDF: se sobrescribe el mismo archivo del ticket, manteniendo la URL.
+    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
+    if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) {
+      try {
+        eventosapp_ticket_generar_pdf($ticket_id);
+        $result['pdf'] = 'regenerated';
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'pdf: '.$e->getMessage();
+      }
+    } else {
+      $result['pdf'] = $pdf_on ? 'helper_not_available' : 'disabled';
+    }
+
+    // ICS: se delega al generador actual si está disponible.
+    $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
+    if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) {
+      try {
+        eventosapp_ticket_generar_ics($ticket_id);
+        $result['ics'] = 'regenerated';
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'ics: '.$e->getMessage();
+      }
+    } else {
+      $result['ics'] = $ics_on ? 'helper_not_available' : 'disabled';
+    }
+
+    // Google Wallet.
+    $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
+    if (($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) && function_exists('eventosapp_generar_enlace_wallet_android')) {
+      try {
+        eventosapp_generar_enlace_wallet_android($ticket_id, false);
+        $result['wallet_android'] = 'regenerated';
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'wallet_android: '.$e->getMessage();
+      }
+    } else {
+      $result['wallet_android'] = ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) ? 'helper_not_available' : 'disabled';
+    }
+
+    // Apple Wallet.
+    $wallet_ios_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true);
+    if ($wallet_ios_on === '1' || $wallet_ios_on === 1 || $wallet_ios_on === true) {
+      try {
+        if (function_exists('eventosapp_apple_generate_pass')) {
+          eventosapp_apple_generate_pass($ticket_id);
+          $result['wallet_apple'] = 'regenerated';
+        } elseif (function_exists('eventosapp_generar_enlace_wallet_apple')) {
+          eventosapp_generar_enlace_wallet_apple($ticket_id);
+          $result['wallet_apple'] = 'regenerated';
+        } else {
+          $result['wallet_apple'] = 'helper_not_available';
+        }
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'wallet_apple: '.$e->getMessage();
+      }
+    } else {
+      $result['wallet_apple'] = 'disabled';
+    }
+
+    if (function_exists('eventosapp_ticket_build_search_blob')) {
+      try {
+        eventosapp_ticket_build_search_blob($ticket_id);
+        $result['search_index'] = 'rebuilt';
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'search_index: '.$e->getMessage();
+      }
+    }
+
+    update_post_meta($ticket_id, '_eventosapp_webhook_assets_last_sync', current_time('mysql'));
+    update_post_meta($ticket_id, '_eventosapp_webhook_assets_last_result', $result);
+
+    error_log('[EventosApp] Webhook assets '.$context.' ticket='.$ticket_id.' event='.$evento_id.' result='.wp_json_encode($result));
+
+    return $result;
+  }
+}
+
 /** ---------------------------------------------------------------------------
  * Rutas REST (alias genérico + ruta histórica /ac-webhook)
  * ------------------------------------------------------------------------- */
@@ -374,46 +635,67 @@ function eventosapp_ac_webhook_handler(\WP_REST_Request $req){
   if (!$email)      return new \WP_Error('bad_request','Falta email', ['status'=>400]);
 
   // === Dedupe según preferencia/config ===
+  // Regla crítica: NUNCA reutilizar un ticket de otro evento, aunque el external_id sea igual.
+  // Esto permite usar la cédula como external_id sin pisar tickets históricos del mismo asistente.
   $existing = [];
+  $dedupe_used = 'none';
+  $external_scope_key = $external_id ? evapp_build_webhook_scope_key($evento_id, $external_id) : '';
+
   if (!$force_new && $dedupe_pref !== 'none') {
-    // 1) por external_id (cuando aplica)
+    // 1) por external_id + evento (cuando aplica)
     if ($external_id && $dedupe_pref !== 'email') {
-      $existing = get_posts([
-        'post_type'   => 'eventosapp_ticket',
-        'post_status' => 'any',
-        'meta_key'    => '_eventosapp_external_id',
-        'meta_value'  => $external_id,
-        'fields'      => 'ids',
-        'numberposts' => 1,
-      ]);
-    }
-    // 2) por (evento + email) SOLO si se pide explícitamente dedupe=email
-    if (!$existing && $dedupe_pref === 'email') {
-      $q = new WP_Query([
-        'post_type'       => 'eventosapp_ticket',
-        'post_status'     => 'any',
-        'fields'          => 'ids',
-        'posts_per_page'  => 1,
-        'meta_query'      => [
-          'relation' => 'AND',
-          [ 'key'=>'_eventosapp_ticket_evento_id', 'value'=>$evento_id ],
-          [ 'key'=>'_eventosapp_asistente_email',  'value'=>$email   ],
-        ],
-        'no_found_rows'   => true,
-      ]);
-      $existing = $q->posts;
+      $found_by_external = evapp_find_ticket_by_external_id_evento($external_id, $evento_id);
+      if ($found_by_external) {
+        $existing = [$found_by_external];
+        $dedupe_used = 'external_id_event';
+        error_log('[EventosApp] Webhook dedupe by external_id+event: ticket '.$found_by_external.' reutilizado para external_id='.$external_id.' evento='.$evento_id);
+      }
     }
 
-    // 3) por (evento + cédula) — fallback universal que aplica en TODOS los modos
-    //    Garantiza deduplicación sin importar el canal de creación original.
+    // 2) por (evento + email) SOLO si se pide explícitamente dedupe=email
+    if (!$existing && $dedupe_pref === 'email') {
+      $found_by_email = evapp_find_ticket_by_email_evento($email, $evento_id);
+      if ($found_by_email) {
+        $existing = [$found_by_email];
+        $dedupe_used = 'email_event';
+        error_log('[EventosApp] Webhook dedupe by email+event: ticket '.$found_by_email.' reutilizado para email='.$email.' evento='.$evento_id);
+      }
+    }
+
+    // 3) por (evento + cédula) — fallback universal que aplica en TODOS los modos salvo dedupe=none.
+    //    También está limitado al evento; no cruza asistentes entre eventos.
     if (!$existing && $cc) {
       $found_by_cc = function_exists('evapp_find_ticket_by_cedula_evento')
         ? evapp_find_ticket_by_cedula_evento($cc, $evento_id)
         : false;
       if ($found_by_cc) {
         $existing = [$found_by_cc];
-        error_log('[EventosApp] Webhook dedupe by CC: ticket '.$found_by_cc.' reutilizado para cc='.$cc.' evento='.$evento_id);
+        $dedupe_used = 'cc_event';
+        error_log('[EventosApp] Webhook dedupe by CC+event: ticket '.$found_by_cc.' reutilizado para cc='.$cc.' evento='.$evento_id);
       }
+    }
+  }
+
+  // Protección adicional: si alguna función externa devolviera un ticket de otro evento,
+  // se bloquea la actualización y se continúa por la ruta de creación de ticket nuevo.
+  if ($existing) {
+    $candidate_ticket_id = (int)$existing[0];
+    if (!evapp_webhook_ticket_matches_event($candidate_ticket_id, $evento_id)) {
+      $candidate_event_id = (int)get_post_meta($candidate_ticket_id, '_eventosapp_ticket_evento_id', true);
+
+      eventosapp_add_ticket_audit_log($candidate_ticket_id, [
+        'trigger'            => 'webhook_cross_event_reuse_blocked',
+        'dedupe_by'          => $dedupe_used,
+        'external_id'        => $external_id,
+        'incoming_event_id'  => $evento_id,
+        'ticket_event_id'    => $candidate_event_id,
+        'message'            => 'Se bloqueó la actualización de este ticket porque el webhook pertenece a otro evento. El sistema continuará creando un ticket nuevo.',
+        'ip'                 => isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : '',
+      ]);
+
+      error_log('[EventosApp] Webhook BLOCKED cross-event reuse: candidate_ticket='.$candidate_ticket_id.' ticket_event='.$candidate_event_id.' incoming_event='.$evento_id.' external_id='.$external_id.' dedupe='.$dedupe_used);
+      $existing = [];
+      $dedupe_used = 'blocked_cross_event';
     }
   }
 
@@ -450,9 +732,18 @@ if ($existing) {
   }
   // ---- FIN CAPTURA PREVIA ----
 
-  eventosapp_update_ticket_from_payload($ticket_id, compact(
+  $payload_update_ok = eventosapp_update_ticket_from_payload($ticket_id, compact(
     'evento_id','email','first_name','last_name','phone','company','cc','nit','cargo','city','country','localidad','external_id'
   ), $data);
+
+  if ($payload_update_ok === false) {
+    error_log('[EventosApp] Webhook UPDATE abortado por protección de evento para ticket '.$ticket_id.' evento='.$evento_id);
+    return new \WP_Error('conflict', 'El ticket encontrado no pertenece al evento recibido; actualización bloqueada para evitar anexos de otro evento.', ['status' => 409]);
+  }
+
+  // Al actualizar un ticket del mismo evento por webhook, refrescar anexos para que PDF/ICS/Wallet
+  // reflejen los datos actuales. Esta función NO permite cambiar de evento.
+  $asset_refresh_result_upd = evapp_webhook_refresh_ticket_assets($ticket_id, $evento_id, 'webhook_update');
 
   // ⬇️ Asegurar autor/creador del ticket cuando entra por webhook
   $webhook_author = (int) evapp_webhook_author_id();
@@ -511,7 +802,8 @@ if ($existing) {
   if (!empty($changed_fields)) {
     eventosapp_add_ticket_audit_log($ticket_id, [
       'trigger'         => 'webhook_update',
-      'dedupe_by'       => $dedupe_pref,
+      'dedupe_by'       => $dedupe_used,
+      'dedupe_pref'     => $dedupe_pref,
       'external_id'     => $external_id,
       'changed_fields'  => $changed_fields,
       'before'          => $before_snapshot,
@@ -590,8 +882,10 @@ if ($existing) {
     'ok'         => true,
     'ticket_id'  => $ticket_id,
     'updated'    => true,
+    'dedupe_by'  => $dedupe_used,
     'fields_changed' => array_keys($changed_fields),
     'audit_logged'   => !empty($changed_fields),
+    'asset_refresh'  => isset($asset_refresh_result_upd) ? $asset_refresh_result_upd : null,
     'conditional_matched' => is_array($conditional_result_upd) && !empty($conditional_result_upd['matched_rule']),
     'template_used' => (is_array($conditional_result_upd) && !empty($conditional_result_upd['template'])) ? $conditional_result_upd['template'] : 'default',
   ], $email_result);
@@ -629,9 +923,11 @@ if ($existing) {
 
   // Guardar metadatos principales (incluye el user_id del creador)
   update_post_meta($post_id, '_eventosapp_ticket_evento_id', $evento_id);
+  update_post_meta($post_id, '_eventosapp_ticket_evento_id_original', $evento_id);
   update_post_meta($post_id, '_eventosapp_ticket_user_id', $webhook_author);
   // 2.3 Webhook (marca como webhook)
   update_post_meta($post_id, '_eventosapp_creation_channel', 'webhook');
+  update_post_meta($post_id, '_eventosapp_ticket_webhook_created_at', current_time('mysql'));
   update_post_meta($post_id, '_eventosapp_asistente_nombre',   $first_name);
   update_post_meta($post_id, '_eventosapp_asistente_apellido', $last_name);
   update_post_meta($post_id, '_eventosapp_asistente_cc',       $cc);
@@ -643,7 +939,10 @@ if ($existing) {
   update_post_meta($post_id, '_eventosapp_asistente_ciudad',   $city);
   update_post_meta($post_id, '_eventosapp_asistente_pais',     $country);
   update_post_meta($post_id, '_eventosapp_asistente_localidad',$localidad);
-  if (!empty($external_id)) update_post_meta($post_id, '_eventosapp_external_id', $external_id);
+  if (!empty($external_id)) {
+    update_post_meta($post_id, '_eventosapp_external_id', $external_id);
+    update_post_meta($post_id, '_eventosapp_external_scope_key', $external_scope_key);
+  }
 
 
   // Campos adicionales del evento (si llegan en el payload)
@@ -814,7 +1113,7 @@ if ($existing) {
 
   // Respuesta REST incluyendo el resultado del correo
   $response = array_merge(
-    ['ok'=>true, 'ticket_id'=>$post_id, 'public_id'=>$ticket_public_id],
+    ['ok'=>true, 'ticket_id'=>$post_id, 'public_id'=>$ticket_public_id, 'created'=>true, 'dedupe_by'=>$dedupe_used],
     $email_result
   );
 
@@ -828,6 +1127,15 @@ if ($existing) {
 /** Reutilizable: actualiza un ticket existente con nuevo payload */
 function eventosapp_update_ticket_from_payload($post_id, array $flat, array $data){
   foreach ($flat as $k=>$v) $$k = $v; // vars locales
+
+  // Defensa adicional: esta función no debe mover tickets entre eventos.
+  // Si se intenta actualizar un ticket que ya pertenece a otro evento, se bloquea.
+  $current_event_id = absint(get_post_meta($post_id, '_eventosapp_ticket_evento_id', true));
+  if ($current_event_id && $current_event_id !== absint($evento_id)) {
+    error_log('[EventosApp] Webhook update payload BLOCKED: ticket '.$post_id.' pertenece al evento '.$current_event_id.' y el payload intenta usar evento '.absint($evento_id));
+    return false;
+  }
+
   update_post_meta($post_id, '_eventosapp_ticket_evento_id',   (int)$evento_id);
   update_post_meta($post_id, '_eventosapp_asistente_nombre',   (string)$first_name);
   update_post_meta($post_id, '_eventosapp_asistente_apellido', (string)$last_name);
@@ -840,7 +1148,12 @@ function eventosapp_update_ticket_from_payload($post_id, array $flat, array $dat
   update_post_meta($post_id, '_eventosapp_asistente_ciudad',   (string)$city);
   update_post_meta($post_id, '_eventosapp_asistente_pais',     (string)($country ?: 'Colombia'));
   update_post_meta($post_id, '_eventosapp_asistente_localidad',(string)$localidad);
-  if (!empty($external_id)) update_post_meta($post_id, '_eventosapp_external_id', (string)$external_id);
+  if (!empty($external_id)) {
+    update_post_meta($post_id, '_eventosapp_external_id', (string)$external_id);
+    if (function_exists('evapp_build_webhook_scope_key')) {
+      update_post_meta($post_id, '_eventosapp_external_scope_key', evapp_build_webhook_scope_key((int)$evento_id, (string)$external_id));
+    }
+  }
 
   // Extras del evento
   if (function_exists('eventosapp_get_event_extra_fields')) {
@@ -877,4 +1190,6 @@ function eventosapp_update_ticket_from_payload($post_id, array $flat, array $dat
   if (function_exists('eventosapp_ticket_build_search_blob')) {
     eventosapp_ticket_build_search_blob($post_id);
   }
+
+  return true;
 }
