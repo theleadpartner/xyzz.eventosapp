@@ -6,7 +6,7 @@ if ( ! defined('ABSPATH') ) exit;
 function eventosapp_build_ac_webhook_body_template($event_id){
     $body = [
         'event_id'    => (int) $event_id,
-        'external_id' => '<<opcional: id_unico_envio>>',
+        'external_id' => '<<opcional: cedula_o_id_unico>>',
         'email'       => '<<email>>',
         'first_name'  => '<<nombre>>',
         'last_name'   => '<<apellido>>',
@@ -124,7 +124,7 @@ function eventosapp_render_curl_template_metabox($post){
       <textarea id="evapp-json-raw" class="evapp-hidden"><?php echo esc_textarea($json); ?></textarea>
 
       <p class="description" style="margin-top:10px">
-        Notas: <code>HTTP 403</code> = secreto inválido; <code>HTTP 400</code> = falta <code>event_id</code> o <code>email</code>.
+        Notas: <code>HTTP 403</code> = secreto inválido; <code>HTTP 400</code> = falta <code>event_id</code> o <code>email</code>. El <code>external_id</code> se deduplica siempre dentro del evento enviado.
       </p>
     </div>
 
@@ -183,7 +183,7 @@ function eventosapp_render_curl_template_metabox($post){
         txt.push("");
         txt.push("4) Campos recomendados (si los tienes):");
         txt.push("- first_name, last_name, phone, company, cc, nit, cargo, city, country, localidad");
-        txt.push("- external_id (opcional para deduplicar si tu plataforma genera un ID del envío)");
+        txt.push("- external_id (opcional; puede ser cédula o ID del envío. La deduplicación queda limitada al event_id, por lo que no pisa tickets de otros eventos)");
         txt.push("- extras específicos del evento (usa la key exacta del campo, o eventosapp_extra[key])");
         txt.push("");
         txt.push("5) Ejemplo de JSON:");
