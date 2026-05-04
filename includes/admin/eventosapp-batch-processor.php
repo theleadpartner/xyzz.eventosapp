@@ -4,7 +4,7 @@
  * Sistema de actualización por lote en segundo plano
  * 
  * @package EventosApp
- * @version 4.0.0 - Refresh personalizado con selección de recursos
+ * @version 4.1.0 - Procesamiento resiliente en segundo plano con pausa y reanudación
  */
 
 if (!defined('ABSPATH')) exit;
@@ -16,6 +16,10 @@ class EventosApp_Batch_Processor {
     const OPTION_PREFIX = 'eventosapp_batch_';
     const BATCH_SIZES = [10, 25, 50, 100, 200];
     const DEFAULT_BATCH_SIZE = 50;
+    const CRON_HOOK = 'eventosapp_batch_processor_cron_run';
+    const LOCK_OPTION = 'eventosapp_batch_processor_lock';
+    const LOCK_TTL = 120;
+    const LOG_LIMIT = 200;
     
     /**
      * Singleton
@@ -38,7 +42,13 @@ class EventosApp_Batch_Processor {
         add_action('wp_ajax_eventosapp_batch_start', [$this, 'ajax_start_batch']);
         add_action('wp_ajax_eventosapp_batch_process', [$this, 'ajax_process_batch']);
         add_action('wp_ajax_eventosapp_batch_status', [$this, 'ajax_get_status']);
+        add_action('wp_ajax_eventosapp_batch_pause', [$this, 'ajax_pause_batch']);
+        add_action('wp_ajax_eventosapp_batch_resume', [$this, 'ajax_resume_batch']);
         add_action('wp_ajax_eventosapp_batch_cancel', [$this, 'ajax_cancel_batch']);
+
+        // Ejecutor en segundo plano. Permite que el proceso continúe aunque se recargue
+        // la pantalla o se pierda temporalmente la conexión del navegador.
+        add_action(self::CRON_HOOK, [$this, 'cron_process_batch'], 10, 1);
     }
     
     /**
@@ -111,6 +121,16 @@ class EventosApp_Batch_Processor {
                 <span class="dashicons dashicons-update"></span>
                 Actualización por Lote de Tickets
             </h1>
+
+            <div class="notice notice-info eventosapp-batch-background-notice">
+                <p>
+                    <strong>Procesamiento resiliente:</strong> al iniciar una actualización, el avance queda guardado en la base de datos y se agenda un ejecutor en segundo plano. Puedes pausar, continuar, recargar la pantalla o volver después de una caída de conexión sin perder el progreso.
+                </p>
+            </div>
+
+            <div id="batch-connection-notice" class="notice notice-warning eventosapp-batch-connection-notice" style="display:none;">
+                <p><strong>Conexión inestable:</strong> se conservará el progreso y el sistema intentará continuar cuando vuelva la conexión.</p>
+            </div>
             
             <div class="eventosapp-batch-container">
                 
@@ -237,6 +257,21 @@ class EventosApp_Batch_Processor {
                             <button type="button" id="batch-start-btn" class="button button-primary button-hero" <?php echo $current_process ? 'disabled' : ''; ?>>
                                 <span class="dashicons dashicons-controls-play"></span>
                                 Iniciar Actualización
+                            </button>
+                            
+                            <button type="button" id="batch-pause-btn" class="button button-secondary" style="display: none;">
+                                <span class="dashicons dashicons-controls-pause"></span>
+                                Pausar
+                            </button>
+
+                            <button type="button" id="batch-resume-btn" class="button button-primary" style="display: none;">
+                                <span class="dashicons dashicons-controls-play"></span>
+                                Continuar
+                            </button>
+
+                            <button type="button" id="batch-background-btn" class="button button-secondary" style="display: none;">
+                                <span class="dashicons dashicons-admin-generic"></span>
+                                Dejar en segundo plano
                             </button>
                             
                             <button type="button" id="batch-cancel-btn" class="button button-secondary" style="display: none;">
@@ -480,6 +515,11 @@ class EventosApp_Batch_Processor {
             background: #fff8e5;
             color: #996800;
         }
+
+        .status-paused {
+            background: #e0f2fe;
+            color: #075985;
+        }
         
         .status-completed {
             background: #d1fae5;
@@ -642,77 +682,79 @@ class EventosApp_Batch_Processor {
         .log-container::-webkit-scrollbar-thumb:hover {
             background: #777;
         }
+
+        .eventosapp-batch-background-notice,
+        .eventosapp-batch-connection-notice {
+            margin: 0 0 16px 0;
+        }
+
+        .batch-actions .button {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
         </style>
         
         <script>
         jQuery(document).ready(function($) {
-            console.log('EventosApp Batch Processor - Iniciando...');
-            
-            // Variables globales
+            console.log('EventosApp Batch Processor - Iniciando modo resiliente...');
+
             let currentProcess = null;
             let autoScroll = true;
             let startTime = null;
             let timerInterval = null;
-            
+            let monitorInterval = null;
+            let kickInterval = null;
+            let statusAjaxBusy = false;
+            let processAjaxBusy = false;
+            let connectionWarningVisible = false;
+            let processedLogUids = {};
+            let backgroundOnlyMode = false;
+
             const ajaxUrl = <?php echo json_encode($ajax_url); ?>;
             const nonce = <?php echo json_encode($nonce); ?>;
             const availableAssets = <?php echo wp_json_encode($available_assets); ?>;
-            
-            console.log('AJAX URL:', ajaxUrl);
-            console.log('Nonce:', nonce);
-            
-            // Verificar si hay un proceso en curso al cargar
+
             <?php if ($current_process): ?>
-            console.log('Proceso existente encontrado:', <?php echo json_encode($current_process); ?>);
-            loadCurrentProcess(<?php echo json_encode($current_process); ?>);
+            loadCurrentProcess(<?php echo wp_json_encode($current_process); ?>);
             <?php endif; ?>
-            
-            // Evento: Seleccionar evento
+
             $('#batch-event-select').on('change', function() {
                 const eventId = $(this).val();
-                console.log('Evento seleccionado:', eventId);
-                
+
                 if (!eventId) {
                     $('#ticket-count-info').hide();
                     return;
                 }
-                
-                // Obtener cantidad de tickets
+
                 $.post(ajaxUrl, {
                     action: 'eventosapp_batch_status',
                     nonce: nonce,
                     task: 'count_tickets',
                     event_id: eventId
                 }, function(response) {
-                    console.log('Respuesta count tickets:', response);
                     if (response.success) {
                         $('#ticket-count-number').text(response.data.count);
                         $('#ticket-count-info').show();
                     }
                 }).fail(function(xhr, status, error) {
-                    console.error('Error contando tickets:', error);
+                    showConnectionWarning(true);
                     addLog('error', 'Error al contar tickets: ' + error);
                 });
             });
 
-            // Evento: Cambiar modo para mostrar/ocultar recursos personalizados
             $('input[name="batch_mode"]').on('change', function() {
                 toggleCustomAssets();
             });
 
             toggleCustomAssets();
-            
-            // Evento: Iniciar proceso
+
             $('#batch-start-btn').on('click', function() {
-                console.log('Click en Iniciar Actualización');
-                
                 const eventId = $('#batch-event-select').val();
                 const mode = $('input[name="batch_mode"]:checked').val();
                 const batchSize = $('#batch-size-select').val();
                 const selectedAssets = mode === 'custom' ? getSelectedAssets() : [];
-                
-                console.log('Parámetros:', { eventId, mode, batchSize, selectedAssets });
-                
+
                 if (!eventId) {
                     alert('Por favor selecciona un evento');
                     return;
@@ -722,7 +764,7 @@ class EventosApp_Batch_Processor {
                     alert('Selecciona al menos un recurso para ejecutar el refresh personalizado.');
                     return;
                 }
-                
+
                 const eventName = $('#batch-event-select option:selected').text();
                 const modeName = getModeName(mode, selectedAssets);
                 let confirmMessage = '¿Iniciar actualización por lote?\n\nEvento: ' + eventName + '\nModo: ' + modeName;
@@ -730,60 +772,79 @@ class EventosApp_Batch_Processor {
                 if (mode === 'custom') {
                     confirmMessage += '\nRecursos: ' + getAssetLabels(selectedAssets).join(', ');
                 }
-                
+
+                confirmMessage += '\n\nEl proceso quedará guardado y podrá continuar aunque recargues la pantalla o pierdas conexión.';
+
                 if (!confirm(confirmMessage)) {
                     return;
                 }
-                
+
                 startBatchProcess(eventId, mode, batchSize, selectedAssets);
             });
-            
-            // Evento: Cancelar proceso
+
+            $('#batch-pause-btn').on('click', function() {
+                pauseBatchProcess();
+            });
+
+            $('#batch-resume-btn').on('click', function() {
+                resumeBatchProcess();
+            });
+
+            $('#batch-background-btn').on('click', function() {
+                backgroundOnlyMode = true;
+                stopKickLoop();
+                addLog('info', 'El proceso seguirá en segundo plano. Puedes cerrar o recargar esta pantalla; al volver se cargará el progreso guardado.');
+                updateUI();
+            });
+
             $('#batch-cancel-btn').on('click', function() {
-                if (!confirm('¿Estás seguro de cancelar el proceso? El progreso se perderá.')) {
+                if (!confirm('¿Estás seguro de cancelar el proceso? El progreso se detendrá y podrás iniciar uno nuevo.')) {
                     return;
                 }
-                
-                cancelBatchProcess();
+                cancelBatchProcess(false);
             });
-            
-            // Evento: Procesar Nuevo Evento
+
             $('#batch-new-btn').on('click', function() {
-                console.log('Click en Procesar Nuevo Evento');
                 resetProcess();
             });
-            
-            // Evento: Limpiar log
+
             $('#log-clear-btn').on('click', function() {
                 $('#batch-log-container').empty();
+                processedLogUids = {};
                 addLog('info', 'Log limpiado manualmente');
             });
-            
-            // Evento: Toggle auto-scroll
+
             $('#log-auto-scroll-btn').on('click', function() {
                 autoScroll = !autoScroll;
                 $(this).toggleClass('active', autoScroll);
                 $(this).html('<span class="dashicons dashicons-arrow-down-alt"></span> Auto-scroll: ' + (autoScroll ? 'ON' : 'OFF'));
             });
-            
-            /**
-             * Iniciar proceso de actualización por lote
-             */
+
+            window.addEventListener('offline', function() {
+                showConnectionWarning(true);
+                addLog('warning', 'Se perdió la conexión del navegador. El progreso ya guardado no se perderá.');
+            });
+
+            window.addEventListener('online', function() {
+                showConnectionWarning(false);
+                addLog('success', 'Conexión recuperada. Consultando estado y reactivando ejecución.');
+                pollStatus(true);
+                if (!backgroundOnlyMode) {
+                    kickProcessor();
+                    startKickLoop();
+                }
+            });
+
             function startBatchProcess(eventId, mode, batchSize, selectedAssets) {
                 selectedAssets = Array.isArray(selectedAssets) ? selectedAssets : [];
-                console.log('=== INICIANDO PROCESO ===');
-                console.log('Event ID:', eventId);
-                console.log('Mode:', mode);
-                console.log('Batch Size:', batchSize);
-                console.log('Selected Assets:', selectedAssets);
-                
+                backgroundOnlyMode = false;
+
                 addLog('batch', '═══════════════════════════════════════════════════');
                 addLog('batch', 'INICIANDO PROCESO DE ACTUALIZACIÓN POR LOTE');
                 addLog('batch', '═══════════════════════════════════════════════════');
-                
-                // Deshabilitar botón mientras procesa
+
                 $('#batch-start-btn').prop('disabled', true).text('Iniciando...');
-                
+
                 $.ajax({
                     url: ajaxUrl,
                     type: 'POST',
@@ -797,12 +858,12 @@ class EventosApp_Batch_Processor {
                         assets: selectedAssets
                     },
                     success: function(response) {
-                        console.log('Respuesta de inicio:', response);
-                        
+                        showConnectionWarning(false);
+
                         if (response.success) {
                             currentProcess = response.data;
-                            startTime = new Date();
-                            
+                            startTime = new Date((currentProcess.start_time || Math.floor(Date.now() / 1000)) * 1000);
+
                             addLog('success', 'Proceso iniciado correctamente');
                             addLog('info', 'Evento: ' + $('#batch-event-select option:selected').text());
                             addLog('info', 'Modo: ' + getModeName(currentProcess.mode, currentProcess.assets || selectedAssets));
@@ -811,44 +872,34 @@ class EventosApp_Batch_Processor {
                             }
                             addLog('info', 'Total de tickets: ' + currentProcess.total);
                             addLog('info', 'Tamaño de lote: ' + batchSize);
-                            
-                            console.log('Mostrando UI y comenzando proceso...');
+                            addLog('info', 'Ejecución en segundo plano activada. Puedes recargar la pantalla sin perder progreso.');
+
+                            renderProcessLogs(currentProcess.logs || []);
                             updateUI();
-                            
-                            // Pequeña pausa antes de comenzar el primer lote
-                            setTimeout(function() {
-                                processNextBatch();
-                            }, 500);
+                            updateProgress();
+                            startMonitorLoop();
+                            startKickLoop();
+                            kickProcessor();
                         } else {
-                            addLog('error', 'Error al iniciar: ' + (response.data && response.data.message ? response.data.message : 'Desconocido'));
+                            addLog('error', 'Error al iniciar: ' + getResponseMessage(response));
                             $('#batch-start-btn').prop('disabled', false).html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
                         }
                     },
                     error: function(xhr, status, error) {
-                        console.error('Error AJAX al iniciar:', error);
-                        console.error('XHR:', xhr);
-                        console.error('Status:', status);
-                        console.error('Response Text:', xhr.responseText);
-                        
+                        showConnectionWarning(true);
                         addLog('error', 'Error de conexión al iniciar el proceso: ' + error);
                         $('#batch-start-btn').prop('disabled', false).html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
                     }
                 });
             }
-            
-            /**
-             * Procesar siguiente lote
-             */
-            function processNextBatch() {
-                if (!currentProcess) {
-                    console.error('No hay proceso activo');
+
+            function kickProcessor() {
+                if (!currentProcess || currentProcess.status !== 'processing' || processAjaxBusy || !navigator.onLine) {
                     return;
                 }
-                
-                const batchNumber = Math.floor(currentProcess.processed / currentProcess.batch_size) + 1;
-                console.log('Procesando lote ' + batchNumber);
-                addLog('batch', '--- Procesando lote ' + batchNumber + ' ---');
-                
+
+                processAjaxBusy = true;
+
                 $.ajax({
                     url: ajaxUrl,
                     type: 'POST',
@@ -859,119 +910,194 @@ class EventosApp_Batch_Processor {
                         process_id: currentProcess.id
                     },
                     success: function(response) {
-                        console.log('Respuesta de lote:', response);
-                        
-                        if (response.success) {
+                        processAjaxBusy = false;
+                        showConnectionWarning(false);
+
+                        if (response.success && response.data) {
                             currentProcess = response.data;
-                            
-                            // Actualizar estadísticas
+                            renderProcessLogs(currentProcess.logs || []);
+                            updateUI();
                             updateProgress();
-                            
-                            // Logs del lote
-                            if (response.data.batch_log && response.data.batch_log.length > 0) {
-                                response.data.batch_log.forEach(function(log) {
-                                    addLog(log.type, log.message);
-                                });
-                            }
-                            
-                            addLog('success', 'Lote ' + batchNumber + ' completado: ' + response.data.last_batch_processed + ' tickets procesados');
-                            
-                            // Continuar o finalizar
+
                             if (currentProcess.status === 'completed') {
-                                console.log('Proceso completado');
                                 finishProcess();
-                            } else if (currentProcess.status === 'processing') {
-                                // Pequeña pausa entre lotes para no saturar
-                                setTimeout(processNextBatch, 500);
                             }
                         } else {
-                            addLog('error', 'Error procesando lote: ' + (response.data && response.data.message ? response.data.message : 'Desconocido'));
-                            currentProcess.status = 'error';
+                            const message = getResponseMessage(response);
+                            if (message && message !== 'El proceso no está en ejecución') {
+                                addLog('warning', 'No se pudo ejecutar el lote ahora: ' + message);
+                            }
+                            pollStatus(true);
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        processAjaxBusy = false;
+                        showConnectionWarning(true);
+                        addLogOncePerMinute('connection_process_error', 'error', 'Error de conexión durante el procesamiento. Se reintentará automáticamente: ' + error);
+                    }
+                });
+            }
+
+            function pollStatus(force) {
+                if (statusAjaxBusy && !force) {
+                    return;
+                }
+
+                statusAjaxBusy = true;
+
+                $.ajax({
+                    url: ajaxUrl,
+                    type: 'POST',
+                    dataType: 'json',
+                    data: {
+                        action: 'eventosapp_batch_status',
+                        nonce: nonce
+                    },
+                    success: function(response) {
+                        statusAjaxBusy = false;
+                        showConnectionWarning(false);
+
+                        if (response.success && response.data) {
+                            const oldStatus = currentProcess ? currentProcess.status : '';
+                            currentProcess = response.data;
+                            if (!startTime && currentProcess.start_time) {
+                                startTime = new Date(currentProcess.start_time * 1000);
+                            }
+                            renderProcessLogs(currentProcess.logs || []);
+                            updateUI();
+                            updateProgress();
+
+                            if (oldStatus !== 'completed' && currentProcess.status === 'completed') {
+                                finishProcess();
+                            }
+                        } else if (response.success && !response.data) {
+                            currentProcess = null;
                             updateUI();
                         }
                     },
                     error: function(xhr, status, error) {
-                        console.error('Error AJAX procesando lote:', error);
-                        console.error('Response Text:', xhr.responseText);
-                        
-                        addLog('error', 'Error de conexión durante el procesamiento: ' + error);
-                        if (currentProcess) {
-                            currentProcess.status = 'error';
-                            updateUI();
-                        }
+                        statusAjaxBusy = false;
+                        showConnectionWarning(true);
+                        addLogOncePerMinute('connection_status_error', 'warning', 'No se pudo consultar el estado. Se reintentará automáticamente: ' + error);
                     }
                 });
             }
-            
-            /**
-             * Cancelar proceso
-             */
-            function cancelBatchProcess() {
-                if (!currentProcess) return;
-                
-                console.log('Cancelando proceso...');
-                addLog('warning', 'Cancelando proceso...');
-                
+
+            function pauseBatchProcess() {
+                if (!currentProcess || currentProcess.status !== 'processing') return;
+
+                addLog('warning', 'Pausando proceso...');
+
                 $.post(ajaxUrl, {
-                    action: 'eventosapp_batch_cancel',
+                    action: 'eventosapp_batch_pause',
                     nonce: nonce,
                     process_id: currentProcess.id
                 }, function(response) {
                     if (response.success) {
-                        addLog('warning', 'Proceso cancelado correctamente');
-                        currentProcess = null;
-                        if (timerInterval) {
-                            clearInterval(timerInterval);
-                        }
+                        currentProcess = response.data;
+                        renderProcessLogs(currentProcess.logs || []);
+                        stopKickLoop();
                         updateUI();
+                        updateProgress();
+                    } else {
+                        addLog('error', 'No se pudo pausar: ' + getResponseMessage(response));
                     }
+                }).fail(function(xhr, status, error) {
+                    showConnectionWarning(true);
+                    addLog('error', 'Error de conexión al pausar: ' + error);
                 });
             }
-            
-            /**
-             * Resetear proceso para comenzar uno nuevo
-             */
+
+            function resumeBatchProcess() {
+                if (!currentProcess) return;
+
+                backgroundOnlyMode = false;
+                addLog('success', 'Reanudando proceso...');
+
+                $.post(ajaxUrl, {
+                    action: 'eventosapp_batch_resume',
+                    nonce: nonce,
+                    process_id: currentProcess.id
+                }, function(response) {
+                    if (response.success) {
+                        currentProcess = response.data;
+                        renderProcessLogs(currentProcess.logs || []);
+                        updateUI();
+                        updateProgress();
+                        startMonitorLoop();
+                        startKickLoop();
+                        kickProcessor();
+                    } else {
+                        addLog('error', 'No se pudo continuar: ' + getResponseMessage(response));
+                    }
+                }).fail(function(xhr, status, error) {
+                    showConnectionWarning(true);
+                    addLog('error', 'Error de conexión al continuar: ' + error);
+                });
+            }
+
+            function cancelBatchProcess(hardReset) {
+                if (!currentProcess && !hardReset) return;
+
+                addLog('warning', hardReset ? 'Limpiando proceso...' : 'Cancelando proceso...');
+
+                $.post(ajaxUrl, {
+                    action: 'eventosapp_batch_cancel',
+                    nonce: nonce,
+                    process_id: currentProcess ? currentProcess.id : '',
+                    hard_reset: hardReset ? 1 : 0
+                }, function(response) {
+                    if (response.success) {
+                        stopMonitorLoop();
+                        stopKickLoop();
+
+                        if (hardReset || (response.data && response.data.cleared)) {
+                            currentProcess = null;
+                        } else {
+                            currentProcess = response.data;
+                            renderProcessLogs(currentProcess.logs || []);
+                        }
+
+                        updateUI();
+                        updateProgress();
+                    } else {
+                        addLog('error', 'No se pudo cancelar: ' + getResponseMessage(response));
+                    }
+                }).fail(function(xhr, status, error) {
+                    showConnectionWarning(true);
+                    addLog('error', 'Error de conexión al cancelar: ' + error);
+                });
+            }
+
             function resetProcess() {
-                console.log('Reseteando proceso para iniciar uno nuevo...');
-                
-                // Cancelar proceso actual en el servidor
+                stopMonitorLoop();
+                stopKickLoop();
+
                 if (currentProcess && currentProcess.id) {
-                    $.post(ajaxUrl, {
-                        action: 'eventosapp_batch_cancel',
-                        nonce: nonce,
-                        process_id: currentProcess.id
-                    });
+                    cancelBatchProcess(true);
                 }
-                
-                // Limpiar timer si existe
+
                 if (timerInterval) {
                     clearInterval(timerInterval);
                     timerInterval = null;
                 }
-                
-                // Resetear variables
+
                 currentProcess = null;
                 startTime = null;
-                
-                // Limpiar selección de evento
+                backgroundOnlyMode = false;
+                processedLogUids = {};
+
                 $('#batch-event-select').val('').trigger('change');
                 $('#ticket-count-info').hide();
-                
-                // Resetear modo a completo
                 $('#mode-complete').prop('checked', true);
                 $('.batch-custom-asset').prop('checked', true);
                 toggleCustomAssets();
-                
-                // Resetear tamaño de lote al recomendado
                 $('#batch-size-select').val('50');
-                
-                // Limpiar log
+
                 $('#batch-log-container').empty();
                 addLog('info', 'Sistema reseteado. Listo para procesar un nuevo evento.');
-                
-                // Ocultar panel de progreso con animación suave
+
                 $('#batch-progress-panel').fadeOut(300, function() {
-                    // Resetear valores del progreso
                     $('#progress-bar').css('width', '0%');
                     $('#progress-percentage').text('0%');
                     $('#progress-current, #progress-total, #progress-success, #progress-skipped, #progress-failed').text('0');
@@ -980,46 +1106,24 @@ class EventosApp_Batch_Processor {
                     $('#progress-event-name').text('-');
                     $('#progress-mode').text('-');
                 });
-                
-                // Actualizar UI para mostrar estado inicial
+
                 updateUI();
-                
-                console.log('Reset completado');
             }
-            
-            /**
-             * Finalizar proceso
-             */
+
             function finishProcess() {
-                console.log('Finalizando proceso...');
-                
+                stopKickLoop();
+                stopMonitorLoop(false);
                 if (timerInterval) {
                     clearInterval(timerInterval);
+                    timerInterval = null;
                 }
-                
-                addLog('batch', '═══════════════════════════════════════════════════');
-                addLog('batch', 'PROCESO COMPLETADO');
-                addLog('batch', '═══════════════════════════════════════════════════');
-                addLog('success', 'Total procesados: ' + currentProcess.processed);
-                addLog('success', 'Exitosos: ' + currentProcess.success);
-                addLog('warning', 'Omitidos: ' + currentProcess.skipped);
-                addLog('error', 'Errores: ' + currentProcess.failed);
-                
-                const duration = Math.floor((new Date() - startTime) / 1000);
-                const minutes = Math.floor(duration / 60);
-                const seconds = duration % 60;
-                addLog('info', 'Tiempo total: ' + minutes + 'm ' + seconds + 's');
-                
                 updateUI();
+                updateProgress();
             }
-            
-            /**
-             * Cargar proceso en curso
-             */
+
             function loadCurrentProcess(process) {
-                console.log('Cargando proceso existente:', process);
                 currentProcess = process;
-                startTime = new Date(process.start_time * 1000);
+                startTime = new Date((process.start_time || Math.floor(Date.now() / 1000)) * 1000);
 
                 if (process.event_id) {
                     $('#batch-event-select').val(String(process.event_id));
@@ -1037,138 +1141,149 @@ class EventosApp_Batch_Processor {
                 }
 
                 toggleCustomAssets();
+                renderProcessLogs(process.logs || []);
                 updateUI();
                 updateProgress();
-                
+
                 if (process.status === 'processing') {
-                    processNextBatch();
+                    addLog('info', 'Proceso existente detectado. Se continúa desde el progreso guardado.');
+                    startMonitorLoop();
+                    startKickLoop();
+                    kickProcessor();
                 }
             }
-            
-            /**
-             * Actualizar UI
-             */
+
             function updateUI() {
-                console.log('Actualizando UI. Proceso actual:', currentProcess);
-                
                 if (currentProcess) {
-                    console.log('Mostrando panel de progreso. Estado:', currentProcess.status);
-                    
-                    // Deshabilitar configuración
                     $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn, .batch-custom-asset').prop('disabled', true);
-                    $('#batch-progress-panel').show(); // FORZAR mostrar el panel
-                    
-                    // Actualizar información del evento
-                    $('#progress-event-name').text($('#batch-event-select option:selected').text());
+                    $('#batch-progress-panel').show();
+
+                    $('#progress-event-name').text($('#batch-event-select option:selected').text() || ('Evento ID: ' + currentProcess.event_id));
                     $('#progress-mode').text(getModeName(currentProcess.mode, currentProcess.assets || []));
-                    
-                    // Estado y manejo de botones según estado del proceso
+
                     const statusBadge = $('#progress-status');
-                    statusBadge.removeClass('status-running status-completed status-cancelled status-error');
-                    
+                    statusBadge.removeClass('status-running status-paused status-completed status-cancelled status-error');
+
+                    $('#batch-pause-btn, #batch-resume-btn, #batch-background-btn, #batch-cancel-btn, #batch-new-btn').hide();
+
                     if (currentProcess.status === 'processing') {
-                        // PROCESANDO: Mostrar botón cancelar, ocultar botón nuevo
-                        statusBadge.addClass('status-running').text('Procesando');
+                        statusBadge.addClass('status-running').text(backgroundOnlyMode ? 'Segundo plano' : 'Procesando');
+                        $('#batch-pause-btn').show();
+                        $('#batch-background-btn').show();
                         $('#batch-cancel-btn').show();
-                        $('#batch-new-btn').hide();
                         startTimer();
+                    } else if (currentProcess.status === 'paused') {
+                        statusBadge.addClass('status-paused').text('Pausado');
+                        $('#batch-resume-btn').show();
+                        $('#batch-cancel-btn').show();
+                        stopKickLoop();
                     } else if (currentProcess.status === 'completed') {
-                        // COMPLETADO: Ocultar botón cancelar, mostrar botón nuevo
                         statusBadge.addClass('status-completed').text('Completado');
-                        $('#batch-cancel-btn').hide();
                         $('#batch-new-btn').show();
                     } else if (currentProcess.status === 'cancelled') {
-                        // CANCELADO: Ocultar botón cancelar, mostrar botón nuevo
                         statusBadge.addClass('status-cancelled').text('Cancelado');
-                        $('#batch-cancel-btn').hide();
                         $('#batch-new-btn').show();
                     } else if (currentProcess.status === 'error') {
-                        // ERROR: Ocultar botón cancelar, mostrar botón nuevo
                         statusBadge.addClass('status-error').text('Error');
-                        $('#batch-cancel-btn').hide();
+                        $('#batch-resume-btn').show();
                         $('#batch-new-btn').show();
                     }
                 } else {
-                    console.log('Ocultando panel de progreso');
-                    
-                    // Habilitar configuración
                     $('#batch-event-select, input[name="batch_mode"], #batch-size-select, #batch-start-btn, .batch-custom-asset').prop('disabled', false);
                     $('#batch-start-btn').html('<span class="dashicons dashicons-controls-play"></span> Iniciar Actualización');
                     toggleCustomAssets();
-                    $('#batch-cancel-btn').hide();
-                    $('#batch-new-btn').hide();
-                    
-                    // Resetear progreso
+                    $('#batch-pause-btn, #batch-resume-btn, #batch-background-btn, #batch-cancel-btn, #batch-new-btn').hide();
                     $('#progress-bar').css('width', '0%');
                     $('#progress-percentage').text('0%');
                     $('#progress-current, #progress-total, #progress-success, #progress-skipped, #progress-failed').text('0');
                 }
             }
-            
-            /**
-             * Actualizar progreso
-             */
+
             function updateProgress() {
                 if (!currentProcess) return;
-                
-                console.log('Actualizando progreso:', currentProcess.processed + '/' + currentProcess.total);
-                
-                const percentage = currentProcess.total > 0 ? Math.round((currentProcess.processed / currentProcess.total) * 100) : 0;
-                
+
+                const total = parseInt(currentProcess.total || 0, 10);
+                const processed = parseInt(currentProcess.processed || 0, 10);
+                const percentage = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+
                 $('#progress-bar').css('width', percentage + '%');
                 $('#progress-percentage').text(percentage + '%');
-                $('#progress-current').text(currentProcess.processed);
-                $('#progress-total').text(currentProcess.total);
-                $('#progress-success').text(currentProcess.success);
-                $('#progress-skipped').text(currentProcess.skipped);
-                $('#progress-failed').text(currentProcess.failed);
-                
-                // Calcular tiempo estimado
-                if (currentProcess.processed > 0 && startTime) {
+                $('#progress-current').text(processed);
+                $('#progress-total').text(total);
+                $('#progress-success').text(currentProcess.success || 0);
+                $('#progress-skipped').text(currentProcess.skipped || 0);
+                $('#progress-failed').text(currentProcess.failed || 0);
+
+                if (processed > 0 && startTime && currentProcess.status === 'processing') {
                     const elapsed = (new Date() - startTime) / 1000;
-                    const rate = currentProcess.processed / elapsed;
-                    const remaining = currentProcess.total - currentProcess.processed;
-                    const estimatedSeconds = Math.ceil(remaining / rate);
-                    
+                    const rate = processed / Math.max(elapsed, 1);
+                    const remaining = Math.max(total - processed, 0);
+                    const estimatedSeconds = Math.ceil(remaining / Math.max(rate, 0.001));
                     const estMinutes = Math.floor(estimatedSeconds / 60);
                     const estSeconds = estimatedSeconds % 60;
                     $('#estimated-time').text(estMinutes + 'm ' + estSeconds + 's');
+                } else if (currentProcess.status === 'paused') {
+                    $('#estimated-time').text('Pausado');
+                } else if (currentProcess.status === 'completed') {
+                    $('#estimated-time').text('Completado');
                 }
             }
-            
-            /**
-             * Iniciar timer
-             */
+
             function startTimer() {
                 if (timerInterval) {
                     clearInterval(timerInterval);
                 }
-                
+
                 timerInterval = setInterval(function() {
                     if (!startTime) return;
-                    
                     const elapsed = Math.floor((new Date() - startTime) / 1000);
                     const minutes = Math.floor(elapsed / 60);
                     const seconds = elapsed % 60;
                     $('#elapsed-time').text(
-                        (minutes < 10 ? '0' : '') + minutes + ':' + 
+                        (minutes < 10 ? '0' : '') + minutes + ':' +
                         (seconds < 10 ? '0' : '') + seconds
                     );
                 }, 1000);
             }
-            
-            /**
-             * Mostrar u ocultar el panel de recursos del refresh personalizado.
-             */
-            function toggleCustomAssets() {
-                const mode = $('input[name="batch_mode"]:checked').val();
-                const shouldShow = mode === 'custom';
-                $('#custom-assets-row').toggle(shouldShow);
+
+            function startMonitorLoop() {
+                stopMonitorLoop(false);
+                monitorInterval = setInterval(function() {
+                    pollStatus(false);
+                }, 3000);
             }
 
-            /**
-             * Obtener recursos personalizados seleccionados.
-             */
+            function stopMonitorLoop(clearTimer) {
+                if (monitorInterval) {
+                    clearInterval(monitorInterval);
+                    monitorInterval = null;
+                }
+                if (clearTimer && timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+            }
+
+            function startKickLoop() {
+                if (backgroundOnlyMode) return;
+                stopKickLoop();
+                kickInterval = setInterval(function() {
+                    kickProcessor();
+                }, 1800);
+            }
+
+            function stopKickLoop() {
+                if (kickInterval) {
+                    clearInterval(kickInterval);
+                    kickInterval = null;
+                }
+            }
+
+            function toggleCustomAssets() {
+                const mode = $('input[name="batch_mode"]:checked').val();
+                $('#custom-assets-row').toggle(mode === 'custom');
+            }
+
             function getSelectedAssets() {
                 const assets = [];
                 $('.batch-custom-asset:checked').each(function() {
@@ -1177,9 +1292,6 @@ class EventosApp_Batch_Processor {
                 return assets;
             }
 
-            /**
-             * Obtener etiquetas legibles para recursos seleccionados.
-             */
             function getAssetLabels(assets) {
                 assets = Array.isArray(assets) ? assets : [];
                 return assets.map(function(asset) {
@@ -1190,9 +1302,6 @@ class EventosApp_Batch_Processor {
                 });
             }
 
-            /**
-             * Nombre legible del modo.
-             */
             function getModeName(mode, assets) {
                 if (mode === 'complete') {
                     return 'Regeneración Completa';
@@ -1207,25 +1316,60 @@ class EventosApp_Batch_Processor {
                 return mode || '-';
             }
 
-            /**
-             * Agregar entrada al log
-             */
-            function addLog(type, message) {
-                const time = new Date().toTimeString().split(' ')[0];
+            function renderProcessLogs(logs) {
+                if (!Array.isArray(logs)) return;
+                logs.forEach(function(log) {
+                    if (!log || !log.uid || processedLogUids[log.uid]) return;
+                    processedLogUids[log.uid] = true;
+                    addLog(log.type || 'info', log.message || '', log.time || null);
+                });
+            }
+
+            const logThrottle = {};
+            function addLogOncePerMinute(key, type, message) {
+                const now = Date.now();
+                if (logThrottle[key] && (now - logThrottle[key]) < 60000) {
+                    return;
+                }
+                logThrottle[key] = now;
+                addLog(type, message);
+            }
+
+            function addLog(type, message, timestamp) {
+                const time = timestamp ? formatLogTime(timestamp) : new Date().toTimeString().split(' ')[0];
                 const entry = $('<div class="log-entry log-' + type + '">' +
                     '<span class="log-time">[' + time + ']</span>' +
-                    '<span class="log-message">' + message + '</span>' +
+                    '<span class="log-message"></span>' +
                     '</div>');
-                
+
+                entry.find('.log-message').text(message);
                 $('#batch-log-container').append(entry);
-                
+
                 if (autoScroll) {
                     const container = document.getElementById('batch-log-container');
                     container.scrollTop = container.scrollHeight;
                 }
             }
-            
-            console.log('EventosApp Batch Processor - Listo');
+
+            function formatLogTime(timestamp) {
+                const numeric = parseInt(timestamp, 10);
+                if (!numeric) return new Date().toTimeString().split(' ')[0];
+                return new Date(numeric * 1000).toTimeString().split(' ')[0];
+            }
+
+            function getResponseMessage(response) {
+                if (response && response.data && response.data.message) return response.data.message;
+                if (response && response.message) return response.message;
+                return 'Desconocido';
+            }
+
+            function showConnectionWarning(show) {
+                if (show === connectionWarningVisible) return;
+                connectionWarningVisible = show;
+                $('#batch-connection-notice').toggle(show);
+            }
+
+            console.log('EventosApp Batch Processor - Listo en modo resiliente');
         });
         </script>
         <?php
@@ -1236,20 +1380,20 @@ class EventosApp_Batch_Processor {
      */
     public function ajax_start_batch() {
         check_ajax_referer('eventosapp_batch_processor', 'nonce');
-        
+
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => 'Permisos insuficientes']);
         }
-        
+
         $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
         $mode = isset($_POST['mode']) ? sanitize_key(wp_unslash($_POST['mode'])) : 'complete';
         $batch_size = isset($_POST['batch_size']) ? absint($_POST['batch_size']) : self::DEFAULT_BATCH_SIZE;
         $assets = [];
-        
+
         if (!$event_id) {
             wp_send_json_error(['message' => 'ID de evento inválido']);
         }
-        
+
         if (!in_array($mode, ['complete', 'qr_missing', 'custom'], true)) {
             $mode = 'complete';
         }
@@ -1261,26 +1405,25 @@ class EventosApp_Batch_Processor {
                 wp_send_json_error(['message' => 'Selecciona al menos un recurso para ejecutar el refresh personalizado']);
             }
         }
-        
+
         if (!in_array($batch_size, self::BATCH_SIZES, true)) {
             $batch_size = self::DEFAULT_BATCH_SIZE;
         }
-        
-        // Verificar si ya hay un proceso activo
+
         $active = $this->get_current_process();
-        if ($active && $active['status'] === 'processing') {
-            wp_send_json_error(['message' => 'Ya hay un proceso en ejecución']);
+        if ($active && isset($active['status']) && in_array($active['status'], ['processing', 'paused'], true)) {
+            wp_send_json_error(['message' => 'Ya hay un proceso activo. Debes pausarlo, continuarlo, cancelarlo o finalizarlo antes de iniciar otro.']);
         }
-        
-        // Contar tickets del evento
+
         $total = $this->count_tickets_by_event($event_id);
-        
+
         if ($total === 0) {
             wp_send_json_error(['message' => 'No se encontraron tickets para este evento']);
         }
-        
-        // Crear nuevo proceso
-        $process_id = 'batch_' . $event_id . '_' . time();
+
+        $process_id = 'batch_' . $event_id . '_' . time() . '_' . wp_generate_password(6, false, false);
+        $now = time();
+
         $process_data = [
             'id' => $process_id,
             'event_id' => $event_id,
@@ -1295,144 +1438,603 @@ class EventosApp_Batch_Processor {
             'failed' => 0,
             'current_offset' => 0,
             'status' => 'processing',
-            'start_time' => time(),
-            'last_update' => time()
+            'background_enabled' => true,
+            'resume_count' => 0,
+            'start_time' => $now,
+            'last_update' => $now,
+            'last_heartbeat' => $now,
+            'last_runner' => 'start',
+            'last_batch_processed' => 0,
+            'batch_log' => [],
+            'logs' => [],
         ];
-        
-        update_option(self::OPTION_PREFIX . 'current', $process_data);
-        
+
+        $initial_logs = [
+            $this->make_process_log('batch', 'Proceso creado y guardado en base de datos.'),
+            $this->make_process_log('info', 'Ejecución en segundo plano activada mediante WP-Cron y refuerzo AJAX mientras la pantalla esté abierta.'),
+        ];
+        $process_data = $this->append_process_logs($process_data, $initial_logs);
+
+        update_option(self::OPTION_PREFIX . 'current', $process_data, false);
+        $this->release_process_lock($process_id);
+        $this->schedule_background_runner($process_data, 1);
+
         wp_send_json_success($process_data);
     }
-    
+
     /**
-     * AJAX: Procesar siguiente lote
+     * AJAX: Procesar siguiente lote. Este endpoint ahora es un refuerzo de ejecución,
+     * no el único motor. Si la pantalla se cierra, el runner de WP-Cron continúa.
      */
     public function ajax_process_batch() {
         check_ajax_referer('eventosapp_batch_processor', 'nonce');
-        
+
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => 'Permisos insuficientes']);
         }
-        
-        $process = $this->get_current_process();
-        
-        if (!$process) {
-            wp_send_json_error(['message' => 'No hay proceso activo']);
-        }
-        
-        if ($process['status'] !== 'processing') {
-            wp_send_json_error(['message' => 'El proceso no está en ejecución']);
-        }
-        
-        // Obtener tickets del lote actual
-        $tickets = $this->get_tickets_batch(
-            $process['event_id'],
-            $process['current_offset'],
-            $process['batch_size']
-        );
-        
-        $batch_log = [];
-        $batch_success = 0;
-        $batch_skipped = 0;
-        $batch_failed = 0;
-        
-        $process_assets = isset($process['assets']) && is_array($process['assets']) ? $process['assets'] : [];
 
-        foreach ($tickets as $ticket_id) {
-            $result = $this->process_ticket($ticket_id, $process['mode'], $process_assets);
-            $result_message = isset($result['message']) && $result['message'] !== '' ? ': ' . $result['message'] : '';
-            
-            if ($result['status'] === 'success') {
-                $batch_success++;
-                $batch_log[] = [
-                    'type' => 'success',
-                    'message' => "✓ Ticket #{$ticket_id} procesado correctamente" . $result_message
-                ];
-            } elseif ($result['status'] === 'skipped') {
-                $batch_skipped++;
-                $batch_log[] = [
-                    'type' => 'warning',
-                    'message' => "⊘ Ticket #{$ticket_id} omitido" . $result_message
-                ];
-            } else {
-                $batch_failed++;
-                $batch_log[] = [
-                    'type' => 'error',
-                    'message' => "✗ Ticket #{$ticket_id} falló" . $result_message
-                ];
+        $process_id = isset($_POST['process_id']) ? sanitize_text_field(wp_unslash($_POST['process_id'])) : '';
+        $result = $this->process_next_batch_internal($process_id, 'ajax');
+
+        if (is_wp_error($result)) {
+            $current = $this->get_current_process();
+            $error_code = $result->get_error_code();
+
+            if ($error_code === 'locked' && $current) {
+                wp_send_json_success($current);
             }
+
+            wp_send_json_error(['message' => $result->get_error_message()]);
         }
-        
-        // Actualizar proceso
-        $process['processed'] += count($tickets);
-        $process['success'] += $batch_success;
-        $process['skipped'] += $batch_skipped;
-        $process['failed'] += $batch_failed;
-        $process['current_offset'] += $process['batch_size'];
-        $process['last_update'] = time();
-        $process['last_batch_processed'] = count($tickets);
-        $process['batch_log'] = $batch_log;
-        
-        // Verificar si terminamos
-        if ($process['processed'] >= $process['total']) {
-            $process['status'] = 'completed';
-            $process['end_time'] = time();
-        }
-        
-        update_option(self::OPTION_PREFIX . 'current', $process);
-        
-        wp_send_json_success($process);
+
+        wp_send_json_success($result);
     }
-    
+
     /**
-     * AJAX: Obtener estado del proceso
+     * AJAX: Obtener estado del proceso o contar tickets.
      */
     public function ajax_get_status() {
         check_ajax_referer('eventosapp_batch_processor', 'nonce');
-        
-        $task = isset($_POST['task']) ? sanitize_text_field($_POST['task']) : '';
-        
+
+        $task = isset($_POST['task']) ? sanitize_text_field(wp_unslash($_POST['task'])) : '';
+
         if ($task === 'count_tickets') {
+            if (!current_user_can('manage_options')) {
+                wp_send_json_error(['message' => 'Permisos insuficientes']);
+            }
+
             $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
             $count = $this->count_tickets_by_event($event_id);
             wp_send_json_success(['count' => $count]);
         }
-        
+
         $process = $this->get_current_process();
+
+        if ($process && isset($process['status']) && $process['status'] === 'processing') {
+            // Si el usuario vuelve después de recargar o perder conexión, esta consulta
+            // reasegura que exista un runner agendado.
+            $this->schedule_background_runner($process, 1);
+            $process = $this->get_current_process();
+        }
+
         wp_send_json_success($process);
     }
-    
+
     /**
-     * AJAX: Cancelar proceso
+     * AJAX: Pausar proceso sin perder progreso.
      */
-    public function ajax_cancel_batch() {
+    public function ajax_pause_batch() {
         check_ajax_referer('eventosapp_batch_processor', 'nonce');
-        
+
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => 'Permisos insuficientes']);
         }
-        
-        delete_option(self::OPTION_PREFIX . 'current');
-        wp_send_json_success(['message' => 'Proceso cancelado']);
+
+        $process_id = isset($_POST['process_id']) ? sanitize_text_field(wp_unslash($_POST['process_id'])) : '';
+        $process = $this->get_current_process();
+
+        if (!$process) {
+            wp_send_json_error(['message' => 'No hay proceso activo']);
+        }
+
+        if (!$this->process_id_matches($process, $process_id)) {
+            wp_send_json_error(['message' => 'El proceso solicitado no coincide con el proceso activo']);
+        }
+
+        if (!isset($process['status']) || $process['status'] !== 'processing') {
+            wp_send_json_error(['message' => 'Solo se puede pausar un proceso en ejecución']);
+        }
+
+        $process['status'] = 'paused';
+        $process['paused_at'] = time();
+        $process['last_update'] = time();
+        $process['last_runner'] = 'paused_by_user';
+        $process['batch_log'] = [
+            ['type' => 'warning', 'message' => 'Proceso pausado manualmente. Puedes continuarlo después sin perder progreso.'],
+        ];
+        $process = $this->append_process_logs($process, [
+            $this->make_process_log('warning', 'Proceso pausado manualmente. Puedes continuarlo después sin perder progreso.'),
+        ]);
+
+        update_option(self::OPTION_PREFIX . 'current', $process, false);
+        $this->unschedule_background_runner($process['id']);
+        $this->release_process_lock($process['id']);
+
+        wp_send_json_success($process);
     }
-    
+
     /**
-     * Obtener proceso actual
+     * AJAX: Continuar proceso pausado o reactivar un proceso que quedó en error recuperable.
+     */
+    public function ajax_resume_batch() {
+        check_ajax_referer('eventosapp_batch_processor', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Permisos insuficientes']);
+        }
+
+        $process_id = isset($_POST['process_id']) ? sanitize_text_field(wp_unslash($_POST['process_id'])) : '';
+        $process = $this->get_current_process();
+
+        if (!$process) {
+            wp_send_json_error(['message' => 'No hay proceso activo']);
+        }
+
+        if (!$this->process_id_matches($process, $process_id)) {
+            wp_send_json_error(['message' => 'El proceso solicitado no coincide con el proceso activo']);
+        }
+
+        $status = isset($process['status']) ? $process['status'] : '';
+        if (!in_array($status, ['paused', 'error'], true)) {
+            wp_send_json_error(['message' => 'Solo se puede continuar un proceso pausado o en error']);
+        }
+
+        $process['status'] = 'processing';
+        $process['last_update'] = time();
+        $process['last_heartbeat'] = time();
+        $process['last_runner'] = 'resumed_by_user';
+        $process['resume_count'] = isset($process['resume_count']) ? absint($process['resume_count']) + 1 : 1;
+        unset($process['paused_at'], $process['end_time']);
+        $process['batch_log'] = [
+            ['type' => 'success', 'message' => 'Proceso reanudado. Se continuará desde el último lote guardado.'],
+        ];
+        $process = $this->append_process_logs($process, [
+            $this->make_process_log('success', 'Proceso reanudado. Se continuará desde el último lote guardado.'),
+        ]);
+
+        update_option(self::OPTION_PREFIX . 'current', $process, false);
+        $this->release_process_lock($process['id']);
+        $this->schedule_background_runner($process, 1);
+
+        wp_send_json_success($process);
+    }
+
+    /**
+     * AJAX: Cancelar proceso o limpiar estado para iniciar uno nuevo.
+     */
+    public function ajax_cancel_batch() {
+        check_ajax_referer('eventosapp_batch_processor', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Permisos insuficientes']);
+        }
+
+        $hard_reset = !empty($_POST['hard_reset']);
+        $process_id = isset($_POST['process_id']) ? sanitize_text_field(wp_unslash($_POST['process_id'])) : '';
+        $process = $this->get_current_process();
+
+        if ($hard_reset) {
+            if ($process && isset($process['id'])) {
+                $this->unschedule_background_runner($process['id']);
+                $this->release_process_lock($process['id']);
+            }
+            delete_option(self::OPTION_PREFIX . 'current');
+            delete_option(self::LOCK_OPTION);
+            wp_send_json_success(['message' => 'Proceso limpiado', 'cleared' => true]);
+        }
+
+        if (!$process) {
+            delete_option(self::OPTION_PREFIX . 'current');
+            wp_send_json_success(['message' => 'No había proceso activo', 'cleared' => true]);
+        }
+
+        if (!$this->process_id_matches($process, $process_id)) {
+            wp_send_json_error(['message' => 'El proceso solicitado no coincide con el proceso activo']);
+        }
+
+        $process['status'] = 'cancelled';
+        $process['end_time'] = time();
+        $process['last_update'] = time();
+        $process['last_runner'] = 'cancelled_by_user';
+        $process['batch_log'] = [
+            ['type' => 'warning', 'message' => 'Proceso cancelado manualmente.'],
+        ];
+        $process = $this->append_process_logs($process, [
+            $this->make_process_log('warning', 'Proceso cancelado manualmente.'),
+        ]);
+
+        update_option(self::OPTION_PREFIX . 'current', $process, false);
+        $this->unschedule_background_runner($process['id']);
+        $this->release_process_lock($process['id']);
+
+        wp_send_json_success($process);
+    }
+
+    /**
+     * Runner de WP-Cron para ejecutar lotes aunque la pantalla no esté abierta.
+     */
+    public function cron_process_batch($process_id = '') {
+        $process_id = is_string($process_id) ? sanitize_text_field($process_id) : '';
+        $result = $this->process_next_batch_internal($process_id, 'cron');
+
+        if (is_wp_error($result)) {
+            return;
+        }
+
+        if (isset($result['status']) && $result['status'] === 'processing') {
+            $this->schedule_background_runner($result, 2);
+        }
+    }
+
+    /**
+     * Ejecuta un lote de forma segura, con lock, estado persistente y logs persistentes.
+     */
+    private function process_next_batch_internal($process_id = '', $source = 'ajax') {
+        $process = $this->get_current_process();
+
+        if (!$process) {
+            return new WP_Error('no_process', 'No hay proceso activo');
+        }
+
+        if (!$this->process_id_matches($process, $process_id)) {
+            return new WP_Error('stale_process', 'El proceso solicitado no coincide con el proceso activo');
+        }
+
+        $status = isset($process['status']) ? $process['status'] : '';
+        if ($status !== 'processing') {
+            return new WP_Error('not_processing', 'El proceso no está en ejecución');
+        }
+
+        $process_id = isset($process['id']) ? (string) $process['id'] : '';
+        if (!$this->acquire_process_lock($process_id)) {
+            return new WP_Error('locked', 'Otro runner ya está procesando un lote');
+        }
+
+        try {
+            $batch_number = (isset($process['batch_size']) && absint($process['batch_size']) > 0)
+                ? (int) floor(absint($process['processed']) / absint($process['batch_size'])) + 1
+                : 1;
+
+            $tickets = $this->get_tickets_batch(
+                absint($process['event_id']),
+                absint($process['current_offset']),
+                absint($process['batch_size'])
+            );
+
+            $batch_log = [];
+            $persistent_logs = [];
+            $batch_success = 0;
+            $batch_skipped = 0;
+            $batch_failed = 0;
+
+            $batch_log[] = [
+                'type' => 'batch',
+                'message' => '--- Procesando lote ' . $batch_number . ' (' . strtoupper($source) . ') ---',
+            ];
+            $persistent_logs[] = $this->make_process_log('batch', '--- Procesando lote ' . $batch_number . ' (' . strtoupper($source) . ') ---');
+
+            if (empty($tickets)) {
+                $process['status'] = 'completed';
+                $process['end_time'] = time();
+                $process['last_update'] = time();
+                $process['last_heartbeat'] = time();
+                $process['last_runner'] = $source;
+                $process['last_batch_processed'] = 0;
+                $batch_log[] = ['type' => 'warning', 'message' => 'No se encontraron más tickets en el lote actual. El proceso se marca como completado.'];
+                $persistent_logs[] = $this->make_process_log('warning', 'No se encontraron más tickets en el lote actual. El proceso se marca como completado.');
+                $process['batch_log'] = $batch_log;
+                $process = $this->append_process_logs($process, $persistent_logs);
+                update_option(self::OPTION_PREFIX . 'current', $process, false);
+                $this->unschedule_background_runner($process_id);
+                $this->release_process_lock($process_id);
+                return $process;
+            }
+
+            $process_assets = isset($process['assets']) && is_array($process['assets']) ? $process['assets'] : [];
+
+            foreach ($tickets as $ticket_id) {
+                $result = $this->process_ticket($ticket_id, $process['mode'], $process_assets);
+                $result_message = isset($result['message']) && $result['message'] !== '' ? ': ' . $result['message'] : '';
+
+                if ($result['status'] === 'success') {
+                    $batch_success++;
+                    $message = "✓ Ticket #{$ticket_id} procesado correctamente" . $result_message;
+                    $batch_log[] = ['type' => 'success', 'message' => $message];
+                    $persistent_logs[] = $this->make_process_log('success', $message);
+                } elseif ($result['status'] === 'skipped') {
+                    $batch_skipped++;
+                    $message = "⊘ Ticket #{$ticket_id} omitido" . $result_message;
+                    $batch_log[] = ['type' => 'warning', 'message' => $message];
+                    $persistent_logs[] = $this->make_process_log('warning', $message);
+                } else {
+                    $batch_failed++;
+                    $message = "✗ Ticket #{$ticket_id} falló" . $result_message;
+                    $batch_log[] = ['type' => 'error', 'message' => $message];
+                    $persistent_logs[] = $this->make_process_log('error', $message);
+                }
+            }
+
+            $processed_now = count($tickets);
+            $process['processed'] = absint($process['processed']) + $processed_now;
+            $process['success'] = absint($process['success']) + $batch_success;
+            $process['skipped'] = absint($process['skipped']) + $batch_skipped;
+            $process['failed'] = absint($process['failed']) + $batch_failed;
+            $process['current_offset'] = absint($process['current_offset']) + $processed_now;
+            $process['last_update'] = time();
+            $process['last_heartbeat'] = time();
+            $process['last_runner'] = $source;
+            $process['last_batch_processed'] = $processed_now;
+
+            $summary = 'Lote ' . $batch_number . ' completado: ' . $processed_now . ' tickets procesados.';
+            $batch_log[] = ['type' => 'success', 'message' => $summary];
+            $persistent_logs[] = $this->make_process_log('success', $summary);
+
+            if (absint($process['processed']) >= absint($process['total'])) {
+                $process['status'] = 'completed';
+                $process['end_time'] = time();
+                $batch_log[] = ['type' => 'batch', 'message' => '═══════════════════════════════════════════════════'];
+                $batch_log[] = ['type' => 'batch', 'message' => 'PROCESO COMPLETADO'];
+                $batch_log[] = ['type' => 'batch', 'message' => '═══════════════════════════════════════════════════'];
+                $persistent_logs[] = $this->make_process_log('batch', '═══════════════════════════════════════════════════');
+                $persistent_logs[] = $this->make_process_log('batch', 'PROCESO COMPLETADO');
+                $persistent_logs[] = $this->make_process_log('batch', '═══════════════════════════════════════════════════');
+                $this->unschedule_background_runner($process_id);
+            }
+
+            // Si el usuario pausó o canceló mientras este lote estaba corriendo,
+            // respetamos esa orden al terminar el lote actual para no sobrescribirla
+            // con una copia anterior del proceso.
+            $latest_process = $this->get_current_process();
+            if (
+                is_array($latest_process)
+                && isset($latest_process['id'], $process['id'])
+                && (string) $latest_process['id'] === (string) $process['id']
+            ) {
+                if (isset($latest_process['logs']) && is_array($latest_process['logs'])) {
+                    $process['logs'] = $latest_process['logs'];
+                }
+
+                $latest_status = isset($latest_process['status']) ? (string) $latest_process['status'] : '';
+                if ($process['status'] !== 'completed' && in_array($latest_status, ['paused', 'cancelled'], true)) {
+                    $process['status'] = $latest_status;
+                    $process['last_runner'] = isset($latest_process['last_runner']) ? $latest_process['last_runner'] : $process['last_runner'];
+
+                    if ($latest_status === 'paused') {
+                        $process['paused_at'] = isset($latest_process['paused_at']) ? absint($latest_process['paused_at']) : time();
+                        $message = 'Se completó el lote en curso y se respetó la pausa solicitada.';
+                        $batch_log[] = ['type' => 'warning', 'message' => $message];
+                        $persistent_logs[] = $this->make_process_log('warning', $message);
+                    } elseif ($latest_status === 'cancelled') {
+                        $process['end_time'] = isset($latest_process['end_time']) ? absint($latest_process['end_time']) : time();
+                        $message = 'Se completó el lote en curso y se respetó la cancelación solicitada.';
+                        $batch_log[] = ['type' => 'warning', 'message' => $message];
+                        $persistent_logs[] = $this->make_process_log('warning', $message);
+                    }
+
+                    $this->unschedule_background_runner($process_id);
+                }
+            }
+
+            $process['batch_log'] = $batch_log;
+            $process = $this->append_process_logs($process, $persistent_logs);
+
+            update_option(self::OPTION_PREFIX . 'current', $process, false);
+
+            if (isset($process['status']) && $process['status'] === 'processing') {
+                $this->schedule_background_runner($process, 2);
+            }
+
+            $this->release_process_lock($process_id);
+            return $process;
+
+        } catch (Exception $e) {
+            $this->release_process_lock($process_id);
+            return $this->mark_process_error($process, $e->getMessage(), $source);
+        } catch (\Throwable $e) {
+            $this->release_process_lock($process_id);
+            return $this->mark_process_error($process, $e->getMessage(), $source);
+        }
+    }
+
+    /**
+     * Marcar proceso como error real de servidor, conservando la posibilidad de continuarlo.
+     */
+    private function mark_process_error($process, $message, $source = 'system') {
+        if (!is_array($process)) {
+            return new WP_Error('process_error', $message);
+        }
+
+        $process['status'] = 'error';
+        $process['last_update'] = time();
+        $process['last_heartbeat'] = time();
+        $process['last_runner'] = $source;
+        $process['batch_log'] = [
+            ['type' => 'error', 'message' => 'Error del proceso: ' . $message],
+        ];
+        $process = $this->append_process_logs($process, [
+            $this->make_process_log('error', 'Error del proceso: ' . $message),
+        ]);
+
+        update_option(self::OPTION_PREFIX . 'current', $process, false);
+
+        if (isset($process['id'])) {
+            $this->unschedule_background_runner($process['id']);
+            $this->release_process_lock($process['id']);
+        }
+
+        return $process;
+    }
+
+    /**
+     * Obtener proceso actual.
      */
     private function get_current_process() {
-        return get_option(self::OPTION_PREFIX . 'current', null);
+        $process = get_option(self::OPTION_PREFIX . 'current', null);
+        return is_array($process) ? $process : null;
     }
-    
+
     /**
-     * Contar tickets por evento
+     * Validar si el ID enviado coincide con el proceso activo.
+     */
+    private function process_id_matches($process, $process_id) {
+        if (!is_array($process) || empty($process['id'])) {
+            return false;
+        }
+
+        $process_id = (string) $process_id;
+        if ($process_id === '') {
+            return true;
+        }
+
+        return hash_equals((string) $process['id'], $process_id);
+    }
+
+    /**
+     * Agendar el runner de segundo plano.
+     */
+    private function schedule_background_runner($process = null, $delay = 2) {
+        if (!$process) {
+            $process = $this->get_current_process();
+        }
+
+        if (!$process || empty($process['id']) || empty($process['status']) || $process['status'] !== 'processing') {
+            return false;
+        }
+
+        $process_id = (string) $process['id'];
+        $args = [$process_id];
+        $next = wp_next_scheduled(self::CRON_HOOK, $args);
+
+        if (!$next) {
+            $timestamp = time() + max(1, absint($delay));
+            wp_schedule_single_event($timestamp, self::CRON_HOOK, $args);
+            $process['next_run'] = $timestamp;
+            update_option(self::OPTION_PREFIX . 'current', $process, false);
+        }
+
+        if (function_exists('spawn_cron')) {
+            @spawn_cron(time());
+        }
+
+        return true;
+    }
+
+    /**
+     * Desagendar runner de segundo plano.
+     */
+    private function unschedule_background_runner($process_id = '') {
+        $process_id = (string) $process_id;
+
+        if ($process_id !== '') {
+            wp_clear_scheduled_hook(self::CRON_HOOK, [$process_id]);
+            return;
+        }
+
+        wp_clear_scheduled_hook(self::CRON_HOOK);
+    }
+
+    /**
+     * Lock simple para evitar que AJAX y WP-Cron procesen el mismo lote a la vez.
+     */
+    private function acquire_process_lock($process_id) {
+        $process_id = (string) $process_id;
+        $now = time();
+        $lock = get_option(self::LOCK_OPTION, null);
+
+        if (is_array($lock)) {
+            $expires = isset($lock['expires']) ? absint($lock['expires']) : 0;
+            $locked_process = isset($lock['process_id']) ? (string) $lock['process_id'] : '';
+
+            if ($expires > $now && $locked_process === $process_id) {
+                return false;
+            }
+        }
+
+        update_option(self::LOCK_OPTION, [
+            'process_id' => $process_id,
+            'expires' => $now + self::LOCK_TTL,
+            'created' => $now,
+        ], false);
+
+        return true;
+    }
+
+    /**
+     * Liberar lock del proceso.
+     */
+    private function release_process_lock($process_id = '') {
+        $lock = get_option(self::LOCK_OPTION, null);
+        if (!is_array($lock)) {
+            return;
+        }
+
+        if ($process_id === '' || (isset($lock['process_id']) && (string) $lock['process_id'] === (string) $process_id)) {
+            delete_option(self::LOCK_OPTION);
+        }
+    }
+
+    /**
+     * Crear entrada de log persistente.
+     */
+    private function make_process_log($type, $message) {
+        static $counter = 0;
+        $counter++;
+        $time = time();
+
+        return [
+            'uid' => $time . '_' . $counter . '_' . wp_generate_password(4, false, false),
+            'time' => $time,
+            'type' => sanitize_key($type ?: 'info'),
+            'message' => wp_strip_all_tags((string) $message),
+        ];
+    }
+
+    /**
+     * Agregar logs persistentes al proceso, limitando su tamaño para no inflar wp_options.
+     */
+    private function append_process_logs($process, $logs) {
+        if (!is_array($process)) {
+            $process = [];
+        }
+
+        if (!isset($process['logs']) || !is_array($process['logs'])) {
+            $process['logs'] = [];
+        }
+
+        foreach ((array) $logs as $log) {
+            if (!is_array($log) || empty($log['message'])) {
+                continue;
+            }
+            $process['logs'][] = $log;
+        }
+
+        if (count($process['logs']) > self::LOG_LIMIT) {
+            $process['logs'] = array_slice($process['logs'], -self::LOG_LIMIT);
+        }
+
+        return $process;
+    }
+
+    /**
+     * Contar tickets por evento.
      */
     private function count_tickets_by_event($event_id) {
         if (function_exists('eventosapp_count_tickets_by_event')) {
             return eventosapp_count_tickets_by_event($event_id);
         }
-        
+
         global $wpdb;
-        
+
         $count = $wpdb->get_var($wpdb->prepare("
             SELECT COUNT(p.ID)
             FROM {$wpdb->posts} p
@@ -1442,16 +2044,16 @@ class EventosApp_Batch_Processor {
             AND pm.meta_key = '_eventosapp_ticket_evento_id'
             AND pm.meta_value = %d
         ", $event_id));
-        
+
         return absint($count);
     }
-    
+
     /**
-     * Obtener lote de tickets
+     * Obtener lote de tickets.
      */
     private function get_tickets_batch($event_id, $offset, $limit) {
         global $wpdb;
-        
+
         $tickets = $wpdb->get_col($wpdb->prepare("
             SELECT p.ID
             FROM {$wpdb->posts} p
@@ -1463,10 +2065,10 @@ class EventosApp_Batch_Processor {
             ORDER BY p.ID ASC
             LIMIT %d OFFSET %d
         ", $event_id, $limit, $offset));
-        
+
         return array_map('absint', $tickets);
     }
-    
+
     /**
      * Sanitizar recursos recibidos desde AJAX.
      */
@@ -1550,7 +2152,6 @@ class EventosApp_Batch_Processor {
      * Procesar un ticket individual.
      */
     private function process_ticket($ticket_id, $mode, $assets = []) {
-        // Importar la función de batch-refresh si existe
         if (function_exists('eventosapp_refresh_ticket_full')) {
             try {
                 if ($mode === 'custom') {
@@ -1558,7 +2159,7 @@ class EventosApp_Batch_Processor {
                 } else {
                     $result = eventosapp_refresh_ticket_full($ticket_id, $mode);
                 }
-                
+
                 if ($result === true) {
                     return ['status' => 'success'];
                 }
@@ -1589,16 +2190,16 @@ class EventosApp_Batch_Processor {
 
                     return ['status' => 'success', 'message' => $summary];
                 }
-                
+
                 return ['status' => 'success'];
-                
+
             } catch (Exception $e) {
                 return ['status' => 'error', 'message' => $e->getMessage()];
             } catch (\Throwable $e) {
                 return ['status' => 'error', 'message' => $e->getMessage()];
             }
         }
-        
+
         return ['status' => 'error', 'message' => 'Función de procesamiento no disponible'];
     }
 }
