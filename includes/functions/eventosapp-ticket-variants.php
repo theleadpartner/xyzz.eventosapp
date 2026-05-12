@@ -36,6 +36,11 @@ if (!function_exists('eventosapp_ticket_variants_meta_keys')) {
             '_eventosapp_ticket_variant_last_debug',
             '_eventosapp_ticket_email_template_override',
             '_eventosapp_ticket_email_template',
+            '_eventosapp_ticket_email_template_path',
+            '_eventosapp_ticket_email_header_image_url',
+            '_eventosapp_ticket_email_heading_color',
+            '_eventosapp_ticket_email_subheading_color',
+            '_eventosapp_ticket_email_text_color',
             '_eventosapp_wallet_variant_class_id',
             '_eventosapp_wallet_variant_logo_url',
             '_eventosapp_wallet_variant_hero_img_url',
@@ -297,26 +302,54 @@ if (!function_exists('eventosapp_ticket_variants_get_available_fields')) {
 
 if (!function_exists('eventosapp_ticket_variants_get_available_email_templates')) {
     function eventosapp_ticket_variants_get_available_email_templates() {
-        if (function_exists('eventosapp_get_available_email_templates')) {
-            $templates = eventosapp_get_available_email_templates();
-            return is_array($templates) ? $templates : [];
-        }
-
+        // Escanea las ubicaciones reales usadas por el plugin y conserva compatibilidad
+        // con instalaciones antiguas que hayan usado /templates/email_tickets/.
         $templates = [];
-        $dir = plugin_dir_path(dirname(dirname(__FILE__))) . 'templates/email_tickets/';
-        if (is_dir($dir)) {
-            foreach ((array) glob($dir . '*.html') as $file) {
+        $plugin_root = plugin_dir_path(dirname(dirname(__FILE__)));
+        $dirs = [
+            $plugin_root . 'includes/templates/email_tickets/',
+            $plugin_root . 'templates/email_tickets/',
+        ];
+
+        foreach ($dirs as $dir) {
+            if (!is_dir($dir)) continue;
+            foreach ((array) glob(trailingslashit($dir) . '*.html') as $file) {
+                if (!is_readable($file)) continue;
                 $basename = basename($file);
+                if (isset($templates[$basename])) continue;
                 $label = str_replace(['-', '_', '.html'], [' ', ' ', ''], $basename);
-                $templates[$basename] = ucwords($label);
+                $label = trim(ucwords($label));
+                $templates[$basename] = $label ?: $basename;
             }
         }
 
         if (empty($templates)) {
             $templates['email-ticket.html'] = 'Email Ticket (por defecto)';
+        } elseif (isset($templates['email-ticket.html'])) {
+            $templates = ['email-ticket.html' => 'Email Ticket (por defecto)'] + array_diff_key($templates, ['email-ticket.html' => true]);
         }
 
-        return $templates;
+        return apply_filters('eventosapp_ticket_variants_available_email_templates', $templates, $dirs);
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_resolve_email_template_path')) {
+    function eventosapp_ticket_variants_resolve_email_template_path($template_file) {
+        $template_file = sanitize_file_name((string) $template_file);
+        if ($template_file === '') return '';
+
+        $plugin_root = plugin_dir_path(dirname(dirname(__FILE__)));
+        $dirs = [
+            $plugin_root . 'includes/templates/email_tickets/',
+            $plugin_root . 'templates/email_tickets/',
+        ];
+
+        foreach ($dirs as $dir) {
+            $path = trailingslashit($dir) . $template_file;
+            if (is_readable($path) && is_file($path)) return $path;
+        }
+
+        return '';
     }
 }
 
@@ -353,6 +386,10 @@ if (!function_exists('eventosapp_ticket_variants_sanitize_rule')) {
             'match'      => (isset($rule['match']) && $rule['match'] === 'any') ? 'any' : 'all',
             'conditions' => [],
             'email_template' => isset($rule['email_template']) ? sanitize_file_name($rule['email_template']) : '',
+            'email_header_image_url'  => isset($rule['email_header_image_url']) ? esc_url_raw($rule['email_header_image_url']) : '',
+            'email_heading_color'     => isset($rule['email_heading_color']) ? eventosapp_ticket_variants_sanitize_hex($rule['email_heading_color']) : '',
+            'email_subheading_color'  => isset($rule['email_subheading_color']) ? eventosapp_ticket_variants_sanitize_hex($rule['email_subheading_color']) : '',
+            'email_text_color'        => isset($rule['email_text_color']) ? eventosapp_ticket_variants_sanitize_hex($rule['email_text_color']) : '',
             'google_wallet_class_id'  => isset($rule['google_wallet_class_id']) ? sanitize_text_field($rule['google_wallet_class_id']) : '',
             'google_wallet_logo_url'  => isset($rule['google_wallet_logo_url']) ? esc_url_raw($rule['google_wallet_logo_url']) : '',
             'google_wallet_hero_url'  => isset($rule['google_wallet_hero_url']) ? esc_url_raw($rule['google_wallet_hero_url']) : '',
@@ -566,10 +603,22 @@ if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
         if (!empty($rule['email_template'])) {
             update_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', $rule['email_template']);
             update_post_meta($ticket_id, '_eventosapp_ticket_email_template', $rule['email_template']);
+            $template_path = function_exists('eventosapp_ticket_variants_resolve_email_template_path') ? eventosapp_ticket_variants_resolve_email_template_path($rule['email_template']) : '';
+            if ($template_path !== '') {
+                update_post_meta($ticket_id, '_eventosapp_ticket_email_template_path', $template_path);
+            } else {
+                delete_post_meta($ticket_id, '_eventosapp_ticket_email_template_path');
+            }
         } else {
             delete_post_meta($ticket_id, '_eventosapp_ticket_email_template_override');
             delete_post_meta($ticket_id, '_eventosapp_ticket_email_template');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_email_template_path');
         }
+
+        if (!empty($rule['email_header_image_url'])) update_post_meta($ticket_id, '_eventosapp_ticket_email_header_image_url', $rule['email_header_image_url']); else delete_post_meta($ticket_id, '_eventosapp_ticket_email_header_image_url');
+        if (!empty($rule['email_heading_color'])) update_post_meta($ticket_id, '_eventosapp_ticket_email_heading_color', $rule['email_heading_color']); else delete_post_meta($ticket_id, '_eventosapp_ticket_email_heading_color');
+        if (!empty($rule['email_subheading_color'])) update_post_meta($ticket_id, '_eventosapp_ticket_email_subheading_color', $rule['email_subheading_color']); else delete_post_meta($ticket_id, '_eventosapp_ticket_email_subheading_color');
+        if (!empty($rule['email_text_color'])) update_post_meta($ticket_id, '_eventosapp_ticket_email_text_color', $rule['email_text_color']); else delete_post_meta($ticket_id, '_eventosapp_ticket_email_text_color');
 
         $google_class_id = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
         if ($google_class_id !== '') update_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', $google_class_id); else delete_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id');
@@ -625,7 +674,13 @@ if (!function_exists('eventosapp_ticket_variants_get_email_template_for_ticket')
 
         eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
 
-        return (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true);
+        $template = (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true);
+        if ($template !== '') {
+            $GLOBALS['eventosapp_ticket_variants_last_email_ticket_id'] = $ticket_id;
+            $GLOBALS['eventosapp_ticket_variants_last_email_event_id'] = $event_id;
+        }
+
+        return $template;
     }
 }
 
@@ -642,6 +697,153 @@ if (!function_exists('eventosapp_ticket_variants_email_template_filter')) {
     add_filter('eventosapp_ticket_email_template_file', 'eventosapp_ticket_variants_email_template_filter', 20, 3);
     add_filter('eventosapp_email_ticket_template', 'eventosapp_ticket_variants_email_template_filter', 20, 3);
     add_filter('eventosapp_email_template_for_ticket', 'eventosapp_ticket_variants_email_template_filter', 20, 3);
+}
+
+
+
+if (!function_exists('eventosapp_ticket_variants_email_template_path_filter')) {
+    function eventosapp_ticket_variants_email_template_path_filter($template_path = '', $ticket_id = 0, $event_id = 0) {
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id) return $template_path;
+
+        $event_id = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $variant_template = eventosapp_ticket_variants_get_email_template_for_ticket($ticket_id, $event_id);
+        if ($variant_template === '') return $template_path;
+
+        $resolved = eventosapp_ticket_variants_resolve_email_template_path($variant_template);
+        return $resolved !== '' ? $resolved : $template_path;
+    }
+
+    add_filter('eventosapp_ticket_email_template_path', 'eventosapp_ticket_variants_email_template_path_filter', 20, 3);
+    add_filter('eventosapp_email_ticket_template_path', 'eventosapp_ticket_variants_email_template_path_filter', 20, 3);
+    add_filter('eventosapp_template_email_ticket_path', 'eventosapp_ticket_variants_email_template_path_filter', 20, 3);
+}
+
+if (!function_exists('eventosapp_ticket_variants_get_email_branding_for_ticket')) {
+    function eventosapp_ticket_variants_get_email_branding_for_ticket($ticket_id, $event_id = 0) {
+        $ticket_id = absint($ticket_id);
+        $event_id  = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if (!$ticket_id || !$event_id) return [];
+
+        eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
+
+        $branding = [
+            'header_image_url' => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_header_image_url', true),
+            'heading_color'    => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_heading_color', true),
+            'subheading_color' => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_subheading_color', true),
+            'text_color'       => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_text_color', true),
+        ];
+
+        return apply_filters('eventosapp_ticket_variant_email_branding', $branding, $ticket_id, $event_id);
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_email_tokens_filter')) {
+    function eventosapp_ticket_variants_email_tokens_filter($tokens, $ticket_id = 0, $event_id = 0) {
+        if (!is_array($tokens)) $tokens = [];
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id) return $tokens;
+
+        $event_id = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $branding = eventosapp_ticket_variants_get_email_branding_for_ticket($ticket_id, $event_id);
+        $template = eventosapp_ticket_variants_get_email_template_for_ticket($ticket_id, $event_id);
+        $path     = $template ? eventosapp_ticket_variants_resolve_email_template_path($template) : '';
+
+        $tokens['{{ticket_variant_email_template}}'] = $template;
+        $tokens['{{ticket_variant_email_template_path}}'] = $path;
+        $tokens['{{ticket_variant_email_header_image_url}}'] = $branding['header_image_url'] ?? '';
+        $tokens['{{ticket_variant_email_heading_color}}'] = $branding['heading_color'] ?? '';
+        $tokens['{{ticket_variant_email_subheading_color}}'] = $branding['subheading_color'] ?? '';
+        $tokens['{{ticket_variant_email_text_color}}'] = $branding['text_color'] ?? '';
+
+        return $tokens;
+    }
+
+    add_filter('eventosapp_ticket_email_tokens', 'eventosapp_ticket_variants_email_tokens_filter', 20, 3);
+    add_filter('eventosapp_email_ticket_tokens', 'eventosapp_ticket_variants_email_tokens_filter', 20, 3);
+    add_filter('eventosapp_ticket_email_replacements', 'eventosapp_ticket_variants_email_tokens_filter', 20, 3);
+}
+
+if (!function_exists('eventosapp_ticket_variants_apply_email_branding_to_html')) {
+    function eventosapp_ticket_variants_apply_email_branding_to_html($html, $ticket_id = 0, $event_id = 0) {
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id || !is_string($html) || $html === '') return $html;
+
+        $event_id = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $branding = eventosapp_ticket_variants_get_email_branding_for_ticket($ticket_id, $event_id);
+
+        $header_url = esc_url($branding['header_image_url'] ?? '');
+        $heading    = eventosapp_ticket_variants_sanitize_hex($branding['heading_color'] ?? '');
+        $subheading = eventosapp_ticket_variants_sanitize_hex($branding['subheading_color'] ?? '');
+        $text       = eventosapp_ticket_variants_sanitize_hex($branding['text_color'] ?? '');
+
+        $had_header_placeholder = (stripos($html, '{{ticket_variant_email_header_image_url}}') !== false || stripos($html, '[[ticket_variant_email_header_image_url]]') !== false);
+
+        $replacements = [
+            '{{ticket_variant_email_header_image_url}}' => $header_url,
+            '{{ticket_variant_email_heading_color}}'    => $heading,
+            '{{ticket_variant_email_subheading_color}}' => $subheading,
+            '{{ticket_variant_email_text_color}}'       => $text,
+            '[[ticket_variant_email_header_image_url]]' => $header_url,
+            '[[ticket_variant_email_heading_color]]'    => $heading,
+            '[[ticket_variant_email_subheading_color]]' => $subheading,
+            '[[ticket_variant_email_text_color]]'       => $text,
+        ];
+        $html = strtr($html, $replacements);
+
+        $css = '';
+        if ($heading) {
+            $css .= 'h1,.evapp-email-title,.eventosapp-email-title{color:' . esc_attr($heading) . ' !important;}';
+        }
+        if ($subheading) {
+            $css .= 'h2,h3,.evapp-email-subtitle,.eventosapp-email-subtitle{color:' . esc_attr($subheading) . ' !important;}';
+        }
+        if ($text) {
+            $css .= '.evapp-email-heading,.eventosapp-email-heading,.evapp-email-header-text,.eventosapp-email-header-text{color:' . esc_attr($text) . ' !important;}';
+        }
+        if ($css !== '') {
+            $style = '<style type="text/css">' . $css . '</style>';
+            if (stripos($html, '</head>') !== false) {
+                $html = preg_replace('/<\/head>/i', $style . '</head>', $html, 1);
+            } else {
+                $html = $style . $html;
+            }
+        }
+
+        if ($header_url !== '' && !$had_header_placeholder && stripos($html, 'evapp-variant-email-header') === false) {
+            $img = '<div class="evapp-variant-email-header" style="width:100%;text-align:center;margin:0 0 18px 0;"><img src="' . esc_url($header_url) . '" alt="" style="display:block;width:100%;max-width:100%;height:auto;border:0;margin:0 auto;"></div>';
+            if (preg_match('/<body[^>]*>/i', $html)) {
+                $html = preg_replace('/(<body[^>]*>)/i', '$1' . $img, $html, 1);
+            } else {
+                $html = $img . $html;
+            }
+        }
+
+        return $html;
+    }
+
+    add_filter('eventosapp_ticket_email_html', 'eventosapp_ticket_variants_apply_email_branding_to_html', 20, 3);
+    add_filter('eventosapp_email_ticket_html', 'eventosapp_ticket_variants_apply_email_branding_to_html', 20, 3);
+    add_filter('eventosapp_ticket_email_body', 'eventosapp_ticket_variants_apply_email_branding_to_html', 20, 3);
+}
+
+if (!function_exists('eventosapp_ticket_variants_wp_mail_filter')) {
+    function eventosapp_ticket_variants_wp_mail_filter($atts) {
+        $ticket_id = isset($GLOBALS['eventosapp_ticket_variants_last_email_ticket_id']) ? absint($GLOBALS['eventosapp_ticket_variants_last_email_ticket_id']) : 0;
+        $event_id  = isset($GLOBALS['eventosapp_ticket_variants_last_email_event_id']) ? absint($GLOBALS['eventosapp_ticket_variants_last_email_event_id']) : 0;
+
+        if (!$ticket_id || !is_array($atts) || empty($atts['message']) || !is_string($atts['message'])) {
+            return $atts;
+        }
+
+        // Se aplica una sola vez al correo inmediatamente posterior a la resolución de plantilla del ticket.
+        unset($GLOBALS['eventosapp_ticket_variants_last_email_ticket_id'], $GLOBALS['eventosapp_ticket_variants_last_email_event_id']);
+
+        $atts['message'] = eventosapp_ticket_variants_apply_email_branding_to_html($atts['message'], $ticket_id, $event_id);
+        return $atts;
+    }
+
+    add_filter('wp_mail', 'eventosapp_ticket_variants_wp_mail_filter', 20, 1);
 }
 
 if (!function_exists('eventosapp_ticket_variants_filter_google_wallet_context')) {
@@ -708,8 +910,9 @@ if (!function_exists('eventosapp_ticket_variants_refresh_google_wallet_object'))
         if (!$has_variant_wallet) return false;
 
         $auth = eventosapp_google_wallet_get_access_token();
-        if (empty($auth['access_token'])) {
-            error_log('[EventosApp] Variante Wallet Google no pudo refrescar ticket=' . $ticket_id . ' porque no hay access_token');
+        $access_token = is_array($auth) ? ($auth['access_token'] ?? ($auth['token'] ?? '')) : '';
+        if (empty($access_token)) {
+            error_log('[EventosApp] Variante Wallet Google no pudo refrescar ticket=' . $ticket_id . ' porque no hay access_token/token');
             return false;
         }
 
@@ -721,7 +924,7 @@ if (!function_exists('eventosapp_ticket_variants_refresh_google_wallet_object'))
             return false;
         }
 
-        return eventosapp_wallet_patch_single_ticket($event_id, $ticket_id, $auth['access_token'], $ctx);
+        return eventosapp_wallet_patch_single_ticket($event_id, $ticket_id, $access_token, $ctx);
     }
 }
 
@@ -877,12 +1080,18 @@ if (!function_exists('eventosapp_ticket_variants_render_metabox')) {
                     '<button type="button" class="button button-secondary evapp-var-add-condition">＋ Agregar criterio</button>'+
                     '<div class="evapp-var-section">Correo</div>'+
                     '<div class="evapp-var-grid-2">'+
-                        '<div class="evapp-var-field"><label>Plantilla de correo para esta variante</label><select name="'+base+'[email_template]">'+templateOptions()+'</select><span class="evapp-var-help">Si se deja vacío, se usa la plantilla normal del evento.</span></div>'+
+                        '<div class="evapp-var-field"><label>Plantilla de correo para esta variante</label><select name="'+base+'[email_template]">'+templateOptions()+'</select><span class="evapp-var-help">Lee las plantillas desde <code>includes/templates/email_tickets/</code>. Si se deja vacío, se usa la plantilla normal del evento.</span></div>'+
                         '<div class="evapp-var-field"><label>Notas internas</label><textarea name="'+base+'[internal_notes]" rows="2" placeholder="Notas de uso interno"></textarea></div>'+
+                        '<div class="evapp-var-field"><label>Cabezote URL del correo</label><input type="url" name="'+base+'[email_header_image_url]" placeholder="https://..."><span class="evapp-var-help">Imagen superior específica para el correo de esta variante.</span></div>'+
+                    '</div>'+
+                    '<div class="evapp-var-grid-3">'+
+                        colorField(base+'[email_heading_color]', 'Color encabezado principal', '')+
+                        colorField(base+'[email_subheading_color]', 'Color encabezado secundario', '')+
+                        colorField(base+'[email_text_color]', 'Color texto de encabezados', '')+
                     '</div>'+
                     '<div class="evapp-var-section">Google Wallet / Android</div>'+
                     '<div class="evapp-var-grid-2">'+
-                        '<div class="evapp-var-field"><label>Class ID de Google Wallet</label><input type="text" name="'+base+'[google_wallet_class_id]" placeholder="3388...event_vip"><span class="evapp-var-help">Puede ser una clase distinta del mismo evento. Si no incluye issuer ID, se antepone automáticamente.</span></div>'+
+                        '<div class="evapp-var-field"><label>Class ID de Google Wallet</label><input type="text" name="'+base+'[google_wallet_class_id]" placeholder="3388...event_vip"><span class="evapp-var-help">Puede ser una clase distinta del mismo evento. Si no existe, el sistema intentará crearla en Google Wallet antes de generar el objeto. Si no incluye issuer ID, se antepone automáticamente.</span></div>'+
                         '<div class="evapp-var-field"><label>Nombre del evento en Google Wallet</label><input type="text" name="'+base+'[google_wallet_event_name]" placeholder="Opcional"></div>'+
                         '<div class="evapp-var-field"><label>Logo URL Google Wallet</label><input type="url" name="'+base+'[google_wallet_logo_url]" placeholder="https://..."></div>'+
                         '<div class="evapp-var-field"><label>Hero image URL Google Wallet</label><input type="url" name="'+base+'[google_wallet_hero_url]" placeholder="https://..."></div>'+
@@ -1042,11 +1251,33 @@ if (!function_exists('eventosapp_ticket_variants_render_rule')) {
                             <option value="<?php echo esc_attr($template_file); ?>" <?php selected($rule['email_template'] ?? '', $template_file); ?>><?php echo esc_html($template_label); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <span class="evapp-var-help">Si se deja vacío, se usa la plantilla normal del evento.</span>
+                    <span class="evapp-var-help">Lee las plantillas desde <code>includes/templates/email_tickets/</code>. Si se deja vacío, se usa la plantilla normal del evento.</span>
                 </div>
                 <div class="evapp-var-field">
                     <label>Notas internas</label>
                     <textarea name="<?php echo esc_attr($base); ?>[internal_notes]" rows="2" placeholder="Notas de uso interno"><?php echo esc_textarea($rule['internal_notes'] ?? ''); ?></textarea>
+                </div>
+                <div class="evapp-var-field">
+                    <label>Cabezote URL del correo</label>
+                    <input type="url" name="<?php echo esc_attr($base); ?>[email_header_image_url]" value="<?php echo esc_attr($rule['email_header_image_url'] ?? ''); ?>" placeholder="https://...">
+                    <span class="evapp-var-help">Imagen superior específica para la plantilla de correo de esta variante.</span>
+                </div>
+            </div>
+            <div class="evapp-var-grid-3">
+                <div class="evapp-var-field">
+                    <label>Color encabezado principal</label>
+                    <input type="text" name="<?php echo esc_attr($base); ?>[email_heading_color]" value="<?php echo esc_attr($rule['email_heading_color'] ?? ''); ?>" placeholder="#111827">
+                    <span class="evapp-var-help">Formato: #RRGGBB.</span>
+                </div>
+                <div class="evapp-var-field">
+                    <label>Color encabezado secundario</label>
+                    <input type="text" name="<?php echo esc_attr($base); ?>[email_subheading_color]" value="<?php echo esc_attr($rule['email_subheading_color'] ?? ''); ?>" placeholder="#334155">
+                    <span class="evapp-var-help">Formato: #RRGGBB.</span>
+                </div>
+                <div class="evapp-var-field">
+                    <label>Color texto de encabezados</label>
+                    <input type="text" name="<?php echo esc_attr($base); ?>[email_text_color]" value="<?php echo esc_attr($rule['email_text_color'] ?? ''); ?>" placeholder="#475569">
+                    <span class="evapp-var-help">Formato: #RRGGBB.</span>
                 </div>
             </div>
 
@@ -1055,7 +1286,7 @@ if (!function_exists('eventosapp_ticket_variants_render_rule')) {
                 <div class="evapp-var-field">
                     <label>Class ID de Google Wallet</label>
                     <input type="text" name="<?php echo esc_attr($base); ?>[google_wallet_class_id]" value="<?php echo esc_attr($rule['google_wallet_class_id'] ?? ''); ?>" placeholder="3388...event_vip">
-                    <span class="evapp-var-help">Puede ser una clase distinta del mismo evento.</span>
+                    <span class="evapp-var-help">Puede ser una clase distinta del mismo evento. Si no existe, el sistema intentará crearla en Google Wallet antes de generar el objeto.</span>
                 </div>
                 <div class="evapp-var-field">
                     <label>Nombre del evento en Google Wallet</label>
@@ -1133,10 +1364,21 @@ add_action('save_post_eventosapp_event', function($post_id) {
         if ($clean) $rules[] = $clean;
     }
 
+    $previous_config = get_post_meta($post_id, '_eventosapp_ticket_variants_config', true);
+
     $config = [
         'rules'      => $rules,
         'updated_at' => current_time('mysql'),
     ];
 
     update_post_meta($post_id, '_eventosapp_ticket_variants_config', $config);
+
+    // Si cambian variantes, clases, assets o plantillas, se invalida la firma del batch.
+    // Así una actualización del evento o una refrescada forzada vuelve a aplicar los assets correctos.
+    if (wp_json_encode($previous_config) !== wp_json_encode($config)) {
+        delete_post_meta($post_id, '_eventosapp_wallet_signature');
+        delete_post_meta($post_id, '_eventosapp_wallet_last_synced_class');
+        update_post_meta($post_id, '_eventosapp_ticket_variants_last_config_change', current_time('mysql'));
+        error_log('[EventosApp] Variantes de ticket actualizadas evento=' . (int) $post_id . ' - firma wallet invalidada para regenerar assets.');
+    }
 }, 27);
