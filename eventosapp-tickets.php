@@ -1390,7 +1390,9 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     // 5.1) Aplicar variante de ticket por reglas antes de generar correo/wallets.
     // Esto permite que localidad u otros campos decidan plantilla de correo, clase Google Wallet y diseño Apple Wallet.
     if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
-        eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
+        $variant_result = eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
+        update_post_meta($post_id, '_eventosapp_ticket_variant_save_result', $variant_result);
+        error_log('[EventosApp] Ticket save variant ticket=' . (int) $post_id . ' event=' . (int) $evento_id . ' result=' . wp_json_encode($variant_result));
     }
 
     // 6) ID público NO predecible + secuencia interna por evento + título = ID
@@ -1430,6 +1432,12 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         if (function_exists('eventosapp_ticket_init_email_status')) {
             eventosapp_ticket_init_email_status($post_id);
         }
+    }
+
+    // Reaplicar después de asegurar el ID público por si alguna regla o log depende del ticketID.
+    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        $variant_result_after_id = eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
+        update_post_meta($post_id, '_eventosapp_ticket_variant_save_result', $variant_result_after_id);
     }
 
     // 8) Wallet Android on/off por evento
