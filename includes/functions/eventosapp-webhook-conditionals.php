@@ -521,6 +521,20 @@ function eventosapp_evaluate_webhook_conditionals($ticket_id, $event_id) {
     $ticket_id = absint($ticket_id);
     $event_id  = absint($event_id);
 
+    // NUEVO: antes de evaluar condicionales de webhook, aplica la variante general del ticket.
+    // Así una regla por localidad/campo extra puede definir la plantilla de correo incluso si
+    // no hay una condicional específica del webhook.
+    $variant_template = null;
+    if ($ticket_id && $event_id && function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
+    }
+    if ($ticket_id && $event_id && function_exists('eventosapp_ticket_variants_get_email_template_for_ticket')) {
+        $variant_template = eventosapp_ticket_variants_get_email_template_for_ticket($ticket_id, $event_id);
+        if ($variant_template !== '') {
+            $default_result['template'] = $variant_template;
+        }
+    }
+
     // Obtener configuración de condicionales del evento.
     $config = get_post_meta($event_id, '_eventosapp_webhook_conditionals', true);
 
@@ -576,7 +590,8 @@ function eventosapp_evaluate_webhook_conditionals($ticket_id, $event_id) {
                 $result['template']   = null;
             } elseif ($rule['action'] === 'send_with_template') {
                 $result['send_email'] = true;
-                $result['template']   = !empty($rule['template']) ? $rule['template'] : null;
+                // Si la regla de webhook no define plantilla, usa la plantilla de la variante aplicada al ticket.
+                $result['template']   = !empty($rule['template']) ? $rule['template'] : $variant_template;
             } else {
                 $default_result['debug'] = $debug;
                 update_post_meta($ticket_id, '_eventosapp_webhook_conditional_last_debug', $debug);
