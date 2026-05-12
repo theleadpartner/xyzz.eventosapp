@@ -9,6 +9,23 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 /** ============ Helpers internos ============ */
 
+if (!function_exists('eventosapp_ticket_email_debug_log')) {
+    function eventosapp_ticket_email_debug_log($message, $context = [], $once_key = '') {
+        static $seen = [];
+        if ($once_key !== '') {
+            if (isset($seen[$once_key])) return;
+            $seen[$once_key] = true;
+        }
+
+        $line = 'EVENTOSAPP EMAIL | ' . trim((string) $message);
+        if (is_array($context) && !empty($context)) {
+            $encoded = wp_json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($encoded) $line .= ' | ' . $encoded;
+        }
+        error_log($line);
+    }
+}
+
 if (!function_exists('eventosapp_email_templates_dir')) {
     function eventosapp_email_templates_dir(){
         // este archivo vive en includes/functions/, subimos a includes/ y luego templates/email_tickets/
@@ -123,6 +140,16 @@ function eventosapp_send_ticket_email_handler() {
         return;
     }
 
+    // Aplicar variante antes de generar wallets y antes de construir el HTML del correo.
+    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        $variant_result = eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
+        eventosapp_ticket_email_debug_log('Variante evaluada antes de envío manual', [
+            'ticket_id' => $post_id,
+            'event_id'  => $evento_id,
+            'result'    => $variant_result,
+        ], 'manual_variant_' . $post_id . '_' . $evento_id);
+    }
+
     // Asegurar enlaces de Wallet antes de armar HTML
     $wa_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
     $wi_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
@@ -198,12 +225,16 @@ function eventosapp_send_ticket_email_handler() {
     );
 
     update_post_meta($post_id, '_eventosapp_ticket_email_debug_admin', [
-        'at'          => current_time('mysql'),
-        'recipient'   => $recipient,
-        'subject'     => $subject,
-        'attachments' => $attachments,
-        'headers'     => $headers,
-        'source'      => 'admin',
+        'at'            => current_time('mysql'),
+        'recipient'     => $recipient,
+        'subject'       => $subject,
+        'attachments'   => $attachments,
+        'headers'       => $headers,
+        'source'        => 'admin',
+        'variant_key'   => get_post_meta($post_id, '_eventosapp_ticket_variant_key', true),
+        'variant_name'  => get_post_meta($post_id, '_eventosapp_ticket_variant_name', true),
+        'template'      => get_post_meta($post_id, '_eventosapp_ticket_email_template_override', true),
+        'template_path' => get_post_meta($post_id, '_eventosapp_ticket_email_template_path', true),
     ]);
 
     $ok = wp_mail($recipient, $subject, $html, $headers, $attachments);
@@ -310,6 +341,17 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
         return [false, 'Ticket sin evento asignado'];
     }
 
+    // Aplicar variante antes de generar wallets y antes de construir el HTML del correo.
+    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        $variant_result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+        eventosapp_ticket_email_debug_log('Variante evaluada antes de envío programático', [
+            'ticket_id' => $ticket_id,
+            'event_id'  => $evento_id,
+            'source'    => $source,
+            'result'    => $variant_result,
+        ], 'programmatic_variant_' . $ticket_id . '_' . $evento_id . '_' . $source);
+    }
+
     // Asegurar enlaces de Wallet antes de armar HTML
     $wa_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
     $wi_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
@@ -386,12 +428,16 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
 
     // Debug info
     update_post_meta($ticket_id, '_eventosapp_ticket_email_debug', [
-        'at'          => current_time('mysql'),
-        'recipient'   => $recipient,
-        'subject'     => $subject,
-        'attachments' => $attachments,
-        'headers'     => $headers,
-        'source'      => $source,
+        'at'            => current_time('mysql'),
+        'recipient'     => $recipient,
+        'subject'       => $subject,
+        'attachments'   => $attachments,
+        'headers'       => $headers,
+        'source'        => $source,
+        'variant_key'   => get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true),
+        'variant_name'  => get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true),
+        'template'      => get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true),
+        'template_path' => get_post_meta($ticket_id, '_eventosapp_ticket_email_template_path', true),
     ]);
 
     // Enviar correo
@@ -454,10 +500,23 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
  * para que los botones del email siempre aparezcan.
  */
 function eventosapp_build_ticket_email_html($ticket_id) {
+    $ticket_id   = absint($ticket_id);
     $evento_id   = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
     $ticket_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
 
-    $header_img = get_post_meta($evento_id, '_eventosapp_email_header_img', true);
+    if ($ticket_id && $evento_id && function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+    }
+
+    $variant_branding = [];
+    if ($ticket_id && $evento_id && function_exists('eventosapp_ticket_variants_get_email_branding_for_ticket')) {
+        $variant_branding = eventosapp_ticket_variants_get_email_branding_for_ticket($ticket_id, $evento_id);
+        if (!is_array($variant_branding)) $variant_branding = [];
+    }
+
+    $header_img = !empty($variant_branding['header_image_url'])
+        ? $variant_branding['header_image_url']
+        : get_post_meta($evento_id, '_eventosapp_email_header_img', true);
     if (!$header_img) {
         $header_img = 'https://eventosapp.com/wp-content/uploads/2025/08/header_ticket_gen.jpg';
     }
@@ -572,8 +631,12 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         $extra_block .= '</div>';
     }
 
-    // Cargar plantilla seleccionada
-    $tpl_file = $evento_id ? (get_post_meta($evento_id, '_eventosapp_email_tpl', true) ?: 'email-ticket.html') : 'email-ticket.html';
+    // Cargar plantilla seleccionada.
+    // Antes se leía solamente _eventosapp_email_tpl del evento; ahora se permite que la variante del ticket la sobrescriba.
+    $default_tpl_file = $evento_id ? (get_post_meta($evento_id, '_eventosapp_email_tpl', true) ?: 'email-ticket.html') : 'email-ticket.html';
+    $tpl_file = apply_filters('eventosapp_ticket_email_template', $default_tpl_file, $ticket_id, $evento_id);
+    $tpl_file = sanitize_file_name($tpl_file ?: $default_tpl_file ?: 'email-ticket.html');
+
     $tpl_dir  = eventosapp_email_templates_dir();
     $tpl_path = $tpl_dir . $tpl_file;
 
@@ -584,11 +647,22 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         $tpl_path = is_readable($legacy) ? $legacy : '';
     }
 
+    $tpl_path = apply_filters('eventosapp_ticket_email_template_path', $tpl_path, $ticket_id, $evento_id);
+
     if (!$tpl_path || !is_readable($tpl_path)) {
         $body = '<h2>{{evento_nombre}}</h2><p>Hola {{asistente_nombre}}, aquí está tu ticket: {{ticket_id}}</p><p><img src="{{qr_url}}" alt="QR"></p>{{mensaje_extra_block}}';
     } else {
         $body = file_get_contents($tpl_path);
     }
+
+    eventosapp_ticket_email_debug_log('Plantilla HTML resuelta', [
+        'ticket_id'          => $ticket_id,
+        'event_id'           => $evento_id,
+        'event_template'     => $default_tpl_file,
+        'effective_template' => $tpl_file,
+        'template_path'      => $tpl_path,
+        'variant_key'        => get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true),
+    ], 'html_template_' . $ticket_id . '_' . md5((string) $tpl_file . '|' . (string) $tpl_path));
 
     // === Rutas públicas a los botones gráficos de Wallet (dentro del plugin) con cache-busting ===
     $wallet_google_img = eventosapp_asset_url_with_version('assets/graphics/wallet_icons/google_wallet_btn.png');
@@ -617,10 +691,16 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         '{{mensaje_extra_block}}' => $extra_block,
         '{{mensaje_extra}}'       => esc_html($extra_msg),
     ];
+
+    $replacements = apply_filters('eventosapp_ticket_email_replacements', $replacements, $ticket_id, $evento_id);
+    if (!is_array($replacements)) $replacements = [];
+
     $html = strtr($body, $replacements);
 
-    // === Color de encabezados (h1 y h2) desde meta ===
-    $h_color = $evento_id ? (get_post_meta($evento_id, '_eventosapp_email_heading_color', true) ?: '') : '';
+    // === Color de encabezados (h1 y h2) desde meta/variante ===
+    $h_color = !empty($variant_branding['heading_color'])
+        ? $variant_branding['heading_color']
+        : ($evento_id ? (get_post_meta($evento_id, '_eventosapp_email_heading_color', true) ?: '') : '');
     $h_color = sanitize_hex_color($h_color);
     if ($h_color) {
         $style = '<style type="text/css">h1{color:'.$h_color.' !important;} h2{color:'.$h_color.' !important;}</style>';
@@ -661,6 +741,22 @@ function eventosapp_build_ticket_email_html($ticket_id) {
     if (!preg_match('/<a[^>]+class="btn[^"]*"/i', $html)) {
         $html = preg_replace('/<div class="actions"[^>]*>.*?<\/div>/is', '', $html);
     }
+
+    $html = apply_filters('eventosapp_ticket_email_html', $html, $ticket_id, $evento_id);
+
+    // Ya aplicamos la variante dentro de este constructor; evitamos que el filtro wp_mail la duplique.
+    unset($GLOBALS['eventosapp_ticket_variants_last_email_ticket_id'], $GLOBALS['eventosapp_ticket_variants_last_email_event_id']);
+
+    eventosapp_ticket_email_debug_log('HTML de correo construido', [
+        'ticket_id'      => $ticket_id,
+        'event_id'       => $evento_id,
+        'variant_key'    => get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true),
+        'template'       => $tpl_file ?? '',
+        'template_path'  => $tpl_path ?? '',
+        'header_img'     => $header_img,
+        'wallet_android' => !empty($wallet_android_url) ? 'yes' : 'no',
+        'wallet_apple'   => !empty($wallet_apple_url) ? 'yes' : 'no',
+    ], 'html_built_' . $ticket_id . '_' . md5((string) ($tpl_file ?? '') . '|' . (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true)));
 
     return $html;
 }
