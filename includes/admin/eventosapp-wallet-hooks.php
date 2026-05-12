@@ -594,9 +594,11 @@ if (!function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
 
         if ($code_get === 200) {
             $patch_payload = $payload;
-            // Google Wallet no permite enviar reviewStatus en PATCH de clases aprobadas.
-            // Si se envía, la API puede responder: Invalid review status "APPROVED".
-            unset($patch_payload['id'], $patch_payload['reviewStatus']);
+            // En clases existentes aprobadas, Google puede exigir que los cambios revisables
+            // se envíen con reviewStatus=UNDER_REVIEW. Nunca reenviamos APPROVED desde el GET.
+            unset($patch_payload['id']);
+            $patch_payload['reviewStatus'] = 'UNDER_REVIEW';
+
             $res_patch = wp_remote_request($class_url, [
                 'timeout' => 20,
                 'method'  => 'PATCH',
@@ -606,6 +608,24 @@ if (!function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
             $code_patch = is_wp_error($res_patch) ? 0 : wp_remote_retrieve_response_code($res_patch);
             $body_patch = is_wp_error($res_patch) ? ('WP_Error: ' . $res_patch->get_error_message()) : wp_remote_retrieve_body($res_patch);
             error_log('EVENTOSAPP WALLET ENSURE CLASS PATCH [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_patch . ' | payload_keys=' . implode(',', array_keys($patch_payload)) . ' | ' . substr($body_patch, 0, 400));
+
+            // Fallback defensivo: algunas clases antiguas pueden rechazar reviewStatus en PATCH.
+            // Si ocurre, reintentamos sin reviewStatus, pero jamás enviamos APPROVED.
+            if (!in_array((int) $code_patch, [200, 201], true) && (stripos($body_patch, 'reviewStatus') !== false || stripos($body_patch, 'review status') !== false)) {
+                $fallback_payload = $patch_payload;
+                unset($fallback_payload['reviewStatus']);
+                $res_patch_fallback = wp_remote_request($class_url, [
+                    'timeout' => 20,
+                    'method'  => 'PATCH',
+                    'headers' => $headers_json,
+                    'body'    => wp_json_encode($fallback_payload),
+                ]);
+                $code_patch_fb = is_wp_error($res_patch_fallback) ? 0 : wp_remote_retrieve_response_code($res_patch_fallback);
+                $body_patch_fb = is_wp_error($res_patch_fallback) ? ('WP_Error: ' . $res_patch_fallback->get_error_message()) : wp_remote_retrieve_body($res_patch_fallback);
+                error_log('EVENTOSAPP WALLET ENSURE CLASS PATCH FALLBACK [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_patch_fb . ' | payload_keys=' . implode(',', array_keys($fallback_payload)) . ' | ' . substr($body_patch_fb, 0, 400));
+                $code_patch = $code_patch_fb;
+                $body_patch = $body_patch_fb;
+            }
 
             // Aunque el PATCH no sea aceptado, el GET 200 confirma que la clase existe.
             // Se devuelve true para no bloquear la actualización del objeto.
@@ -2201,6 +2221,13 @@ function eventosapp_wallet_patch_objects_for_event($evento_id) {
         $wallet_apple_on ? 'ON' : 'OFF',
         $reason
     ));
+
+    // Procesa inmediatamente la primera página para no depender únicamente de WP-Cron/Action Scheduler.
+    // Si hay más páginas, el worker seguirá programando las siguientes como antes.
+    if (!empty($job['total'])) {
+        error_log('EVENTOSAPP WALLET BATCH immediate evento:' . (int) $evento_id . ' - Ejecutando primera página tras guardar evento.');
+        do_action('eventosapp_wallet_bulk_patch', ['evento_id' => (int) $evento_id]);
+    }
 }
 
 add_action('eventosapp_wallet_bulk_patch', function($args){
