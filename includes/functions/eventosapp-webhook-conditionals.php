@@ -110,25 +110,35 @@ function eventosapp_condition_operator_label($operator) {
  * Obtiene las plantillas de correo disponibles
  */
 function eventosapp_get_available_email_templates() {
+    // Directorio real de plantillas del plugin: includes/templates/email_tickets/.
+    // También se conserva compatibilidad con instalaciones antiguas que hayan usado /templates/email_tickets/.
     $templates = [];
-    $dir = plugin_dir_path(dirname(dirname(__FILE__))) . 'templates/email_tickets/';
+    $plugin_root = plugin_dir_path(dirname(dirname(__FILE__)));
+    $dirs = [
+        $plugin_root . 'includes/templates/email_tickets/',
+        $plugin_root . 'templates/email_tickets/',
+    ];
 
-    if (is_dir($dir)) {
-        $files = glob($dir . '*.html');
-        foreach ($files as $file) {
+    foreach ($dirs as $dir) {
+        if (!is_dir($dir)) continue;
+        $files = glob(trailingslashit($dir) . '*.html');
+        foreach ((array) $files as $file) {
+            if (!is_readable($file)) continue;
             $basename = basename($file);
+            if (isset($templates[$basename])) continue;
             $label = str_replace(['-', '_', '.html'], [' ', ' ', ''], $basename);
-            $label = ucwords($label);
-            $templates[$basename] = $label;
+            $label = trim(ucwords($label));
+            $templates[$basename] = $label ?: $basename;
         }
     }
 
-    // Asegurar que siempre haya al menos la plantilla por defecto
     if (empty($templates)) {
         $templates['email-ticket.html'] = 'Email Ticket (por defecto)';
+    } elseif (isset($templates['email-ticket.html'])) {
+        $templates = ['email-ticket.html' => 'Email Ticket (por defecto)'] + array_diff_key($templates, ['email-ticket.html' => true]);
     }
 
-    return $templates;
+    return apply_filters('eventosapp_available_email_templates', $templates, $dirs);
 }
 
 /**
