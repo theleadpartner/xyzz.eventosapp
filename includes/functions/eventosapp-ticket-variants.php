@@ -1002,6 +1002,260 @@ if (!function_exists('eventosapp_ticket_variants_refresh_google_wallet_object'))
     }
 }
 
+
+
+/* ============================================================
+ * =========== GOOGLE WALLET: CLASES DE VARIANTES =============
+ * ============================================================ */
+
+if (!function_exists('eventosapp_ticket_variants_get_google_class_id_for_rule')) {
+    /**
+     * Devuelve el Class ID efectivo de Google Wallet para una regla de variante.
+     * Si el metabox no trae Class ID manual, genera uno automático por evento + variante.
+     */
+    function eventosapp_ticket_variants_get_google_class_id_for_rule($event_id, $rule) {
+        $event_id = absint($event_id);
+        $rule = is_array($rule) ? $rule : [];
+        if (!$event_id || empty($rule)) return '';
+
+        $manual = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
+        if ($manual !== '') return $manual;
+
+        $variant_key = isset($rule['key']) ? sanitize_key($rule['key']) : '';
+        $auto = eventosapp_ticket_variants_build_auto_google_class_id($event_id, $variant_key);
+        return eventosapp_ticket_variants_normalize_class_id($auto);
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_get_google_class_source_for_rule')) {
+    function eventosapp_ticket_variants_get_google_class_source_for_rule($rule) {
+        $rule = is_array($rule) ? $rule : [];
+        $manual = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
+        return $manual !== '' ? 'manual' : 'auto';
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_apply_rule_to_google_context')) {
+    /**
+     * Construye el contexto de clase Google Wallet para una variante sin depender de un ticket.
+     * Esto permite crear/actualizar la clase al guardar el evento, incluso antes del batch por tickets.
+     */
+    function eventosapp_ticket_variants_apply_rule_to_google_context($ctx, $event_id, $rule) {
+        $ctx = is_array($ctx) ? $ctx : [];
+        $event_id = absint($event_id);
+        $rule = is_array($rule) ? $rule : [];
+
+        $class_id = eventosapp_ticket_variants_get_google_class_id_for_rule($event_id, $rule);
+        if ($class_id !== '') {
+            $ctx['class_id'] = $class_id;
+        }
+
+        if (!empty($rule['google_wallet_logo_url'])) {
+            $ctx['logo_url'] = esc_url_raw($rule['google_wallet_logo_url']);
+        }
+        if (!empty($rule['google_wallet_hero_url'])) {
+            $ctx['hero_url'] = esc_url_raw($rule['google_wallet_hero_url']);
+        }
+        if (!empty($rule['google_wallet_hex_color'])) {
+            $ctx['hex_color'] = eventosapp_ticket_variants_sanitize_hex($rule['google_wallet_hex_color']);
+        }
+        if (!empty($rule['google_wallet_event_name'])) {
+            $ctx['nombre_evento'] = sanitize_text_field($rule['google_wallet_event_name']);
+        }
+
+        $ctx['variant_key'] = isset($rule['key']) ? sanitize_key($rule['key']) : '';
+        $ctx['variant_name'] = isset($rule['name']) ? sanitize_text_field($rule['name']) : '';
+        $ctx['variant_class_source'] = eventosapp_ticket_variants_get_google_class_source_for_rule($rule);
+
+        return $ctx;
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_for_event')) {
+    /**
+     * Crea/actualiza en Google Wallet todas las clases Android asociadas a variantes configuradas.
+     *
+     * Esta función es intencionalmente a nivel EVENTO, no a nivel ticket:
+     * - Si la variante ya existe en el metabox y se guarda el evento, la clase se crea si falta.
+     * - Si la clase ya existe, se actualiza con logo/hero/color/nombre de la variante.
+     * - Después el batch puede regenerar/actualizar los tickets existentes usando esa clase.
+     */
+    function eventosapp_ticket_variants_sync_google_wallet_classes_for_event($event_id, $reason = '') {
+        $event_id = absint($event_id);
+        $summary = [
+            'ok' => false,
+            'reason' => '',
+            'total_rules' => 0,
+            'synced' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'classes' => [],
+        ];
+
+        if (!$event_id || get_post_type($event_id) !== 'eventosapp_event') {
+            $summary['reason'] = 'invalid_event';
+            return $summary;
+        }
+
+        $wallet_android_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true) === '1';
+        if (!$wallet_android_on) {
+            $summary['reason'] = 'android_wallet_disabled';
+            eventosapp_ticket_variants_log('Sync clases Android variantes omitido: Android Wallet no está activo en el evento', [
+                'event_id' => $event_id,
+                'reason' => $reason,
+            ]);
+            return $summary;
+        }
+
+        $config = eventosapp_ticket_variants_get_config($event_id);
+        $rules = isset($config['rules']) && is_array($config['rules']) ? $config['rules'] : [];
+        $summary['total_rules'] = count($rules);
+
+        if (empty($config['enabled']) || empty($rules)) {
+            $summary['reason'] = empty($config['enabled']) ? 'variants_disabled' : 'no_rules';
+            eventosapp_ticket_variants_log('Sync clases Android variantes omitido: no hay variantes activas', [
+                'event_id' => $event_id,
+                'enabled' => !empty($config['enabled']) ? 'yes' : 'no',
+                'rules_count' => count($rules),
+                'reason' => $reason,
+            ]);
+            return $summary;
+        }
+
+        if (!function_exists('eventosapp_wallet_build_event_context')) {
+            $summary['reason'] = 'missing_event_context_function';
+            eventosapp_ticket_variants_log('Sync clases Android variantes falló: falta eventosapp_wallet_build_event_context()', [
+                'event_id' => $event_id,
+                'reason' => $reason,
+            ]);
+            return $summary;
+        }
+
+        $base_ctx = eventosapp_wallet_build_event_context($event_id);
+        if (empty($base_ctx['issuer_id'])) {
+            $summary['reason'] = 'missing_issuer_id';
+            eventosapp_ticket_variants_log('Sync clases Android variantes falló: falta issuer_id', [
+                'event_id' => $event_id,
+                'reason' => $reason,
+            ]);
+            return $summary;
+        }
+
+        $access_token = '';
+        if (function_exists('eventosapp_google_wallet_get_access_token')) {
+            $auth = eventosapp_google_wallet_get_access_token();
+            $access_token = is_array($auth) ? (string) ($auth['token'] ?? ($auth['access_token'] ?? '')) : '';
+        }
+
+        $can_ensure = $access_token !== '' && function_exists('eventosapp_wallet_ensure_event_ticket_class');
+        $can_sync   = function_exists('eventosapp_sync_wallet_class');
+
+        if (!$can_ensure && !$can_sync) {
+            $summary['reason'] = 'missing_wallet_sync_functions';
+            eventosapp_ticket_variants_log('Sync clases Android variantes falló: no hay funciones de sincronización disponibles', [
+                'event_id' => $event_id,
+                'has_token' => $access_token !== '' ? 'yes' : 'no',
+                'reason' => $reason,
+            ]);
+            return $summary;
+        }
+
+        foreach ($rules as $index => $rule) {
+            if (!is_array($rule)) {
+                $summary['skipped']++;
+                continue;
+            }
+
+            $class_id = eventosapp_ticket_variants_get_google_class_id_for_rule($event_id, $rule);
+            if ($class_id === '') {
+                $summary['skipped']++;
+                eventosapp_ticket_variants_log('Regla de variante sin Class ID Android efectivo', [
+                    'event_id' => $event_id,
+                    'index' => (int) $index,
+                    'variant_key' => $rule['key'] ?? '',
+                    'reason' => $reason,
+                ]);
+                continue;
+            }
+
+            $ctx = eventosapp_ticket_variants_apply_rule_to_google_context($base_ctx, $event_id, $rule);
+            $ctx['class_id'] = $class_id;
+
+            $ok = false;
+            if ($can_ensure) {
+                $ok = (bool) eventosapp_wallet_ensure_event_ticket_class($event_id, $access_token, $ctx, 0);
+            } elseif ($can_sync) {
+                $sync = eventosapp_sync_wallet_class($event_id, [
+                    'force_class_id' => $class_id,
+                    'logo_url' => $ctx['logo_url'] ?? '',
+                    'hero_url' => $ctx['hero_url'] ?? '',
+                    'hex_color' => $ctx['hex_color'] ?? '',
+                    'brand_text' => $ctx['brand_text'] ?? '',
+                    'event_name' => $ctx['nombre_evento'] ?? '',
+                    'variant_key' => $ctx['variant_key'] ?? '',
+                    'variant_name' => $ctx['variant_name'] ?? '',
+                ]);
+                $ok = is_array($sync) && !empty($sync['ok']);
+            }
+
+            $class_row = [
+                'index' => (int) $index,
+                'variant_key' => $rule['key'] ?? '',
+                'variant_name' => $rule['name'] ?? '',
+                'class_id' => $class_id,
+                'class_source' => $ctx['variant_class_source'] ?? '',
+                'ok' => $ok ? 'yes' : 'no',
+            ];
+            $summary['classes'][] = $class_row;
+
+            if ($ok) {
+                $summary['synced']++;
+            } else {
+                $summary['failed']++;
+            }
+
+            eventosapp_ticket_variants_log($ok ? 'Clase Android de variante sincronizada' : 'No se pudo sincronizar clase Android de variante', array_merge([
+                'event_id' => $event_id,
+                'reason' => $reason,
+            ], $class_row));
+        }
+
+        $summary['ok'] = $summary['failed'] === 0 && ($summary['synced'] > 0 || $summary['skipped'] === $summary['total_rules']);
+        $summary['reason'] = $summary['reason'] ?: 'processed';
+
+        update_post_meta($event_id, '_eventosapp_ticket_variants_wallet_classes_last_sync', $summary);
+        update_post_meta($event_id, '_eventosapp_ticket_variants_wallet_classes_last_sync_at', current_time('mysql'));
+
+        eventosapp_ticket_variants_log('Resumen sync clases Android variantes', [
+            'event_id' => $event_id,
+            'reason' => $reason,
+            'synced' => $summary['synced'],
+            'failed' => $summary['failed'],
+            'skipped' => $summary['skipped'],
+            'total_rules' => $summary['total_rules'],
+        ]);
+
+        return $summary;
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_on_event_save')) {
+    function eventosapp_ticket_variants_sync_google_wallet_classes_on_event_save($post_id) {
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+        if (wp_is_post_revision($post_id)) return;
+        if (get_post_type($post_id) !== 'eventosapp_event') return;
+
+        $valid_event_nonce = isset($_POST['eventosapp_nonce']) && wp_verify_nonce($_POST['eventosapp_nonce'], 'eventosapp_detalles_evento');
+        $valid_variant_nonce = isset($_POST['eventosapp_ticket_variants_nonce']) && wp_verify_nonce($_POST['eventosapp_ticket_variants_nonce'], 'eventosapp_ticket_variants_save');
+
+        if (!$valid_event_nonce && !$valid_variant_nonce) return;
+        if (!current_user_can('edit_post', $post_id)) return;
+
+        eventosapp_ticket_variants_sync_google_wallet_classes_for_event($post_id, 'save_post_eventosapp_event');
+    }
+}
+add_action('save_post_eventosapp_event', 'eventosapp_ticket_variants_sync_google_wallet_classes_on_event_save', 35);
+
 /* ============================================================
  * ======================== METABOX ===========================
  * ============================================================ */
