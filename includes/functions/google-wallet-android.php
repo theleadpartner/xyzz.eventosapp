@@ -357,9 +357,11 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
 
     if ($code === 409) {
         $patch_url = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketClass/' . rawurlencode($class_id);
-        // en patch, mandamos campos que pueden cambiar
+        // En PATCH de clases existentes no se debe reenviar APPROVED.
+        // Cuando cambian campos revisables, Google suele exigir UNDER_REVIEW.
         $patch_payload = [
             'issuerName'         => $issuerName,
+            'reviewStatus'       => 'UNDER_REVIEW',
             'eventName'          => ['defaultValue' => ['language' => 'es', 'value' => $nombreEvento]],
             'hexBackgroundColor' => $hex_color,
         ];
@@ -416,9 +418,30 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
         }
         $pcode = wp_remote_retrieve_response_code($patch_res);
         $pbody = wp_remote_retrieve_body($patch_res);
-        $log("PATCH class HTTP $pcode | body: " . substr($pbody, 0, 600));
+        $log("PATCH class HTTP $pcode | payload_keys=" . implode(',', array_keys($patch_payload)) . " | body: " . substr($pbody, 0, 600));
 
-        if ($pcode === 200) {
+        // Fallback defensivo: si alguna clase antigua rechaza reviewStatus, reintentamos sin ese campo.
+        // Nunca reenviamos APPROVED desde una respuesta previa de Google.
+        if (!in_array((int) $pcode, [200, 201], true) && (stripos($pbody, 'reviewStatus') !== false || stripos($pbody, 'review status') !== false)) {
+            $fallback_payload = $patch_payload;
+            unset($fallback_payload['reviewStatus']);
+            $patch_res_fb = wp_remote_request($patch_url, [
+                'timeout' => 20,
+                'headers' => [
+                    'Authorization' => "Bearer $access_token",
+                    'Content-Type'  => 'application/json'
+                ],
+                'body'   => wp_json_encode($fallback_payload),
+                'method' => 'PATCH',
+            ]);
+            $pcode_fb = is_wp_error($patch_res_fb) ? 0 : wp_remote_retrieve_response_code($patch_res_fb);
+            $pbody_fb = is_wp_error($patch_res_fb) ? ('WP_Error: ' . $patch_res_fb->get_error_message()) : wp_remote_retrieve_body($patch_res_fb);
+            $log("PATCH class FALLBACK HTTP $pcode_fb | payload_keys=" . implode(',', array_keys($fallback_payload)) . " | body: " . substr($pbody_fb, 0, 600));
+            $pcode = $pcode_fb;
+            $pbody = $pbody_fb;
+        }
+
+        if (in_array((int) $pcode, [200, 201], true)) {
             $log("Clase actualizada OK: $class_id");
             return ['ok' => true, 'class_id' => $class_id, 'logs' => $logs];
         }
@@ -968,7 +991,16 @@ if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
             ? $maybe_body['error']['errors'][0]['reason'] : '';
         if ($reason === 'classNotFound' || $api_code === 404) {
             $log('La Class no existe. Intentando crearla/actualizarla y reintentar el objeto...');
-            $sync = eventosapp_sync_wallet_class($evento_id, ['force_class_id' => $class_id]);
+            $sync = eventosapp_sync_wallet_class($evento_id, [
+                'force_class_id' => $class_id,
+                'logo_url' => $logo_url,
+                'hero_url' => $hero_url,
+                'hex_color' => $hex_color,
+                'brand_text' => $brand_text,
+                'event_name' => $nombre_evento,
+                'variant_key' => $wallet_context['variant_key'] ?? '',
+                'variant_name' => $wallet_context['variant_name'] ?? '',
+            ]);
             foreach ($sync['logs'] as $l) { $log($l); }
             if ($sync['ok']) {
                 $api_res = wp_remote_post($api_url, [
