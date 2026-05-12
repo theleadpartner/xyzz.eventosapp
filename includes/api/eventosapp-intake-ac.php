@@ -440,6 +440,18 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
       return $result;
     }
 
+    // Aplicar variantes antes de regenerar assets.
+    // Así Google Wallet/Apple/correo usan clase, branding y plantilla según la regla coincidente.
+    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+      try {
+        $variant_result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+        $result['ticket_variant'] = $variant_result;
+        error_log('[EventosApp] Webhook assets variant ticket='.$ticket_id.' event='.$evento_id.' result='.wp_json_encode($variant_result));
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'ticket_variant: '.$e->getMessage();
+      }
+    }
+
     // QR: completar faltantes sin cambiar URLs existentes.
     if (class_exists('EventosApp_QR_Manager')) {
       try {
@@ -813,6 +825,17 @@ if ($existing) {
   }
   // ---- FIN AUDITORÍA ----
 
+  // Aplicar variantes actualizadas antes de evaluar condicionales y reenviar correo.
+  if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+    try {
+      $variant_result_update = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+      update_post_meta($ticket_id, '_eventosapp_webhook_variant_result', $variant_result_update);
+      error_log('[EventosApp] Webhook UPDATE variant ticket='.$ticket_id.' event='.$evento_id.' result='.wp_json_encode($variant_result_update));
+    } catch (\Throwable $e) {
+      error_log('[EventosApp] Webhook UPDATE variant ERROR ticket='.$ticket_id.' event='.$evento_id.' error='.$e->getMessage());
+    }
+  }
+
   // ---- ENVÍO DE CORREO (siempre en actualización por CC) ----
   $email_result = ['email_sent' => false, 'email_msg' => ''];
 
@@ -1003,6 +1026,17 @@ if ($existing) {
     error_log('[EventosApp] Webhook CREATE: ADVERTENCIA - EventosApp_QR_Manager no disponible para ticket '.$post_id);
   }
 
+  // Aplicar variantes después de guardar datos base, extras y QR, antes de generar wallets/correo.
+  if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+    try {
+      $variant_result_create = eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
+      update_post_meta($post_id, '_eventosapp_webhook_variant_result', $variant_result_create);
+      error_log('[EventosApp] Webhook CREATE variant ticket='.$post_id.' event='.$evento_id.' result='.wp_json_encode($variant_result_create));
+    } catch (\Throwable $e) {
+      error_log('[EventosApp] Webhook CREATE variant ERROR ticket='.$post_id.' event='.$evento_id.' error='.$e->getMessage());
+    }
+  }
+
   // ============================================================================
   // FUNCIONES LEGACY - Mantener compatibilidad con archivos antiguos
   // ============================================================================
@@ -1015,6 +1049,9 @@ if ($existing) {
   $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
   if ($wallet_android_on==='1' || $wallet_android_on===1 || $wallet_android_on===true) {
     if (function_exists('eventosapp_generar_enlace_wallet_android')) eventosapp_generar_enlace_wallet_android($post_id, false);
+    if (function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
+      eventosapp_ticket_variants_refresh_google_wallet_object($post_id, $evento_id);
+    }
   }
 
   // Indexar para búsquedas
