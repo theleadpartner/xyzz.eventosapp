@@ -210,6 +210,11 @@ function eventosapp_wallet_build_signature($evento_id){
     $coords     = (string) get_post_meta($evento_id, '_eventosapp_coordenadas', true);
     $brand_text = (string) get_option('eventosapp_wallet_branding_text', 'Evento');
 
+    // NUEVO: la firma incluye la configuración de variantes, para disparar PATCH/regen
+    // cuando cambian reglas, plantillas, clases o assets por localidad/campo.
+    $ticket_variants_enabled = (string) get_post_meta($evento_id, '_eventosapp_ticket_variants_enabled', true);
+    $ticket_variants_config  = get_post_meta($evento_id, '_eventosapp_ticket_variants_config', true);
+
     $class_id   = $wc_enable ? ($class_evt ?: ($issuer_id ? $issuer_id.'.event_'.$evento_id : '')) : $class_def;
     if ($class_id && $issuer_id && strpos($class_id, '.') === false) {
         $class_id = $issuer_id . '.' . ltrim($class_id, '.');
@@ -236,6 +241,8 @@ function eventosapp_wallet_build_signature($evento_id){
         'direccion' => $direccion,
         'coords'    => $coords,
         'brand'     => $brand_text,
+        'ticket_variants_enabled' => $ticket_variants_enabled,
+        'ticket_variants_config'  => $ticket_variants_config,
 
         // Apple (novedad en la firma)
         'apple_icon'  => $apple_icon,
@@ -311,6 +318,10 @@ function eventosapp_wallet_build_event_context($evento_id){
         ? (get_post_meta($evento_id, '_eventosapp_wallet_hero_img_url', true) ?: get_option('eventosapp_wallet_hero_img_url'))
         : (get_option('eventosapp_wallet_hero_img_url') ?: '');
 
+    $hex_color = $wallet_custom_enable
+        ? (get_post_meta($evento_id, '_eventosapp_wallet_hex_color', true) ?: '#3782C4')
+        : (get_option('eventosapp_wallet_hex_color') ?: '#3782C4');
+
     $brand_text = get_option('eventosapp_wallet_branding_text') ?: 'Evento';
 
     $class_id = $wallet_custom_enable ? ($class_id_event ?: ($issuer_id . '.event_' . $evento_id)) : $class_id_default;
@@ -351,6 +362,7 @@ function eventosapp_wallet_build_event_context($evento_id){
         'class_id'   => $class_id,
         'logo_url'   => $logo_url,
         'hero_url'   => $hero_url,
+        'hex_color'  => $hex_color,
         'brand_text' => $brand_text,
         'startISO'   => $startISO,
         'endISO'     => $endISO,
@@ -463,6 +475,7 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
     $hero_url        = $ctx['hero_url'];
     $logo_url        = $ctx['logo_url'];
     $brand_text      = $ctx['brand_text'];
+    $hex_color       = isset($ctx['hex_color']) ? $ctx['hex_color'] : '';
     $startISO        = $ctx['startISO'];
     $endISO          = $ctx['endISO'];
     $doorsISO        = $ctx['doorsISO'];
@@ -470,6 +483,25 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
     $lat             = $ctx['lat'];
     $lng             = $ctx['lng'];
     $nombre_evento   = $ctx['nombre_evento'];
+
+    // NUEVO: aplicar variante por ticket antes de construir/actualizar el objeto Google Wallet.
+    // Esto permite classId/logo/hero/color/nombre distintos por localidad u otros criterios.
+    if (function_exists('eventosapp_ticket_variants_filter_google_wallet_context')) {
+        $ctx = eventosapp_ticket_variants_filter_google_wallet_context($ctx, $ticket_id, $evento_id);
+        $issuer_id       = $ctx['issuer_id'];
+        $class_id_wanted = $ctx['class_id'];
+        $hero_url        = $ctx['hero_url'];
+        $logo_url        = $ctx['logo_url'];
+        $brand_text      = $ctx['brand_text'];
+        $hex_color       = isset($ctx['hex_color']) ? $ctx['hex_color'] : '';
+        $startISO        = $ctx['startISO'];
+        $endISO          = $ctx['endISO'];
+        $doorsISO        = $ctx['doorsISO'];
+        $direccion       = $ctx['direccion'];
+        $lat             = $ctx['lat'];
+        $lng             = $ctx['lng'];
+        $nombre_evento   = $ctx['nombre_evento'];
+    }
 
     // Datos del asistente
     $asistente_nombre   = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
@@ -509,6 +541,7 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
         ] : null,
         'logo'          => $logo_url ? ['sourceUri' => ['uri' => $logo_url]] : null,
         'eventName'     => ['defaultValue' => ['language' => 'es', 'value' => $nombre_evento]],
+        'hexBackgroundColor' => $hex_color ?: null,
         'startDateTime' => $startISO,
         'endDateTime'   => $endISO,
         'doorsOpen'     => $doorsISO,
@@ -672,8 +705,18 @@ function eventosapp__hex_to_rgb_css($hex){
  * (Incluye 'trace' con detalle de resolución para consola).
  */
 if (!function_exists('eventosapp__apple_resolve_assets_paths')) {
-    function eventosapp__apple_resolve_assets_paths($evento_id){
+    function eventosapp__apple_resolve_assets_paths($evento_id, $ticket_id = 0){
         $trace = ['inputs'=>[], 'steps'=>[]];
+
+        $ticket_id = absint($ticket_id);
+        if ($ticket_id && function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+            eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+        }
+
+        // Overrides por variante del ticket
+        $icon_variant  = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_apple_variant_icon_url',  true) : '';
+        $logo_variant  = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_apple_variant_logo_url',  true) : '';
+        $strip_variant = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_apple_variant_strip_url', true) : '';
 
         // Overrides por evento
         $icon_ev  = get_post_meta($evento_id, '_eventosapp_apple_icon_url',  true);
@@ -686,14 +729,15 @@ if (!function_exists('eventosapp__apple_resolve_assets_paths')) {
         $strip_def = get_option('eventosapp_apple_strip_default_url', '');
 
         $trace['inputs'] = [
+            'icon_variant'=>$icon_variant, 'logo_variant'=>$logo_variant, 'strip_variant'=>$strip_variant,
             'icon_ev'=>$icon_ev, 'logo_ev'=>$logo_ev, 'strip_ev'=>$strip_ev,
             'icon_def'=>$icon_def, 'logo_def'=>$logo_def, 'strip_def'=>$strip_def
         ];
 
-        // Fuente efectiva
-        $iconSrc  = $icon_ev  ?: $icon_def;
-        $logoSrc  = $logo_ev  ?: $logo_def;
-        $stripSrc = $strip_ev ?: $strip_def;
+        // Fuente efectiva: variante del ticket > evento > Integraciones.
+        $iconSrc  = $icon_variant  ?: ($icon_ev  ?: $icon_def);
+        $logoSrc  = $logo_variant  ?: ($logo_ev  ?: $logo_def);
+        $stripSrc = $strip_variant ?: ($strip_ev ?: $strip_def);
 
         // Convertir URL o ruta → archivo local utilizable
         $icon  = eventosapp__url_or_path_to_local($iconSrc);
@@ -842,6 +886,13 @@ function eventosapp_generar_enlace_wallet_apple($ticket_id){
 
     // Contexto evento
     $ctx = eventosapp_wallet_build_event_context($evento_id);
+
+    // NUEVO: aplicar variante por ticket antes de construir el PKPass Apple.
+    // Apple no maneja classId como Google, pero sí puede variar nombre, imágenes y colores.
+    if (function_exists('eventosapp_ticket_variants_filter_apple_context')) {
+        $ctx = eventosapp_ticket_variants_filter_apple_context($ctx, $ticket_id, $evento_id);
+    }
+
     $nombre_evento = $ctx['nombre_evento'];
     $direccion     = $ctx['direccion'];
 
@@ -914,9 +965,16 @@ function eventosapp_generar_enlace_wallet_apple($ticket_id){
     ]);
 
     // Colores
-    $bg_hex = get_post_meta($evento_id, '_eventosapp_apple_hex_bg', true) ?: get_option('eventosapp_apple_bg_hex', '#3782C4');
-    $fg_hex = get_post_meta($evento_id, '_eventosapp_apple_hex_fg', true) ?: get_option('eventosapp_apple_fg_hex', '#FFFFFF');
-    $label_hex = get_post_meta($evento_id, '_eventosapp_apple_hex_label', true) ?: get_option('eventosapp_apple_label_hex', '#FFFFFF');
+    // NUEVO: primero intenta usar colores de variante; si no existen, conserva overrides del evento y defaults globales.
+    $bg_hex = get_post_meta($ticket_id, '_eventosapp_apple_variant_hex_bg', true)
+        ?: get_post_meta($evento_id, '_eventosapp_apple_hex_bg', true)
+        ?: get_option('eventosapp_apple_bg_hex', '#3782C4');
+    $fg_hex = get_post_meta($ticket_id, '_eventosapp_apple_variant_hex_fg', true)
+        ?: get_post_meta($evento_id, '_eventosapp_apple_hex_fg', true)
+        ?: get_option('eventosapp_apple_fg_hex', '#FFFFFF');
+    $label_hex = get_post_meta($ticket_id, '_eventosapp_apple_variant_hex_label', true)
+        ?: get_post_meta($evento_id, '_eventosapp_apple_hex_label', true)
+        ?: get_option('eventosapp_apple_label_hex', '#FFFFFF');
 
     $bg_css    = eventosapp__hex_to_rgb_css($bg_hex);
     $fg_css    = eventosapp__hex_to_rgb_css($fg_hex);
@@ -954,7 +1012,8 @@ function eventosapp_generar_enlace_wallet_apple($ticket_id){
     evapp_pk_debug_append($ticket_id, 'tmpDir', ['tmpDir'=>$tmpDir]);
 
     // Assets Apple (icon/logo/strip)
-    $assets = eventosapp__apple_resolve_assets_paths($evento_id);
+    // NUEVO: pasa el ticket_id para que pueda resolver imágenes específicas de la variante.
+    $assets = eventosapp__apple_resolve_assets_paths($evento_id, $ticket_id);
     evapp_pk_debug_append($ticket_id, 'Assets (entrada y resolución)', $assets['trace'] ?? []);
 
     if (empty($assets['icon']) || !file_exists($assets['icon'])) {
