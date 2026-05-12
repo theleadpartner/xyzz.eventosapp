@@ -751,6 +751,11 @@ function eventosapp_ticket_files_metabox($post) {
     // Wallet Apple
     $wallet_apple_url = get_post_meta($post->ID, '_eventosapp_ticket_wallet_apple', true);
 
+    // Variante de ticket aplicada, si existe
+    $variant_name  = get_post_meta($post->ID, '_eventosapp_ticket_variant_name', true);
+    $variant_email = get_post_meta($post->ID, '_eventosapp_ticket_email_template_override', true);
+    $variant_class = get_post_meta($post->ID, '_eventosapp_wallet_variant_class_id', true);
+
     ?>
     <style>
         .eventosapp-file-links label { display:block; font-weight:600; margin-bottom:2px; margin-top:12px;}
@@ -758,6 +763,17 @@ function eventosapp_ticket_files_metabox($post) {
         .eventosapp-file-links a { font-size:13px; }
     </style>
     <div class="eventosapp-file-links">
+        <label>Variante aplicada:</label>
+        <?php if ($variant_name): ?>
+            <div style="font-size:12px;background:#f0f6fc;border:1px solid #c5d9ed;border-radius:5px;padding:8px;margin-bottom:8px;">
+                <strong><?php echo esc_html($variant_name); ?></strong>
+                <?php if ($variant_email): ?><br><span>Plantilla correo: <code><?php echo esc_html($variant_email); ?></code></span><?php endif; ?>
+                <?php if ($variant_class): ?><br><span>Google Wallet Class: <code><?php echo esc_html($variant_class); ?></code></span><?php endif; ?>
+            </div>
+        <?php else: ?>
+            <span style="color:#888;">Sin variante aplicada.</span>
+        <?php endif; ?>
+
         <label>QR:</label>
         <?php if ($qr_url): ?>
             <a href="<?php echo esc_url($qr_url); ?>" target="_blank"><?php echo esc_html($qr_url); ?></a>
@@ -1359,6 +1375,12 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         }
     }
 
+    // 5.1) Aplicar variante de ticket por reglas antes de generar correo/wallets.
+    // Esto permite que localidad u otros campos decidan plantilla de correo, clase Google Wallet y diseño Apple Wallet.
+    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
+    }
+
     // 6) ID público NO predecible + secuencia interna por evento + título = ID
     $ticketID = get_post_meta($post_id, 'eventosapp_ticketID', true);
     if (!$ticketID) {
@@ -1402,6 +1424,11 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
     if ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) {
         if (function_exists('eventosapp_generar_enlace_wallet_android')) eventosapp_generar_enlace_wallet_android($post_id, false);
+
+        // Si la variante define clase/branding propio, se fuerza un PATCH/INSERT con ese contexto.
+        if (function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
+            eventosapp_ticket_variants_refresh_google_wallet_object($post_id, $evento_id);
+        }
     } else {
         if (function_exists('eventosapp_eliminar_enlace_wallet_android')) eventosapp_eliminar_enlace_wallet_android($post_id);
     }
