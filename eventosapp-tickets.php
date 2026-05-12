@@ -755,6 +755,10 @@ function eventosapp_ticket_files_metabox($post) {
     $variant_name  = get_post_meta($post->ID, '_eventosapp_ticket_variant_name', true);
     $variant_email = get_post_meta($post->ID, '_eventosapp_ticket_email_template_override', true);
     $variant_class = get_post_meta($post->ID, '_eventosapp_wallet_variant_class_id', true);
+    $variant_email_header = get_post_meta($post->ID, '_eventosapp_ticket_email_header_image_url', true);
+    $variant_email_heading_color = get_post_meta($post->ID, '_eventosapp_ticket_email_heading_color', true);
+    $variant_email_subheading_color = get_post_meta($post->ID, '_eventosapp_ticket_email_subheading_color', true);
+    $variant_email_text_color = get_post_meta($post->ID, '_eventosapp_ticket_email_text_color', true);
 
     ?>
     <style>
@@ -768,6 +772,14 @@ function eventosapp_ticket_files_metabox($post) {
             <div style="font-size:12px;background:#f0f6fc;border:1px solid #c5d9ed;border-radius:5px;padding:8px;margin-bottom:8px;">
                 <strong><?php echo esc_html($variant_name); ?></strong>
                 <?php if ($variant_email): ?><br><span>Plantilla correo: <code><?php echo esc_html($variant_email); ?></code></span><?php endif; ?>
+                <?php if ($variant_email_header): ?><br><span>Cabezote correo: <a href="<?php echo esc_url($variant_email_header); ?>" target="_blank">ver imagen</a></span><?php endif; ?>
+                <?php if ($variant_email_heading_color || $variant_email_subheading_color || $variant_email_text_color): ?>
+                    <br><span>Colores correo:
+                        <?php if ($variant_email_heading_color): ?><code><?php echo esc_html($variant_email_heading_color); ?></code><?php endif; ?>
+                        <?php if ($variant_email_subheading_color): ?><code><?php echo esc_html($variant_email_subheading_color); ?></code><?php endif; ?>
+                        <?php if ($variant_email_text_color): ?><code><?php echo esc_html($variant_email_text_color); ?></code><?php endif; ?>
+                    </span>
+                <?php endif; ?>
                 <?php if ($variant_class): ?><br><span>Google Wallet Class: <code><?php echo esc_html($variant_class); ?></code></span><?php endif; ?>
             </div>
         <?php else: ?>
