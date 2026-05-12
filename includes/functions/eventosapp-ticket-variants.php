@@ -18,62 +18,41 @@ if (!defined('ABSPATH')) exit;
  * ========================= HELPERS ===========================
  * ============================================================ */
 
-if (!function_exists('eventosapp_ticket_variants_log')) {
-    /**
-     * Escribe trazas de variantes en wp-content/debug.log cuando WP_DEBUG_LOG está activo.
-     * Se deja sin dependencia de opciones para que el diagnóstico siempre quede visible en WP_DEBUG true.
-     */
-    function eventosapp_ticket_variants_log($message, $context = [], $once_key = '') {
-        static $seen = [];
-
-        if ($once_key !== '') {
-            if (isset($seen[$once_key])) return;
-            $seen[$once_key] = true;
-        }
-
-        $line = 'EVENTOSAPP VARIANTS | ' . trim((string) $message);
-        if (is_array($context) && !empty($context)) {
-            $encoded = wp_json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            if ($encoded) $line .= ' | ' . $encoded;
-        }
-
-        error_log($line);
-    }
-}
-
-if (!function_exists('eventosapp_ticket_variants_class_suffix')) {
-    function eventosapp_ticket_variants_class_suffix($value) {
-        $value = sanitize_key((string) $value);
-        $value = str_replace('-', '_', $value);
-        $value = preg_replace('/[^a-z0-9_]+/i', '_', $value);
-        $value = trim((string) $value, '_');
-        return $value !== '' ? $value : 'default';
-    }
-}
-
-if (!function_exists('eventosapp_ticket_variants_build_auto_google_class_id')) {
-    /**
-     * Crea un Class ID estable por evento + variante.
-     * Esto evita que los tickets variantes usen la clase principal del evento.
-     */
-    function eventosapp_ticket_variants_build_auto_google_class_id($event_id, $rule) {
-        $event_id = absint($event_id);
-        $issuer_id = trim((string) get_option('eventosapp_wallet_issuer_id', ''));
-        if (!$event_id || $issuer_id === '') return '';
-
-        $rule = is_array($rule) ? $rule : [];
-        $raw_key = !empty($rule['key']) ? $rule['key'] : (!empty($rule['name']) ? $rule['name'] : 'variant');
-        $suffix = eventosapp_ticket_variants_class_suffix($raw_key);
-
-        return $issuer_id . '.event_' . $event_id . '_variant_' . $suffix;
-    }
-}
-
 if (!function_exists('eventosapp_ticket_variants_enabled')) {
     function eventosapp_ticket_variants_enabled($event_id) {
         $event_id = absint($event_id);
         if (!$event_id) return false;
         return get_post_meta($event_id, '_eventosapp_ticket_variants_enabled', true) === '1';
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_log')) {
+    function eventosapp_ticket_variants_log($message, $context = []) {
+        if (is_array($context) && !empty($context)) {
+            $message .= ' | ' . wp_json_encode($context);
+        }
+        error_log('EVENTOSAPP VARIANTS | ' . $message);
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_build_auto_google_class_id')) {
+    function eventosapp_ticket_variants_build_auto_google_class_id($event_id, $variant_key = '') {
+        $event_id = absint($event_id);
+        $variant_key = sanitize_key((string) $variant_key);
+        if (!$event_id) return '';
+        if ($variant_key === '') $variant_key = 'variant';
+
+        $local_id = 'event_' . $event_id . '_variant_' . $variant_key;
+        $local_id = preg_replace('/[^A-Za-z0-9._-]/', '_', $local_id);
+        $local_id = trim($local_id, '._-');
+        if ($local_id === '') return '';
+
+        $issuer_id = trim((string) get_option('eventosapp_wallet_issuer_id', ''));
+        if ($issuer_id !== '') {
+            return $issuer_id . '.' . $local_id;
+        }
+
+        return $local_id;
     }
 }
 
@@ -629,10 +608,6 @@ if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
         if (empty($evaluation['enabled'])) {
             eventosapp_ticket_variants_clear_ticket_meta($ticket_id);
             update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_debug', $evaluation['debug']);
-            eventosapp_ticket_variants_log('Variantes desactivadas para el evento; se limpian overrides del ticket', [
-                'ticket_id' => $ticket_id,
-                'event_id'  => $event_id,
-            ], 'disabled_' . $ticket_id . '_' . $event_id);
             return [
                 'applied' => false,
                 'reason'  => 'disabled',
@@ -643,12 +618,6 @@ if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
         if (empty($evaluation['matched']) || empty($evaluation['rule'])) {
             eventosapp_ticket_variants_clear_ticket_meta($ticket_id);
             update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_debug', $evaluation['debug']);
-            eventosapp_ticket_variants_log('Ninguna variante coincide; el ticket usará configuración normal del evento', [
-                'ticket_id'   => $ticket_id,
-                'event_id'    => $event_id,
-                'rules_count' => isset($evaluation['debug']['rules_count']) ? (int) $evaluation['debug']['rules_count'] : 0,
-                'debug'       => $evaluation['debug'],
-            ], 'no_match_' . $ticket_id . '_' . $event_id);
             return [
                 'applied' => false,
                 'reason'  => 'no_match',
@@ -683,14 +652,19 @@ if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
         if (!empty($rule['email_subheading_color'])) update_post_meta($ticket_id, '_eventosapp_ticket_email_subheading_color', $rule['email_subheading_color']); else delete_post_meta($ticket_id, '_eventosapp_ticket_email_subheading_color');
         if (!empty($rule['email_text_color'])) update_post_meta($ticket_id, '_eventosapp_ticket_email_text_color', $rule['email_text_color']); else delete_post_meta($ticket_id, '_eventosapp_ticket_email_text_color');
 
-        $manual_google_class_id = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
-        $auto_google_class_id   = eventosapp_ticket_variants_build_auto_google_class_id($event_id, $rule);
-        $google_class_id        = $manual_google_class_id !== '' ? $manual_google_class_id : $auto_google_class_id;
+        $google_class_id_manual = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
+        $google_class_id_auto   = eventosapp_ticket_variants_normalize_class_id(eventosapp_ticket_variants_build_auto_google_class_id($event_id, $rule['key'] ?? ''));
+        $google_class_id        = $google_class_id_manual !== '' ? $google_class_id_manual : $google_class_id_auto;
+        $google_class_source    = $google_class_id_manual !== '' ? 'manual' : 'auto';
 
         if ($google_class_id !== '') {
             update_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', $google_class_id);
-            update_post_meta($ticket_id, '_eventosapp_wallet_variant_class_auto', $manual_google_class_id === '' ? '1' : '0');
-            update_post_meta($ticket_id, '_eventosapp_wallet_variant_class_source', $manual_google_class_id === '' ? 'auto' : 'manual');
+            update_post_meta($ticket_id, '_eventosapp_wallet_variant_class_source', $google_class_source);
+            if ($google_class_id_auto !== '') {
+                update_post_meta($ticket_id, '_eventosapp_wallet_variant_class_auto', $google_class_id_auto);
+            } else {
+                delete_post_meta($ticket_id, '_eventosapp_wallet_variant_class_auto');
+            }
         } else {
             delete_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id');
             delete_post_meta($ticket_id, '_eventosapp_wallet_variant_class_auto');
@@ -714,17 +688,15 @@ if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
 
         do_action('eventosapp_ticket_variant_applied', $ticket_id, $event_id, $rule, $evaluation);
 
-        eventosapp_ticket_variants_log('Variante aplicada', [
-            'ticket_id'       => $ticket_id,
-            'event_id'        => $event_id,
-            'variant_key'     => $rule['key'],
-            'variant_name'    => $rule['name'],
-            'matched_index'   => (int) $evaluation['matched_index'],
-            'email_template'  => get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true),
-            'google_class_id' => get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true),
-            'google_class_source' => get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_source', true),
-            'apple_strip'     => get_post_meta($ticket_id, '_eventosapp_apple_variant_strip_url', true),
-        ], 'applied_' . $ticket_id . '_' . $event_id . '_' . $rule['key']);
+        eventosapp_ticket_variants_log('Variante de ticket aplicada', [
+            'ticket_id' => $ticket_id,
+            'event_id' => $event_id,
+            'variant_key' => $rule['key'],
+            'variant_name' => $rule['name'],
+            'matched_index' => (int) $evaluation['matched_index'],
+            'google_wallet_class_id' => get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true),
+            'google_wallet_class_source' => get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_source', true),
+        ]);
 
         return [
             'applied'       => true,
@@ -763,12 +735,6 @@ if (!function_exists('eventosapp_ticket_variants_get_email_template_for_ticket')
         if ($template !== '') {
             $GLOBALS['eventosapp_ticket_variants_last_email_ticket_id'] = $ticket_id;
             $GLOBALS['eventosapp_ticket_variants_last_email_event_id'] = $event_id;
-            eventosapp_ticket_variants_log('Plantilla de correo de variante resuelta', [
-                'ticket_id' => $ticket_id,
-                'event_id'  => $event_id,
-                'template'  => $template,
-                'path'      => eventosapp_ticket_variants_resolve_email_template_path($template),
-            ], 'email_tpl_' . $ticket_id . '_' . md5($template));
         }
 
         return $template;
@@ -901,8 +867,7 @@ if (!function_exists('eventosapp_ticket_variants_apply_email_branding_to_html'))
             }
         }
 
-        $header_already_rendered = ($header_url !== '' && stripos($html, $header_url) !== false);
-        if ($header_url !== '' && !$had_header_placeholder && !$header_already_rendered && stripos($html, 'evapp-variant-email-header') === false) {
+        if ($header_url !== '' && !$had_header_placeholder && stripos($html, 'evapp-variant-email-header') === false) {
             $img = '<div class="evapp-variant-email-header" style="width:100%;text-align:center;margin:0 0 18px 0;"><img src="' . esc_url($header_url) . '" alt="" style="display:block;width:100%;max-width:100%;height:auto;border:0;margin:0 auto;"></div>';
             if (preg_match('/<body[^>]*>/i', $html)) {
                 $html = preg_replace('/(<body[^>]*>)/i', '$1' . $img, $html, 1);
@@ -955,21 +920,26 @@ if (!function_exists('eventosapp_ticket_variants_filter_google_wallet_context'))
         $event_name = get_post_meta($ticket_id, '_eventosapp_wallet_variant_event_name', true);
 
         if ($class_id !== '') $ctx['class_id'] = eventosapp_ticket_variants_normalize_class_id($class_id);
+        if ($class_id !== '') {
+            $ctx['variant_key'] = get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true);
+            $ctx['variant_name'] = get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true);
+            $ctx['variant_class_source'] = get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_source', true);
+        }
         if ($logo_url !== '') $ctx['logo_url'] = esc_url_raw($logo_url);
         if ($hero_url !== '') $ctx['hero_url'] = esc_url_raw($hero_url);
         if ($hex_color !== '') $ctx['hex_color'] = eventosapp_ticket_variants_sanitize_hex($hex_color);
         if ($event_name !== '') $ctx['nombre_evento'] = sanitize_text_field($event_name);
 
-        if ($class_id !== '' || $logo_url !== '' || $hero_url !== '' || $hex_color !== '' || $event_name !== '') {
-            eventosapp_ticket_variants_log('Contexto Google Wallet filtrado por variante', [
+        if ($class_id !== '') {
+            eventosapp_ticket_variants_log('Contexto Google Wallet de variante aplicado', [
                 'ticket_id' => $ticket_id,
-                'event_id'  => $event_id,
-                'class_id'  => $ctx['class_id'] ?? '',
-                'logo_url'  => $ctx['logo_url'] ?? '',
-                'hero_url'  => $ctx['hero_url'] ?? '',
-                'hex_color' => $ctx['hex_color'] ?? '',
-                'event_name'=> $ctx['nombre_evento'] ?? '',
-            ], 'gw_ctx_' . $ticket_id . '_' . md5(wp_json_encode($ctx)));
+                'event_id' => $event_id,
+                'class_id' => $ctx['class_id'] ?? '',
+                'class_source' => $ctx['variant_class_source'] ?? '',
+                'logo_override' => $logo_url !== '' ? 'yes' : 'no',
+                'hero_override' => $hero_url !== '' ? 'yes' : 'no',
+                'event_name_override' => $event_name !== '' ? 'yes' : 'no',
+            ]);
         }
 
         return $ctx;
