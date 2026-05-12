@@ -50,6 +50,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
     // NUEVO: Flag "Registrar acompañantes sin QR en Check-In"
     $acompanantes_checkin = get_post_meta($post->ID, '_eventosapp_ticket_acompanantes_checkin', true);
 
+    // NUEVO: Flag "Variantes de ticket por reglas"
+    $ticket_variants_enabled = get_post_meta($post->ID, '_eventosapp_ticket_variants_enabled', true);
+
     wp_nonce_field('eventosapp_extras_ticket_guardar', 'eventosapp_extras_ticket_nonce');
     ?>
     <label>
@@ -68,6 +71,13 @@ function eventosapp_render_metabox_extras_ticket($post) {
         <input type="checkbox" name="eventosapp_ticket_wallet_apple" value="1" <?php checked($walleti, '1'); ?>>
         Ticket en Wallet Apple/iPhone
     </label><br>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_variants_enabled" value="1" <?php checked($ticket_variants_enabled, '1'); ?>>
+        <strong>Activar variantes de ticket por reglas</strong>
+    </label>
+    <br>
+    <small style="color:#666">Permite usar una plantilla de correo y diseños de Wallet diferentes según localidad u otros campos del asistente.</small>
+    <br><br>
     <label>
         <input type="checkbox" name="eventosapp_ticket_verify_email" value="1" <?php checked($verify, '1'); ?>>
         Verificar Correo Electrónico de Asistente
@@ -177,6 +187,7 @@ add_action('save_post_eventosapp_event', function($post_id){
     update_post_meta($post_id, '_eventosapp_ticket_ics',                isset($_POST['eventosapp_ticket_ics']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_wallet_android',     isset($_POST['eventosapp_ticket_wallet_android']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_wallet_apple',       isset($_POST['eventosapp_ticket_wallet_apple']) ? '1' : '0');
+    update_post_meta($post_id, '_eventosapp_ticket_variants_enabled',   isset($_POST['eventosapp_ticket_variants_enabled']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_verify_email',       isset($_POST['eventosapp_ticket_verify_email']) ? '1' : '0');
 
     // Solo para registro público
