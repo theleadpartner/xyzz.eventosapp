@@ -469,6 +469,166 @@ if (!function_exists('eventosapp__preview_relevant_date')) {
  * =============== GOOGLE WALLET: PATCH POR TICKET ============
  * ============================================================ */
 
+
+if (!function_exists('eventosapp_wallet_strip_null_values')) {
+    function eventosapp_wallet_strip_null_values($value) {
+        if (!is_array($value)) return $value;
+        $clean = [];
+        foreach ($value as $key => $item) {
+            if ($item === null || $item === '') continue;
+            if (is_array($item)) {
+                $item = eventosapp_wallet_strip_null_values($item);
+                if ($item === []) continue;
+            }
+            $clean[$key] = $item;
+        }
+        return $clean;
+    }
+}
+
+if (!function_exists('eventosapp_wallet_build_event_ticket_class_payload')) {
+    function eventosapp_wallet_build_event_ticket_class_payload($evento_id, $ctx) {
+        $evento_id = absint($evento_id);
+        $ctx = is_array($ctx) ? $ctx : [];
+
+        $class_id = isset($ctx['class_id']) ? (string) $ctx['class_id'] : '';
+        $nombre_evento = isset($ctx['nombre_evento']) && $ctx['nombre_evento'] !== '' ? (string) $ctx['nombre_evento'] : (get_the_title($evento_id) ?: 'Evento');
+        $direccion = isset($ctx['direccion']) ? (string) $ctx['direccion'] : '';
+        $brand_text = isset($ctx['brand_text']) && $ctx['brand_text'] !== '' ? (string) $ctx['brand_text'] : (get_bloginfo('name') ?: 'EventosApp');
+        $issuer_name = get_option('eventosapp_wallet_issuer_name') ?: get_option('eventosapp_wallet_issuer_display_name') ?: $brand_text;
+        $logo_url = isset($ctx['logo_url']) ? (string) $ctx['logo_url'] : '';
+        $hero_url = isset($ctx['hero_url']) ? (string) $ctx['hero_url'] : '';
+        $hex_color = isset($ctx['hex_color']) ? (string) $ctx['hex_color'] : '';
+
+        $payload = [
+            'id' => $class_id,
+            'issuerName' => $issuer_name,
+            'reviewStatus' => 'UNDER_REVIEW',
+            'eventName' => [
+                'defaultValue' => [
+                    'language' => 'es',
+                    'value' => $nombre_evento,
+                ],
+            ],
+            'logo' => $logo_url ? [
+                'sourceUri' => ['uri' => $logo_url],
+                'contentDescription' => [
+                    'defaultValue' => [
+                        'language' => 'es',
+                        'value' => $brand_text,
+                    ],
+                ],
+            ] : null,
+            'heroImage' => $hero_url ? [
+                'sourceUri' => ['uri' => $hero_url],
+                'contentDescription' => [
+                    'defaultValue' => [
+                        'language' => 'es',
+                        'value' => $nombre_evento,
+                    ],
+                ],
+            ] : null,
+            'hexBackgroundColor' => $hex_color ?: null,
+            'dateTime' => [
+                'start' => $ctx['startISO'] ?? null,
+                'end' => $ctx['endISO'] ?? null,
+                'doorsOpen' => $ctx['doorsISO'] ?? null,
+            ],
+            'venue' => $direccion ? [
+                'name' => [
+                    'defaultValue' => [
+                        'language' => 'es',
+                        'value' => $direccion,
+                    ],
+                ],
+                'address' => [
+                    'defaultValue' => [
+                        'language' => 'es',
+                        'value' => $direccion,
+                    ],
+                ],
+            ] : null,
+        ];
+
+        if (!empty($ctx['lat']) && !empty($ctx['lng'])) {
+            $payload['locations'] = [[
+                'latitude'  => (float) $ctx['lat'],
+                'longitude' => (float) $ctx['lng'],
+            ]];
+        }
+
+        return eventosapp_wallet_strip_null_values($payload);
+    }
+}
+
+if (!function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
+    function eventosapp_wallet_ensure_event_ticket_class($evento_id, $access_token, $ctx, $ticket_id = 0) {
+        $evento_id = absint($evento_id);
+        $ticket_id = absint($ticket_id);
+        $ctx = is_array($ctx) ? $ctx : [];
+        $class_id = isset($ctx['class_id']) ? trim((string) $ctx['class_id']) : '';
+
+        if (!$evento_id || !$access_token || $class_id === '') {
+            return false;
+        }
+
+        static $ensured_classes = [];
+        if (array_key_exists($class_id, $ensured_classes)) {
+            return (bool) $ensured_classes[$class_id];
+        }
+
+        $headers_json = [
+            'Authorization' => 'Bearer ' . $access_token,
+            'Content-Type'  => 'application/json',
+        ];
+        $base_url = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketClass/';
+        $class_url = $base_url . rawurlencode($class_id);
+        $payload = eventosapp_wallet_build_event_ticket_class_payload($evento_id, $ctx);
+
+        $res_get = wp_remote_get($class_url, [
+            'timeout' => 20,
+            'headers' => ['Authorization' => 'Bearer ' . $access_token],
+        ]);
+        $code_get = is_wp_error($res_get) ? 0 : wp_remote_retrieve_response_code($res_get);
+        $body_get = is_wp_error($res_get) ? ('WP_Error: ' . $res_get->get_error_message()) : wp_remote_retrieve_body($res_get);
+
+        if ($code_get === 200) {
+            $patch_payload = $payload;
+            unset($patch_payload['id'], $patch_payload['reviewStatus']);
+            $res_patch = wp_remote_request($class_url, [
+                'timeout' => 20,
+                'method'  => 'PATCH',
+                'headers' => $headers_json,
+                'body'    => wp_json_encode($patch_payload),
+            ]);
+            $code_patch = is_wp_error($res_patch) ? 0 : wp_remote_retrieve_response_code($res_patch);
+            $body_patch = is_wp_error($res_patch) ? ('WP_Error: ' . $res_patch->get_error_message()) : wp_remote_retrieve_body($res_patch);
+            error_log('EVENTOSAPP WALLET ENSURE CLASS PATCH [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_patch . ' | ' . substr($body_patch, 0, 400));
+            // Aunque el PATCH no sea aceptado, el GET 200 confirma que la clase existe.
+            // Se devuelve true para no bloquear la actualización del objeto.
+            $ensured_classes[$class_id] = true;
+            return true;
+        }
+
+        if ($code_get === 404) {
+            $res_insert = wp_remote_post($base_url, [
+                'timeout' => 20,
+                'headers' => $headers_json,
+                'body'    => wp_json_encode($payload),
+            ]);
+            $code_insert = is_wp_error($res_insert) ? 0 : wp_remote_retrieve_response_code($res_insert);
+            $body_insert = is_wp_error($res_insert) ? ('WP_Error: ' . $res_insert->get_error_message()) : wp_remote_retrieve_body($res_insert);
+            error_log('EVENTOSAPP WALLET ENSURE CLASS INSERT [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_insert . ' | ' . substr($body_insert, 0, 500));
+            $ensured_classes[$class_id] = in_array((int) $code_insert, [200, 201, 409], true);
+            return (bool) $ensured_classes[$class_id];
+        }
+
+        error_log('EVENTOSAPP WALLET ENSURE CLASS GET [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_get . ' | ' . substr($body_get, 0, 400));
+        $ensured_classes[$class_id] = false;
+        return false;
+    }
+}
+
 function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_token, $ctx){
     $issuer_id       = $ctx['issuer_id'];
     $class_id_wanted = $ctx['class_id'];
@@ -501,6 +661,15 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
         $lat             = $ctx['lat'];
         $lng             = $ctx['lng'];
         $nombre_evento   = $ctx['nombre_evento'];
+    }
+
+    // Asegurar que la clase Google Wallet exista antes de insertar/recrear el objeto.
+    // Esto es crítico cuando la variante usa una clase distinta a la clase principal del evento.
+    if (function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
+        $class_ok = eventosapp_wallet_ensure_event_ticket_class($evento_id, $access_token, $ctx, $ticket_id);
+        if (!$class_ok) {
+            error_log('EVENTOSAPP WALLET CLASS WARNING [evento:' . (int) $evento_id . ' ticket:' . (int) $ticket_id . '] No se pudo confirmar/crear classId=' . (string) $class_id_wanted . '. Se continuará con el objeto para conservar compatibilidad.');
+        }
     }
 
     // Datos del asistente
