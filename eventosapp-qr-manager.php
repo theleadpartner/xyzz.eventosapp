@@ -75,6 +75,31 @@ class EventosApp_QR_Manager {
     }
 
     /**
+     * Detecta si un ticket corresponde a modalidad virtual.
+     * En tickets virtuales no se generan QR, PDF ni Wallet.
+     */
+    private function is_virtual_ticket($ticket_id) {
+        return function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id);
+    }
+
+    /**
+     * Limpia metadata y archivos QR cuando un ticket es virtual.
+     */
+    private function cleanup_qr_codes_for_virtual_ticket($ticket_id) {
+        $existing_qrs = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (is_array($existing_qrs)) {
+            foreach ($existing_qrs as $qr_data) {
+                $this->maybe_delete_qr_file($qr_data);
+            }
+        }
+
+        delete_post_meta($ticket_id, '_eventosapp_qr_codes');
+        foreach (self::QR_TYPES as $type => $label) {
+            delete_post_meta($ticket_id, '_eventosapp_qr_' . $type);
+        }
+    }
+
+    /**
      * Agrega el metabox de QR codes
      */
     public function add_qr_metabox() {
@@ -162,6 +187,17 @@ class EventosApp_QR_Manager {
                 word-break: break-all;
             }
         </style>';
+
+        if ($this->is_virtual_ticket($ticket_id)) {
+            $this->cleanup_qr_codes_for_virtual_ticket($ticket_id);
+            echo '<div class="eventosapp-qr-item">';
+            echo '<h4>🎥 Ticket virtual</h4>';
+            echo '<p>Este ticket pertenece a modalidad virtual y no requiere códigos QR.</p>';
+            echo '<p class="description">El acceso se gestiona desde la landing virtual del ticket y el anexo requerido es el archivo ICS.</p>';
+            echo '</div>';
+            echo '</div>';
+            return;
+        }
         
         foreach (self::QR_TYPES as $type => $label) {
             $qr_data = $this->get_qr_code($ticket_id, $type);
@@ -246,6 +282,11 @@ class EventosApp_QR_Manager {
     public function generate_all_qr_codes($ticket_id) {
         // Verificar que es un ticket válido
         if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return;
+        }
+
+        if ($this->is_virtual_ticket($ticket_id)) {
+            $this->cleanup_qr_codes_for_virtual_ticket($ticket_id);
             return;
         }
 
@@ -428,6 +469,12 @@ class EventosApp_QR_Manager {
         // Asegurar que el ticket existe
         if (get_post_type($ticket_id) !== 'eventosapp_ticket') {
             error_log("EventosApp QR Manager: Ticket inválido - $ticket_id");
+            return false;
+        }
+
+        if ($this->is_virtual_ticket($ticket_id)) {
+            $this->cleanup_qr_codes_for_virtual_ticket($ticket_id);
+            error_log("EventosApp QR Manager: ticket virtual $ticket_id no requiere QR tipo $type");
             return false;
         }
         
@@ -1040,6 +1087,11 @@ class EventosApp_QR_Manager {
             return 0;
         }
 
+        if ($this->is_virtual_ticket($ticket_id)) {
+            $this->cleanup_qr_codes_for_virtual_ticket($ticket_id);
+            return 0;
+        }
+
         // Si force = true, eliminar QR existentes
         if ($force) {
             $this->delete_all_qr_codes_public($ticket_id);
@@ -1109,10 +1161,16 @@ class EventosApp_QR_Manager {
      */
     public function generate_missing_qr_codes($ticket_id) {
         if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
-            return ['generated' => 0, 'skipped' => 0, 'failed' => 0, 'invalidated' => 0, 'regenerated_missing_file' => 0];
+            return ['generated' => 0, 'skipped' => 0, 'failed' => 0, 'invalidated' => 0, 'regenerated_missing_file' => 0, 'skipped_virtual' => 0];
         }
 
-        $stats = ['generated' => 0, 'skipped' => 0, 'failed' => 0, 'invalidated' => 0, 'regenerated_missing_file' => 0];
+        $stats = ['generated' => 0, 'skipped' => 0, 'failed' => 0, 'invalidated' => 0, 'regenerated_missing_file' => 0, 'skipped_virtual' => 0];
+
+        if ($this->is_virtual_ticket($ticket_id)) {
+            $this->cleanup_qr_codes_for_virtual_ticket($ticket_id);
+            $stats['skipped_virtual'] = 1;
+            return $stats;
+        }
         
         // Asegurar código de seguridad
         $this->ensure_security_code($ticket_id);
@@ -1177,6 +1235,11 @@ class EventosApp_QR_Manager {
      */
     public function regenerate_all_qr_codes_complete($ticket_id) {
         if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return 0;
+        }
+
+        if ($this->is_virtual_ticket($ticket_id)) {
+            $this->cleanup_qr_codes_for_virtual_ticket($ticket_id);
             return 0;
         }
 
