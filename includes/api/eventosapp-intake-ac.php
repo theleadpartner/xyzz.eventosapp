@@ -115,6 +115,234 @@ if (!function_exists('evapp_boolish')) {
   }
 }
 
+
+/**
+ * Sanitiza un estado corto para respuestas públicas del webhook.
+ * Mantiene la trazabilidad operativa sin exponer URLs, JWT, reglas completas ni configuración interna.
+ */
+if (!function_exists('evapp_webhook_public_status')) {
+  function evapp_webhook_public_status($value) {
+    if (is_bool($value)) return $value;
+    if (is_int($value) || is_float($value)) return $value;
+    if (is_null($value)) return null;
+    if (is_scalar($value)) {
+      $status = sanitize_key((string) $value);
+      return $status !== '' ? $status : sanitize_text_field((string) $value);
+    }
+    return 'processed';
+  }
+}
+
+/**
+ * Resume el resultado de QR sin filtrar rutas ni datos internos del manager.
+ */
+if (!function_exists('evapp_webhook_public_qr_summary')) {
+  function evapp_webhook_public_qr_summary($qr_result) {
+    if (is_array($qr_result)) {
+      $allowed = ['generated', 'skipped', 'failed', 'invalidated', 'regenerated_missing_file'];
+      $summary = [];
+      foreach ($allowed as $key) {
+        if (array_key_exists($key, $qr_result)) {
+          $summary[$key] = is_numeric($qr_result[$key]) ? (int) $qr_result[$key] : evapp_webhook_public_status($qr_result[$key]);
+        }
+      }
+      return !empty($summary) ? $summary : ['status' => 'processed'];
+    }
+    return evapp_webhook_public_status($qr_result);
+  }
+}
+
+/**
+ * Resume la sincronización de clases Google Wallet de variantes sin exponer class_id ni datos de branding.
+ */
+if (!function_exists('evapp_webhook_public_wallet_classes_summary')) {
+  function evapp_webhook_public_wallet_classes_summary($sync_result) {
+    if (!is_array($sync_result)) return null;
+
+    $summary = [
+      'ok'          => !empty($sync_result['ok']),
+      'reason'      => isset($sync_result['reason']) ? sanitize_key((string) $sync_result['reason']) : '',
+      'total_rules' => isset($sync_result['total_rules']) ? (int) $sync_result['total_rules'] : 0,
+      'synced'      => isset($sync_result['synced']) ? (int) $sync_result['synced'] : 0,
+      'failed'      => isset($sync_result['failed']) ? (int) $sync_result['failed'] : 0,
+      'skipped'     => isset($sync_result['skipped']) ? (int) $sync_result['skipped'] : 0,
+    ];
+
+    return $summary;
+  }
+}
+
+/**
+ * Resume la evaluación de variante para la respuesta pública del webhook.
+ * No devuelve reglas completas, valores comparados, URLs ni Class IDs.
+ */
+if (!function_exists('evapp_webhook_public_variant_summary')) {
+  function evapp_webhook_public_variant_summary($asset_refresh_result = null, $ticket_id = 0) {
+    $asset_refresh_result = is_array($asset_refresh_result) ? $asset_refresh_result : [];
+    $variant_result = isset($asset_refresh_result['ticket_variant']) && is_array($asset_refresh_result['ticket_variant'])
+      ? $asset_refresh_result['ticket_variant']
+      : [];
+
+    $debug = isset($variant_result['debug']) && is_array($variant_result['debug']) ? $variant_result['debug'] : [];
+
+    $ticket_id = absint($ticket_id);
+    $variant_key = isset($variant_result['variant_key']) ? (string) $variant_result['variant_key'] : '';
+    $variant_name = isset($variant_result['variant_name']) ? (string) $variant_result['variant_name'] : '';
+
+    if ($variant_key === '' && isset($asset_refresh_result['variant_key'])) {
+      $variant_key = (string) $asset_refresh_result['variant_key'];
+    }
+    if ($variant_name === '' && isset($asset_refresh_result['variant_name'])) {
+      $variant_name = (string) $asset_refresh_result['variant_name'];
+    }
+    if ($ticket_id && $variant_key === '') {
+      $variant_key = (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true);
+    }
+    if ($ticket_id && $variant_name === '') {
+      $variant_name = (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true);
+    }
+
+    $matched_index = null;
+    if (isset($variant_result['matched_index'])) {
+      $matched_index = is_numeric($variant_result['matched_index']) ? (int) $variant_result['matched_index'] : null;
+    } elseif (isset($debug['matched_index']) && $debug['matched_index'] !== null) {
+      $matched_index = is_numeric($debug['matched_index']) ? (int) $debug['matched_index'] : null;
+    }
+
+    return [
+      'evaluated'     => !empty($variant_result) || $variant_key !== '' || $variant_name !== '',
+      'applied'       => !empty($variant_result['applied']) || $variant_key !== '',
+      'variant_key'   => sanitize_key($variant_key),
+      'variant_name'  => sanitize_text_field($variant_name),
+      'matched_index' => $matched_index,
+      'rules_count'   => isset($debug['rules_count']) ? (int) $debug['rules_count'] : null,
+      'reason'        => isset($variant_result['reason']) ? sanitize_key((string) $variant_result['reason']) : '',
+    ];
+  }
+}
+
+/**
+ * Resume la evaluación de condicionales del webhook para respuesta pública.
+ * No devuelve campos evaluados, valores esperados/reales, reglas completas ni plantillas completas.
+ */
+if (!function_exists('evapp_webhook_public_conditional_summary')) {
+  function evapp_webhook_public_conditional_summary($conditional_result = null) {
+    $conditional_result = is_array($conditional_result) ? $conditional_result : [];
+    $debug = isset($conditional_result['debug']) && is_array($conditional_result['debug']) ? $conditional_result['debug'] : [];
+    $matched_rule = isset($conditional_result['matched_rule']) && is_array($conditional_result['matched_rule']) ? $conditional_result['matched_rule'] : [];
+
+    $matched_index = null;
+    if (isset($debug['matched_index']) && $debug['matched_index'] !== null) {
+      $matched_index = is_numeric($debug['matched_index']) ? (int) $debug['matched_index'] : null;
+    }
+
+    return [
+      'evaluated'     => !empty($conditional_result),
+      'enabled'       => isset($debug['enabled']) ? (bool) $debug['enabled'] : null,
+      'matched'       => !empty($matched_rule),
+      'matched_index' => $matched_index,
+      'rules_count'   => isset($debug['rules_count']) ? (int) $debug['rules_count'] : null,
+      'send_email'    => array_key_exists('send_email', $conditional_result) ? (bool) $conditional_result['send_email'] : null,
+      'action'        => isset($matched_rule['action']) ? sanitize_key((string) $matched_rule['action']) : '',
+    ];
+  }
+}
+
+/**
+ * Convierte el resultado interno de anexos en una salida segura para el consumidor del webhook.
+ * La versión completa se conserva en post_meta y error_log para depuración interna.
+ */
+if (!function_exists('evapp_webhook_public_asset_refresh_summary')) {
+  function evapp_webhook_public_asset_refresh_summary($asset_refresh_result = null, $ticket_id = 0) {
+    if (!is_array($asset_refresh_result)) return null;
+
+    $errors = isset($asset_refresh_result['errors']) && is_array($asset_refresh_result['errors']) ? $asset_refresh_result['errors'] : [];
+
+    $summary = [
+      'context'                    => isset($asset_refresh_result['context']) ? sanitize_key((string) $asset_refresh_result['context']) : '',
+      'variant'                    => evapp_webhook_public_variant_summary($asset_refresh_result, $ticket_id),
+      'google_wallet_classes_sync' => evapp_webhook_public_wallet_classes_summary($asset_refresh_result['google_wallet_classes_sync'] ?? null),
+      'qr'                         => evapp_webhook_public_qr_summary($asset_refresh_result['qr'] ?? null),
+      'pdf'                        => evapp_webhook_public_status($asset_refresh_result['pdf'] ?? null),
+      'ics'                        => evapp_webhook_public_status($asset_refresh_result['ics'] ?? null),
+      'wallet_android'             => evapp_webhook_public_status($asset_refresh_result['wallet_android'] ?? null),
+      'wallet_apple'               => evapp_webhook_public_status($asset_refresh_result['wallet_apple'] ?? null),
+      'search_index'               => evapp_webhook_public_status($asset_refresh_result['search_index'] ?? null),
+      'errors_count'               => count($errors),
+    ];
+
+    // Los detalles de errores quedan en _eventosapp_webhook_assets_last_result y error_log.
+    // La respuesta pública solo informa la cantidad para no exponer rutas, payloads o mensajes internos.
+    return $summary;
+  }
+}
+
+/**
+ * Arma una respuesta pública del webhook con lista blanca de campos.
+ * Evita exponer JWT/URLs de Wallet, class IDs, reglas completas, valores comparados y debug interno.
+ */
+if (!function_exists('evapp_webhook_build_public_response')) {
+  function evapp_webhook_build_public_response(array $raw_response, $ticket_id = 0, $evento_id = 0, $context = 'webhook') {
+    $ticket_id = absint($ticket_id ?: ($raw_response['ticket_id'] ?? 0));
+    $evento_id = absint($evento_id);
+    $context = sanitize_key((string) $context);
+
+    $asset_refresh = isset($raw_response['asset_refresh']) && is_array($raw_response['asset_refresh']) ? $raw_response['asset_refresh'] : null;
+    $variant_summary = evapp_webhook_public_variant_summary($asset_refresh, $ticket_id);
+
+    $public = [
+      'ok'                  => !empty($raw_response['ok']),
+      'ticket_id'           => $ticket_id,
+    ];
+
+    if (array_key_exists('public_id', $raw_response)) {
+      $public['public_id'] = sanitize_text_field((string) $raw_response['public_id']);
+    }
+    if (array_key_exists('created', $raw_response)) {
+      $public['created'] = (bool) $raw_response['created'];
+    }
+    if (array_key_exists('updated', $raw_response)) {
+      $public['updated'] = (bool) $raw_response['updated'];
+    }
+    if (array_key_exists('dedupe_by', $raw_response)) {
+      $public['dedupe_by'] = sanitize_key((string) $raw_response['dedupe_by']);
+    }
+    if (array_key_exists('fields_changed', $raw_response) && is_array($raw_response['fields_changed'])) {
+      $public['fields_changed'] = array_values(array_map('sanitize_key', $raw_response['fields_changed']));
+    }
+    if (array_key_exists('audit_logged', $raw_response)) {
+      $public['audit_logged'] = (bool) $raw_response['audit_logged'];
+    }
+
+    $public['conditional_matched'] = !empty($raw_response['conditional_matched']);
+    $public['variant_applied'] = !empty($variant_summary['applied']);
+    $public['variant_key'] = $variant_summary['variant_key'];
+    $public['variant_name'] = $variant_summary['variant_name'];
+    $public['asset_refresh'] = evapp_webhook_public_asset_refresh_summary($asset_refresh, $ticket_id);
+
+    if (array_key_exists('email_sent', $raw_response)) {
+      $public['email_sent'] = (bool) $raw_response['email_sent'];
+    }
+    if (array_key_exists('email_msg', $raw_response)) {
+      $public['email_msg'] = sanitize_text_field((string) $raw_response['email_msg']);
+    }
+
+    if (isset($raw_response['conditional_debug']) && is_array($raw_response['conditional_debug'])) {
+      $public['conditional_debug'] = evapp_webhook_public_conditional_summary([
+        'send_email'   => $raw_response['email_sent'] ?? null,
+        'matched_rule' => !empty($raw_response['conditional_matched']) ? ['action' => 'matched'] : null,
+        'debug'        => $raw_response['conditional_debug'],
+      ]);
+    }
+
+    if (isset($raw_response['conditional_summary']) && is_array($raw_response['conditional_summary'])) {
+      $public['conditional_summary'] = $raw_response['conditional_summary'];
+    }
+
+    return apply_filters('eventosapp_webhook_public_response', $public, $raw_response, $ticket_id, $evento_id, $context);
+  }
+}
+
 /**
  * Sanitiza claves de campos adicionales provenientes del webhook.
  */
@@ -1048,16 +1276,19 @@ if ($existing) {
     'dedupe_by'  => $dedupe_used,
     'fields_changed' => array_keys($changed_fields),
     'audit_logged'   => !empty($changed_fields),
+    // Resultado interno completo: se conserva solo para construir la salida pública segura.
+    // No se devuelve directamente para evitar exponer reglas, class IDs, JWTs o URLs de Wallet.
     'asset_refresh'  => isset($asset_refresh_result_upd) ? $asset_refresh_result_upd : null,
     'conditional_matched' => is_array($conditional_result_upd) && !empty($conditional_result_upd['matched_rule']),
-    'template_used' => (is_array($conditional_result_upd) && !empty($conditional_result_upd['template'])) ? $conditional_result_upd['template'] : 'default',
+    'conditional_summary' => evapp_webhook_public_conditional_summary($conditional_result_upd),
   ], $email_result);
 
   if ($debug_conditionals && is_array($conditional_result_upd) && isset($conditional_result_upd['debug'])) {
-    $response['conditional_debug'] = $conditional_result_upd['debug'];
+    // Compatibilidad con debug=1, pero sin devolver valores comparados ni reglas completas.
+    $response['conditional_debug'] = evapp_webhook_public_conditional_summary($conditional_result_upd);
   }
 
-  return $response;
+  return evapp_webhook_build_public_response($response, $ticket_id, $evento_id, 'webhook_update');
 }
 
 
@@ -1247,7 +1478,7 @@ if ($existing) {
    */
   do_action('eventosapp_ticket_created_via_webhook', $post_id, $data);
 
-  // Respuesta REST incluyendo el resultado del correo
+  // Respuesta REST segura: conserva trazabilidad operativa sin exponer reglas, JWTs, URLs ni configuración interna.
   $response = array_merge(
     [
       'ok'=>true,
@@ -1255,16 +1486,20 @@ if ($existing) {
       'public_id'=>$ticket_public_id,
       'created'=>true,
       'dedupe_by'=>$dedupe_used,
+      // Resultado interno completo: se conserva solo para construir la salida pública segura.
+      // No se devuelve directamente para evitar exponer reglas, class IDs, JWTs o URLs de Wallet.
       'asset_refresh'=>isset($asset_refresh_result_create) ? $asset_refresh_result_create : null,
+      'conditional_summary' => evapp_webhook_public_conditional_summary($conditional_result),
     ],
     $email_result
   );
 
   if ($debug_conditionals && is_array($conditional_result) && isset($conditional_result['debug'])) {
-    $response['conditional_debug'] = $conditional_result['debug'];
+    // Compatibilidad con debug=1, pero sin devolver valores comparados ni reglas completas.
+    $response['conditional_debug'] = evapp_webhook_public_conditional_summary($conditional_result);
   }
 
-  return $response;
+  return evapp_webhook_build_public_response($response, $post_id, $evento_id, 'webhook_create');
 }
 
 /** Reutilizable: actualiza un ticket existente con nuevo payload */
