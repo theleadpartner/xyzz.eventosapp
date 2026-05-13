@@ -963,6 +963,73 @@ if (!function_exists('eventosapp_ticket_variants_email_tokens_filter')) {
     add_filter('eventosapp_ticket_email_replacements', 'eventosapp_ticket_variants_email_tokens_filter', 20, 3);
 }
 
+if (!function_exists('eventosapp_ticket_variants_normalize_email_url_for_compare')) {
+    /**
+     * Normaliza URLs para comparar imágenes ya insertadas en HTML de correo.
+     * Gmail/WordPress pueden escapar & como &amp;, por eso se comparan varias versiones.
+     */
+    function eventosapp_ticket_variants_normalize_email_url_for_compare($url) {
+        $url = trim((string) $url);
+        if ($url === '') return [];
+
+        $variants = [];
+        $variants[] = $url;
+        $variants[] = esc_url($url);
+        $variants[] = esc_url_raw($url);
+        $variants[] = html_entity_decode($url, ENT_QUOTES, 'UTF-8');
+        $variants[] = str_replace('&amp;', '&', $url);
+        $variants[] = str_replace('&', '&amp;', $url);
+
+        $clean = [];
+        foreach ($variants as $candidate) {
+            $candidate = trim((string) $candidate);
+            if ($candidate !== '') {
+                $clean[$candidate] = true;
+            }
+        }
+
+        return array_keys($clean);
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_email_html_has_managed_header')) {
+    /**
+     * Detecta si la plantilla del correo ya tiene un cabezote propio.
+     *
+     * Esto evita duplicar el cabezote de variante cuando la plantilla normal ya usa
+     * {{header_img}} y eventosapp_build_ticket_email_html() reemplaza ese token con
+     * la imagen efectiva de la variante.
+     */
+    function eventosapp_ticket_variants_email_html_has_managed_header($html, $header_url = '') {
+        if (!is_string($html) || $html === '') return false;
+
+        $markers = [
+            'evapp-variant-email-header',
+            'eventosapp-email-header-managed',
+            'eventosapp-email-template-header',
+            'evapp-email-template-header',
+            '{{header_img}}',
+            '[[header_img]]',
+            '{{ticket_variant_email_header_image_url}}',
+            '[[ticket_variant_email_header_image_url]]',
+        ];
+
+        foreach ($markers as $marker) {
+            if ($marker !== '' && stripos($html, $marker) !== false) {
+                return true;
+            }
+        }
+
+        foreach (eventosapp_ticket_variants_normalize_email_url_for_compare($header_url) as $candidate_url) {
+            if ($candidate_url !== '' && stripos($html, $candidate_url) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
 if (!function_exists('eventosapp_ticket_variants_apply_email_branding_to_html')) {
     function eventosapp_ticket_variants_apply_email_branding_to_html($html, $ticket_id = 0, $event_id = 0) {
         $ticket_id = absint($ticket_id);
@@ -976,7 +1043,13 @@ if (!function_exists('eventosapp_ticket_variants_apply_email_branding_to_html'))
         $subheading = eventosapp_ticket_variants_sanitize_hex($branding['subheading_color'] ?? '');
         $text       = eventosapp_ticket_variants_sanitize_hex($branding['text_color'] ?? '');
 
-        $had_header_placeholder = (stripos($html, '{{ticket_variant_email_header_image_url}}') !== false || stripos($html, '[[ticket_variant_email_header_image_url]]') !== false);
+        $had_header_placeholder = (
+            stripos($html, '{{ticket_variant_email_header_image_url}}') !== false
+            || stripos($html, '[[ticket_variant_email_header_image_url]]') !== false
+            || stripos($html, '{{header_img}}') !== false
+            || stripos($html, '[[header_img]]') !== false
+        );
+        $already_has_header = eventosapp_ticket_variants_email_html_has_managed_header($html, $header_url);
 
         $replacements = [
             '{{ticket_variant_email_header_image_url}}' => $header_url,
@@ -1009,13 +1082,19 @@ if (!function_exists('eventosapp_ticket_variants_apply_email_branding_to_html'))
             }
         }
 
-        if ($header_url !== '' && !$had_header_placeholder && stripos($html, 'evapp-variant-email-header') === false) {
+        if ($header_url !== '' && !$had_header_placeholder && !$already_has_header) {
             $img = '<div class="evapp-variant-email-header" style="width:100%;text-align:center;margin:0 0 18px 0;"><img src="' . esc_url($header_url) . '" alt="" style="display:block;width:100%;max-width:100%;height:auto;border:0;margin:0 auto;"></div>';
             if (preg_match('/<body[^>]*>/i', $html)) {
                 $html = preg_replace('/(<body[^>]*>)/i', '$1' . $img, $html, 1);
             } else {
                 $html = $img . $html;
             }
+        } elseif ($header_url !== '' && $already_has_header && function_exists('eventosapp_ticket_variants_log')) {
+            eventosapp_ticket_variants_log('Cabezote de variante no inyectado porque la plantilla ya contiene un cabezote gestionado', [
+                'ticket_id' => $ticket_id,
+                'event_id'  => $event_id,
+                'reason'    => $had_header_placeholder ? 'placeholder_detected' : 'header_url_or_marker_detected',
+            ]);
         }
 
         return $html;
@@ -1099,174 +1178,10 @@ if (!function_exists('eventosapp_ticket_variants_filter_apple_context')) {
         eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
 
         $event_name = get_post_meta($ticket_id, '_eventosapp_apple_variant_event_name', true);
-        $icon_url   = get_post_meta($ticket_id, '_eventosapp_apple_variant_icon_url', true);
-        $logo_url   = get_post_meta($ticket_id, '_eventosapp_apple_variant_logo_url', true);
-        $strip_url  = get_post_meta($ticket_id, '_eventosapp_apple_variant_strip_url', true);
-        $hex_bg     = get_post_meta($ticket_id, '_eventosapp_apple_variant_hex_bg', true);
-        $hex_fg     = get_post_meta($ticket_id, '_eventosapp_apple_variant_hex_fg', true);
-        $hex_label  = get_post_meta($ticket_id, '_eventosapp_apple_variant_hex_label', true);
-
-        if ($event_name !== '') {
-            $ctx['nombre_evento'] = sanitize_text_field($event_name);
-            $ctx['event_name']    = sanitize_text_field($event_name);
-        }
-
-        if ($icon_url !== '') {
-            $ctx['icon_url']       = esc_url_raw($icon_url);
-            $ctx['apple_icon_url'] = esc_url_raw($icon_url);
-        }
-
-        if ($logo_url !== '') {
-            $ctx['logo_url']       = esc_url_raw($logo_url);
-            $ctx['apple_logo_url'] = esc_url_raw($logo_url);
-        }
-
-        if ($strip_url !== '') {
-            $ctx['strip_url']       = esc_url_raw($strip_url);
-            $ctx['apple_strip_url'] = esc_url_raw($strip_url);
-        }
-
-        if ($hex_bg !== '') {
-            $hex_bg = eventosapp_ticket_variants_sanitize_hex($hex_bg);
-            $ctx['hex_bg']           = $hex_bg;
-            $ctx['background_color'] = $hex_bg;
-            $ctx['backgroundColor']  = $hex_bg;
-        }
-
-        if ($hex_fg !== '') {
-            $hex_fg = eventosapp_ticket_variants_sanitize_hex($hex_fg);
-            $ctx['hex_fg']          = $hex_fg;
-            $ctx['foreground_color'] = $hex_fg;
-            $ctx['foregroundColor']  = $hex_fg;
-        }
-
-        if ($hex_label !== '') {
-            $hex_label = eventosapp_ticket_variants_sanitize_hex($hex_label);
-            $ctx['hex_label']   = $hex_label;
-            $ctx['label_color'] = $hex_label;
-            $ctx['labelColor']  = $hex_label;
-        }
-
-        $variant_key  = get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true);
-        $variant_name = get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true);
-        if ($variant_key !== '')  $ctx['variant_key']  = sanitize_key($variant_key);
-        if ($variant_name !== '') $ctx['variant_name'] = sanitize_text_field($variant_name);
-
-        if ($event_name !== '' || $icon_url !== '' || $logo_url !== '' || $strip_url !== '' || $hex_bg !== '' || $hex_fg !== '' || $hex_label !== '') {
-            eventosapp_ticket_variants_log('Contexto Apple Wallet de variante aplicado', [
-                'ticket_id' => $ticket_id,
-                'event_id' => $event_id,
-                'variant_key' => $variant_key,
-                'variant_name' => $variant_name,
-                'event_name_override' => $event_name !== '' ? 'yes' : 'no',
-                'icon_override' => $icon_url !== '' ? 'yes' : 'no',
-                'logo_override' => $logo_url !== '' ? 'yes' : 'no',
-                'strip_override' => $strip_url !== '' ? 'yes' : 'no',
-                'colors_override' => ($hex_bg !== '' || $hex_fg !== '' || $hex_label !== '') ? 'yes' : 'no',
-            ]);
-        }
+        if ($event_name !== '') $ctx['nombre_evento'] = sanitize_text_field($event_name);
 
         return $ctx;
     }
-}
-
-
-if (!function_exists('eventosapp_ticket_variants_filter_google_wallet_context_compat')) {
-    /**
-     * Compatibilidad defensiva para generadores Google Wallet que construyen un contexto
-     * antes de crear/actualizar el objeto. El flujo principal ya llama al filtro directo,
-     * pero estos hooks evitan que un webhook, batch o generador alterno ignore la variante.
-     */
-    function eventosapp_ticket_variants_filter_google_wallet_context_compat($ctx, $ticket_id = 0, $event_id = 0) {
-        if (!is_array($ctx)) $ctx = [];
-
-        $ticket_id = absint($ticket_id ?: ($ctx['ticket_id'] ?? 0));
-        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
-            return $ctx;
-        }
-
-        $event_id = absint($event_id ?: ($ctx['event_id'] ?? get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true)));
-        if (!$event_id) {
-            return $ctx;
-        }
-
-        return eventosapp_ticket_variants_filter_google_wallet_context($ctx, $ticket_id, $event_id);
-    }
-
-    add_filter('eventosapp_google_wallet_context', 'eventosapp_ticket_variants_filter_google_wallet_context_compat', 20, 3);
-    add_filter('eventosapp_wallet_google_context', 'eventosapp_ticket_variants_filter_google_wallet_context_compat', 20, 3);
-    add_filter('eventosapp_wallet_object_context', 'eventosapp_ticket_variants_filter_google_wallet_context_compat', 20, 3);
-}
-
-if (!function_exists('eventosapp_ticket_variants_filter_apple_context_compat')) {
-    /**
-     * Compatibilidad defensiva para generadores Apple Wallet/pkpass que exponen filtros
-     * de contexto. Se limita a posts eventosapp_ticket para no afectar contextos globales.
-     */
-    function eventosapp_ticket_variants_filter_apple_context_compat($ctx, $ticket_id = 0, $event_id = 0) {
-        if (!is_array($ctx)) $ctx = [];
-
-        $ticket_id = absint($ticket_id ?: ($ctx['ticket_id'] ?? 0));
-        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
-            return $ctx;
-        }
-
-        $event_id = absint($event_id ?: ($ctx['event_id'] ?? get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true)));
-        if (!$event_id) {
-            return $ctx;
-        }
-
-        return eventosapp_ticket_variants_filter_apple_context($ctx, $ticket_id, $event_id);
-    }
-
-    add_filter('eventosapp_apple_wallet_context', 'eventosapp_ticket_variants_filter_apple_context_compat', 20, 3);
-    add_filter('eventosapp_wallet_apple_context', 'eventosapp_ticket_variants_filter_apple_context_compat', 20, 3);
-    add_filter('eventosapp_apple_pass_context', 'eventosapp_ticket_variants_filter_apple_context_compat', 20, 3);
-    add_filter('eventosapp_pkpass_context', 'eventosapp_ticket_variants_filter_apple_context_compat', 20, 3);
-}
-
-if (!function_exists('eventosapp_ticket_variants_apply_on_webhook_ticket')) {
-    /**
-     * Fallback idempotente para tickets creados o actualizados por webhook.
-     * El intake principal también lo aplica antes de generar anexos; este hook protege
-     * integraciones externas que disparen las acciones de webhook sin pasar por ese helper.
-     */
-    function eventosapp_ticket_variants_apply_on_webhook_ticket($ticket_id, $payload = []) {
-        $ticket_id = absint($ticket_id);
-        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
-            return;
-        }
-
-        $event_id = 0;
-        if (is_array($payload) && !empty($payload['event_id'])) {
-            $event_id = absint($payload['event_id']);
-        }
-        if (!$event_id) {
-            $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
-        }
-        if (!$event_id) {
-            return;
-        }
-
-        try {
-            $result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
-            update_post_meta($ticket_id, '_eventosapp_webhook_variant_hook_result', $result);
-            update_post_meta($ticket_id, '_eventosapp_webhook_variant_hook_at', current_time('mysql'));
-
-            eventosapp_ticket_variants_log('Variante aplicada desde hook de webhook', [
-                'ticket_id' => $ticket_id,
-                'event_id' => $event_id,
-                'matched' => !empty($result['matched']) ? 'yes' : 'no',
-                'variant_key' => $result['variant_key'] ?? '',
-                'payload_keys' => is_array($payload) ? array_keys($payload) : [],
-            ]);
-        } catch (Throwable $e) {
-            error_log('EVENTOSAPP VARIANTS | Error aplicando variante desde hook webhook | ticket=' . $ticket_id . ' event=' . $event_id . ' error=' . $e->getMessage());
-        }
-    }
-
-    add_action('eventosapp_ticket_created_via_webhook', 'eventosapp_ticket_variants_apply_on_webhook_ticket', 10, 2);
-    add_action('eventosapp_ticket_updated_via_webhook', 'eventosapp_ticket_variants_apply_on_webhook_ticket', 10, 2);
 }
 
 if (!function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
