@@ -190,6 +190,21 @@ if ( ! function_exists( 'evapp_get_ticket_variant_label_for_asistente' ) ) {
     }
 }
 
+if ( ! function_exists( 'evapp_get_ticket_modalidad_label_for_asistente' ) ) {
+    function evapp_get_ticket_modalidad_label_for_asistente( $ticket_id ) {
+        $ticket_id = (int) $ticket_id;
+        if ( ! $ticket_id ) return '';
+
+        if ( function_exists( 'eventosapp_get_ticket_modalidad_label' ) ) {
+            return eventosapp_get_ticket_modalidad_label( $ticket_id );
+        }
+
+        $raw = (string) get_post_meta( $ticket_id, '_eventosapp_ticket_modalidad', true );
+        if ( $raw === 'virtual' ) return 'Virtual';
+        return 'Presencial';
+    }
+}
+
 if ( ! function_exists( 'evapp_get_ticket_variant_admin_html_for_asistente' ) ) {
     function evapp_get_ticket_variant_admin_html_for_asistente( $ticket_id ) {
         $ticket_id = (int) $ticket_id;
@@ -439,6 +454,7 @@ if ( ! function_exists( 'evapp_registrar_changelog_asistente' ) ) {
         }
 
         $ticket_variant_label = evapp_get_ticket_variant_label_for_asistente( $ticket_id );
+        $ticket_modalidad_label = evapp_get_ticket_modalidad_label_for_asistente( $ticket_id );
 
         $entrada = [
             'timestamp'          => current_time( 'mysql' ),
@@ -446,6 +462,7 @@ if ( ! function_exists( 'evapp_registrar_changelog_asistente' ) ) {
             'evento_id'          => $evento_id,
             'evento_nombre'      => $evento_nombre,
             'ticket_variant'     => $ticket_variant_label,
+            'ticket_modalidad'   => $ticket_modalidad_label,
             'variant_context'    => is_array( $variant_context ) ? [
                 'available' => ! empty( $variant_context['available'] ),
                 'applied'   => ! empty( $variant_context['applied'] ),
@@ -603,6 +620,7 @@ function evapp_render_metabox_tickets_asociados( $post ) {
             <tr>
                 <th>Ticket ID</th>
                 <th>Evento</th>
+                <th>Modalidad</th>
                 <th>Variante</th>
                 <th>Fecha del Evento</th>
                 <th>Check-In</th>
@@ -621,6 +639,7 @@ function evapp_render_metabox_tickets_asociados( $post ) {
             $ticket_uid  = get_post_meta( $t_id, 'eventosapp_ticketID', true ) ?: "#{$t_id}";
             $evento_id   = (int) get_post_meta( $t_id, '_eventosapp_ticket_evento_id', true );
             $evento_nombre = $evento_id ? get_the_title( $evento_id ) : '—';
+            $modalidad_label = evapp_get_ticket_modalidad_label_for_asistente( $t_id );
             $variant_html  = evapp_get_ticket_variant_admin_html_for_asistente( $t_id );
             $fecha_label   = $evento_id ? evapp_get_event_date_label( $evento_id )    : '—';
             $checkin_label = evapp_get_checkin_status_label( $t_id );
@@ -629,6 +648,7 @@ function evapp_render_metabox_tickets_asociados( $post ) {
             <tr>
                 <td class="evapp-ticket-id"><?php echo esc_html( $ticket_uid ); ?></td>
                 <td><?php echo esc_html( $evento_nombre ); ?></td>
+                <td><?php echo esc_html( $modalidad_label ?: 'Presencial' ); ?></td>
                 <td><?php echo $variant_html; ?></td>
                 <td><?php echo esc_html( $fecha_label ); ?></td>
                 <td><?php echo $checkin_label; ?></td>
@@ -678,6 +698,10 @@ function evapp_render_metabox_asistente_changelog( $post ) {
         $ticket_uid     = $ticket_id ? get_post_meta( $ticket_id, 'eventosapp_ticketID', true ) : '';
         $ticket_label   = $ticket_uid ?: ( $ticket_id ? "#{$ticket_id}" : '—' );
         $ticket_variant = isset( $entrada['ticket_variant'] ) ? sanitize_text_field( (string) $entrada['ticket_variant'] ) : '';
+        $ticket_modalidad = isset( $entrada['ticket_modalidad'] ) ? sanitize_text_field( (string) $entrada['ticket_modalidad'] ) : '';
+        if ( $ticket_modalidad === '' && $ticket_id ) {
+            $ticket_modalidad = evapp_get_ticket_modalidad_label_for_asistente( $ticket_id );
+        }
         if ( $ticket_variant === '' && $ticket_id ) {
             $ticket_variant = evapp_get_ticket_variant_label_for_asistente( $ticket_id );
         }
@@ -690,6 +714,9 @@ function evapp_render_metabox_asistente_changelog( $post ) {
             <strong>Actualización #<?php echo $num; ?></strong>
             <span class="evapp-cl-meta">📅 <?php echo $ts; ?></span>
             <span class="evapp-cl-meta">🎟 Ticket: <em><?php echo esc_html( $ticket_label ); ?></em></span>
+            <?php if ( $ticket_modalidad !== '' ) : ?>
+                <span class="evapp-cl-meta">🧭 Modalidad: <em><?php echo esc_html( $ticket_modalidad ); ?></em></span>
+            <?php endif; ?>
             <?php if ( $ticket_variant !== '' ) : ?>
                 <span class="evapp-cl-meta">🏷 Variante: <em><?php echo esc_html( $ticket_variant ); ?></em></span>
             <?php endif; ?>
