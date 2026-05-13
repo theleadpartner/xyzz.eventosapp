@@ -574,6 +574,8 @@ add_action('admin_post_eventosapp_edit_upload_csv', function(){
         'no_match_count'    => 0,
         'multi_match_count' => 0,
         'error_count'       => 0,
+        'variant_recalculated_count' => 0,
+        'variant_changed_count'      => 0,
     ];
     update_option( evapp_edit_state_key($event_id, $hash), $state, false );
 
@@ -804,6 +806,8 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
     $nomatch = intval($state['no_match_count']);
     $multi   = intval($state['multi_match_count']);
     $errs    = intval($state['error_count']);
+    $variant_recalculated = intval($state['variant_recalculated_count'] ?? 0);
+    $variant_changed      = intval($state['variant_changed_count'] ?? 0);
 
     $mapS = $state['map_search'];
     $mapU = $state['map_update'];
@@ -883,8 +887,32 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
                     }
                 }
 
-                // Reindexar si hubo cambios
+                // Recalcular variante y reindexar si hubo cambios.
                 if ($changes > 0) {
+                    $variant_prepare = null;
+
+                    // Compatibilidad con Variantes:
+                    // Si la edición masiva cambia localidad, campos base o campos extra usados por reglas,
+                    // recalculamos la variante del ticket inmediatamente. No regeneramos anexos pesados aquí
+                    // para no saturar el proceso; si cambia la variante se marca el ticket para refresh posterior.
+                    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context')) {
+                        $variant_prepare = eventosapp_ticket_variants_prepare_ticket_for_batch_context($pid, $event_id, 'bulk_edit', [
+                            'sync_google_classes' => true,
+                            'mark_assets_stale'   => true,
+                            'clear_assets_stale'  => false,
+                            'log'                 => true,
+                        ]);
+                    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+                        $variant_prepare = eventosapp_ticket_variants_apply_to_ticket($pid, $event_id, true);
+                    }
+
+                    if (is_array($variant_prepare)) {
+                        $variant_recalculated++;
+                        if (!empty($variant_prepare['changed'])) {
+                            $variant_changed++;
+                        }
+                    }
+
                     if (function_exists('eventosapp_ticket_build_search_blob')) {
                         eventosapp_ticket_build_search_blob($pid);
                     }
@@ -928,10 +956,12 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
     $state['no_match_count']    = $nomatch;
     $state['multi_match_count'] = $multi;
     $state['error_count']       = $errs;
+    $state['variant_recalculated_count'] = $variant_recalculated;
+    $state['variant_changed_count']      = $variant_changed;
     update_option( evapp_edit_state_key($event_id, $hash), $state, false );
 
     // Construir mensaje del log
-    $msg = '📝 Chunk '.$offset.'/'.$state['total_rows'].' - Procesadas: '.$processed.' | Actualizadas: '.$updated.' | Sin cambios: '.$same.' | Sin match: '.$nomatch.' | Múltiples: '.$multi.' | Errores: '.$errs;
+    $msg = '📝 Chunk '.$offset.'/'.$state['total_rows'].' - Procesadas: '.$processed.' | Actualizadas: '.$updated.' | Sin cambios: '.$same.' | Sin match: '.$nomatch.' | Múltiples: '.$multi.' | Errores: '.$errs.' | Variantes recalculadas: '.$variant_recalculated.' | Variantes cambiadas: '.$variant_changed;
     
     if ($log_msgs) {
         $msg .= ' | ' . implode(' | ', array_slice($log_msgs, 0, 5));
@@ -944,6 +974,8 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
         'no_match_count'    => $nomatch,
         'multi_match_count' => $multi,
         'error_count'       => $errs,
+        'variant_recalculated_count' => $variant_recalculated,
+        'variant_changed_count'      => $variant_changed,
         'msg'               => $msg,
         'done'              => $done ? 1 : 0,
     ]);
