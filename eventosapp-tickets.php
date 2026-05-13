@@ -1390,9 +1390,7 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     // 5.1) Aplicar variante de ticket por reglas antes de generar correo/wallets.
     // Esto permite que localidad u otros campos decidan plantilla de correo, clase Google Wallet y diseño Apple Wallet.
     if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
-        $variant_result = eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
-        update_post_meta($post_id, '_eventosapp_ticket_variant_save_result', $variant_result);
-        error_log('[EventosApp] Ticket save variant ticket=' . (int) $post_id . ' event=' . (int) $evento_id . ' result=' . wp_json_encode($variant_result));
+        eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
     }
 
     // 6) ID público NO predecible + secuencia interna por evento + título = ID
@@ -1434,20 +1432,22 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         }
     }
 
-    // Reaplicar después de asegurar el ID público por si alguna regla o log depende del ticketID.
-    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
-        $variant_result_after_id = eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
-        update_post_meta($post_id, '_eventosapp_ticket_variant_save_result', $variant_result_after_id);
-    }
-
     // 8) Wallet Android on/off por evento
     $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
     if ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) {
-        if (function_exists('eventosapp_generar_enlace_wallet_android')) eventosapp_generar_enlace_wallet_android($post_id, false);
+        // Flujo dirigido: el generador principal de Android ya resuelve la variante ANTES de crear/actualizar el objeto.
+        // Solo se usa el refresh de variantes como respaldo si el class efectivo no coincide después de generar.
+        if (function_exists('eventosapp_generar_enlace_wallet_android')) {
+            eventosapp_generar_enlace_wallet_android($post_id, false);
+        }
 
-        // Si la variante define clase/branding propio, se fuerza un PATCH/INSERT con ese contexto.
-        if (function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
+        $variant_class_id = get_post_meta($post_id, '_eventosapp_wallet_variant_class_id', true);
+        $effective_class  = get_post_meta($post_id, '_eventosapp_wallet_google_class_id_effective', true);
+        if ($variant_class_id && $effective_class !== $variant_class_id && function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
+            error_log('EVENTOSAPP WALLET ANDROID FALLBACK REFRESH ticket=' . (int) $post_id . ' evento=' . (int) $evento_id . ' variant_class=' . $variant_class_id . ' effective_class=' . $effective_class);
             eventosapp_ticket_variants_refresh_google_wallet_object($post_id, $evento_id);
+        } else {
+            error_log('EVENTOSAPP WALLET ANDROID DIRECTED FLOW OK ticket=' . (int) $post_id . ' evento=' . (int) $evento_id . ' variant_class=' . $variant_class_id . ' effective_class=' . $effective_class);
         }
     } else {
         if (function_exists('eventosapp_eliminar_enlace_wallet_android')) eventosapp_eliminar_enlace_wallet_android($post_id);
