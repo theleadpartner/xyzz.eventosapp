@@ -373,8 +373,27 @@ if (!function_exists('eventosapp_ticket_variants_get_ticket_field_value')) {
 
         if (!$ticket_id || $field_key === '') return '';
 
+        $modalidad_aliases = [
+            'modalidad',
+            'ticket_modalidad',
+            'modality',
+            'mode',
+            'attendance_mode',
+            'modalidad_asistencia',
+            'tipo_asistencia',
+        ];
+
         if (function_exists('eventosapp_get_ticket_field_value')) {
-            return eventosapp_get_ticket_field_value($ticket_id, $field_key);
+            $shared_value = eventosapp_get_ticket_field_value($ticket_id, $field_key);
+            if ($shared_value !== '' || !in_array(sanitize_key($field_key), $modalidad_aliases, true)) {
+                return $shared_value;
+            }
+
+            if (function_exists('eventosapp_get_ticket_modalidad')) {
+                return eventosapp_ticket_variants_value_to_string(eventosapp_get_ticket_modalidad($ticket_id));
+            }
+
+            return eventosapp_ticket_variants_value_to_string(get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true));
         }
 
         $aliases = [
