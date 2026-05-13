@@ -18,6 +18,213 @@
 
 if (!defined('ABSPATH')) exit;
 
+
+/**
+ * Log interno del módulo de envío masivo.
+ * Mantiene trazabilidad en WP_DEBUG/error_log sin exponer reglas completas ni payloads sensibles en el navegador.
+ */
+if (!function_exists('eventosapp_email_masivo_debug_log')) {
+    function eventosapp_email_masivo_debug_log($message, $context = []) {
+        $line = 'EVENTOSAPP EMAIL MASIVO | ' . trim((string) $message);
+        if (is_array($context) && !empty($context)) {
+            $encoded = wp_json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($encoded) {
+                $line .= ' | ' . $encoded;
+            }
+        }
+        error_log($line);
+    }
+}
+
+/**
+ * Prepara la variante efectiva del ticket antes de mostrarlo o enviarlo por correo masivo.
+ *
+ * Compatibilidad buscada:
+ * - Si existe el helper masivo de variantes, se usa para sincronizar clases Google Wallet por evento/contexto.
+ * - Si el helper masivo no existe, se hace fallback a eventosapp_ticket_variants_apply_to_ticket().
+ * - Si el módulo de variantes no está cargado, no bloquea el envío y deja trazabilidad segura.
+ *
+ * @param int    $ticket_id ID del ticket.
+ * @param string $context   Contexto corto para logs/metas.
+ * @return array Resumen seguro para logs/UI.
+ */
+if (!function_exists('eventosapp_email_masivo_prepare_ticket_variant')) {
+    function eventosapp_email_masivo_prepare_ticket_variant($ticket_id, $context = 'email_bulk') {
+        $ticket_id = absint($ticket_id);
+        $event_id  = $ticket_id ? absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true)) : 0;
+        $context   = sanitize_key((string) $context);
+        if ($context === '') {
+            $context = 'email_bulk';
+        }
+
+        $summary = [
+            'ok'                    => false,
+            'ticket_id'             => $ticket_id,
+            'event_id'              => $event_id,
+            'context'               => $context,
+            'applied'               => false,
+            'reason'                => '',
+            'variant_key'           => '',
+            'variant_name'          => '',
+            'matched_index'         => null,
+            'changed'               => false,
+            'email_template'        => '',
+            'email_template_path'   => '',
+            'email_header_image'    => '',
+            'google_wallet_class'   => '',
+            'google_class_source'   => '',
+            'google_classes_synced' => false,
+        ];
+
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            $summary['reason'] = 'ticket_invalid';
+            eventosapp_email_masivo_debug_log('Variante no preparada: ticket inválido', $summary);
+            return $summary;
+        }
+
+        if (!$event_id) {
+            $summary['reason'] = 'event_missing';
+            eventosapp_email_masivo_debug_log('Variante no preparada: ticket sin evento', $summary);
+            return $summary;
+        }
+
+        if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context')) {
+            try {
+                $prepared = eventosapp_ticket_variants_prepare_ticket_for_batch_context($ticket_id, $event_id, $context, [
+                    'sync_google_classes' => true,
+                    'mark_assets_stale'   => false,
+                    'clear_assets_stale'  => false,
+                    'log'                 => true,
+                ]);
+
+                if (is_array($prepared)) {
+                    $summary = array_merge($summary, [
+                        'ok'                    => !empty($prepared['ok']),
+                        'applied'               => !empty($prepared['applied']),
+                        'reason'                => (string) ($prepared['reason'] ?? ''),
+                        'variant_key'           => (string) ($prepared['variant_key'] ?? ''),
+                        'variant_name'          => (string) ($prepared['variant_name'] ?? ''),
+                        'matched_index'         => array_key_exists('matched_index', $prepared) ? $prepared['matched_index'] : null,
+                        'changed'               => !empty($prepared['changed']),
+                        'google_classes_synced' => !empty($prepared['google_classes_synced']),
+                    ]);
+                }
+            } catch (Throwable $e) {
+                $summary['ok'] = false;
+                $summary['reason'] = 'variant_prepare_exception';
+                eventosapp_email_masivo_debug_log('Error preparando variante para correo masivo', [
+                    'ticket_id' => $ticket_id,
+                    'event_id'  => $event_id,
+                    'context'   => $context,
+                    'error'     => $e->getMessage(),
+                ]);
+            }
+        } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+            try {
+                $applied = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
+                if (!is_array($applied)) {
+                    $applied = [];
+                }
+
+                $summary['ok']            = true;
+                $summary['applied']       = !empty($applied['applied']);
+                $summary['reason']        = (string) ($applied['reason'] ?? ($summary['applied'] ? 'applied' : 'not_applied'));
+                $summary['variant_key']   = (string) ($applied['variant_key'] ?? get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true));
+                $summary['variant_name']  = (string) ($applied['variant_name'] ?? get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true));
+                $summary['matched_index'] = array_key_exists('matched_index', $applied) ? $applied['matched_index'] : null;
+            } catch (Throwable $e) {
+                $summary['ok'] = false;
+                $summary['reason'] = 'variant_apply_exception';
+                eventosapp_email_masivo_debug_log('Error aplicando variante para correo masivo', [
+                    'ticket_id' => $ticket_id,
+                    'event_id'  => $event_id,
+                    'context'   => $context,
+                    'error'     => $e->getMessage(),
+                ]);
+            }
+        } else {
+            $summary['ok']     = true;
+            $summary['reason'] = 'variants_module_not_loaded';
+        }
+
+        $summary['variant_key']         = (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true);
+        $summary['variant_name']        = (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true);
+        $summary['email_template']      = (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true);
+        $summary['email_template_path'] = (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_path', true);
+        $summary['email_header_image']  = (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_header_image_url', true);
+        $summary['google_wallet_class'] = (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true);
+        $summary['google_class_source'] = (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_source', true);
+
+        update_post_meta($ticket_id, '_eventosapp_email_masivo_variant_last_context', $context);
+        update_post_meta($ticket_id, '_eventosapp_email_masivo_variant_last_at', current_time('mysql'));
+        update_post_meta($ticket_id, '_eventosapp_email_masivo_variant_last_result', [
+            'context'               => $summary['context'],
+            'applied'               => $summary['applied'],
+            'reason'                => $summary['reason'],
+            'variant_key'           => $summary['variant_key'],
+            'variant_name'          => $summary['variant_name'],
+            'matched_index'         => $summary['matched_index'],
+            'changed'               => $summary['changed'],
+            'email_template'        => $summary['email_template'],
+            'google_wallet_class'   => $summary['google_wallet_class'],
+            'google_class_source'   => $summary['google_class_source'],
+            'google_classes_synced' => $summary['google_classes_synced'],
+        ]);
+
+        eventosapp_email_masivo_debug_log('Variante preparada para correo masivo', [
+            'ticket_id'             => $ticket_id,
+            'event_id'              => $event_id,
+            'context'               => $context,
+            'applied'               => $summary['applied'] ? 'yes' : 'no',
+            'reason'                => $summary['reason'],
+            'variant_key'           => $summary['variant_key'],
+            'variant_name'          => $summary['variant_name'],
+            'email_template'        => $summary['email_template'],
+            'google_wallet_class'   => $summary['google_wallet_class'],
+            'google_class_source'   => $summary['google_class_source'],
+            'google_classes_synced' => $summary['google_classes_synced'] ? 'yes' : 'no',
+        ]);
+
+        return $summary;
+    }
+}
+
+/**
+ * Texto corto y seguro para la UI/log del envío masivo.
+ */
+if (!function_exists('eventosapp_email_masivo_format_variant_label')) {
+    function eventosapp_email_masivo_format_variant_label($variant_summary) {
+        if (!is_array($variant_summary)) {
+            return 'Plantilla normal del evento';
+        }
+
+        if (!empty($variant_summary['applied'])) {
+            $name = trim((string) ($variant_summary['variant_name'] ?: $variant_summary['variant_key']));
+            $label = $name !== '' ? ('Variante: ' . $name) : 'Variante aplicada';
+            if (!empty($variant_summary['email_template'])) {
+                $label .= ' · plantilla: ' . sanitize_file_name($variant_summary['email_template']);
+            }
+            return $label;
+        }
+
+        $reason = (string) ($variant_summary['reason'] ?? '');
+        if ($reason === 'variants_module_not_loaded') {
+            return 'Plantilla normal del evento · módulo de variantes no cargado';
+        }
+        if ($reason === 'disabled') {
+            return 'Plantilla normal del evento · variantes desactivadas';
+        }
+        if ($reason === 'no_match') {
+            return 'Plantilla normal del evento · sin variante coincidente';
+        }
+        if ($reason === 'event_missing') {
+            return 'Sin evento asignado';
+        }
+
+        return 'Plantilla normal del evento';
+    }
+}
+
 /**
  * Registrar el menú de administración
  */
@@ -349,6 +556,8 @@ function eventosapp_email_masivo_render_step2($segment_id) {
         .evapp-filters-applied { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 8px; margin: 20px 0; }
         .evapp-filters-applied h4 { margin-top: 0; color: #856404; }
         .evapp-filter-tag { display: inline-block; background: white; border: 1px solid #ffc107; padding: 5px 10px; margin: 5px; border-radius: 4px; font-size: 12px; }
+        .evapp-variant-badge { display: inline-block; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe; padding: 3px 8px; border-radius: 999px; font-size: 11px; line-height: 1.4; }
+        .evapp-variant-badge-normal { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
     </style>
 
     <div class="evapp-filters-applied">
@@ -398,6 +607,10 @@ function eventosapp_email_masivo_render_step2($segment_id) {
         ?>
     </div>
 
+    <div class="notice notice-info" style="margin: 15px 0;">
+        <p><strong>Compatibilidad con variantes:</strong> antes de mostrar la vista previa y antes de cada envío, el sistema evalúa la variante efectiva del ticket. Si el ticket coincide con una variante, se usará su plantilla de correo, cabezote y branding configurado; si no coincide, se mantiene la plantilla normal del evento.</p>
+    </div>
+
     <div class="evapp-preview-stats">
         <div class="evapp-stat-card">
             <h3>Total de Tickets</h3>
@@ -420,6 +633,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                         <th>Email</th>
                         <th>Evento</th>
                         <th>Localidad</th>
+                        <th>Variante / Plantilla</th>
                         <th>Estado Email</th>
                     </tr>
                 </thead>
@@ -434,6 +648,9 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                         $localidad = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
                         $email_status = get_post_meta($tid, '_eventosapp_ticket_email_sent_status', true);
                         $ticket_id = get_post_meta($tid, 'eventosapp_ticketID', true);
+                        $variant_summary = eventosapp_email_masivo_prepare_ticket_variant($tid, 'email_bulk_preview');
+                        $variant_label = eventosapp_email_masivo_format_variant_label($variant_summary);
+                        $variant_badge_class = !empty($variant_summary['applied']) ? 'evapp-variant-badge' : 'evapp-variant-badge evapp-variant-badge-normal';
                         
                         $status_colors = [
                             'enviado' => '#10b981',
@@ -448,6 +665,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                             <td><?php echo esc_html($email); ?></td>
                             <td><?php echo esc_html(get_the_title($evento_id)); ?></td>
                             <td><?php echo esc_html($localidad); ?></td>
+                            <td><span class="<?php echo esc_attr($variant_badge_class); ?>"><?php echo esc_html($variant_label); ?></span></td>
                             <td>
                                 <span style="background: <?php echo $status_color; ?>; color: white; padding: 3px 8px; border-radius: 3px; font-size: 11px;">
                                     <?php echo esc_html($email_status ?: 'no_enviado'); ?>
@@ -585,7 +803,8 @@ function eventosapp_email_masivo_render_step3($segment_id) {
             const $log = $('#logContainer');
             const timestamp = new Date().toLocaleTimeString();
             const className = 'evapp-log-' + type;
-            $log.append('<div class="evapp-log-entry ' + className + '">[' + timestamp + '] ' + message + '</div>');
+            const safeMessage = $('<div>').text(message || '').html();
+            $log.append('<div class="evapp-log-entry ' + className + '">[' + timestamp + '] ' + safeMessage + '</div>');
             $log.scrollTop($log[0].scrollHeight);
         }
 
@@ -797,30 +1016,47 @@ add_action('wp_ajax_eventosapp_email_masivo_process_batch', function(){
             continue;
         }
 
-        // Enviar usando la función existente
+        // Preparar variante antes de construir y enviar el correo masivo.
+        $variant_summary = eventosapp_email_masivo_prepare_ticket_variant($ticket_id, 'email_bulk_send');
+        $variant_label = eventosapp_email_masivo_format_variant_label($variant_summary);
+
+        $logs[] = [
+            'message' => "Ticket {$ticket_code}: {$variant_label}",
+            'type' => !empty($variant_summary['applied']) ? 'info' : 'info'
+        ];
+
+        // Enviar usando la función existente. eventosapp_send_ticket_email_now vuelve a validar la variante,
+        // por lo que este módulo queda compatible incluso si el ticket cambió entre la vista previa y el envío.
         if (function_exists('eventosapp_send_ticket_email_now')) {
             list($ok, $msg) = eventosapp_send_ticket_email_now($ticket_id, [
                 'source' => 'bulk',
-                'force' => false // No forzar reenvío si ya se envió
+                'force' => false,
+                'variant_context' => [
+                    'applied' => !empty($variant_summary['applied']),
+                    'reason' => (string) ($variant_summary['reason'] ?? ''),
+                    'variant_key' => (string) ($variant_summary['variant_key'] ?? ''),
+                    'variant_name' => (string) ($variant_summary['variant_name'] ?? ''),
+                    'email_template' => (string) ($variant_summary['email_template'] ?? ''),
+                ],
             ]);
 
             if ($ok) {
                 $sent++;
                 $logs[] = [
-                    'message' => "Ticket {$ticket_code}: Enviado correctamente a {$email}",
+                    'message' => "Ticket {$ticket_code}: Enviado correctamente a {$email} ({$variant_label})",
                     'type' => 'success'
                 ];
             } else {
                 $errors++;
                 $logs[] = [
-                    'message' => "Ticket {$ticket_code}: Error - " . ($msg ?: 'Desconocido'),
+                    'message' => "Ticket {$ticket_code}: Error - " . ($msg ?: 'Desconocido') . " ({$variant_label})",
                     'type' => 'error'
                 ];
             }
         } else {
             $errors++;
             $logs[] = [
-                'message' => "Ticket {$ticket_code}: Función de envío no disponible",
+                'message' => "Ticket {$ticket_code}: Función de envío no disponible ({$variant_label})",
                 'type' => 'error'
             ];
         }
