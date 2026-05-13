@@ -157,12 +157,17 @@ function eventosapp_send_ticket_email_handler() {
     $wi_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
 
     if ($is_virtual_ticket) {
-        delete_post_meta($post_id, '_eventosapp_ticket_wallet_android_url');
-        delete_post_meta($post_id, '_eventosapp_ticket_wallet_android');
-        delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple');
-        delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple_url');
-        delete_post_meta($post_id, '_eventosapp_ticket_pkpass_url');
-        delete_post_meta($post_id, '_eventosapp_ticket_pdf_url');
+        if (function_exists('eventosapp_ticket_clear_presential_assets')) {
+            eventosapp_ticket_clear_presential_assets($post_id);
+        } else {
+            delete_post_meta($post_id, '_eventosapp_ticket_wallet_android_url');
+            delete_post_meta($post_id, '_eventosapp_ticket_wallet_android');
+            delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple');
+            delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple_url');
+            delete_post_meta($post_id, '_eventosapp_ticket_pkpass_url');
+            delete_post_meta($post_id, '_eventosapp_ticket_pdf_url');
+            delete_post_meta($post_id, '_eventosapp_qr_codes');
+        }
     }
 
     if ($wa_on && !get_post_meta($post_id, '_eventosapp_ticket_wallet_android_url', true)) {
@@ -370,12 +375,17 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
     $wi_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
 
     if ($is_virtual_ticket) {
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+        if (function_exists('eventosapp_ticket_clear_presential_assets')) {
+            eventosapp_ticket_clear_presential_assets($ticket_id);
+        } else {
+            delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+            delete_post_meta($ticket_id, '_eventosapp_qr_codes');
+        }
     }
 
     if ($wa_on && !get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', true)) {
@@ -555,12 +565,17 @@ function eventosapp_build_ticket_email_html($ticket_id) {
     $wi_on  = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
 
     if ($is_virtual_ticket) {
-        delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
-        delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+        if (function_exists('eventosapp_ticket_clear_presential_assets')) {
+            eventosapp_ticket_clear_presential_assets($ticket_id);
+        } else {
+            delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+            delete_post_meta($ticket_id, '_eventosapp_qr_codes');
+        }
     }
 
     // Datos evento
