@@ -359,6 +359,22 @@ function eventosapp_render_metabox_evento($post) {
     $organizador_email = get_post_meta($post->ID, '_eventosapp_organizador_email', true) ?: '';
     $organizador_tel   = get_post_meta($post->ID, '_eventosapp_organizador_tel', true) ?: '';
 
+    // Modalidad del evento
+    $modalidad_evento = function_exists('eventosapp_get_event_modalidad')
+        ? eventosapp_get_event_modalidad($post->ID)
+        : (get_post_meta($post->ID, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    $modalidad_evento = function_exists('eventosapp_normalize_event_modalidad')
+        ? eventosapp_normalize_event_modalidad($modalidad_evento)
+        : (in_array($modalidad_evento, ['presencial','virtual','presencial_virtual'], true) ? $modalidad_evento : 'presencial');
+    $modalidad_options = function_exists('eventosapp_event_modalidad_options') ? eventosapp_event_modalidad_options() : [
+        'presencial'         => 'Presencial',
+        'virtual'            => 'Virtual',
+        'presencial_virtual' => 'Presencial y Virtual',
+    ];
+    $virtual_url             = get_post_meta($post->ID, '_eventosapp_virtual_url', true) ?: '';
+    $virtual_platform        = get_post_meta($post->ID, '_eventosapp_virtual_platform', true) ?: '';
+    $virtual_access_datetime = get_post_meta($post->ID, '_eventosapp_virtual_access_datetime', true) ?: '';
+
     // === VINCULACIÓN CON CLIENTE ===
     $usar_cliente = get_post_meta($post->ID, '_eventosapp_usar_cliente', true) === '1' ? '1' : '0';
     $cliente_id   = (int) get_post_meta($post->ID, '_eventosapp_cliente_id', true);
@@ -408,6 +424,11 @@ function eventosapp_render_metabox_evento($post) {
     .muted { color:#666; font-size:12px; }
     .evapp-org-toggle-wrap { margin-bottom:6px; }
     .evapp-org-toggle-wrap label { font-weight:400; cursor:pointer; }
+    .evapp-modalidad-box { border:1px solid #dbeafe; background:#eff6ff; padding:12px; border-radius:10px; margin:12px 0 16px; }
+    .evapp-modalidad-box label { font-weight:600; }
+    .evapp-modalidad-help { margin:6px 0 0; color:#1f4f82; font-size:12px; line-height:1.4; }
+    .evapp-physical-fields, .evapp-virtual-fields { border:1px solid #e5e7eb; background:#fafafa; padding:12px; border-radius:10px; margin:10px 0 16px; }
+    .evapp-virtual-fields h4, .evapp-physical-fields h4 { margin:0 0 10px; }
     </style>
 
     <!-- Tipo de fecha -->
@@ -466,13 +487,42 @@ function eventosapp_render_metabox_evento($post) {
     </select>
     <br><br>
 
-    <!-- CAMPOS DEL EVENTO -->
-    <label><strong>Dirección del Evento:</strong></label><br>
-    <input type="text" class="eventosapp-input-wide" name="eventosapp_direccion" value="<?php echo esc_attr($direccion); ?>" placeholder="Ej: Calle 123 #45-67, Ciudad"><br><br>
+    <!-- MODALIDAD DEL EVENTO -->
+    <div class="evapp-modalidad-box">
+        <label for="eventosapp_event_modalidad"><strong>Modalidad del Evento:</strong></label><br>
+        <select name="eventosapp_event_modalidad" id="eventosapp_event_modalidad">
+            <?php foreach ($modalidad_options as $mode_key => $mode_label): ?>
+                <option value="<?php echo esc_attr($mode_key); ?>" <?php selected($modalidad_evento, $mode_key); ?>><?php echo esc_html($mode_label); ?></option>
+            <?php endforeach; ?>
+        </select>
+        <p class="evapp-modalidad-help">
+            Presencial usa ubicación física y tickets con QR/PDF/Wallet según la configuración actual. Virtual usa enlace de acceso y solo adjunta ICS. Presencial y Virtual permite elegir la modalidad por asistente.
+        </p>
+    </div>
 
-    <label><strong>Coordenadas Google Maps (lat,lng):</strong></label><br>
-    <input type="text" class="eventosapp-input-wide" name="eventosapp_coordenadas" value="<?php echo esc_attr($coordenadas); ?>" placeholder="Ej: 11.0041,-74.8067"><br>
-    <span class="muted">Puedes obtenerlas desde <a href="https://www.google.com/maps" target="_blank" rel="noopener">Google Maps</a></span><br><br>
+    <!-- CAMPOS DEL EVENTO -->
+    <div class="evapp-physical-fields" id="evapp_physical_fields">
+        <h4>Ubicación física del evento</h4>
+        <label><strong>Dirección del Evento:</strong></label><br>
+        <input type="text" class="eventosapp-input-wide" name="eventosapp_direccion" value="<?php echo esc_attr($direccion); ?>" placeholder="Ej: Calle 123 #45-67, Ciudad"><br><br>
+
+        <label><strong>Coordenadas Google Maps (lat,lng):</strong></label><br>
+        <input type="text" class="eventosapp-input-wide" name="eventosapp_coordenadas" value="<?php echo esc_attr($coordenadas); ?>" placeholder="Ej: 11.0041,-74.8067"><br>
+        <span class="muted">Puedes obtenerlas desde <a href="https://www.google.com/maps" target="_blank" rel="noopener">Google Maps</a></span>
+    </div>
+
+    <div class="evapp-virtual-fields" id="evapp_virtual_fields">
+        <h4>Acceso virtual del evento</h4>
+        <label><strong>Plataforma del evento virtual:</strong></label><br>
+        <input type="text" class="eventosapp-input-wide" name="eventosapp_virtual_platform" value="<?php echo esc_attr($virtual_platform); ?>" placeholder="Ej: Zoom, Google Meet, Microsoft Teams"><br><br>
+
+        <label><strong>Enlace del evento virtual:</strong></label><br>
+        <input type="url" class="eventosapp-input-wide" name="eventosapp_virtual_url" value="<?php echo esc_url($virtual_url); ?>" placeholder="https://..."><br><br>
+
+        <label><strong>Fecha y hora para habilitar el enlace:</strong></label><br>
+        <input type="datetime-local" name="eventosapp_virtual_access_datetime" value="<?php echo esc_attr($virtual_access_datetime); ?>">
+        <br><span class="muted">Antes de esta fecha/hora, la landing del ticket virtual mostrará que el botón todavía no está habilitado.</span>
+    </div>
 
     <!-- === NOMBRE DEL ORGANIZADOR (con opción de vincular cliente) === -->
     <label><strong>Nombre del Organizador:</strong></label><br>
@@ -613,6 +663,22 @@ function eventosapp_render_metabox_evento($post) {
           }
       });
 
+      function evappToggleModalidadFields(){
+          var mode = $('#eventosapp_event_modalidad').val() || 'presencial';
+          if (mode === 'virtual') {
+              $('#evapp_physical_fields').hide();
+              $('#evapp_virtual_fields').show();
+          } else if (mode === 'presencial_virtual') {
+              $('#evapp_physical_fields').show();
+              $('#evapp_virtual_fields').show();
+          } else {
+              $('#evapp_physical_fields').show();
+              $('#evapp_virtual_fields').hide();
+          }
+      }
+      $('#eventosapp_event_modalidad').on('change', evappToggleModalidadFields);
+      evappToggleModalidadFields();
+
       // === Toggle Organizador: texto libre vs cliente ===
       $('#evapp_usar_cliente_cb').on('change', function(){
           if ($(this).is(':checked')) {
@@ -719,6 +785,10 @@ add_action('save_post_eventosapp_event', function($post_id) {
     $tipo = isset($_POST['eventosapp_tipo_fecha']) ? sanitize_text_field($_POST['eventosapp_tipo_fecha']) : 'unica';
     update_post_meta($post_id, '_eventosapp_tipo_fecha', $tipo);
 
+    $modalidad = isset($_POST['eventosapp_event_modalidad']) ? sanitize_text_field(wp_unslash($_POST['eventosapp_event_modalidad'])) : 'presencial';
+    $modalidad = function_exists('eventosapp_normalize_event_modalidad') ? eventosapp_normalize_event_modalidad($modalidad) : (in_array($modalidad, ['presencial','virtual','presencial_virtual'], true) ? $modalidad : 'presencial');
+    update_post_meta($post_id, '_eventosapp_event_modalidad', $modalidad);
+
     if ($tipo === 'unica') {
         update_post_meta($post_id, '_eventosapp_fecha_unica', sanitize_text_field($_POST['eventosapp_fecha_unica'] ?? ''));
         update_post_meta($post_id, '_eventosapp_fecha_inicio', '');
@@ -749,6 +819,9 @@ add_action('save_post_eventosapp_event', function($post_id) {
 
     update_post_meta($post_id, '_eventosapp_direccion', sanitize_text_field($_POST['eventosapp_direccion'] ?? ''));
     update_post_meta($post_id, '_eventosapp_coordenadas', sanitize_text_field($_POST['eventosapp_coordenadas'] ?? ''));
+    update_post_meta($post_id, '_eventosapp_virtual_platform', sanitize_text_field($_POST['eventosapp_virtual_platform'] ?? ''));
+    update_post_meta($post_id, '_eventosapp_virtual_url', esc_url_raw($_POST['eventosapp_virtual_url'] ?? ''));
+    update_post_meta($post_id, '_eventosapp_virtual_access_datetime', sanitize_text_field($_POST['eventosapp_virtual_access_datetime'] ?? ''));
     update_post_meta($post_id, '_eventosapp_organizador_email', sanitize_email($_POST['eventosapp_organizador_email'] ?? ''));
     update_post_meta($post_id, '_eventosapp_organizador_tel', sanitize_text_field($_POST['eventosapp_organizador_tel'] ?? ''));
 
