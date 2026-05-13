@@ -1031,6 +1031,10 @@ function eventosapp_ticket_metabox_render($post) {
         'presencial' => 'Presencial',
         'virtual'    => 'Virtual',
     ];
+    $is_virtual_ticket = ($ticket_modalidad === 'virtual');
+    $virtual_landing_url = ($is_virtual_ticket && function_exists('eventosapp_get_virtual_landing_url'))
+        ? eventosapp_get_virtual_landing_url($post->ID)
+        : '';
 
     // ¿el evento pide QR preimpreso?
     $use_preprinted = $evento_id ? (get_post_meta($evento_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1') : false;
@@ -1055,15 +1059,25 @@ function eventosapp_ticket_metabox_render($post) {
                     <b>ID Único de Ticket:</b> <?php echo esc_html($ticketID); ?>
                 </div>
                 <div class="eventosapp-ticket-qr-block">
-                    <b>QR del Ticket:</b><br>
-                    <?php
-                    $qr_src = eventosapp_get_ticket_qr_url($ticketID);
-                    if ($qr_src) {
-                        echo '<img src="' . esc_url($qr_src) . '" alt="QR Ticket" style="max-width:140px;">';
-                    } else {
-                        echo '<span style="color:#b33;">No se pudo generar el QR</span>';
-                    }
-                    ?>
+                    <?php if ($is_virtual_ticket): ?>
+                        <b>Acceso virtual del Ticket:</b><br>
+                        <?php if ($virtual_landing_url): ?>
+                            <a class="button button-secondary" href="<?php echo esc_url($virtual_landing_url); ?>" target="_blank" rel="noopener noreferrer">Abrir enlace de acceso virtual</a>
+                            <p style="margin:6px 0 0;color:#555;font-size:12px;">Este ticket es virtual: no usa QR presencial, PDF presencial ni Wallet.</p>
+                        <?php else: ?>
+                            <span style="color:#b33;">El acceso virtual se generará cuando el ticket tenga ID público.</span>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <b>QR del Ticket:</b><br>
+                        <?php
+                        $qr_src = eventosapp_get_ticket_qr_url($ticketID);
+                        if ($qr_src) {
+                            echo '<img src="' . esc_url($qr_src) . '" alt="QR Ticket" style="max-width:140px;">';
+                        } else {
+                            echo '<span style="color:#b33;">No se pudo generar el QR</span>';
+                        }
+                        ?>
+                    <?php endif; ?>
                 </div>
             <?php endif; ?>
             <!-- resto del formulario igual -->
@@ -1172,13 +1186,11 @@ function eventosapp_ticket_metabox_render($post) {
     <label for="eventosapp_ticket_modalidad">Modalidad del Ticket: <span style="color:#b33">*</span></label>
     <select name="eventosapp_ticket_modalidad" class="eventosapp-input-wide" id="eventosapp_ticket_modalidad" required data-current="<?php echo esc_attr($ticket_modalidad); ?>">
         <?php
-        $allowed_modalidades = [];
-        if ($event_modalidad === 'virtual') {
-            $allowed_modalidades = ['virtual'];
-        } elseif ($event_modalidad === 'presencial_virtual') {
-            $allowed_modalidades = ['presencial', 'virtual'];
-        } else {
-            $allowed_modalidades = ['presencial'];
+        $allowed_modalidades = function_exists('eventosapp_ticket_allowed_modalidades_for_event')
+            ? eventosapp_ticket_allowed_modalidades_for_event($evento_id)
+            : (($event_modalidad === 'virtual') ? ['virtual'] : (($event_modalidad === 'presencial_virtual') ? ['presencial', 'virtual'] : ['presencial']));
+        if (!in_array($ticket_modalidad, $allowed_modalidades, true)) {
+            $ticket_modalidad = reset($allowed_modalidades) ?: 'presencial';
         }
         foreach ($allowed_modalidades as $mod_key) {
             $mod_label = $ticket_modalidad_options[$mod_key] ?? ucfirst($mod_key);
@@ -1558,6 +1570,9 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         ? eventosapp_resolve_ticket_modalidad($evento_id, $requested_modalidad, get_post_meta($post_id, '_eventosapp_ticket_modalidad', true))
         : ($requested_modalidad ?: 'presencial');
     update_post_meta($post_id, '_eventosapp_ticket_modalidad', $ticket_modalidad);
+    if ($ticket_modalidad === 'virtual' && function_exists('eventosapp_ticket_clear_presential_assets')) {
+        eventosapp_ticket_clear_presential_assets($post_id);
+    }
 
     // 3) Usuario generador
     $user_id = intval($_POST['eventosapp_ticket_user_id'] ?? 0);
@@ -2174,21 +2189,21 @@ add_action('wp_ajax_eventosapp_ticket_get_modalidades', function() {
     $evento_id = intval($_POST['evento_id'] ?? 0);
     $event_mode = $evento_id && function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($evento_id) : 'presencial_virtual';
     $labels = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial'=>'Presencial','virtual'=>'Virtual'];
+    $allowed = function_exists('eventosapp_ticket_allowed_modalidades_for_event')
+        ? eventosapp_ticket_allowed_modalidades_for_event($evento_id)
+        : (($event_mode === 'virtual') ? ['virtual'] : (($event_mode === 'presencial_virtual') ? ['presencial', 'virtual'] : ['presencial']));
 
+    $options = [];
+    foreach ($allowed as $key) {
+        $options[$key] = $labels[$key] ?? ucfirst($key);
+    }
+
+    $default = reset($allowed) ?: 'presencial';
     if ($event_mode === 'virtual') {
-        $options = ['virtual' => $labels['virtual'] ?? 'Virtual'];
-        $default = 'virtual';
         $help = 'Este evento es Virtual: todos los tickets quedan en modalidad Virtual.';
     } elseif ($event_mode === 'presencial_virtual') {
-        $options = [
-            'presencial' => $labels['presencial'] ?? 'Presencial',
-            'virtual'    => $labels['virtual'] ?? 'Virtual',
-        ];
-        $default = 'presencial';
         $help = 'Este evento permite Presencial y Virtual: selecciona la modalidad del asistente.';
     } else {
-        $options = ['presencial' => $labels['presencial'] ?? 'Presencial'];
-        $default = 'presencial';
         $help = 'Este evento es Presencial: todos los tickets quedan en modalidad Presencial.';
     }
 
