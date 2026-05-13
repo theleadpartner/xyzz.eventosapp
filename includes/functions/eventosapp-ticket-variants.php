@@ -1015,6 +1015,307 @@ if (!function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_contex
     }
 }
 
+
+if (!function_exists('eventosapp_ticket_variants_frontend_refresh_enabled_assets')) {
+    /**
+     * Refresca anexos habilitados desde flujos frontend cuando una edición o reenvío
+     * necesita garantizar que los assets usen la variante efectiva más reciente.
+     *
+     * No cambia URLs manualmente ni elimina funciones existentes: delega en los
+     * generadores canónicos ya disponibles en el plugin.
+     */
+    function eventosapp_ticket_variants_frontend_refresh_enabled_assets($ticket_id, $event_id = 0, $context = 'frontend', $args = []) {
+        $ticket_id = absint($ticket_id);
+        $event_id  = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $context   = sanitize_key((string) $context);
+        if ($context === '') $context = 'frontend';
+
+        $defaults = [
+            'refresh_wallets'        => true,
+            'refresh_pdf_ics'        => false,
+            'clear_assets_stale'     => true,
+            'rebuild_search_index'   => false,
+            'log'                    => true,
+        ];
+        $args = is_array($args) ? array_merge($defaults, $args) : $defaults;
+
+        $summary = [
+            'ok'                  => false,
+            'ticket_id'           => $ticket_id,
+            'event_id'            => $event_id,
+            'context'             => $context,
+            'wallet_android'      => 'skipped',
+            'wallet_apple'        => 'skipped',
+            'pdf'                 => 'skipped',
+            'ics'                 => 'skipped',
+            'search_index'        => 'skipped',
+            'assets_stale_cleared'=> false,
+            'errors'              => [],
+        ];
+
+        if (!$ticket_id || !$event_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            $summary['errors'][] = 'ticket_or_event_invalid';
+            return $summary;
+        }
+
+        if (!empty($args['refresh_wallets'])) {
+            $wallet_android_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true);
+            $wallet_android_on = ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true || $wallet_android_on === 'yes' || $wallet_android_on === 'on');
+
+            if ($wallet_android_on) {
+                try {
+                    if (function_exists('eventosapp_generar_enlace_wallet_android')) {
+                        eventosapp_generar_enlace_wallet_android($ticket_id, false);
+                        $summary['wallet_android'] = 'generated';
+                    } elseif (function_exists('eventosapp_generate_wallet_android_ticket')) {
+                        eventosapp_generate_wallet_android_ticket($ticket_id);
+                        $summary['wallet_android'] = 'generated_legacy';
+                    } else {
+                        $summary['wallet_android'] = 'generator_missing';
+                    }
+                } catch (Throwable $e) {
+                    $summary['wallet_android'] = 'error';
+                    $summary['errors'][] = 'wallet_android: ' . $e->getMessage();
+                }
+            } else {
+                $summary['wallet_android'] = 'disabled';
+            }
+
+            $wallet_apple_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_apple', true);
+            $wallet_apple_on = ($wallet_apple_on === '1' || $wallet_apple_on === 1 || $wallet_apple_on === true || $wallet_apple_on === 'yes' || $wallet_apple_on === 'on');
+
+            if ($wallet_apple_on) {
+                try {
+                    if (function_exists('eventosapp_apple_generate_pass')) {
+                        eventosapp_apple_generate_pass($ticket_id, false);
+                        $summary['wallet_apple'] = 'generated';
+                    } elseif (function_exists('eventosapp_generar_enlace_wallet_apple')) {
+                        eventosapp_generar_enlace_wallet_apple($ticket_id);
+                        $summary['wallet_apple'] = 'generated_legacy';
+                    } elseif (function_exists('eventosapp_generate_wallet_apple_pass')) {
+                        eventosapp_generate_wallet_apple_pass($ticket_id);
+                        $summary['wallet_apple'] = 'generated_legacy_alt';
+                    } else {
+                        $summary['wallet_apple'] = 'generator_missing';
+                    }
+                } catch (Throwable $e) {
+                    $summary['wallet_apple'] = 'error';
+                    $summary['errors'][] = 'wallet_apple: ' . $e->getMessage();
+                }
+            } else {
+                $summary['wallet_apple'] = 'disabled';
+            }
+        }
+
+        if (!empty($args['refresh_pdf_ics'])) {
+            $pdf_on = get_post_meta($event_id, '_eventosapp_ticket_pdf', true) === '1';
+            $ics_on = get_post_meta($event_id, '_eventosapp_ticket_ics', true) === '1';
+
+            if ($pdf_on) {
+                try {
+                    if (function_exists('eventosapp_ticket_generar_pdf')) {
+                        eventosapp_ticket_generar_pdf($ticket_id);
+                        $summary['pdf'] = 'generated';
+                    } else {
+                        $summary['pdf'] = 'generator_missing';
+                    }
+                } catch (Throwable $e) {
+                    $summary['pdf'] = 'error';
+                    $summary['errors'][] = 'pdf: ' . $e->getMessage();
+                }
+            } else {
+                $summary['pdf'] = 'disabled';
+            }
+
+            if ($ics_on) {
+                try {
+                    if (function_exists('eventosapp_ticket_generar_ics')) {
+                        eventosapp_ticket_generar_ics($ticket_id);
+                        $summary['ics'] = 'generated';
+                    } else {
+                        $summary['ics'] = 'generator_missing';
+                    }
+                } catch (Throwable $e) {
+                    $summary['ics'] = 'error';
+                    $summary['errors'][] = 'ics: ' . $e->getMessage();
+                }
+            } else {
+                $summary['ics'] = 'disabled';
+            }
+        }
+
+        if (!empty($args['rebuild_search_index']) && function_exists('eventosapp_ticket_build_search_blob')) {
+            try {
+                eventosapp_ticket_build_search_blob($ticket_id);
+                $summary['search_index'] = 'rebuilt';
+            } catch (Throwable $e) {
+                $summary['search_index'] = 'error';
+                $summary['errors'][] = 'search_index: ' . $e->getMessage();
+            }
+        }
+
+        if (!empty($args['clear_assets_stale'])) {
+            delete_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh_since');
+            $summary['assets_stale_cleared'] = true;
+        }
+
+        $summary['ok'] = empty($summary['errors']);
+
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_frontend_assets_context', $context);
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_frontend_assets_at', current_time('mysql'));
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_frontend_assets_result', $summary);
+
+        if (!empty($args['log'])) {
+            eventosapp_ticket_variants_log('Refresh de assets frontend después de preparar variante', [
+                'ticket_id' => $ticket_id,
+                'event_id' => $event_id,
+                'context' => $context,
+                'wallet_android' => $summary['wallet_android'],
+                'wallet_apple' => $summary['wallet_apple'],
+                'pdf' => $summary['pdf'],
+                'ics' => $summary['ics'],
+                'search_index' => $summary['search_index'],
+                'ok' => $summary['ok'] ? 'yes' : 'no',
+            ]);
+        }
+
+        return $summary;
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
+    /**
+     * Punto común para herramientas frontend que crean, actualizan o reenvían tickets.
+     *
+     * Debe ejecutarse después de guardar los metadatos del asistente y antes de generar
+     * correo, PDF/ICS o Wallets. Así todas las herramientas frontend consumen la misma
+     * variante efectiva que el admin, webhooks, procesos masivos y refresh por lotes.
+     */
+    function eventosapp_ticket_variants_prepare_ticket_for_frontend_context($ticket_id, $event_id = 0, $context = 'frontend', $args = []) {
+        $ticket_id = absint($ticket_id);
+        $event_id  = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $context   = sanitize_key((string) $context);
+        if ($context === '') $context = 'frontend';
+
+        $defaults = [
+            'sync_google_classes' => true,
+            'mark_assets_stale'   => true,
+            'clear_assets_stale'  => false,
+            'refresh_wallets'     => false,
+            'refresh_pdf_ics'     => false,
+            'rebuild_search_index'=> true,
+            'log'                 => true,
+        ];
+        $args = is_array($args) ? array_merge($defaults, $args) : $defaults;
+
+        $summary = [
+            'ok'              => false,
+            'ticket_id'       => $ticket_id,
+            'event_id'        => $event_id,
+            'context'         => $context,
+            'applied'         => false,
+            'reason'          => '',
+            'variant_key'     => '',
+            'variant_name'    => '',
+            'matched_index'   => null,
+            'changed'         => false,
+            'assets'          => null,
+        ];
+
+        if (!$ticket_id || !$event_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            $summary['reason'] = 'ticket_or_event_invalid';
+            return $summary;
+        }
+
+        if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context')) {
+            $prepared = eventosapp_ticket_variants_prepare_ticket_for_batch_context($ticket_id, $event_id, $context, [
+                'sync_google_classes' => !empty($args['sync_google_classes']),
+                'mark_assets_stale'   => !empty($args['mark_assets_stale']),
+                'clear_assets_stale'  => !empty($args['clear_assets_stale']),
+                'log'                 => !empty($args['log']),
+            ]);
+        } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+            $before = [
+                'variant_key'    => (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true),
+                'email_template' => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true),
+                'google_class'   => (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true),
+                'apple_strip'    => (string) get_post_meta($ticket_id, '_eventosapp_apple_variant_strip_url', true),
+            ];
+            $result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
+            if (!is_array($result)) $result = [];
+            $after = [
+                'variant_key'    => (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true),
+                'email_template' => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true),
+                'google_class'   => (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true),
+                'apple_strip'    => (string) get_post_meta($ticket_id, '_eventosapp_apple_variant_strip_url', true),
+            ];
+            $prepared = [
+                'ok'            => true,
+                'applied'       => !empty($result['applied']),
+                'reason'        => (string) ($result['reason'] ?? (!empty($result['applied']) ? 'applied' : 'not_applied')),
+                'variant_key'   => (string) ($result['variant_key'] ?? $after['variant_key']),
+                'variant_name'  => (string) ($result['variant_name'] ?? get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true)),
+                'matched_index' => isset($result['matched_index']) ? (int) $result['matched_index'] : null,
+                'changed'       => ($before !== $after),
+            ];
+        } else {
+            $prepared = [
+                'ok'     => false,
+                'reason' => 'variants_apply_function_missing',
+            ];
+        }
+
+        if (!is_array($prepared)) $prepared = [];
+
+        $summary['ok']            = !empty($prepared['ok']);
+        $summary['applied']       = !empty($prepared['applied']);
+        $summary['reason']        = (string) ($prepared['reason'] ?? 'unknown');
+        $summary['variant_key']   = (string) ($prepared['variant_key'] ?? get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true));
+        $summary['variant_name']  = (string) ($prepared['variant_name'] ?? get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true));
+        $summary['matched_index'] = isset($prepared['matched_index']) ? (int) $prepared['matched_index'] : null;
+        $summary['changed']       = !empty($prepared['changed']);
+
+        if (!empty($args['rebuild_search_index']) && function_exists('eventosapp_ticket_build_search_blob')) {
+            try {
+                eventosapp_ticket_build_search_blob($ticket_id);
+            } catch (Throwable $e) {
+                if (!isset($summary['warnings']) || !is_array($summary['warnings'])) $summary['warnings'] = [];
+                $summary['warnings'][] = 'search_index: ' . $e->getMessage();
+            }
+        }
+
+        if (!empty($args['refresh_wallets']) || !empty($args['refresh_pdf_ics'])) {
+            $summary['assets'] = eventosapp_ticket_variants_frontend_refresh_enabled_assets($ticket_id, $event_id, $context, [
+                'refresh_wallets'      => !empty($args['refresh_wallets']),
+                'refresh_pdf_ics'      => !empty($args['refresh_pdf_ics']),
+                'clear_assets_stale'   => true,
+                'rebuild_search_index' => false,
+                'log'                  => !empty($args['log']),
+            ]);
+        }
+
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_frontend_context', $context);
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_frontend_at', current_time('mysql'));
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_frontend_result', $summary);
+
+        if (!empty($args['log'])) {
+            eventosapp_ticket_variants_log('Preparación de variante para herramienta frontend', [
+                'ticket_id' => $ticket_id,
+                'event_id' => $event_id,
+                'context' => $context,
+                'applied' => $summary['applied'] ? 'yes' : 'no',
+                'reason' => $summary['reason'],
+                'variant_key' => $summary['variant_key'],
+                'changed' => $summary['changed'] ? 'yes' : 'no',
+                'assets_refreshed' => is_array($summary['assets']) ? 'yes' : 'no',
+            ]);
+        }
+
+        return $summary;
+    }
+}
+
 if (!function_exists('eventosapp_ticket_variants_apply_on_save')) {
     add_action('save_post_eventosapp_ticket', 'eventosapp_ticket_variants_apply_on_save', 21, 3);
     function eventosapp_ticket_variants_apply_on_save($post_id, $post = null, $update = null) {
