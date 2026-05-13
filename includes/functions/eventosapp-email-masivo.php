@@ -420,6 +420,16 @@ function eventosapp_email_masivo_render_step1() {
                     <input type="date" name="filters[event_date]" id="event_date">
                     <small>Tickets válidos para esta fecha del evento</small>
                 </div>
+
+                <div class="evapp-filter-field">
+                    <label for="modalidad">Modalidad del Ticket</label>
+                    <select name="filters[modalidad]" id="modalidad">
+                        <option value="">-- Todas las modalidades --</option>
+                        <option value="presencial">Presencial</option>
+                        <option value="virtual">Virtual</option>
+                    </select>
+                    <small>Filtra tickets presenciales o virtuales</small>
+                </div>
             </div>
         </div>
 
@@ -572,6 +582,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
             'evento_id' => 'Evento',
             'localidad' => 'Localidad',
             'event_date' => 'Fecha del Evento',
+            'modalidad' => 'Modalidad del Ticket',
             'created_from' => 'Creado Desde',
             'created_to' => 'Creado Hasta'
         ];
@@ -588,8 +599,12 @@ function eventosapp_email_masivo_render_step2($segment_id) {
             if ($key === 'evento_id') {
                 $display_value = get_the_title($value);
             }
+            if ($key === 'modalidad') {
+                $modalidad_opts = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial' => 'Presencial', 'virtual' => 'Virtual'];
+                $display_value = $modalidad_opts[$value] ?? $value;
+            }
             
-            echo '<span class="evapp-filter-tag"><strong>'.$label.':</strong> '.$display_value.'</span>';
+            echo '<span class="evapp-filter-tag"><strong>'.esc_html($label).':</strong> '.esc_html($display_value).'</span>';
         }
 
         // Campos extras
@@ -633,6 +648,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                         <th>Email</th>
                         <th>Evento</th>
                         <th>Localidad</th>
+                        <th>Modalidad</th>
                         <th>Variante / Plantilla</th>
                         <th>Estado Email</th>
                     </tr>
@@ -646,6 +662,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                         $email = get_post_meta($tid, '_eventosapp_asistente_email', true);
                         $evento_id = get_post_meta($tid, '_eventosapp_ticket_evento_id', true);
                         $localidad = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
+                        $modalidad_label = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($tid) : ucfirst((string) get_post_meta($tid, '_eventosapp_ticket_modalidad', true));
                         $email_status = get_post_meta($tid, '_eventosapp_ticket_email_sent_status', true);
                         $ticket_id = get_post_meta($tid, 'eventosapp_ticketID', true);
                         $variant_summary = eventosapp_email_masivo_prepare_ticket_variant($tid, 'email_bulk_preview');
@@ -665,6 +682,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                             <td><?php echo esc_html($email); ?></td>
                             <td><?php echo esc_html(get_the_title($evento_id)); ?></td>
                             <td><?php echo esc_html($localidad); ?></td>
+                            <td><?php echo esc_html($modalidad_label ?: 'Presencial'); ?></td>
                             <td><span class="<?php echo esc_attr($variant_badge_class); ?>"><?php echo esc_html($variant_label); ?></span></td>
                             <td>
                                 <span style="background: <?php echo $status_color; ?>; color: white; padding: 3px 8px; border-radius: 3px; font-size: 11px;">
@@ -1107,6 +1125,21 @@ function eventosapp_email_masivo_get_filtered_tickets($filters) {
         ];
     }
 
+    $modalidad_filter = '';
+    if (!empty($filters['modalidad'])) {
+        $modalidad_filter = function_exists('eventosapp_normalize_ticket_modalidad')
+            ? eventosapp_normalize_ticket_modalidad($filters['modalidad'])
+            : sanitize_key((string) $filters['modalidad']);
+
+        if (!in_array($modalidad_filter, ['presencial', 'virtual'], true)) {
+            $modalidad_filter = '';
+        }
+
+        // No se agrega meta_query aquí porque la modalidad efectiva puede depender del evento:
+        // eventos Virtuales fuerzan todos sus tickets a Virtual aunque el meta del ticket esté vacío.
+        // El filtro exacto se aplica más abajo con eventosapp_get_ticket_modalidad().
+    }
+
     // Filtro por estado de email - CORREGIDO para manejar no_enviado correctamente
     if (!empty($filters['email_status'])) {
         $email_status = sanitize_text_field($filters['email_status']);
@@ -1244,6 +1277,12 @@ function eventosapp_email_masivo_get_filtered_tickets($filters) {
         }
         
         $ticket_ids = $filtered_ids;
+    }
+
+    if (!empty($modalidad_filter) && function_exists('eventosapp_get_ticket_modalidad')) {
+        $ticket_ids = array_values(array_filter($ticket_ids, function($tid) use ($modalidad_filter) {
+            return eventosapp_get_ticket_modalidad($tid) === $modalidad_filter;
+        }));
     }
 
     return $ticket_ids;
