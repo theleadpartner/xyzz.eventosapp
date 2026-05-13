@@ -261,6 +261,8 @@ if (!function_exists('evapp_webhook_public_asset_refresh_summary')) {
     $summary = [
       'context'                    => isset($asset_refresh_result['context']) ? sanitize_key((string) $asset_refresh_result['context']) : '',
       'variant'                    => evapp_webhook_public_variant_summary($asset_refresh_result, $ticket_id),
+      'ticket_modalidad'           => isset($asset_refresh_result['ticket_modalidad']) ? sanitize_key((string) $asset_refresh_result['ticket_modalidad']) : '',
+      'virtual_ticket'             => !empty($asset_refresh_result['virtual_ticket']),
       'google_wallet_classes_sync' => evapp_webhook_public_wallet_classes_summary($asset_refresh_result['google_wallet_classes_sync'] ?? null),
       'qr'                         => evapp_webhook_public_qr_summary($asset_refresh_result['qr'] ?? null),
       'pdf'                        => evapp_webhook_public_status($asset_refresh_result['pdf'] ?? null),
@@ -743,6 +745,8 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
       'variant_key'                => '',
       'variant_name'               => '',
       'variant_google_class_id'    => '',
+      'ticket_modalidad'           => '',
+      'virtual_ticket'             => false,
       'google_wallet_classes_sync' => null,
       'qr'                         => null,
       'pdf'                        => null,
@@ -777,8 +781,15 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
     $result['variant_name']            = (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true);
     $result['variant_google_class_id'] = (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true);
 
+    if (function_exists('eventosapp_ticket_sync_modalidad')) {
+      eventosapp_ticket_sync_modalidad($ticket_id);
+    }
+    $is_virtual_ticket = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id);
+    $result['ticket_modalidad'] = (string) get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
+    $result['virtual_ticket']   = (bool) $is_virtual_ticket;
+
     // 2) Si hay Android Wallet y variantes, asegurar que las clases existan antes de crear objetos.
-    $wallet_android_on = evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_wallet_android');
+    $wallet_android_on = (!$is_virtual_ticket) && evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_wallet_android');
     if ($wallet_android_on && function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_for_event')) {
       try {
         $result['google_wallet_classes_sync'] = eventosapp_ticket_variants_sync_google_wallet_classes_for_event($evento_id, $context);
@@ -805,8 +816,11 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
     }
 
     // 4) PDF: usa QR tipo PDF y metadatos de variante ya aplicados.
-    $pdf_on = evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_pdf');
-    if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) {
+    $pdf_on = (!$is_virtual_ticket) && evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_pdf');
+    if ($is_virtual_ticket) {
+      delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+      $result['pdf'] = 'disabled_virtual';
+    } elseif ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) {
       try {
         eventosapp_ticket_generar_pdf($ticket_id);
         $result['pdf'] = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true) ? 'regenerated' : 'generated_no_url_meta';
@@ -831,7 +845,12 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
     }
 
     // 6) Google Wallet / Android.
-    if ($wallet_android_on) {
+    if ($is_virtual_ticket) {
+      delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
+      delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
+      delete_post_meta($ticket_id, '_eventosapp_wallet_google_object_id');
+      $result['wallet_android'] = 'disabled_virtual';
+    } elseif ($wallet_android_on) {
       if (function_exists('eventosapp_generar_enlace_wallet_android')) {
         try {
           $before_effective_class = (string) get_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', true);
@@ -872,8 +891,13 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
     }
 
     // 7) Apple Wallet.
-    $wallet_ios_on = evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_wallet_apple');
-    if ($wallet_ios_on) {
+    $wallet_ios_on = (!$is_virtual_ticket) && evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_wallet_apple');
+    if ($is_virtual_ticket) {
+      delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
+      delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
+      delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+      $result['wallet_apple'] = 'disabled_virtual';
+    } elseif ($wallet_ios_on) {
       try {
         if (function_exists('eventosapp_apple_generate_pass')) {
           $apple_url = eventosapp_apple_generate_pass($ticket_id);
@@ -994,6 +1018,7 @@ function eventosapp_ac_webhook_handler(\WP_REST_Request $req){
   $city       = sanitize_text_field($pick(['city','ciudad']));
   $country    = sanitize_text_field($pick(['country','pais'], 'Colombia'));
   $localidad  = sanitize_text_field($pick(['localidad','ticket_localidad']));
+  $modalidad  = sanitize_text_field($pick(['modalidad','ticket_modalidad','eventosapp_ticket_modalidad','modality','mode','attendance_mode','attendance_modality']));
 
   // Flags de control
   $resend_param = $req->get_param('resend') ?? $pick(['resend','send_email','send','reenviar','force_send','send_email_on_update'], '');
@@ -1100,6 +1125,7 @@ if ($existing) {
     'ciudad'    => get_post_meta($ticket_id, '_eventosapp_asistente_ciudad',   true),
     'pais'      => get_post_meta($ticket_id, '_eventosapp_asistente_pais',     true),
     'localidad' => get_post_meta($ticket_id, '_eventosapp_asistente_localidad',true),
+    'modalidad' => get_post_meta($ticket_id, '_eventosapp_ticket_modalidad',true),
   ];
 
   // Si hay campos extras del evento, capturarlos también
@@ -1113,7 +1139,7 @@ if ($existing) {
   // ---- FIN CAPTURA PREVIA ----
 
   $payload_update_ok = eventosapp_update_ticket_from_payload($ticket_id, compact(
-    'evento_id','email','first_name','last_name','phone','company','cc','nit','cargo','city','country','localidad','external_id'
+    'evento_id','email','first_name','last_name','phone','company','cc','nit','cargo','city','country','localidad','modalidad','external_id'
   ), $data);
 
   if ($payload_update_ok === false) {
@@ -1159,6 +1185,7 @@ if ($existing) {
     'ciudad'    => get_post_meta($ticket_id, '_eventosapp_asistente_ciudad',   true),
     'pais'      => get_post_meta($ticket_id, '_eventosapp_asistente_pais',     true),
     'localidad' => get_post_meta($ticket_id, '_eventosapp_asistente_localidad',true),
+    'modalidad' => get_post_meta($ticket_id, '_eventosapp_ticket_modalidad',true),
   ];
 
   if (function_exists('eventosapp_get_event_extra_fields')) {
@@ -1333,6 +1360,8 @@ if ($existing) {
   update_post_meta($post_id, '_eventosapp_asistente_ciudad',   $city);
   update_post_meta($post_id, '_eventosapp_asistente_pais',     $country);
   update_post_meta($post_id, '_eventosapp_asistente_localidad',$localidad);
+  $ticket_modalidad = function_exists('eventosapp_resolve_ticket_modalidad') ? eventosapp_resolve_ticket_modalidad($evento_id, $modalidad, '') : sanitize_key($modalidad ?: 'presencial');
+  update_post_meta($post_id, '_eventosapp_ticket_modalidad', $ticket_modalidad);
   if (!empty($external_id)) {
     update_post_meta($post_id, '_eventosapp_external_id', $external_id);
     update_post_meta($post_id, '_eventosapp_external_scope_key', $external_scope_key);
@@ -1526,6 +1555,8 @@ function eventosapp_update_ticket_from_payload($post_id, array $flat, array $dat
   update_post_meta($post_id, '_eventosapp_asistente_ciudad',   (string)$city);
   update_post_meta($post_id, '_eventosapp_asistente_pais',     (string)($country ?: 'Colombia'));
   update_post_meta($post_id, '_eventosapp_asistente_localidad',(string)$localidad);
+  $ticket_modalidad = function_exists('eventosapp_resolve_ticket_modalidad') ? eventosapp_resolve_ticket_modalidad((int)$evento_id, isset($modalidad) ? $modalidad : evapp_pick_from($data, ['modalidad','ticket_modalidad','eventosapp_ticket_modalidad','modality','mode','attendance_mode','attendance_modality']), get_post_meta($post_id, '_eventosapp_ticket_modalidad', true)) : sanitize_key((string)(isset($modalidad) ? $modalidad : 'presencial'));
+  update_post_meta($post_id, '_eventosapp_ticket_modalidad', $ticket_modalidad);
   if (!empty($external_id)) {
     update_post_meta($post_id, '_eventosapp_external_id', (string)$external_id);
     if (function_exists('evapp_build_webhook_scope_key')) {
