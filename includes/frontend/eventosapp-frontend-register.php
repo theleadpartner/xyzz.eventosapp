@@ -205,6 +205,23 @@ function eventosapp_evreg_submit(){
         }
     }
 
+    // Compatibilidad Variantes de Tickets: asegurar que el ticket creado o actualizado
+    // desde esta herramienta frontend tenga calculada la variante efectiva antes de responder.
+    $variant_context = $existing_ticket_id ? 'frontend_register_update' : 'frontend_register_create';
+    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
+        eventosapp_ticket_variants_prepare_ticket_for_frontend_context($post_id, $eid, $variant_context, [
+            'sync_google_classes' => true,
+            'mark_assets_stale'   => false,
+            'clear_assets_stale'  => true,
+            'refresh_wallets'     => false,
+            'refresh_pdf_ics'     => false,
+            'rebuild_search_index'=> true,
+            'log'                 => true,
+        ]);
+    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($post_id, $eid, true);
+    }
+
     // ID público
     $ticket_pub = get_post_meta($post_id, 'eventosapp_ticketID', true);
     $tid        = $ticket_pub ?: '#'.$post_id;
