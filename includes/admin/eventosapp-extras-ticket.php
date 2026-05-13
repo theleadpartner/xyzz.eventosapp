@@ -71,6 +71,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
         <input type="checkbox" name="eventosapp_ticket_wallet_apple" value="1" <?php checked($walleti, '1'); ?>>
         Ticket en Wallet Apple/iPhone
     </label><br>
+    <small style="display:block;margin:4px 0 10px;color:#666;line-height:1.35;">
+        Compatibilidad de modalidad: en tickets virtuales se conserva el ICS y se omiten automáticamente QR presencial, PDF presencial y Wallet, aunque estén activos para el evento.
+    </small>
     <label>
         <input type="checkbox" name="eventosapp_ticket_variants_enabled" value="1" <?php checked($ticket_variants_enabled, '1'); ?>>
         <strong>Activar variantes de ticket por reglas</strong>
