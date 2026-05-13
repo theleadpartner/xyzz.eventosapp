@@ -1021,6 +1021,16 @@ function eventosapp_ticket_metabox_render($post) {
 	$asistente_pais     = get_post_meta($post->ID, '_eventosapp_asistente_pais', true) ?: 'Colombia';
 
 	$asistente_localidad= get_post_meta($post->ID, '_eventosapp_asistente_localidad', true) ?: '';
+    $ticket_modalidad = function_exists('eventosapp_get_ticket_modalidad')
+        ? eventosapp_get_ticket_modalidad($post->ID)
+        : (get_post_meta($post->ID, '_eventosapp_ticket_modalidad', true) ?: 'presencial');
+    $event_modalidad = $evento_id && function_exists('eventosapp_get_event_modalidad')
+        ? eventosapp_get_event_modalidad($evento_id)
+        : 'presencial_virtual';
+    $ticket_modalidad_options = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : [
+        'presencial' => 'Presencial',
+        'virtual'    => 'Virtual',
+    ];
 
     // ¿el evento pide QR preimpreso?
     $use_preprinted = $evento_id ? (get_post_meta($evento_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1') : false;
@@ -1035,6 +1045,8 @@ function eventosapp_ticket_metabox_render($post) {
         .eventosapp-input-wide { width: 99%; }
         .eventosapp-ticketid-block {font-size:17px; margin-bottom:15px; color:#216db2;}
         .eventosapp-ticket-qr-block {margin-bottom:18px;}
+        .evapp-ticket-modalidad-box { border:1px solid #dbeafe; background:#eff6ff; padding:12px; border-radius:10px; margin:12px 0; }
+        .evapp-ticket-modalidad-box small { color:#1f4f82; display:block; margin-top:5px; line-height:1.35; }
     </style>
     <div class="eventosapp-ticket-metabox">
         <div class="eventosapp-ticket-form">
@@ -1155,6 +1167,29 @@ function eventosapp_ticket_metabox_render($post) {
     }
     ?>
 </select>
+
+<div class="evapp-ticket-modalidad-box">
+    <label for="eventosapp_ticket_modalidad">Modalidad del Ticket: <span style="color:#b33">*</span></label>
+    <select name="eventosapp_ticket_modalidad" class="eventosapp-input-wide" id="eventosapp_ticket_modalidad" required data-current="<?php echo esc_attr($ticket_modalidad); ?>">
+        <?php
+        $allowed_modalidades = [];
+        if ($event_modalidad === 'virtual') {
+            $allowed_modalidades = ['virtual'];
+        } elseif ($event_modalidad === 'presencial_virtual') {
+            $allowed_modalidades = ['presencial', 'virtual'];
+        } else {
+            $allowed_modalidades = ['presencial'];
+        }
+        foreach ($allowed_modalidades as $mod_key) {
+            $mod_label = $ticket_modalidad_options[$mod_key] ?? ucfirst($mod_key);
+            echo '<option value="'.esc_attr($mod_key).'" '.selected($ticket_modalidad, $mod_key, false).'>'.esc_html($mod_label).'</option>';
+        }
+        ?>
+    </select>
+    <small id="eventosapp_ticket_modalidad_help">
+        Si el evento es Presencial o Virtual, la modalidad se fija automáticamente. Si el evento es Presencial y Virtual, aquí se define el tipo de ticket del asistente.
+    </small>
+</div>
 				<?php
 // === Campos adicionales definidos por el evento ===
 if (function_exists('eventosapp_get_event_extra_fields') && $evento_id) {
@@ -1246,6 +1281,26 @@ if (function_exists('eventosapp_get_event_extra_fields') && $evento_id) {
                 }
             });
 
+            // NUEVO: cargar modalidades permitidas para el ticket según el evento seleccionado
+            $.post(ajaxurl, {
+                action: 'eventosapp_ticket_get_modalidades',
+                evento_id: evento_id
+            }, function(resp){
+                if (resp.success && resp.data && resp.data.options) {
+                    var $mod = $('#eventosapp_ticket_modalidad');
+                    var currentMod = $mod.val() || $mod.data('current') || '';
+                    $mod.empty();
+                    $.each(resp.data.options, function(key, label){
+                        var selected = (key === currentMod) ? 'selected' : '';
+                        $mod.append('<option value="'+key+'" '+selected+'>'+label+'</option>');
+                    });
+                    if (!$mod.val() && resp.data.default) {
+                        $mod.val(resp.data.default);
+                    }
+                    $('#eventosapp_ticket_modalidad_help').text(resp.data.help || 'Modalidad del ticket.');
+                }
+            });
+
         } else {
             $('#eventosapp_ticket_event_summary').html('<em>Selecciona un evento para ver el resumen aquí...</em>');
             // Restaurar localidades default si no hay evento
@@ -1255,6 +1310,9 @@ if (function_exists('eventosapp_get_event_extra_fields') && $evento_id) {
                 .append('<option value="General">General</option>')
                 .append('<option value="VIP">VIP</option>')
                 .append('<option value="Platino">Platino</option>');
+            $('#eventosapp_ticket_modalidad').empty()
+                .append('<option value="presencial">Presencial</option>')
+                .append('<option value="virtual">Virtual</option>');
         }
     }).trigger('change');
 
@@ -1375,6 +1433,11 @@ function eventosapp_ticket_generar_pdf($ticket_id) {
     $evento_id = get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
     if (!$evento_id) return;
 
+    if (function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id)) {
+        delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+        return;
+    }
+
     $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true);
     if ($pdf_on !== '1') return; // Solo si la opción está activa
 
@@ -1488,6 +1551,14 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     if (!$evento_id) return;
     update_post_meta($post_id, '_eventosapp_ticket_evento_id', $evento_id);
 
+    // 2.1) Modalidad del ticket: se fija automáticamente para eventos Presencial o Virtual,
+    // y se toma del formulario solo si el evento permite ambas modalidades.
+    $requested_modalidad = isset($_POST['eventosapp_ticket_modalidad']) ? sanitize_text_field(wp_unslash($_POST['eventosapp_ticket_modalidad'])) : '';
+    $ticket_modalidad = function_exists('eventosapp_resolve_ticket_modalidad')
+        ? eventosapp_resolve_ticket_modalidad($evento_id, $requested_modalidad, get_post_meta($post_id, '_eventosapp_ticket_modalidad', true))
+        : ($requested_modalidad ?: 'presencial');
+    update_post_meta($post_id, '_eventosapp_ticket_modalidad', $ticket_modalidad);
+
     // 3) Usuario generador
     $user_id = intval($_POST['eventosapp_ticket_user_id'] ?? 0);
     update_post_meta($post_id, '_eventosapp_ticket_user_id', $user_id);
@@ -1581,7 +1652,14 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     }
 
     // 8) Wallet Android on/off por evento
-    $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
+    $is_virtual_ticket = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($post_id);
+    $wallet_android_on = $is_virtual_ticket ? '0' : get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
+    if ($is_virtual_ticket) {
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_android');
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_android_url');
+        delete_post_meta($post_id, '_eventosapp_wallet_google_object_id');
+        delete_post_meta($post_id, '_eventosapp_wallet_google_class_id_effective');
+    }
     if ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) {
         // Flujo dirigido: el generador principal de Android ya resuelve la variante ANTES de crear/actualizar el objeto.
         // Solo se usa el refresh de variantes como respaldo si el class efectivo no coincide después de generar.
@@ -1610,7 +1688,12 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     }
 	
     // 8.1) Wallet Apple on/off por evento (usa SIEMPRE el generador canonizado / wrapper)
-    $wallet_ios_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true);
+    $wallet_ios_on = $is_virtual_ticket ? '0' : get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true);
+    if ($is_virtual_ticket) {
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple');
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple_url');
+        delete_post_meta($post_id, '_eventosapp_ticket_pkpass_url');
+    }
     if ($wallet_ios_on === '1' || $wallet_ios_on === 1 || $wallet_ios_on === true) {
         // Generador unificado para asegurar el mismo .pkpass que el batch por evento.
         if (function_exists('eventosapp_apple_generate_pass')) {
@@ -1912,6 +1995,11 @@ function eventosapp_generate_pdf_after_qr($post_id, $post, $update) {
     if (wp_is_post_revision($post_id)) return;
     if ($post->post_type !== 'eventosapp_ticket') return;
     
+    if (function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($post_id)) {
+        delete_post_meta($post_id, '_eventosapp_ticket_pdf_url');
+        return;
+    }
+
     // Generar PDF si la función existe
     if (function_exists('eventosapp_ticket_generar_pdf')) {
         eventosapp_ticket_generar_pdf($post_id);
@@ -1978,13 +2066,21 @@ add_action('wp_ajax_eventosapp_ticket_get_event_summary', function() {
     $gps         = get_post_meta($evento_id, '_eventosapp_coordenadas', true);
     $telefono    = get_post_meta($evento_id, '_eventosapp_organizador_tel', true);
     $email       = get_post_meta($evento_id, '_eventosapp_organizador_email', true);
+    $modalidad   = function_exists('eventosapp_get_event_modalidad_label') ? eventosapp_get_event_modalidad_label($evento_id) : 'Presencial';
+    $virtual_platform = get_post_meta($evento_id, '_eventosapp_virtual_platform', true);
+    $virtual_access   = get_post_meta($evento_id, '_eventosapp_virtual_access_datetime', true);
 
     $out  = '<b>'.esc_html($evento->post_title).'</b><br>';
     $out .= '<b>Date(s):</b> '.($date_label !== '' ? $date_label : '-').'<br>';
     $out .= '<b>Start time:</b> ' . esc_html($hora_inicio ?: '-') . '<br>';
     $out .= '<b>End time:</b> '   . esc_html($hora_fin ?: '-')    . '<br>';
+    $out .= '<b>Modalidad:</b> '  . esc_html($modalidad ?: '-')   . '<br>';
     $out .= '<b>Venue:</b> '      . esc_html($lugar ?: '-')       . '<br>';
     $out .= '<b>GPS Coordinates:</b> ' . esc_html($gps ?: '-')    . '<br>';
+    if ($virtual_platform || $virtual_access) {
+        $out .= '<b>Plataforma virtual:</b> ' . esc_html($virtual_platform ?: '-') . '<br>';
+        $out .= '<b>Acceso virtual desde:</b> ' . esc_html($virtual_access ?: '-') . '<br>';
+    }
     $out .= '<b>Phone:</b> '      . esc_html($telefono ?: '-')    . '<br>';
     $out .= '<b>Email:</b> '      . esc_html($email ?: '-')       . '<br>';
 
@@ -2069,6 +2165,39 @@ add_action('wp_ajax_eventosapp_ticket_get_localidades', function() {
         $localidades = ['General', 'VIP', 'Platino'];
     }
     wp_send_json_success($localidades);
+});
+
+
+add_action('wp_ajax_eventosapp_ticket_get_modalidades', function() {
+    if ( ! current_user_can('edit_posts') ) wp_send_json_error('Unauthorized', 403);
+
+    $evento_id = intval($_POST['evento_id'] ?? 0);
+    $event_mode = $evento_id && function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($evento_id) : 'presencial_virtual';
+    $labels = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial'=>'Presencial','virtual'=>'Virtual'];
+
+    if ($event_mode === 'virtual') {
+        $options = ['virtual' => $labels['virtual'] ?? 'Virtual'];
+        $default = 'virtual';
+        $help = 'Este evento es Virtual: todos los tickets quedan en modalidad Virtual.';
+    } elseif ($event_mode === 'presencial_virtual') {
+        $options = [
+            'presencial' => $labels['presencial'] ?? 'Presencial',
+            'virtual'    => $labels['virtual'] ?? 'Virtual',
+        ];
+        $default = 'presencial';
+        $help = 'Este evento permite Presencial y Virtual: selecciona la modalidad del asistente.';
+    } else {
+        $options = ['presencial' => $labels['presencial'] ?? 'Presencial'];
+        $default = 'presencial';
+        $help = 'Este evento es Presencial: todos los tickets quedan en modalidad Presencial.';
+    }
+
+    wp_send_json_success([
+        'event_mode' => $event_mode,
+        'options'    => $options,
+        'default'    => $default,
+        'help'       => $help,
+    ]);
 });
 
 
@@ -2312,6 +2441,7 @@ add_filter('manage_edit-eventosapp_ticket_columns', function($cols){
     $new['title']      = __('ID de Ticket', 'eventosapp');
     $new['ev_evento']  = __('Evento', 'eventosapp');
     $new['ev_asistente']= __('Asistente', 'eventosapp');
+    $new['ev_modalidad']= __('Modalidad', 'eventosapp');
     $new['ev_estado']  = __('Estado', 'eventosapp');
     $new['ev_creado']  = __('Creado', 'eventosapp');
     $new['ev_canal']   = __('Canal', 'eventosapp');
@@ -2340,6 +2470,11 @@ add_action('manage_eventosapp_ticket_posts_custom_column', function($col, $post_
             $apellido = get_post_meta($post_id, '_eventosapp_asistente_apellido', true);
             $full = trim($nombre.' '.$apellido);
             echo $full ? esc_html($full) : '<span style="color:#888">—</span>';
+        break;
+
+        case 'ev_modalidad':
+            $modalidad = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($post_id) : (get_post_meta($post_id, '_eventosapp_ticket_modalidad', true) ?: 'Presencial');
+            echo '<span class="evapp-chip evapp-chip-modalidad">'.esc_html($modalidad).'</span>';
         break;
 
         case 'ev_estado':
@@ -2447,9 +2582,10 @@ add_action('admin_head', function(){
             /* Anchos pensados para que todo quepa sin colapsar */
             .wp-list-table .column-title{width:16%}
             .wp-list-table .column-ev_evento{width:26%}
-            .wp-list-table .column-ev_asistente{width:22%}
-            .wp-list-table .column-ev_estado{width:14%}
-            .wp-list-table .column-ev_creado{width:12%}
+            .wp-list-table .column-ev_asistente{width:19%}
+            .wp-list-table .column-ev_modalidad{width:11%}
+            .wp-list-table .column-ev_estado{width:13%}
+            .wp-list-table .column-ev_creado{width:11%}
             .wp-list-table .column-ev_canal{width:10%}
 
             /* Chips de canal */
@@ -2458,6 +2594,7 @@ add_action('admin_head', function(){
             .evapp-chip-webhook{background:#2563eb}
             .evapp-chip-import{background:#059669}
             .evapp-chip-public{background:#d97706}
+            .evapp-chip-modalidad{background:#0f766e}
 
             /* Evitar que los títulos y nombres se “verticalicen” por cortes raros */
             .wp-list-table .column-title a,
