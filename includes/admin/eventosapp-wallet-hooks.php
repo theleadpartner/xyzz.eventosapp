@@ -594,7 +594,8 @@ if (!function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
 
         if ($code_get === 200) {
             $patch_payload = $payload;
-            unset($patch_payload['id'], $patch_payload['reviewStatus']);
+            unset($patch_payload['id']);
+            $patch_payload['reviewStatus'] = 'UNDER_REVIEW';
             $res_patch = wp_remote_request($class_url, [
                 'timeout' => 20,
                 'method'  => 'PATCH',
@@ -634,22 +635,40 @@ if (!function_exists('eventosapp_wallet_resolve_object_id_for_ticket')) {
      * Object ID canónico para Google Wallet.
      * Debe coincidir con el objeto usado por google-wallet-android.php y por el enlace Save-to-Wallet.
      * Prioriza eventosapp_ticketID porque ese es el identificador público usado por el QR Manager.
+     *
+     * IMPORTANTE: cuando el ticket tiene variante de Android con classId propio, se usa un
+     * object_id distinto por variante. Esto evita intentar mover un objeto ya creado con la
+     * clase base, algo que Google Wallet no permite hacer de forma confiable con PATCH.
      */
-    function eventosapp_wallet_resolve_object_id_for_ticket($issuer_id, $ticket_id) {
+    function eventosapp_wallet_resolve_object_id_for_ticket($issuer_id, $ticket_id, $class_id = '') {
         $issuer_id = trim((string) $issuer_id);
         $ticket_id = absint($ticket_id);
         if ($issuer_id === '' || !$ticket_id) return '';
 
         $public_ticket_id = trim((string) get_post_meta($ticket_id, 'eventosapp_ticketID', true));
-        if ($public_ticket_id !== '') {
-            return $issuer_id . '.' . preg_replace('/[^A-Za-z0-9._-]/', '_', $public_ticket_id);
+        $base_suffix = $public_ticket_id !== '' ? $public_ticket_id : ('ticket_' . $ticket_id);
+        $base_suffix = preg_replace('/[^A-Za-z0-9._-]/', '_', $base_suffix);
+
+        $variant_key = sanitize_key((string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true));
+        $variant_class_id = trim((string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true));
+        $wanted_class_id = trim((string) $class_id);
+
+        if ($variant_key !== '' && $variant_class_id !== '') {
+            $normalize = function($value) use ($issuer_id) {
+                $value = trim((string) $value);
+                if ($value === '') return '';
+                if (strpos($value, '.') === false) return $issuer_id . '.' . ltrim($value, '.');
+                return $value;
+            };
+            $variant_class_norm = $normalize($variant_class_id);
+            $wanted_class_norm  = $normalize($wanted_class_id);
+
+            if ($wanted_class_norm === '' || $wanted_class_norm === $variant_class_norm) {
+                return $issuer_id . '.' . $base_suffix . '_variant_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $variant_key);
+            }
         }
 
-        $saved = trim((string) get_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', true));
-        if ($saved === '') $saved = trim((string) get_post_meta($ticket_id, '_eventosapp_wallet_object_id', true));
-        if ($saved !== '') return $saved;
-
-        return $issuer_id . '.ticket_' . $ticket_id;
+        return $issuer_id . '.' . $base_suffix;
     }
 }
 
@@ -725,7 +744,7 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
 
     // ID canónico del objeto: debe ser el mismo que usa google-wallet-android.php.
     $object_id = function_exists('eventosapp_wallet_resolve_object_id_for_ticket')
-        ? eventosapp_wallet_resolve_object_id_for_ticket($issuer_id, $ticket_id)
+        ? eventosapp_wallet_resolve_object_id_for_ticket($issuer_id, $ticket_id, $class_id_wanted)
         : ($issuer_id . '.' . (get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: ('ticket_' . $ticket_id)));
 
     error_log('EVENTOSAPP WALLET OBJECT RESOLVED [evento:' . (int) $evento_id . ' ticket:' . (int) $ticket_id . '] object=' . $object_id . ' | class=' . $class_id_wanted . ' | variant=' . (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true));
@@ -792,7 +811,7 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
     }
 
     // Función auxiliar para INSERT
-    $do_insert = function() use ($url_ins, $headers_json, $object_id, $class_id_wanted, $base_payload, $evento_id, $ticket_id){
+    $do_insert = function() use ($url_ins, $headers_json, &$object_id, $class_id_wanted, $base_payload, $evento_id, $ticket_id){
         $insert_payload = array_merge([
             'id'      => $object_id,
             'classId' => $class_id_wanted,
@@ -824,19 +843,22 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
         $wanted = (string)$class_id_wanted;
         $have   = (string)$current_class;
         if ($wanted && $have && $wanted !== $have) {
-            // *** CASO PROBLEMA: classId distinto ***
-            // Debemos borrar y recrear con la clase buena.
-            $res_del = wp_remote_request($url_del, [
-                'timeout' => 20,
-                'method'  => 'DELETE',
-                'headers' => ['Authorization'=>"Bearer $access_token"],
-            ]);
-            $code_del = is_wp_error($res_del) ? 0 : wp_remote_retrieve_response_code($res_del);
-            $body_del = is_wp_error($res_del) ? ('WP_Error: '.$res_del->get_error_message()) : wp_remote_retrieve_body($res_del);
-            error_log("EVENTOSAPP WALLET DELETE OBJECT (class mismatch) [evento:$evento_id ticket:$ticket_id] HTTP $code_del | ".substr($body_del,0,300));
+            // Si el objeto actual nació con la clase base, no se intenta moverlo ni borrarlo.
+            // Google Wallet no permite cambiar classId con PATCH y DELETE puede fallar aun con GET 200.
+            // Para variantes se usa un object_id distinto y estable: ticketID_variant_{variant_key}.
+            $variant_key_for_object = sanitize_key((string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true));
+            if ($variant_key_for_object !== '') {
+                $public_ticket_id_for_object = trim((string) get_post_meta($ticket_id, 'eventosapp_ticketID', true));
+                if ($public_ticket_id_for_object === '') $public_ticket_id_for_object = 'ticket_' . $ticket_id;
+                $object_id = $issuer_id . '.' . preg_replace('/[^A-Za-z0-9._-]/', '_', $public_ticket_id_for_object) . '_variant_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $variant_key_for_object);
+                $url_get = $obj_base_url . rawurlencode($object_id);
+                $url_patch = $url_get;
+                $url_del = $url_get;
+                error_log("EVENTOSAPP WALLET CLASS MISMATCH VARIANT OBJECT [evento:$evento_id ticket:$ticket_id] have=$have wanted=$wanted new_object=$object_id");
+                return $do_insert();
+            }
 
-            // Intentar insertar con la clase correcta
-            return $do_insert();
+            error_log("EVENTOSAPP WALLET CLASS MISMATCH WITHOUT VARIANT [evento:$evento_id ticket:$ticket_id object:$object_id] have=$have wanted=$wanted | PATCH conservador sin classId");
         }
 
         // Clase coincide → PATCH (sin tocar classId)
