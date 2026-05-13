@@ -36,23 +36,352 @@ if ( ! function_exists('eventosapp_is_today_valid_for_event') ) {
     }
 }
 
+/**
+ * Log interno controlado. Evita imprimir datos en pantalla cuando algún hook del guardado
+ * intenta hacer echo/print durante el flujo frontend.
+ */
+if ( ! function_exists('eventosapp_front_edit_debug_log') ) {
+    function eventosapp_front_edit_debug_log( $message, $context = [] ) {
+        if ( defined('WP_DEBUG') && WP_DEBUG ) {
+            $suffix = '';
+            if ( ! empty($context) ) {
+                $encoded = function_exists('wp_json_encode') ? wp_json_encode($context) : json_encode($context);
+                $suffix  = ' | ' . $encoded;
+            }
+            error_log('EVENTOSAPP FRONT EDIT | ' . $message . $suffix);
+        }
+    }
+}
+
+/**
+ * Ejecuta callbacks internos dentro de un buffer para que cualquier salida inesperada
+ * de hooks de guardado, variantes, wallet, PDF o ICS no rompa el layout del frontend.
+ */
+if ( ! function_exists('eventosapp_front_edit_run_silent') ) {
+    function eventosapp_front_edit_run_silent( $context, $callback ) {
+        $level = ob_get_level();
+        ob_start();
+
+        try {
+            $result = call_user_func($callback);
+            $captured = ob_get_clean();
+
+            if ( $captured !== '' ) {
+                eventosapp_front_edit_debug_log('Salida inesperada capturada y descartada', [
+                    'context' => $context,
+                    'length'  => strlen($captured),
+                    'preview' => wp_strip_all_tags(substr($captured, 0, 500)),
+                ]);
+            }
+
+            return $result;
+        } catch (Throwable $e) {
+            while ( ob_get_level() > $level ) {
+                ob_end_clean();
+            }
+
+            eventosapp_front_edit_debug_log('Excepción durante ejecución silenciosa', [
+                'context' => $context,
+                'message' => $e->getMessage(),
+                'file'    => $e->getFile(),
+                'line'    => $e->getLine(),
+            ]);
+
+            throw $e;
+        }
+    }
+}
+
+/**
+ * Guarda una notificación temporal después del POST para mostrarla tras el redirect.
+ */
+if ( ! function_exists('eventosapp_front_edit_store_notice') ) {
+    function eventosapp_front_edit_store_notice( $type, $message ) {
+        $uid = get_current_user_id();
+        $key = substr(md5($uid . '|' . microtime(true) . '|' . wp_generate_password(12, false, false)), 0, 20);
+
+        set_transient('evfe_notice_' . $uid . '_' . $key, [
+            'type'    => $type === 'success' ? 'success' : 'error',
+            'message' => (string) $message,
+        ], 5 * MINUTE_IN_SECONDS);
+
+        return $key;
+    }
+}
+
+/**
+ * Recupera y consume la notificación temporal del usuario actual.
+ */
+if ( ! function_exists('eventosapp_front_edit_consume_notice') ) {
+    function eventosapp_front_edit_consume_notice() {
+        if ( empty($_GET['evfe_notice']) ) {
+            return null;
+        }
+
+        $uid = get_current_user_id();
+        $key = sanitize_text_field(wp_unslash($_GET['evfe_notice']));
+        if ( $key === '' ) {
+            return null;
+        }
+
+        $transient_key = 'evfe_notice_' . $uid . '_' . $key;
+        $notice = get_transient($transient_key);
+        delete_transient($transient_key);
+
+        return is_array($notice) ? $notice : null;
+    }
+}
+
+/**
+ * Renderiza notificaciones del frontend con estilos seguros y consistentes.
+ */
+if ( ! function_exists('eventosapp_front_edit_render_notice') ) {
+    function eventosapp_front_edit_render_notice( $notice ) {
+        if ( ! is_array($notice) || empty($notice['message']) ) {
+            return '';
+        }
+
+        $type = ! empty($notice['type']) && $notice['type'] === 'success' ? 'success' : 'error';
+
+        if ( $type === 'success' ) {
+            $style = 'padding:12px;border:1px solid #d1fae5;background:#ecfdf5;border-radius:10px;color:#065f46;margin:0 0 12px;';
+        } else {
+            $style = 'padding:12px;border:1px solid #fca5a5;background:#fee2e2;border-radius:10px;color:#991b1b;margin:0 0 12px;';
+        }
+
+        return '<div class="evfe-notice evfe-notice-' . esc_attr($type) . '" style="' . esc_attr($style) . '">' . wp_kses_post($notice['message']) . '</div>';
+    }
+}
+
+/**
+ * Obtiene el evento activo/solicitado para el flujo frontend.
+ */
+if ( ! function_exists('eventosapp_front_edit_resolve_event_id') ) {
+    function eventosapp_front_edit_resolve_event_id( $explicit_event_id = 0 ) {
+        $eid = absint($explicit_event_id);
+        if ( ! $eid && function_exists('eventosapp_get_active_event') ) {
+            $eid = (int) eventosapp_get_active_event();
+        }
+        return $eid;
+    }
+}
+
+/**
+ * Procesa el guardado real del ticket reutilizando los hooks existentes del admin,
+ * pero sin permitir que sus salidas internas rompan el frontend.
+ */
+if ( ! function_exists('eventosapp_front_edit_update_ticket_from_post') ) {
+    function eventosapp_front_edit_update_ticket_from_post( $current_event_id = 0 ) {
+        if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('edit') ) {
+            return [
+                'type'    => 'error',
+                'message' => 'Permisos insuficientes.',
+            ];
+        }
+
+        $nonce = isset($_POST['_wpnonce']) ? sanitize_text_field(wp_unslash($_POST['_wpnonce'])) : '';
+        if ( ! $nonce || ! wp_verify_nonce($nonce, 'eventosapp_front_edit') ) {
+            eventosapp_front_edit_debug_log('Nonce inválido al guardar desde frontend', [
+                'user_id'  => get_current_user_id(),
+                'event_id' => $current_event_id,
+            ]);
+
+            return [
+                'type'    => 'error',
+                'message' => 'La sesión de seguridad expiró. Recarga la página e intenta de nuevo.',
+            ];
+        }
+
+        $ticket_id = absint($_POST['ed_ticket_id'] ?? 0);
+        if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
+            return [
+                'type'    => 'error',
+                'message' => 'Ticket inválido.',
+            ];
+        }
+
+        $ticket_event = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+        $eid = $ticket_event ?: eventosapp_front_edit_resolve_event_id($current_event_id);
+
+        if ( ! $eid ) {
+            return [
+                'type'    => 'error',
+                'message' => 'No se pudo identificar el evento del ticket.',
+            ];
+        }
+
+        if ( ! current_user_can('manage_options') && $ticket_event !== (int) $current_event_id ) {
+            eventosapp_front_edit_debug_log('Bloqueo por intento de editar ticket fuera del evento activo', [
+                'ticket_id'       => $ticket_id,
+                'ticket_event_id' => $ticket_event,
+                'active_event_id' => $current_event_id,
+                'user_id'         => get_current_user_id(),
+            ]);
+
+            return [
+                'type'    => 'error',
+                'message' => 'No puedes editar este ticket.',
+            ];
+        }
+
+        if ( ! current_user_can('manage_options')
+             && function_exists('eventosapp_user_can_manage_event')
+             && ! eventosapp_user_can_manage_event($eid) ) {
+            return [
+                'type'    => 'error',
+                'message' => 'No tienes permisos sobre este evento.',
+            ];
+        }
+
+        $original_post = $_POST;
+
+        try {
+            // Mapear campos del formulario a los esperados por el hook save_post_eventosapp_ticket.
+            $_POST['eventosapp_ticket_nonce']       = wp_create_nonce('eventosapp_ticket_guardar');
+            $_POST['eventosapp_ticket_evento_id']   = $eid; // no permitimos cambiar el evento aquí
+            $_POST['eventosapp_ticket_user_id']     = get_current_user_id();
+
+            $_POST['eventosapp_asistente_nombre']   = sanitize_text_field(wp_unslash($_POST['ed_nombre']   ?? ''));
+            $_POST['eventosapp_asistente_apellido'] = sanitize_text_field(wp_unslash($_POST['ed_apellido'] ?? ''));
+            $_POST['eventosapp_asistente_cc']       = sanitize_text_field(wp_unslash($_POST['ed_cc']       ?? ''));
+            $_POST['eventosapp_asistente_email']    = sanitize_email(wp_unslash($_POST['ed_email']         ?? ''));
+            $_POST['eventosapp_asistente_tel']      = sanitize_text_field(wp_unslash($_POST['ed_tel']      ?? ''));
+            $_POST['eventosapp_asistente_empresa']  = sanitize_text_field(wp_unslash($_POST['ed_empresa']  ?? ''));
+            $_POST['eventosapp_asistente_nit']      = sanitize_text_field(wp_unslash($_POST['ed_nit']      ?? ''));
+            $_POST['eventosapp_asistente_cargo']    = sanitize_text_field(wp_unslash($_POST['ed_cargo']    ?? ''));
+            $_POST['eventosapp_asistente_ciudad']   = sanitize_text_field(wp_unslash($_POST['ed_ciudad']   ?? ''));
+            $_POST['eventosapp_asistente_pais']     = sanitize_text_field(wp_unslash($_POST['ed_pais']     ?? 'Colombia'));
+            $_POST['eventosapp_asistente_localidad']= sanitize_text_field(wp_unslash($_POST['ed_localidad'] ?? ''));
+
+            // Preimpreso: se conserva la compatibilidad con el guardado existente.
+            $preprinted_raw = wp_unslash($_POST['ed_preprinted_qr_id'] ?? '');
+            if ( $preprinted_raw !== '' ) {
+                $_POST['eventosapp_ticket_preprintedID'] = preg_replace('/\D+/', '', (string) $preprinted_raw);
+            }
+
+            // Sesiones internas.
+            $_POST['eventosapp_ticket_sesiones_nonce'] = wp_create_nonce('eventosapp_ticket_sesiones_guardar');
+            $ses = [];
+            if ( ! empty($_POST['ed_sesiones']) && is_array($_POST['ed_sesiones']) ) {
+                foreach ( $_POST['ed_sesiones'] as $s ) {
+                    $ses[] = sanitize_text_field(wp_unslash($s));
+                }
+            }
+            $_POST['eventosapp_ticket_sesiones_acceso'] = $ses;
+
+            // Extras: los hooks actuales los sanean y guardan.
+            if ( ! empty($_POST['ed_extra']) && is_array($_POST['ed_extra']) ) {
+                $_POST['eventosapp_extra'] = wp_unslash($_POST['ed_extra']);
+            }
+
+            eventosapp_front_edit_run_silent('save_post_eventosapp_ticket', function() use ( $ticket_id ) {
+                do_action('save_post_eventosapp_ticket', $ticket_id, get_post($ticket_id), true);
+                return true;
+            });
+
+            // Compatibilidad Variantes de Tickets: al editar desde frontend,
+            // recalcula la variante efectiva después de guardar los campos.
+            eventosapp_front_edit_run_silent('ticket_variants_after_frontend_edit', function() use ( $ticket_id, $eid ) {
+                if ( function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context') ) {
+                    eventosapp_ticket_variants_prepare_ticket_for_frontend_context($ticket_id, $eid, 'frontend_edit_update', [
+                        'sync_google_classes' => true,
+                        'mark_assets_stale'   => false,
+                        'clear_assets_stale'  => true,
+                        'refresh_wallets'     => false,
+                        'refresh_pdf_ics'     => false,
+                        'rebuild_search_index'=> true,
+                        'log'                 => true,
+                    ]);
+                } elseif ( function_exists('eventosapp_ticket_variants_apply_to_ticket') ) {
+                    eventosapp_ticket_variants_apply_to_ticket($ticket_id, $eid, true);
+                }
+                return true;
+            });
+
+            $pub = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+
+            eventosapp_front_edit_debug_log('Ticket actualizado desde frontend', [
+                'ticket_id' => $ticket_id,
+                'public_id' => $pub,
+                'event_id'  => $eid,
+                'user_id'   => get_current_user_id(),
+            ]);
+
+            return [
+                'type'    => 'success',
+                'message' => 'Cambios guardados para el Ticket <b>' . esc_html($pub ?: '#' . $ticket_id) . '</b>.',
+            ];
+        } catch (Throwable $e) {
+            eventosapp_front_edit_debug_log('Error guardando ticket desde frontend', [
+                'ticket_id' => $ticket_id,
+                'event_id'  => $eid,
+                'message'   => $e->getMessage(),
+                'file'      => $e->getFile(),
+                'line'      => $e->getLine(),
+            ]);
+
+            return [
+                'type'    => 'error',
+                'message' => 'No se pudo guardar el ticket. Revisa wp-debug.log para ver el detalle técnico.',
+            ];
+        } finally {
+            $_POST = $original_post;
+        }
+    }
+}
+
+/**
+ * Procesa el POST antes de que el tema/Elementor impriman el layout.
+ * Esto evita que el HTML del formulario se renderice fuera del contenedor o después del footer.
+ */
+add_action('template_redirect', function(){
+    if ( is_admin() || wp_doing_ajax() ) {
+        return;
+    }
+
+    $method = isset($_SERVER['REQUEST_METHOD']) ? strtoupper((string) $_SERVER['REQUEST_METHOD']) : '';
+    if ( $method !== 'POST' ) {
+        return;
+    }
+
+    $action = isset($_POST['evedit_action']) ? sanitize_key(wp_unslash($_POST['evedit_action'])) : '';
+    if ( $action !== 'update_ticket' ) {
+        return;
+    }
+
+    $posted_event_id = absint($_POST['ed_event_id'] ?? 0);
+    $eid = eventosapp_front_edit_resolve_event_id($posted_event_id);
+    $result = eventosapp_front_edit_update_ticket_from_post($eid);
+    $notice_key = eventosapp_front_edit_store_notice($result['type'], $result['message']);
+
+    $redirect = wp_get_referer();
+    if ( ! $redirect ) {
+        $redirect = get_permalink();
+    }
+    if ( ! $redirect ) {
+        $redirect = home_url('/');
+    }
+
+    $redirect = remove_query_arg(['evfe_notice', 'evedit_action', '_wpnonce', '_wp_http_referer'], $redirect);
+    $redirect = add_query_arg(['evfe_notice' => $notice_key], $redirect);
+
+    wp_safe_redirect($redirect);
+    exit;
+}, 1);
+
 // ———————————————— Shortcode contenedor ————————————————
 add_shortcode('eventosapp_front_edit', function($atts){
     if ( function_exists('eventosapp_require_feature') ) eventosapp_require_feature('edit');
 
     $a = shortcode_atts(['event_id'=>0], $atts);
-    $eid = absint($a['event_id']);
-
-    // Si no vino event_id, usar evento activo del dashboard
-    if ( ! $eid && function_exists('eventosapp_get_active_event') ) {
-        $eid = (int) eventosapp_get_active_event();
-    }
+    $eid = eventosapp_front_edit_resolve_event_id($a['event_id']);
 
     // Debe haber evento
     if ( ! $eid ) {
         if ( function_exists('eventosapp_require_active_event') ) {
+            ob_start();
             eventosapp_require_active_event();
-            return '';
+            return ob_get_clean();
         }
         $dash = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
         return '<div style="padding:.8rem;border:1px solid #eee;background:#fffdf2;border-radius:8px;color:#8a6d3b;">
@@ -78,91 +407,14 @@ add_shortcode('eventosapp_front_edit', function($atts){
     }
     $use_preprinted_qr = (bool) apply_filters('eventosapp_use_preprinted_qr', $use_preprinted_qr, $eid);
 
-    // ——— Procesamiento POST: actualizar ticket ———
+    // Fallback: si por alguna razón template_redirect no capturó el POST, se procesa aquí
+    // dentro de buffers controlados para no romper el layout.
     $msg = '';
-
-    if ( isset($_POST['evedit_action']) && $_POST['evedit_action']==='update_ticket' ) {
-
-        // Seguridad adicional: el usuario debe conservar permiso "edit"
-        if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('edit') ) {
-            $msg = '<div style="padding:.8rem;border:1px solid #fca5a5;background:#fee2e2;border-radius:10px;color:#991b1b;">Permisos insuficientes.</div>';
-        } else {
-            check_admin_referer('eventosapp_front_edit');
-
-            $ticket_id = absint($_POST['ed_ticket_id'] ?? 0);
-            if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
-                $msg = '<div style="padding:.8rem;border:1px solid #fca5a5;background:#fee2e2;border-radius:10px;color:#991b1b;">Ticket inválido.</div>';
-            } else {
-                // Asegurar que el ticket pertenece al evento activo (o que el usuario sea admin)
-                $ticket_event = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
-                if ( ! current_user_can('manage_options') && $ticket_event !== $eid ) {
-                    $msg = '<div style="padding:.8rem;border:1px solid #fca5a5;background:#fee2e2;border-radius:10px;color:#991b1b;">No puedes editar este ticket.</div>';
-                } else {
-                    // Mapear campos del formulario a los esperados por el hook save_post_eventosapp_ticket
-                    $_POST['eventosapp_ticket_nonce']       = wp_create_nonce('eventosapp_ticket_guardar');
-                    $_POST['eventosapp_ticket_evento_id']   = $ticket_event ?: $eid; // no permitimos cambiar el evento aquí
-                    $_POST['eventosapp_ticket_user_id']     = get_current_user_id();
-
-                    $_POST['eventosapp_asistente_nombre']   = sanitize_text_field($_POST['ed_nombre']   ?? '');
-                    $_POST['eventosapp_asistente_apellido'] = sanitize_text_field($_POST['ed_apellido'] ?? '');
-                    $_POST['eventosapp_asistente_cc']       = sanitize_text_field($_POST['ed_cc']       ?? '');
-                    $_POST['eventosapp_asistente_email']    = sanitize_email($_POST['ed_email']         ?? '');
-                    $_POST['eventosapp_asistente_tel']      = sanitize_text_field($_POST['ed_tel']      ?? '');
-                    $_POST['eventosapp_asistente_empresa']  = sanitize_text_field($_POST['ed_empresa']  ?? '');
-                    $_POST['eventosapp_asistente_nit']      = sanitize_text_field($_POST['ed_nit']      ?? '');
-                    $_POST['eventosapp_asistente_cargo']    = sanitize_text_field($_POST['ed_cargo']    ?? '');
-
-                    // NUEVO
-                    $_POST['eventosapp_asistente_ciudad']   = sanitize_text_field($_POST['ed_ciudad']   ?? '');
-                    $_POST['eventosapp_asistente_pais']     = sanitize_text_field($_POST['ed_pais']     ?? 'Colombia');
-                    $_POST['eventosapp_asistente_localidad']= sanitize_text_field($_POST['ed_localidad'] ?? '');
-
-                    // Preimpreso (siempre aceptamos numérico; el save_post ya valida)
-                    $preprinted_raw = wp_unslash($_POST['ed_preprinted_qr_id'] ?? '');
-                    if ($preprinted_raw !== '') {
-                        $_POST['eventosapp_ticket_preprintedID'] = preg_replace('/\D+/', '', (string)$preprinted_raw);
-                    }
-
-                    // Sesiones (checkbox)
-                    $_POST['eventosapp_ticket_sesiones_nonce'] = wp_create_nonce('eventosapp_ticket_sesiones_guardar');
-                    $ses = [];
-                    if ( ! empty($_POST['ed_sesiones']) && is_array($_POST['ed_sesiones']) ) {
-                        foreach ($_POST['ed_sesiones'] as $s) { $ses[] = sanitize_text_field($s); }
-                    }
-                    $_POST['eventosapp_ticket_sesiones_acceso'] = $ses;
-
-                    // Extras (antes del guardado)
-                    if (!empty($_POST['ed_extra']) && is_array($_POST['ed_extra'])) {
-                        $_POST['eventosapp_extra'] = $_POST['ed_extra']; // el hook los sanea y guarda
-                    }
-
-                    // Disparar guardado reutilizando la misma lógica del admin
-                    do_action('save_post_eventosapp_ticket', $ticket_id, get_post($ticket_id), true);
-
-                    // Compatibilidad Variantes de Tickets: al editar desde frontend,
-                    // recalcula la variante efectiva después de guardar los campos.
-                    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
-                        eventosapp_ticket_variants_prepare_ticket_for_frontend_context($ticket_id, $_POST['eventosapp_ticket_evento_id'], 'frontend_edit_update', [
-                            'sync_google_classes' => true,
-                            'mark_assets_stale'   => false,
-                            'clear_assets_stale'  => true,
-                            'refresh_wallets'     => false,
-                            'refresh_pdf_ics'     => false,
-                            'rebuild_search_index'=> true,
-                            'log'                 => true,
-                        ]);
-                    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
-                        eventosapp_ticket_variants_apply_to_ticket($ticket_id, $_POST['eventosapp_ticket_evento_id'], true);
-                    }
-
-                    // Mensaje
-                    $pub = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
-                    $msg = '<div style="padding:12px;border:1px solid #d1fae5;background:#ecfdf5;border-radius:10px;color:#065f46;">
-                        Cambios guardados para el Ticket <b>'.esc_html($pub ?: '#'.$ticket_id).'</b>.
-                    </div>';
-                }
-            }
-        }
+    if ( isset($_POST['evedit_action']) && sanitize_key(wp_unslash($_POST['evedit_action'])) === 'update_ticket' ) {
+        $fallback_result = eventosapp_front_edit_update_ticket_from_post($eid);
+        $msg = eventosapp_front_edit_render_notice($fallback_result);
+    } else {
+        $msg = eventosapp_front_edit_render_notice(eventosapp_front_edit_consume_notice());
     }
 
     // Localidades del evento
@@ -176,17 +428,17 @@ add_shortcode('eventosapp_front_edit', function($atts){
     if ($msg) echo $msg;
     ?>
 
-    <div id="evfe-wrap" class="evfe-wrap" style="max-width:980px;margin:0 auto">
+    <div id="evfe-wrap" class="evfe-wrap" style="max-width:980px;margin:0 auto;clear:both;position:relative;z-index:1;box-sizing:border-box;">
         <!-- Buscador -->
-        <div class="evfe-card" style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 5px rgba(120,140,160,.06)">
+        <div class="evfe-card" style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 5px rgba(120,140,160,.06);box-sizing:border-box;width:100%;">
             <h2 style="margin:0 0 10px;font-size:22px;">Editar tickets</h2>
             <p style="margin:0 0 10px;color:#555">Busca al asistente por nombre, apellido, email, CC o TicketID. Haz clic en <b>Editar</b>.</p>
-            <input id="evfe-input" type="text" class="evfe-input" placeholder="Buscar…" style="width:100%;padding:.65rem .7rem;border:1px solid #dfe3e7;border-radius:10px">
+            <input id="evfe-input" type="text" class="evfe-input" placeholder="Buscar…" style="width:100%;padding:.65rem .7rem;border:1px solid #dfe3e7;border-radius:10px;box-sizing:border-box;">
             <div id="evfe-results" class="evfe-results" style="margin-top:10px"></div>
         </div>
 
         <!-- Formulario de edición (se rellena vía AJAX) -->
-        <form id="evfe-form" method="post" style="display:none;margin-top:14px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 5px rgba(120,140,160,.06)">
+        <form id="evfe-form" method="post" style="display:none;margin-top:14px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 5px rgba(120,140,160,.06);box-sizing:border-box;width:100%;">
             <?php wp_nonce_field('eventosapp_front_edit'); ?>
             <input type="hidden" name="evedit_action" value="update_ticket">
             <input type="hidden" name="ed_ticket_id" id="ed_ticket_id">
@@ -201,7 +453,7 @@ add_shortcode('eventosapp_front_edit', function($atts){
                 <small id="evfe-checkin-note" style="color:#555"></small>
             </div>
 
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">
+            <div class="evfe-form-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">
                 <div><label>Nombre *</label><input type="text" name="ed_nombre" id="ed_nombre" required class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
                 <div><label>Apellido *</label><input type="text" name="ed_apellido" id="ed_apellido" required class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
                 <div><label>CC</label><input type="text" name="ed_cc" id="ed_cc" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
@@ -211,7 +463,6 @@ add_shortcode('eventosapp_front_edit', function($atts){
                 <div><label>NIT</label><input type="text" name="ed_nit" id="ed_nit" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
                 <div><label>Cargo</label><input type="text" name="ed_cargo" id="ed_cargo" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
 
-                <!-- NUEVO -->
                 <div><label>Ciudad</label><input type="text" name="ed_ciudad" id="ed_ciudad" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
                 <div>
                     <label>País</label>
@@ -235,8 +486,6 @@ add_shortcode('eventosapp_front_edit', function($atts){
                     </select>
                 </div>
 
-                <div id="evfe-extras" style="margin-top:12px;padding-top:10px;border-top:1px dashed #e5e7eb"></div>
-
                 <div>
                     <label>ID de QR preimpreso (numérico)</label>
                     <input type="text" name="ed_preprinted_qr_id" id="ed_preprinted_qr_id" class="widefat" placeholder="Ej: 00012345" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">
@@ -246,15 +495,17 @@ add_shortcode('eventosapp_front_edit', function($atts){
                 </div>
             </div>
 
+            <div id="evfe-extras" style="display:none;margin-top:12px;padding-top:10px;border-top:1px dashed #e5e7eb"></div>
+
             <div id="evfe-sesiones" style="margin-top:12px;padding-top:10px;border-top:1px dashed #e5e7eb">
                 <b>Acceso a sesiones internas:</b>
                 <div id="evfe-sesiones-list" style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;"></div>
             </div>
 
-            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:16px">
-                <button type="submit" class="button button-primary" style="padding:.7rem 1.1rem;border-radius:10px;font-weight:700">Guardar cambios</button>
+            <div class="evfe-form-actions" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:16px">
+                <button type="submit" class="button button-primary evfe-submit" style="padding:.7rem 1.1rem;border-radius:10px;font-weight:700">Guardar cambios</button>
 
-                <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <div class="evfe-mail-actions" style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                     <input type="email" id="evfe_email_alt" placeholder="Enviar a otro correo (opcional)" style="padding:.5rem .6rem;border:1px solid #dfe3e7;border-radius:10px;min-width:260px">
                     <button type="button" id="evfe_send_mail" class="button" style="border-color:#2563eb;background:#2563eb;color:#fff;border-radius:10px;">Reenviar ticket por correo</button>
                     <span id="evfe_mail_note" style="font-size:.95rem;color:#555"></span>
@@ -277,20 +528,33 @@ add_shortcode('eventosapp_front_edit', function($atts){
         'event_id'     => $eid,
         'msgs'         => [
             'not_allowed' => __('El check-in solo está permitido en las fechas del evento. Hoy no corresponde.', 'eventosapp'),
-            'net_error'   => __('Error de red. Intenta de nuevo.', 'eventosapp')
+            'net_error'   => __('Error de red. Intenta de nuevo.', 'eventosapp'),
+            'saving'      => __('Guardando cambios…', 'eventosapp')
         ]
     ]);
 
     // CSS (como estilo de WP, no por JS)
     $css = <<<CSS
+.evfe-wrap{max-width:980px;margin:0 auto;clear:both;position:relative;z-index:1;box-sizing:border-box;width:100%}
+.evfe-wrap *{box-sizing:border-box}
+.evfe-card,#evfe-form{width:100%;box-sizing:border-box}
 .evfe-row{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:.8rem;border:1px solid #eee;border-radius:12px;background:#fff;margin-bottom:8px;box-shadow:0 1px 5px rgba(120,140,160,.07)}
 .evfe-data{flex:1 1 auto;min-width:0;word-break:break-word}
 .evfe-actions{flex:0 0 auto;display:flex;gap:8px}
-.evfe-btn{display:inline-block;border-radius:8px;border:0;font-size:1rem;font-weight:600;cursor:pointer;padding:.55rem .9rem;box-shadow:0 1px 4px rgba(30,60,100,.07)}
+.evfe-btn{display:inline-block;border-radius:8px;border:0;font-size:1rem;font-weight:600;cursor:pointer;padding:.55rem .9rem;box-shadow:0 1px 4px rgba(30,60,100,.07);text-decoration:none;line-height:1.2}
 .evfe-edit{background:#2563eb;color:#fff}
-.evfe-edit:hover{background:#1d4ed8}
+.evfe-edit:hover{background:#1d4ed8;color:#fff}
 .evfe-note{display:inline-block;margin-left:8px;font-size:.92rem;color:#0f5132;background:#d1e7dd;border:1px solid #badbcc;padding:.25rem .45rem;border-radius:6px}
-@media(max-width:650px){ .evfe-row{flex-direction:column} .evfe-actions{justify-content:stretch} .evfe-btn{width:100%} }
+.evfe-form-grid > div label{display:block;margin:0 0 5px}
+.evfe-mail-actions input{max-width:100%}
+@media(max-width:650px){
+  .evfe-row{flex-direction:column}
+  .evfe-actions{justify-content:stretch;width:100%}
+  .evfe-btn{width:100%;text-align:center}
+  .evfe-form-actions{align-items:stretch!important}
+  .evfe-mail-actions{margin-left:0!important;width:100%}
+  .evfe-mail-actions input,.evfe-mail-actions button{width:100%;min-width:0!important}
+}
 
 /* Accesibilidad visual del formulario */
 #evfe-form label{font-weight:700;color:#111}
@@ -303,8 +567,9 @@ add_shortcode('eventosapp_front_edit', function($atts){
 #evfe-form textarea{
   background:#f6f7fb;
   border-color:#dfe3e7;
+  width:100%;
 }
-#evfe-form input[type="checkbox"]{background:transparent}
+#evfe-form input[type="checkbox"]{background:transparent;width:auto}
 #evfe-form input:focus,
 #evfe-form select:focus,
 #evfe-form textarea:focus{
@@ -323,7 +588,7 @@ add_shortcode('eventosapp_front_edit', function($atts){
 
 /* Botón toggle */
 .evfe-toggle{background:#111827;color:#fff}
-.evfe-toggle:hover{background:#0b1220}
+.evfe-toggle:hover{background:#0b1220;color:#fff}
 CSS;
 
     wp_register_style('eventosapp-front-edit', false, [], null);
@@ -339,19 +604,42 @@ jQuery(function($){
       eventId = EvFrontEdit.event_id,
       timer;
 
+  function escHtml(value){
+    if(value === null || typeof value === 'undefined') return '';
+    return $('<div>').text(String(value)).html();
+  }
+
+  function escAttr(value){
+    return escHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+
+  function optionHtml(value, label, selected){
+    return '<option value="'+escAttr(value)+'"'+(selected ? ' selected' : '')+'>'+escHtml(label)+'</option>';
+  }
+
+  function setSelectValue($select, value, fallback){
+    var val = (value || fallback || '').toString();
+    if(val && !$select.find('option').filter(function(){ return $(this).val() === val; }).length){
+      $select.append(optionHtml(val, val, false));
+    }
+    $select.val(val);
+  }
+
   function render(rows){
+    rows = Array.isArray(rows) ? rows : [];
     if(!rows.length){ $out.html('<div style="padding:.5rem;color:#666;">No hay resultados.</div>'); return; }
     var html='';
     $.each(rows,function(i,it){
-      var full = (it.first_name||'')+' '+(it.last_name||'');
+      it = it || {};
+      var full = $.trim((it.first_name||'')+' '+(it.last_name||''));
       html += '<div class="evfe-row">'
            +   '<div class="evfe-data">'
-           +     '<strong>'+ full +'</strong> <span style="color:#888">('+(it.cc||'—')+')</span><br>'
-           +     'Email: '+(it.email||'—')+'<br>'
-           +     'TicketID: '+(it.ticket_pub||'—')+' · Evento: '+(it.event_name||'—') 
+           +     '<strong>'+ escHtml(full || 'Sin nombre') +'</strong> <span style="color:#888">('+escHtml(it.cc||'—')+')</span><br>'
+           +     'Email: '+escHtml(it.email||'—')+'<br>'
+           +     'TicketID: '+escHtml(it.ticket_pub||'—')+' · Evento: '+escHtml(it.event_name||'—')
            +   '</div>'
            +   '<div class="evfe-actions">'
-           +     '<button class="evfe-btn evfe-edit" data-ticket-id="'+it.ticket_id+'">Editar</button>'
+           +     '<button type="button" class="evfe-btn evfe-edit" data-ticket-id="'+escAttr(it.ticket_id||'')+'">Editar</button>'
            +   '</div>'
            + '</div>';
     });
@@ -383,18 +671,98 @@ jQuery(function($){
     }
   }
 
+  function renderExtras(schema, vals){
+    var $extras = $('#evfe-extras').empty();
+    schema = Array.isArray(schema) ? schema : [];
+    vals = vals || {};
+
+    if (!schema.length) {
+      $extras.hide();
+      return;
+    }
+
+    var html = '<b>Campos adicionales:</b><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px;">';
+
+    schema.forEach(function(f){
+      f = f || {};
+      var key = (typeof f.key !== 'undefined') ? String(f.key) : '';
+      if(!key) return;
+
+      var label = f.label || key;
+      var req = !!f.required;
+      var val = (vals && typeof vals[key] !== 'undefined') ? vals[key] : '';
+      var name = 'ed_extra['+key+']';
+
+      html += '<div><label>'+escHtml(label)+(req?' *':'')+'</label>';
+
+      if (f.type === 'number') {
+        html += '<input type="number" name="'+escAttr(name)+'" value="'+escAttr(val||'')+'" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">';
+      } else if (f.type === 'select') {
+        html += '<select name="'+escAttr(name)+'" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">';
+        html += optionHtml('', 'Seleccione…', !val);
+        (Array.isArray(f.options) ? f.options : []).forEach(function(op){
+          html += optionHtml(op, op, String(op) === String(val));
+        });
+        html += '</select>';
+      } else {
+        html += '<input type="text" name="'+escAttr(name)+'" value="'+escAttr(val||'')+'" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">';
+      }
+
+      html += '</div>';
+    });
+
+    html += '</div>';
+    $extras.html(html).show();
+  }
+
+  function renderLocalidades(localidades, current){
+    var $sel = $('#ed_localidad');
+    current = current || '';
+
+    if (Array.isArray(localidades) && localidades.length){
+      $sel.empty().append(optionHtml('', 'Seleccione…', current === ''));
+      localidades.forEach(function(l){
+        $sel.append(optionHtml(l, l, String(l) === String(current)));
+      });
+      setSelectValue($sel, current, '');
+    } else {
+      setSelectValue($sel, current, '');
+    }
+  }
+
+  function renderSesiones(sesiones, sesionesAcceso){
+    var $list = $('#evfe-sesiones-list').empty();
+    sesiones = Array.isArray(sesiones) ? sesiones : [];
+    sesionesAcceso = Array.isArray(sesionesAcceso) ? sesionesAcceso : [];
+
+    if (sesiones.length){
+      sesiones.forEach(function(s){
+        var checked = (sesionesAcceso.indexOf(s)>=0) ? 'checked' : '';
+        $list.append('<label style="display:flex;align-items:center;gap:8px;border:1px solid #eee;border-radius:8px;padding:8px;background:#fafbfc;">'
+                     +'<input type="checkbox" name="ed_sesiones[]" value="'+escAttr(s)+'" '+checked+'> '+escHtml(s)+'</label>');
+      });
+      $('#evfe-sesiones').show();
+    } else {
+      $('#evfe-sesiones').hide();
+    }
+  }
+
   // Cargar datos del ticket en el formulario
-  $(document).on('click', '.evfe-edit', function(){
+  $(document).on('click', '.evfe-edit', function(e){
+    e.preventDefault();
     var tid = $(this).data('ticket-id');
+    if(!tid){ alert('Ticket inválido.'); return; }
+
     $.getJSON(EvFrontEdit.ajax_url, {
       action: 'eventosapp_front_get_ticket',
       security: EvFrontEdit.get_nonce,
       ticket_id: tid
     }).done(function(resp){
       if(!resp || !resp.success || !resp.data){ alert('No se pudo cargar el ticket.'); return; }
-      var d = resp.data;
+      var d = resp.data || {};
+
       // Campos base
-      $('#ed_ticket_id').val(d.ticket_id);
+      $('#ed_ticket_id').val(d.ticket_id || '');
       $('#ed_nombre').val(d.nombre||'');
       $('#ed_apellido').val(d.apellido||'');
       $('#ed_cc').val(d.cc||'');
@@ -403,72 +771,17 @@ jQuery(function($){
       $('#ed_empresa').val(d.empresa||'');
       $('#ed_nit').val(d.nit||'');
       $('#ed_cargo').val(d.cargo||'');
-
-      // NUEVO
       $('#ed_ciudad').val(d.ciudad||'');
-      $('#ed_pais').val(d.pais || 'Colombia');
+      setSelectValue($('#ed_pais'), d.pais || 'Colombia', 'Colombia');
 
-      // Localidades
-      var $sel = $('#ed_localidad');
-
-      // Campos adicionales dinámicos
-      var $extras = $('#evfe-extras').empty();
-      var schema = Array.isArray(d.extras_schema) ? d.extras_schema : [];
-      var vals   = d.extras_values || {};
-      if (schema.length) {
-        var html = '<b>Campos adicionales:</b><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px;">';
-        schema.forEach(function(f){
-          var key = f.key, label = f.label || key, req = !!f.required;
-          var val = (vals && typeof vals[key] !== 'undefined') ? vals[key] : '';
-          html += '<div><label>'+label+(req?' *':'')+'</label>';
-          var name = 'ed_extra['+key+']';
-          if (f.type === 'number') {
-            html += '<input type="number" name="'+name+'" value="'+(val||'')+'" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">';
-          } else if (f.type === 'select') {
-            html += '<select name="'+name+'" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">';
-            html += '<option value="">Seleccione…</option>';
-            (f.options||[]).forEach(function(op){
-              var sel = (op===val)?' selected':'';
-              html += '<option value="'+String(op).replace(/"/g,'&quot;')+'"'+sel+'>'+op+'</option>';
-            });
-            html += '</select>';
-          } else {
-            html += '<input type="text" name="'+name+'" value="'+(val||'')+'" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">';
-          }
-          html += '</div>';
-        });
-        html += '</div>';
-        $extras.html(html).show();
-      } else {
-        $extras.hide();
-      }
-
-      if (Array.isArray(d.localidades) && d.localidades.length){
-        var curr = d.localidad||'';
-        $sel.empty().append('<option value="">Seleccione…</option>');
-        d.localidades.forEach(function(l){
-          var sel = (l===curr)?' selected':'';
-          $sel.append('<option value="'+l.replace(/"/g,'&quot;')+'"'+sel+'>'+l+'</option>');
-        });
-      } else {
-        $('#ed_localidad').val(d.localidad||'');
-      }
+      renderExtras(d.extras_schema, d.extras_values);
+      renderLocalidades(d.localidades, d.localidad || '');
 
       // Preimpreso
       $('#ed_preprinted_qr_id').val(d.preprinted||'');
 
       // Sesiones checkbox
-      var $list = $('#evfe-sesiones-list').empty();
-      if (Array.isArray(d.sesiones) && d.sesiones.length){
-        d.sesiones.forEach(function(s){
-          var checked = (Array.isArray(d.sesiones_acceso) && d.sesiones_acceso.indexOf(s)>=0) ? 'checked' : '';
-          $list.append('<label style="display:flex;align-items:center;gap:8px;border:1px solid #eee;border-radius:8px;padding:8px;background:#fafbfc;">'
-                       +'<input type="checkbox" name="ed_sesiones[]" value="'+s.replace(/"/g,'&quot;')+'" '+checked+'> '+s+'</label>');
-        });
-        $('#evfe-sesiones').show();
-      } else {
-        $('#evfe-sesiones').hide();
-      }
+      renderSesiones(d.sesiones, d.sesiones_acceso);
 
       // Check-in hoy (igual que el buscador)
       if (typeof d.today_allowed !== 'undefined') {
@@ -482,8 +795,9 @@ jQuery(function($){
       }
 
       // Mostrar formulario + scroll y focus
-      $form.slideDown(140, function(){
-        var top = $form.offset().top - 8;
+      $form.stop(true, true).slideDown(140, function(){
+        var adminBar = $('#wpadminbar').length ? $('#wpadminbar').outerHeight() : 0;
+        var top = Math.max(0, $form.offset().top - adminBar - 12);
         window.scrollTo({top: top, behavior: 'smooth'});
         $('#ed_nombre').trigger('focus');
         $form.addClass('evfe-form-highlight');
@@ -495,6 +809,15 @@ jQuery(function($){
     }).fail(function(){
       alert('Error de red.');
     });
+  });
+
+  $form.on('submit', function(){
+    var $btn = $form.find('.evfe-submit');
+    if($btn.data('evfe-submitting')){
+      return false;
+    }
+    $btn.data('evfe-submitting', true).prop('disabled', true).text(EvFrontEdit.msgs.saving || 'Guardando cambios…');
+    return true;
   });
 
   // Toggle Check-in (usando el MISMO endpoint del buscador)
@@ -603,8 +926,6 @@ add_action('wp_ajax_eventosapp_front_get_ticket', function(){
     $cargo    = get_post_meta($tid, '_eventosapp_asistente_cargo', true);
     $loc      = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
     $pre      = get_post_meta($tid, 'eventosapp_ticket_preprintedID', true);
-
-    // NUEVO
     $ciudad   = get_post_meta($tid, '_eventosapp_asistente_ciudad', true);
     $pais     = get_post_meta($tid, '_eventosapp_asistente_pais', true);
 
@@ -622,8 +943,15 @@ add_action('wp_ajax_eventosapp_front_get_ticket', function(){
     if (!is_array($ses_acceso)) $ses_acceso = [];
 
     $extras_schema = function_exists('eventosapp_get_event_extra_fields') ? eventosapp_get_event_extra_fields($evento_id) : [];
+    if ( ! is_array($extras_schema) ) {
+        $extras_schema = [];
+    }
+
     $extras_values = [];
     foreach ($extras_schema as $fld){
+        if ( ! is_array($fld) || empty($fld['key']) ) {
+            continue;
+        }
         $extras_values[$fld['key']] = get_post_meta($tid, '_eventosapp_extra_'.$fld['key'], true);
     }
 
@@ -646,10 +974,8 @@ add_action('wp_ajax_eventosapp_front_get_ticket', function(){
         'empresa'           => $emp,
         'nit'               => $nit,
         'cargo'             => $cargo,
-        // NUEVO
         'ciudad'            => $ciudad,
         'pais'              => $pais ?: 'Colombia',
-        //
         'localidad'         => $loc,
         'localidades'       => array_values(array_unique(array_filter($localidades))),
         'preprinted'        => $pre,
@@ -699,7 +1025,7 @@ add_action('wp_ajax_eventosapp_front_send_ticket_email', function(){
 
     // 5) Destino
     $stored = get_post_meta($tid, '_eventosapp_asistente_email', true);
-    $alt    = sanitize_email($_POST['alt_email'] ?? '');
+    $alt    = sanitize_email(wp_unslash($_POST['alt_email'] ?? ''));
     $to     = $alt ?: $stored;
     if ( ! $to || ! is_email($to) ) {
         wp_send_json_error(['message' => 'Correo destino inválido'], 400);
@@ -708,37 +1034,59 @@ add_action('wp_ajax_eventosapp_front_send_ticket_email', function(){
     // Compatibilidad Variantes de Tickets: antes de reenviar desde frontend,
     // recalcula la variante y refresca Wallets habilitados para evitar enlaces antiguos
     // cuando la variante cambió por edición de campos o por ajustes del evento.
-    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
-        eventosapp_ticket_variants_prepare_ticket_for_frontend_context($tid, $evento_id, 'frontend_edit_send_email', [
-            'sync_google_classes' => true,
-            'mark_assets_stale'   => false,
-            'clear_assets_stale'  => true,
-            'refresh_wallets'     => true,
-            'refresh_pdf_ics'     => false,
-            'rebuild_search_index'=> true,
-            'log'                 => true,
-        ]);
-    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
-        eventosapp_ticket_variants_apply_to_ticket($tid, $evento_id, true);
+    try {
+        eventosapp_front_edit_run_silent('ticket_variants_before_frontend_email', function() use ( $tid, $evento_id ) {
+            if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
+                eventosapp_ticket_variants_prepare_ticket_for_frontend_context($tid, $evento_id, 'frontend_edit_send_email', [
+                    'sync_google_classes' => true,
+                    'mark_assets_stale'   => false,
+                    'clear_assets_stale'  => true,
+                    'refresh_wallets'     => true,
+                    'refresh_pdf_ics'     => false,
+                    'rebuild_search_index'=> true,
+                    'log'                 => true,
+                ]);
+            } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+                eventosapp_ticket_variants_apply_to_ticket($tid, $evento_id, true);
+            }
+            return true;
+        });
+    } catch (Throwable $e) {
+        wp_send_json_error(['message' => 'No se pudo preparar la variante del ticket antes del envío. Revisa wp-debug.log.'], 500);
     }
 
     // 6) Flags del evento: generar PDF e ICS antes de enviar si aplica
     $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
     $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
 
-    if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($tid);
-    if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($tid);
+    try {
+        eventosapp_front_edit_run_silent('generate_pdf_ics_before_frontend_email', function() use ( $tid, $pdf_on, $ics_on ) {
+            if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($tid);
+            if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($tid);
+            return true;
+        });
+    } catch (Throwable $e) {
+        wp_send_json_error(['message' => 'No se pudieron preparar los anexos antes del envío. Revisa wp-debug.log.'], 500);
+    }
 
     // 7) Delegar el envío a la función centralizada que registra tracking en BD
     if ( ! function_exists('eventosapp_send_ticket_email_now') ) {
         wp_send_json_error(['message' => 'Función de envío no disponible.'], 500);
     }
 
-    list($ok, $msg) = eventosapp_send_ticket_email_now($tid, [
-        'recipient' => $to,
-        'source'    => 'frontend_edit',
-        'force'     => true,
-    ]);
+    try {
+        $send_result = eventosapp_front_edit_run_silent('send_ticket_email_from_frontend_edit', function() use ( $tid, $to ) {
+            return eventosapp_send_ticket_email_now($tid, [
+                'recipient' => $to,
+                'source'    => 'frontend_edit',
+                'force'     => true,
+            ]);
+        });
+    } catch (Throwable $e) {
+        wp_send_json_error(['message' => 'No se pudo enviar el correo. Revisa wp-debug.log.'], 500);
+    }
+
+    list($ok, $msg) = is_array($send_result) ? $send_result : [false, 'No se pudo enviar el correo.'];
 
     if ($ok) {
         wp_send_json_success(['message' => $msg]);
