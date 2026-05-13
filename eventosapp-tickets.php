@@ -1393,6 +1393,16 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
     }
 
+    // 5.2) Si el evento usa clases Google Wallet por variante, asegurar que existan
+    // antes de crear/actualizar el objeto Android del ticket guardado manualmente.
+    if (function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_for_event')) {
+        try {
+            eventosapp_ticket_variants_sync_google_wallet_classes_for_event($evento_id, 'ticket_manual_save');
+        } catch (Throwable $e) {
+            error_log('EVENTOSAPP TICKETS | No se pudo sincronizar clases Google Wallet de variantes antes de guardar ticket=' . (int) $post_id . ' event=' . (int) $evento_id . ' error=' . $e->getMessage());
+        }
+    }
+
     // 6) ID público NO predecible + secuencia interna por evento + título = ID
     $ticketID = get_post_meta($post_id, 'eventosapp_ticketID', true);
     if (!$ticketID) {
