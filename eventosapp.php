@@ -30,6 +30,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-search.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-public-register.php';
+require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-registration-status-embed.php'; // NUEVO: consulta pública/externa de estado de inscripción
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-face-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'eventosapp-qr-manager.php';
