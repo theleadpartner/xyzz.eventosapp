@@ -214,7 +214,7 @@ if (!function_exists('eventosapp_modalidad_normalize_string')) {
         $value = wp_strip_all_tags((string) $value);
         $value = remove_accents($value);
         $value = strtolower(trim($value));
-        $value = str_replace(['-', ' ', '/', '+'], '_', $value);
+        $value = str_replace(['-', ' ', '/', '+', '&'], '_', $value);
         $value = preg_replace('/_+/u', '_', $value);
         return trim($value, '_');
     }
@@ -224,7 +224,16 @@ if (!function_exists('eventosapp_normalize_event_modalidad')) {
     function eventosapp_normalize_event_modalidad($value) {
         $value = eventosapp_modalidad_normalize_string($value);
 
-        if (in_array($value, ['virtual', 'online', 'remoto', 'remota'], true)) {
+        if (in_array($value, [
+            'virtual',
+            'online',
+            'remoto',
+            'remota',
+            'digital',
+            'streaming',
+            'transmision',
+            'transmision_virtual',
+        ], true)) {
             return 'virtual';
         }
 
@@ -233,9 +242,16 @@ if (!function_exists('eventosapp_normalize_event_modalidad')) {
             'presencia_virtual',
             'presencial_y_virtual',
             'presencia_y_virtual',
+            'virtual_presencial',
+            'virtual_y_presencial',
+            'online_presencial',
+            'online_y_presencial',
+            'presencial_online',
+            'presencial_y_online',
             'hibrido',
             'hibrida',
             'hybrid',
+            'hybrido',
             'mixto',
             'mixta',
         ], true)) {
@@ -250,7 +266,16 @@ if (!function_exists('eventosapp_normalize_ticket_modalidad')) {
     function eventosapp_normalize_ticket_modalidad($value) {
         $value = eventosapp_modalidad_normalize_string($value);
 
-        if (in_array($value, ['virtual', 'online', 'remoto', 'remota'], true)) {
+        if (in_array($value, [
+            'virtual',
+            'online',
+            'remoto',
+            'remota',
+            'digital',
+            'streaming',
+            'transmision',
+            'transmision_virtual',
+        ], true)) {
             return 'virtual';
         }
 
@@ -306,6 +331,38 @@ if (!function_exists('eventosapp_resolve_ticket_modalidad')) {
     }
 }
 
+if (!function_exists('eventosapp_ticket_allowed_modalidades_for_event')) {
+    function eventosapp_ticket_allowed_modalidades_for_event($evento_id) {
+        $event_mode = eventosapp_get_event_modalidad($evento_id);
+
+        if ($event_mode === 'virtual') {
+            return ['virtual'];
+        }
+
+        if ($event_mode === 'presencial_virtual') {
+            return ['presencial', 'virtual'];
+        }
+
+        return ['presencial'];
+    }
+}
+
+if (!function_exists('eventosapp_ticket_modalidad_options_for_event')) {
+    function eventosapp_ticket_modalidad_options_for_event($evento_id) {
+        $all     = eventosapp_ticket_modalidad_options();
+        $allowed = eventosapp_ticket_allowed_modalidades_for_event($evento_id);
+        $out     = [];
+
+        foreach ($allowed as $key) {
+            if (isset($all[$key])) {
+                $out[$key] = $all[$key];
+            }
+        }
+
+        return $out ?: ['presencial' => 'Presencial'];
+    }
+}
+
 if (!function_exists('eventosapp_get_ticket_modalidad')) {
     function eventosapp_get_ticket_modalidad($ticket_id) {
         $ticket_id = absint($ticket_id);
@@ -313,6 +370,10 @@ if (!function_exists('eventosapp_get_ticket_modalidad')) {
 
         $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
         $stored    = get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
+
+        if (!$evento_id) {
+            return eventosapp_normalize_ticket_modalidad($stored ?: 'presencial');
+        }
 
         return eventosapp_resolve_ticket_modalidad($evento_id, $stored, $stored);
     }
@@ -332,6 +393,41 @@ if (!function_exists('eventosapp_ticket_is_virtual')) {
     }
 }
 
+if (!function_exists('eventosapp_ticket_clear_presential_assets')) {
+    function eventosapp_ticket_clear_presential_assets($ticket_id) {
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') return;
+
+        $meta_keys = [
+            '_eventosapp_ticket_pdf_url',
+            '_eventosapp_ticket_pdf_path',
+            '_eventosapp_wallet_android_url',
+            '_eventosapp_ticket_wallet_android',
+            '_eventosapp_ticket_wallet_android_url',
+            '_eventosapp_wallet_android_qr_url',
+            '_eventosapp_wallet_android_qr_path',
+            '_eventosapp_wallet_android_object_id',
+            '_eventosapp_wallet_google_object_id',
+            '_eventosapp_wallet_google_class_id_effective',
+            '_eventosapp_wallet_effective_class_id',
+            '_eventosapp_apple_wallet_url',
+            '_eventosapp_ticket_wallet_apple',
+            '_eventosapp_ticket_wallet_apple_url',
+            '_eventosapp_ticket_pkpass_url',
+            '_eventosapp_apple_wallet_path',
+            '_eventosapp_apple_wallet_pkpass_url',
+            '_eventosapp_apple_wallet_pkpass_path',
+            '_eventosapp_qr_codes',
+            '_eventosapp_ticket_qr_url',
+            '_eventosapp_ticket_qr_path',
+        ];
+
+        foreach ($meta_keys as $meta_key) {
+            delete_post_meta($ticket_id, $meta_key);
+        }
+    }
+}
+
 if (!function_exists('eventosapp_ticket_sync_modalidad')) {
     function eventosapp_ticket_sync_modalidad($ticket_id, $requested = '') {
         $ticket_id = absint($ticket_id);
@@ -342,24 +438,44 @@ if (!function_exists('eventosapp_ticket_sync_modalidad')) {
         $resolved  = eventosapp_resolve_ticket_modalidad($evento_id, $requested, $current);
 
         update_post_meta($ticket_id, '_eventosapp_ticket_modalidad', $resolved);
+
+        if ($resolved === 'virtual') {
+            eventosapp_ticket_clear_presential_assets($ticket_id);
+        }
+
         return $resolved;
     }
 }
 
 if (!function_exists('eventosapp_ticket_requested_modalidad_from_request')) {
     function eventosapp_ticket_requested_modalidad_from_request() {
-        if (!empty($_POST['eventosapp_ticket_modalidad'])) {
-            return sanitize_text_field(wp_unslash($_POST['eventosapp_ticket_modalidad']));
+        $keys = [
+            'eventosapp_ticket_modalidad',
+            'eventosapp_asistente_modalidad',
+            'eventosapp_modalidad',
+            'modalidad',
+            'ticket_modalidad',
+            'ticket_modality',
+            'attendance_mode',
+            'modalidad_asistencia',
+            'tipo_asistencia',
+        ];
+
+        foreach ($keys as $key) {
+            if (isset($_POST[$key]) && $_POST[$key] !== '') {
+                return sanitize_text_field(wp_unslash($_POST[$key]));
+            }
         }
-        if (!empty($_POST['eventosapp_asistente_modalidad'])) {
-            return sanitize_text_field(wp_unslash($_POST['eventosapp_asistente_modalidad']));
+
+        if (!empty($_POST['eventosapp_extra']) && is_array($_POST['eventosapp_extra'])) {
+            $extra_keys = ['modalidad', 'ticket_modalidad', 'ticket_modality', 'attendance_mode', 'modalidad_asistencia', 'tipo_asistencia'];
+            foreach ($extra_keys as $key) {
+                if (isset($_POST['eventosapp_extra'][$key]) && $_POST['eventosapp_extra'][$key] !== '') {
+                    return sanitize_text_field(wp_unslash($_POST['eventosapp_extra'][$key]));
+                }
+            }
         }
-        if (!empty($_POST['modalidad'])) {
-            return sanitize_text_field(wp_unslash($_POST['modalidad']));
-        }
-        if (!empty($_POST['eventosapp_extra']) && is_array($_POST['eventosapp_extra']) && !empty($_POST['eventosapp_extra']['modalidad'])) {
-            return sanitize_text_field(wp_unslash($_POST['eventosapp_extra']['modalidad']));
-        }
+
         return '';
     }
 }
