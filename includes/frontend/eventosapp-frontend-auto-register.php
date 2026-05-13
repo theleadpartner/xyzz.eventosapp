@@ -355,6 +355,23 @@ function eventosapp_evauto_submit(){
         wp_update_post(['ID' => $post_id, 'post_author' => $creator_id]);
     }
 
+    // Compatibilidad Variantes de Tickets: recalcula la variante después de guardar
+    // los datos del asistente y antes de correo, Wallet y respuesta visual.
+    $variant_context = $existing_ticket_id ? 'frontend_auto_register_update' : 'frontend_auto_register_create';
+    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
+        eventosapp_ticket_variants_prepare_ticket_for_frontend_context($post_id, $eid, $variant_context, [
+            'sync_google_classes' => true,
+            'mark_assets_stale'   => false,
+            'clear_assets_stale'  => true,
+            'refresh_wallets'     => false,
+            'refresh_pdf_ics'     => false,
+            'rebuild_search_index'=> true,
+            'log'                 => true,
+        ]);
+    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($post_id, $eid, true);
+    }
+
     // Envío opcional desde este frontend (idempotente)
     if ( defined('EVENTOSAPP_FRONTEND_SENDS_EMAIL') && EVENTOSAPP_FRONTEND_SENDS_EMAIL && function_exists('eventosapp_send_ticket_email_now') ) {
         $sent_key = '_eventosapp_ticket_email_sent';
