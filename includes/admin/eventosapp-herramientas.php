@@ -113,7 +113,8 @@ add_action('admin_post_eventosapp_csv_template', function(){
         'cc',
         'ciudad',
         'pais',
-        'localidad'
+        'localidad',
+        'modalidad'
     ];
 
     // Extras del evento
@@ -137,7 +138,8 @@ add_action('admin_post_eventosapp_csv_template', function(){
         '1030xxx',
         'Barranquilla',
         'Colombia',
-        'VIP'
+        'VIP',
+        'presencial'
     ];
     foreach ($extras as $f) {
         // ejemplo genérico
@@ -356,6 +358,14 @@ function evapp_import_generate_assets_now($ticket_id, $event_id){
         return false;
     }
 
+    if (function_exists('eventosapp_ticket_sync_modalidad')) {
+        $ticket_modalidad = eventosapp_ticket_sync_modalidad($ticket_id);
+    } else {
+        $ticket_modalidad = get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true) ?: 'presencial';
+    }
+
+    $is_virtual_ticket = ($ticket_modalidad === 'virtual');
+
     // Compatibilidad con Variantes:
     // Antes de crear/regenerar QR, ICS, PDF o Wallets desde la importación masiva,
     // se recalcula la variante efectiva usando los metadatos ya guardados del ticket.
@@ -371,7 +381,18 @@ function evapp_import_generate_assets_now($ticket_id, $event_id){
         eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
     }
 
-    if (class_exists('EventosApp_QR_Manager')) {
+    if ($is_virtual_ticket) {
+        if (function_exists('eventosapp_ticket_clear_presential_assets')) {
+            eventosapp_ticket_clear_presential_assets($ticket_id);
+        } else {
+            delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+            delete_post_meta($ticket_id, '_eventosapp_wallet_android_url');
+            delete_post_meta($ticket_id, '_eventosapp_apple_wallet_url');
+            delete_post_meta($ticket_id, '_eventosapp_qr_codes');
+        }
+    }
+
+    if (!$is_virtual_ticket && class_exists('EventosApp_QR_Manager')) {
         $qr = EventosApp_QR_Manager::get_instance();
         if ($qr && method_exists($qr, 'regenerate_all_qr_codes_forced')) {
             $qr->regenerate_all_qr_codes_forced($ticket_id, true);
@@ -380,6 +401,10 @@ function evapp_import_generate_assets_now($ticket_id, $event_id){
 
     if (function_exists('eventosapp_ticket_generar_ics')) {
         eventosapp_ticket_generar_ics($ticket_id);
+    }
+
+    if ($is_virtual_ticket) {
+        return true;
     }
 
     $wallet_android_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true);
@@ -521,6 +546,7 @@ add_action('admin_init', function(){
             'ciudad'      => 'Ciudad',
             'pais'        => 'País',
             'localidad'   => 'Localidad',
+            'modalidad'   => 'Modalidad del ticket (presencial/virtual)',
         ];
         $extras = function_exists('eventosapp_get_event_extra_fields') ? eventosapp_get_event_extra_fields($event_id) : [];
         foreach ($extras as $f) {
@@ -661,7 +687,7 @@ add_action('admin_init', function(){
             echo '<td>'.intval($it['line']).'</td>';
             echo '<td>'.($it['errors'] ? '<span style="color:#b00">'.esc_html(implode('; ', $it['errors'])).'</span>' : '<span style="color:#0a0">OK</span>').'</td>';
             $show = [];
-            foreach (['nombre','apellido','email','cc','localidad'] as $k){
+            foreach (['nombre','apellido','email','cc','localidad','modalidad'] as $k){
                 if (isset($it['data'][$k])) $show[] = $k.': '.$it['data'][$k];
             }
             echo '<td>'.esc_html(implode(' | ', $show)).'</td>';
@@ -675,7 +701,7 @@ add_action('admin_init', function(){
         echo '<input type="hidden" name="event_id" value="'.esc_attr($event_id).'">';
         echo '<input type="hidden" name="hash" value="'.esc_attr($hash).'">';
         echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
-        echo '<p><b>Procesamiento:</b> el sistema creará cada ticket con sus archivos en el mismo lote (QR, PDF, ICS y Wallet si aplica), sin programar correos desde este importador.</p>';
+        echo '<p><b>Procesamiento:</b> el sistema creará cada ticket con sus archivos en el mismo lote (QR, PDF, ICS y Wallet solo cuando la modalidad del ticket lo permita), sin programar correos desde este importador.</p>';
         echo '<p><label>Tamaño del lote: <input type="number" name="batch_size" value="5" min="1" max="20" style="width:70px"></label> <span style="color:#666">Recomendado: 5</span></p>';
         echo '<p><button class="button button-primary">Empezar importación</button></p>';
         echo '</form>';
@@ -1187,6 +1213,7 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         $email     = sanitize_email($data['email'] ?? '');
         $cc        = sanitize_text_field($data['cc'] ?? '');
         $localidad = $data['localidad'] ?? '';
+        $modalidad = $data['modalidad'] ?? '';
 
         if (!$nombre || !$apellido || (!$email && !$cc) || !$localidad) {
             $offset++;
@@ -1230,6 +1257,7 @@ add_action('wp_ajax_eventosapp_import_process', function(){
             'ciudad'     => $data['ciudad'] ?? '',
             'pais'       => $data['pais'] ?? 'Colombia',
             'localidad'  => $localidad,
+            'modalidad'  => $modalidad,
             'extras'     => [],
             'fingerprint'=> $finger,
         ];
@@ -1257,6 +1285,13 @@ add_action('wp_ajax_eventosapp_import_process', function(){
             update_post_meta($pid, '_eventosapp_asistente_ciudad', sanitize_text_field($payload['ciudad']));
             update_post_meta($pid, '_eventosapp_asistente_pais', sanitize_text_field($payload['pais']));
             update_post_meta($pid, '_eventosapp_asistente_localidad', sanitize_text_field($payload['localidad']));
+            update_post_meta($pid, '_eventosapp_ticket_evento_id', (int) $event_id);
+
+            if (function_exists('eventosapp_ticket_sync_modalidad')) {
+                eventosapp_ticket_sync_modalidad($pid, $payload['modalidad'] ?? '');
+            } else {
+                update_post_meta($pid, '_eventosapp_ticket_modalidad', sanitize_key($payload['modalidad'] ?? 'presencial'));
+            }
 
             if (!empty($payload['extras']) && function_exists('eventosapp_get_event_extra_fields')) {
                 $schema = eventosapp_get_event_extra_fields($event_id);
@@ -1407,6 +1442,12 @@ function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'man
     update_post_meta($post_id, '_eventosapp_asistente_ciudad', sanitize_text_field($p['ciudad'] ?? ''));
     update_post_meta($post_id, '_eventosapp_asistente_pais', sanitize_text_field($p['pais'] ?? 'Colombia'));
     update_post_meta($post_id, '_eventosapp_asistente_localidad', sanitize_text_field($p['localidad'] ?? ''));
+
+    if (function_exists('eventosapp_ticket_sync_modalidad')) {
+        eventosapp_ticket_sync_modalidad($post_id, $p['modalidad'] ?? '');
+    } else {
+        update_post_meta($post_id, '_eventosapp_ticket_modalidad', sanitize_key($p['modalidad'] ?? 'presencial'));
+    }
 
     if (function_exists('eventosapp_ticket_init_email_status')) {
         eventosapp_ticket_init_email_status($post_id);
