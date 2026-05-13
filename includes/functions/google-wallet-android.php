@@ -152,37 +152,38 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
     $coords        = get_post_meta($evento_id, '_eventosapp_coordenadas', true) ?: '';
     $logo_event    = get_post_meta($evento_id, '_eventosapp_wallet_logo_url', true) ?: '';
     $logo_global   = get_option('eventosapp_wallet_logo_url', '');
+    $hero_event    = get_post_meta($evento_id, '_eventosapp_wallet_hero_img_url', true) ?: '';
+    $hero_global   = get_option('eventosapp_wallet_hero_img_url', '');
     $hex_event     = get_post_meta($evento_id, '_eventosapp_wallet_hex_color', true) ?: '';
     $hex_global    = get_option('eventosapp_wallet_hex_color', '#3782C4');
     $hex_color     = $wallet_custom_enable ? ($hex_event ?: '#3782C4') : ($hex_global ?: '#3782C4');
     $logo_url      = $wallet_custom_enable ? ($logo_event ?: $logo_global) : $logo_global;
-    $hero_url      = $wallet_custom_enable ? (get_post_meta($evento_id, '_eventosapp_wallet_hero_img_url', true) ?: get_option('eventosapp_wallet_hero_img_url', '')) : get_option('eventosapp_wallet_hero_img_url', '');
+    $hero_url      = $wallet_custom_enable ? ($hero_event ?: $hero_global) : $hero_global;
+    $brand_text    = get_option('eventosapp_wallet_branding_text') ?: 'Evento';
 
-    // Overrides usados por variantes de ticket. Permiten crear una clase Android distinta
-    // sin tocar la clase base del evento.
+    // Overrides explícitos usados por variantes de ticket.
+    // Permite que una clase VIP/General tenga branding distinto sin tocar la clase base del evento.
     if (!empty($args['event_name'])) {
         $nombreEvento = sanitize_text_field((string) $args['event_name']);
-        $log('Override de nombre de evento para clase: ' . $nombreEvento);
-    }
-    if (!empty($args['nombre_evento'])) {
-        $nombreEvento = sanitize_text_field((string) $args['nombre_evento']);
-        $log('Override de nombre_evento para clase: ' . $nombreEvento);
+        $log('Override variant event_name aplicado a clase: ' . $nombreEvento);
     }
     if (!empty($args['logo_url'])) {
         $logo_url = esc_url_raw((string) $args['logo_url']);
-        $log('Override de logo para clase: ' . $logo_url);
+        $log('Override variant logo_url aplicado a clase: ' . $logo_url);
     }
     if (!empty($args['hero_url'])) {
         $hero_url = esc_url_raw((string) $args['hero_url']);
-        $log('Override de hero para clase: ' . $hero_url);
+        $log('Override variant hero_url aplicado a clase: ' . $hero_url);
     }
     if (!empty($args['hex_color'])) {
-        $hex_color = sanitize_text_field((string) $args['hex_color']);
-        $log('Override de color para clase: ' . $hex_color);
+        $hex_override = trim((string) $args['hex_color']);
+        if (preg_match('/^#?[0-9A-Fa-f]{6}$/', $hex_override)) {
+            $hex_color = '#' . ltrim($hex_override, '#');
+            $log('Override variant hex_color aplicado a clase: ' . $hex_color);
+        }
     }
     if (!empty($args['brand_text'])) {
-        $issuerName = sanitize_text_field((string) $args['brand_text']);
-        $log('Override de issuerName/brand_text para clase: ' . $issuerName);
+        $brand_text = sanitize_text_field((string) $args['brand_text']);
     }
 
 //1 editado
@@ -295,7 +296,10 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
     ];
 
     if ($logo_url) {
-        $class_payload['logo'] = ['sourceUri' => ['uri' => $logo_url]];
+        $class_payload['logo'] = [
+            'sourceUri' => ['uri' => $logo_url],
+            'contentDescription' => ['defaultValue' => ['language' => 'es', 'value' => $brand_text]],
+        ];
     }
 
     if ($hero_url) {
@@ -350,24 +354,25 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
     $body = wp_remote_retrieve_body($res);
     $log("CREATE class HTTP $code | body: " . substr($body, 0, 600));
 
-    if ($code === 200) {
+    if (in_array((int) $code, [200, 201], true)) {
         $log("Clase creada OK: $class_id");
         return ['ok' => true, 'class_id' => $class_id, 'logs' => $logs];
     }
 
     if ($code === 409) {
         $patch_url = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketClass/' . rawurlencode($class_id);
-        // En PATCH de clases existentes no se debe reenviar APPROVED.
-        // Cuando cambian campos revisables, Google suele exigir UNDER_REVIEW.
+        // en patch, mandamos campos que pueden cambiar
         $patch_payload = [
             'issuerName'         => $issuerName,
-            'reviewStatus'       => 'UNDER_REVIEW',
             'eventName'          => ['defaultValue' => ['language' => 'es', 'value' => $nombreEvento]],
             'hexBackgroundColor' => $hex_color,
         ];
 
         if ($logo_url) {
-            $patch_payload['logo'] = ['sourceUri' => ['uri' => $logo_url]];
+            $patch_payload['logo'] = [
+                'sourceUri' => ['uri' => $logo_url],
+                'contentDescription' => ['defaultValue' => ['language' => 'es', 'value' => $brand_text]],
+            ];
         }
 
         if ($hero_url) {
@@ -418,30 +423,9 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
         }
         $pcode = wp_remote_retrieve_response_code($patch_res);
         $pbody = wp_remote_retrieve_body($patch_res);
-        $log("PATCH class HTTP $pcode | payload_keys=" . implode(',', array_keys($patch_payload)) . " | body: " . substr($pbody, 0, 600));
+        $log("PATCH class HTTP $pcode | body: " . substr($pbody, 0, 600));
 
-        // Fallback defensivo: si alguna clase antigua rechaza reviewStatus, reintentamos sin ese campo.
-        // Nunca reenviamos APPROVED desde una respuesta previa de Google.
-        if (!in_array((int) $pcode, [200, 201], true) && (stripos($pbody, 'reviewStatus') !== false || stripos($pbody, 'review status') !== false)) {
-            $fallback_payload = $patch_payload;
-            unset($fallback_payload['reviewStatus']);
-            $patch_res_fb = wp_remote_request($patch_url, [
-                'timeout' => 20,
-                'headers' => [
-                    'Authorization' => "Bearer $access_token",
-                    'Content-Type'  => 'application/json'
-                ],
-                'body'   => wp_json_encode($fallback_payload),
-                'method' => 'PATCH',
-            ]);
-            $pcode_fb = is_wp_error($patch_res_fb) ? 0 : wp_remote_retrieve_response_code($patch_res_fb);
-            $pbody_fb = is_wp_error($patch_res_fb) ? ('WP_Error: ' . $patch_res_fb->get_error_message()) : wp_remote_retrieve_body($patch_res_fb);
-            $log("PATCH class FALLBACK HTTP $pcode_fb | payload_keys=" . implode(',', array_keys($fallback_payload)) . " | body: " . substr($pbody_fb, 0, 600));
-            $pcode = $pcode_fb;
-            $pbody = $pbody_fb;
-        }
-
-        if (in_array((int) $pcode, [200, 201], true)) {
+        if ($pcode === 200) {
             $log("Clase actualizada OK: $class_id");
             return ['ok' => true, 'class_id' => $class_id, 'logs' => $logs];
         }
@@ -656,102 +640,96 @@ function eventosapp_generar_enlace_wallet_android($ticket_id, $debug = false) {
     $hero_url_event       = get_post_meta($evento_id, '_eventosapp_wallet_hero_img_url', true);
     $hex_color_event      = get_post_meta($evento_id, '_eventosapp_wallet_hex_color', true);
     $hex_color_default    = get_option('eventosapp_wallet_hex_color') ?: '#3782C4';
+    $hex_color            = $wallet_custom_enable ? ($hex_color_event ?: '#3782C4') : ($hex_color_default ?: '#3782C4');
 
     if ($wallet_custom_enable) {
         $log('Personalización de Wallet por evento: ACTIVADA. Usando valores del evento.');
         $class_id = $class_id_event ?: ($issuer_id . '.event_' . $evento_id);
         $logo_url = $logo_url_event ?: $logo_url_default;
         $hero_url = $hero_url_event ?: $hero_url_default;
-        $hex_color = $hex_color_event ?: '#3782C4';
     } else {
         $log('Personalización de Wallet por evento: DESACTIVADA. Usando valores de Integraciones.');
         $class_id = $class_id_default;
         $logo_url = $logo_url_default;
         $hero_url = $hero_url_default;
-        $hex_color = $hex_color_default;
+    }
+
+    // 4.0.1) Variante dirigida para Android Wallet.
+    // Esta evaluación ocurre ANTES de sincronizar la clase y ANTES de crear/actualizar el objeto.
+    // Así se evita la pelea entre el flujo base del evento y el flujo de variante.
+    $variant_result = null;
+    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        $variant_result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+        $log('Resultado evaluación variante Android antes de resolver class_id: ' . wp_json_encode($variant_result));
+    }
+
+    $variant_class_id   = get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true);
+    $variant_logo_url   = get_post_meta($ticket_id, '_eventosapp_wallet_variant_logo_url', true);
+    $variant_hero_url   = get_post_meta($ticket_id, '_eventosapp_wallet_variant_hero_img_url', true);
+    $variant_hex_color  = get_post_meta($ticket_id, '_eventosapp_wallet_variant_hex_color', true);
+    $variant_event_name = get_post_meta($ticket_id, '_eventosapp_wallet_variant_event_name', true);
+    $variant_key        = get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true);
+
+    if (!empty($variant_class_id)) {
+        $class_id = $variant_class_id;
+        $log('Android Wallet usará Class ID de variante: ' . $class_id);
+    }
+    if (!empty($variant_logo_url)) {
+        $logo_url = $variant_logo_url;
+        $log('Android Wallet usará logo de variante: ' . $logo_url);
+    }
+    if (!empty($variant_hero_url)) {
+        $hero_url = $variant_hero_url;
+        $log('Android Wallet usará hero de variante: ' . $hero_url);
+    }
+    if (!empty($variant_hex_color)) {
+        $hex_color = $variant_hex_color;
+        $log('Android Wallet usará color de variante: ' . $hex_color);
+    }
+    if (!empty($variant_event_name)) {
+        $nombre_evento = $variant_event_name;
+        $log('Android Wallet usará nombre de evento de variante: ' . $nombre_evento);
     }
 
     if ($class_id) {
-        if (strpos($class_id, '.') === false) $class_id = $issuer_id . '.' . ltrim($class_id, '.');
-        else {
+        if (function_exists('eventosapp_ticket_variants_normalize_class_id')) {
+            $class_id = eventosapp_ticket_variants_normalize_class_id($class_id);
+        } elseif (strpos($class_id, '.') === false) {
+            $class_id = $issuer_id . '.' . ltrim($class_id, '.');
+        } else {
             $prefijo = substr($class_id, 0, strpos($class_id, '.'));
             if ($prefijo !== (string)$issuer_id) $log("ADVERTENCIA: El prefijo del class_id ($prefijo) no coincide con issuer_id ($issuer_id). Se usará tal cual fue ingresado.");
         }
     } else {
-        $log('Falta Class ID (ni en evento ni en Integraciones).');
-        update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log', implode("\n", $logs));
-        return $debug ? implode("<br>", array_map('esc_html', $logs)) : '';
-    }
-
-    $wallet_context = [
-        'issuer_id' => $issuer_id,
-        'class_id' => $class_id,
-        'logo_url' => $logo_url,
-        'hero_url' => $hero_url,
-        'hex_color' => $hex_color,
-        'brand_text' => $brand_text,
-        'nombre_evento' => $nombre_evento,
-    ];
-
-    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
-        $variant_result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
-        $log('Resultado evaluación variante antes de Android Wallet: ' . wp_json_encode($variant_result));
-    }
-
-    if (function_exists('eventosapp_ticket_variants_filter_google_wallet_context')) {
-        $wallet_context = eventosapp_ticket_variants_filter_google_wallet_context($wallet_context, $ticket_id, $evento_id);
-        $class_id = $wallet_context['class_id'] ?? $class_id;
-        $logo_url = $wallet_context['logo_url'] ?? $logo_url;
-        $hero_url = $wallet_context['hero_url'] ?? $hero_url;
-        $hex_color = $wallet_context['hex_color'] ?? $hex_color;
-        $brand_text = $wallet_context['brand_text'] ?? $brand_text;
-        $nombre_evento = $wallet_context['nombre_evento'] ?? $nombre_evento;
-        $log('Contexto Android Wallet efectivo: ' . wp_json_encode([
-            'class_id' => $class_id,
-            'variant_key' => $wallet_context['variant_key'] ?? '',
-            'variant_name' => $wallet_context['variant_name'] ?? '',
-            'variant_class_source' => $wallet_context['variant_class_source'] ?? '',
-            'logo_url' => $logo_url,
-            'hero_url' => $hero_url,
-            'hex_color' => $hex_color,
-        ]));
-    } else {
-        $log('No está disponible eventosapp_ticket_variants_filter_google_wallet_context; se usará contexto base del evento.');
-    }
-
-    if ($class_id) {
-        if (strpos($class_id, '.') === false) $class_id = $issuer_id . '.' . ltrim($class_id, '.');
-    } else {
-        $log('Falta Class ID luego de evaluar variantes.');
+        $log('Falta Class ID (ni en evento ni en Integraciones ni en variante).');
         update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log', implode("\n", $logs));
         return $debug ? implode("<br>", array_map('esc_html', $logs)) : '';
     }
 
     update_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', $class_id);
 
-    // 4.1) Sincronizar/crear la clase ANTES de intentar crear el ticket.
-    // Esto garantiza que la clase base o la clase de variante exista en Google Wallet.
+    // 4.1) Sincronizar/crear la clase ANTES de intentar crear el ticket
+    // Esto garantiza que la clase exista en Google Wallet con branding de variante cuando aplique.
     $log("Sincronizando clase de Google Wallet antes de crear el ticket...");
     if (function_exists('eventosapp_sync_wallet_class')) {
-        $sync_args = [
+        $sync = eventosapp_sync_wallet_class($evento_id, [
             'force_class_id' => $class_id,
-            'logo_url' => $logo_url,
-            'hero_url' => $hero_url,
-            'hex_color' => $hex_color,
-            'brand_text' => $brand_text,
-            'event_name' => $nombre_evento,
-            'variant_key' => $wallet_context['variant_key'] ?? '',
-            'variant_name' => $wallet_context['variant_name'] ?? '',
-        ];
-        $sync = eventosapp_sync_wallet_class($evento_id, $sync_args);
+            'logo_url'       => $logo_url,
+            'hero_url'       => $hero_url,
+            'hex_color'      => $hex_color,
+            'event_name'     => $nombre_evento,
+            'brand_text'     => $brand_text,
+            'variant_key'    => $variant_key,
+            'ticket_id'      => $ticket_id,
+        ]);
         foreach ($sync['logs'] as $l) { $log($l); }
         if (!$sync['ok']) {
             $log('ADVERTENCIA: No se pudo sincronizar la clase, pero se intentará crear el ticket de todos modos.');
         } else {
             $log('Clase sincronizada exitosamente: ' . ($sync['class_id'] ?? $class_id));
+            // Actualizar el class_id con el que realmente se usó en la sincronización
             if (!empty($sync['class_id'])) {
                 $class_id = $sync['class_id'];
-                update_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', $class_id);
             }
         }
     } else {
@@ -935,7 +913,6 @@ if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
         ],
         'logo'       => ['sourceUri' => ['uri' => $logo_url]],
         'eventName'  => ['defaultValue' => ['language' => 'es', 'value' => $nombre_evento]],
-        'hexBackgroundColor' => $hex_color ?: null,
         // ⛔️ NO poner startDateTime/endDateTime/doorsOpen en el objeto
         'venue' => $direccion ? [
             'name'    => ['defaultValue' => ['language' => 'es', 'value' => $direccion]],
@@ -965,139 +942,135 @@ if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
         return $debug ? implode("<br>", array_map('esc_html', $logs)) : '';
     }
 
-    // 8) POST crear objeto
+    // 8) Crear/actualizar objeto Google Wallet con flujo dirigido por variante.
+    // Importante: si el objeto ya existe con otra classId, Google no permite moverlo con PATCH simple.
+    // Por eso se consulta el objeto, se compara classId y, si no coincide, se elimina y recrea.
     $api_url = "https://walletobjects.googleapis.com/walletobjects/v1/eventTicketObject";
-    $api_res = wp_remote_post($api_url, [
-        'timeout' => 20,
-        'headers' => [
-            'Authorization' => "Bearer $access_token",
-            'Content-Type'  => 'application/json'
-        ],
-        'body' => wp_json_encode($object_payload)
-    ]);
-    if (is_wp_error($api_res)) {
-        $log('Error creando objeto (WP_Error): ' . $api_res->get_error_message());
-        update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log', implode("\n", $logs));
-        return $debug ? implode("<br>", array_map('esc_html', $logs)) : '';
-    }
-    $api_code = wp_remote_retrieve_response_code($api_res);
-    $api_body = wp_remote_retrieve_body($api_res);
-    $log("API WalletObject respuesta HTTP $api_code | body: " . substr($api_body, 0, 600));
+    $object_url = $api_url . '/' . rawurlencode($object_id);
+    $headers_json = [
+        'Authorization' => "Bearer $access_token",
+        'Content-Type'  => 'application/json',
+    ];
 
-    // 8.1) Si la Class no existe -> crear/patch class y reintentar POST
-    if (in_array($api_code, [400, 404], true) && $class_id) {
+    $insert_object = function($reason = 'insert') use ($api_url, $headers_json, $object_payload, $object_id, $class_id, $ticket_id, $evento_id, $log) {
+        $res = wp_remote_post($api_url, [
+            'timeout' => 20,
+            'headers' => $headers_json,
+            'body'    => wp_json_encode($object_payload),
+        ]);
+        $code = is_wp_error($res) ? 0 : wp_remote_retrieve_response_code($res);
+        $body = is_wp_error($res) ? ('WP_Error: ' . $res->get_error_message()) : wp_remote_retrieve_body($res);
+        $log("INSERT WalletObject ($reason) HTTP $code | object=$object_id | class=$class_id | body: " . substr($body, 0, 700));
+
+        if (in_array((int) $code, [200, 201], true)) {
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', $object_id);
+            update_post_meta($ticket_id, '_eventosapp_wallet_object_id', $object_id);
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', $class_id);
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_last_flow', 'insert_' . $reason);
+        }
+
+        return [$code, $body];
+    };
+
+    $patch_object = function($reason = 'patch') use ($object_url, $headers_json, $object_payload, $object_id, $class_id, $ticket_id, $evento_id, $log) {
+        $patch_payload = $object_payload;
+        unset($patch_payload['id'], $patch_payload['classId']);
+
+        $res = wp_remote_request($object_url, [
+            'timeout' => 20,
+            'headers' => $headers_json,
+            'body'    => wp_json_encode($patch_payload),
+            'method'  => 'PATCH',
+        ]);
+        $code = is_wp_error($res) ? 0 : wp_remote_retrieve_response_code($res);
+        $body = is_wp_error($res) ? ('WP_Error: ' . $res->get_error_message()) : wp_remote_retrieve_body($res);
+        $log("PATCH WalletObject ($reason) HTTP $code | object=$object_id | class=$class_id | body: " . substr($body, 0, 700));
+
+        if ((int) $code === 200) {
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', $object_id);
+            update_post_meta($ticket_id, '_eventosapp_wallet_object_id', $object_id);
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', $class_id);
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_last_flow', 'patch_' . $reason);
+        }
+
+        return [$code, $body];
+    };
+
+    list($api_code, $api_body) = $insert_object('initial');
+
+    // Si la clase no existe, se crea/actualiza con el contexto ya filtrado por variante y se reintenta.
+    if (in_array((int) $api_code, [400, 404], true) && $class_id) {
         $maybe_body = json_decode($api_body, true);
         $reason = is_array($maybe_body) && !empty($maybe_body['error']['errors'][0]['reason'])
-            ? $maybe_body['error']['errors'][0]['reason'] : '';
-        if ($reason === 'classNotFound' || $api_code === 404) {
-            $log('La Class no existe. Intentando crearla/actualizarla y reintentar el objeto...');
+            ? (string) $maybe_body['error']['errors'][0]['reason'] : '';
+
+        if ($reason === 'classNotFound' || (int) $api_code === 404) {
+            $log('La Class no existe para el objeto. Intentando crear/actualizar clase con contexto efectivo y reintentar...');
             $sync = eventosapp_sync_wallet_class($evento_id, [
                 'force_class_id' => $class_id,
-                'logo_url' => $logo_url,
-                'hero_url' => $hero_url,
-                'hex_color' => $hex_color,
-                'brand_text' => $brand_text,
-                'event_name' => $nombre_evento,
-                'variant_key' => $wallet_context['variant_key'] ?? '',
-                'variant_name' => $wallet_context['variant_name'] ?? '',
+                'logo_url'       => $logo_url,
+                'hero_url'       => $hero_url,
+                'hex_color'      => $hex_color,
+                'event_name'     => $nombre_evento,
+                'brand_text'     => $brand_text,
+                'variant_key'    => $variant_key,
+                'ticket_id'      => $ticket_id,
             ]);
             foreach ($sync['logs'] as $l) { $log($l); }
-            if ($sync['ok']) {
-                $api_res = wp_remote_post($api_url, [
-                    'timeout' => 20,
-                    'headers' => [
-                        'Authorization' => "Bearer $access_token",
-                        'Content-Type'  => 'application/json'
-                    ],
-                    'body' => wp_json_encode($object_payload)
-                ]);
-                $api_code = wp_remote_retrieve_response_code($api_res);
-                $api_body = wp_remote_retrieve_body($api_res);
-                $log("REINTENTO API WalletObject HTTP $api_code | body: " . substr($api_body, 0, 600));
-            } else {
-                $log('No se pudo crear/actualizar la Class. Abortando.');
+            if (!empty($sync['ok'])) {
+                list($api_code, $api_body) = $insert_object('retry_after_class_sync');
             }
         }
     }
 
-    // 8.2) Si el objeto YA EXISTE (409), revisar si está asociado a la clase correcta.
-    // Google Wallet no permite cambiar classId de forma confiable con un PATCH simple;
-    // si el objeto fue creado con la clase base y ahora debe usar una variante, se elimina y se recrea.
-    if ($api_code === 409) {
-        $object_url = "https://walletobjects.googleapis.com/walletobjects/v1/eventTicketObject/" . rawurlencode($object_id);
-        $current_class_id = '';
-
+    // Si el objeto existe, consultar classId actual y decidir entre PATCH o DELETE+INSERT.
+    if ((int) $api_code === 409) {
         $get_res = wp_remote_get($object_url, [
             'timeout' => 20,
             'headers' => ['Authorization' => "Bearer $access_token"],
         ]);
         $get_code = is_wp_error($get_res) ? 0 : wp_remote_retrieve_response_code($get_res);
         $get_body = is_wp_error($get_res) ? ('WP_Error: ' . $get_res->get_error_message()) : wp_remote_retrieve_body($get_res);
-        $log("GET WalletObject existente HTTP $get_code | body: " . substr($get_body, 0, 600));
+        $log('GET WalletObject existente HTTP ' . $get_code . ' | object=' . $object_id . ' | body: ' . substr($get_body, 0, 700));
 
-        if ($get_code === 200) {
-            $get_json = json_decode($get_body, true);
-            if (is_array($get_json)) {
-                $current_class_id = isset($get_json['classId']) ? (string) $get_json['classId'] : '';
-                if ($current_class_id === '' && isset($get_json['classReference']['id'])) {
-                    $current_class_id = (string) $get_json['classReference']['id'];
+        $current_class = '';
+        if ((int) $get_code === 200) {
+            $existing = json_decode($get_body, true);
+            if (is_array($existing)) {
+                if (!empty($existing['classId'])) {
+                    $current_class = (string) $existing['classId'];
+                } elseif (!empty($existing['classReference']['id'])) {
+                    $current_class = (string) $existing['classReference']['id'];
                 }
             }
         }
 
-        if ($current_class_id !== '' && $class_id !== '' && $current_class_id !== $class_id) {
-            $log('Class mismatch detectado en objeto existente. current=' . $current_class_id . ' | wanted=' . $class_id . '. Se eliminará y recreará el objeto.');
-            $delete_res = wp_remote_request($object_url, [
+        if ((int) $get_code === 200 && $current_class !== '' && $current_class !== (string) $class_id) {
+            $log('Class mismatch detectado. current=' . $current_class . ' | wanted=' . $class_id . ' | se eliminará y recreará el objeto.');
+            $del_res = wp_remote_request($object_url, [
                 'timeout' => 20,
                 'method'  => 'DELETE',
                 'headers' => ['Authorization' => "Bearer $access_token"],
             ]);
-            $delete_code = is_wp_error($delete_res) ? 0 : wp_remote_retrieve_response_code($delete_res);
-            $delete_body = is_wp_error($delete_res) ? ('WP_Error: ' . $delete_res->get_error_message()) : wp_remote_retrieve_body($delete_res);
-            $log("DELETE WalletObject por class mismatch HTTP $delete_code | body: " . substr($delete_body, 0, 400));
+            $del_code = is_wp_error($del_res) ? 0 : wp_remote_retrieve_response_code($del_res);
+            $del_body = is_wp_error($del_res) ? ('WP_Error: ' . $del_res->get_error_message()) : wp_remote_retrieve_body($del_res);
+            $log('DELETE WalletObject por class mismatch HTTP ' . $del_code . ' | object=' . $object_id . ' | body: ' . substr($del_body, 0, 500));
 
-            $retry_res = wp_remote_post($api_url, [
-                'timeout' => 20,
-                'headers' => [
-                    'Authorization' => "Bearer $access_token",
-                    'Content-Type'  => 'application/json'
-                ],
-                'body' => wp_json_encode($object_payload)
-            ]);
-            if (is_wp_error($retry_res)) {
-                $api_code = 0;
-                $api_body = 'WP_Error: ' . $retry_res->get_error_message();
-                $log('Error recreando objeto tras class mismatch: ' . $retry_res->get_error_message());
-            } else {
-                $api_code = wp_remote_retrieve_response_code($retry_res);
-                $api_body = wp_remote_retrieve_body($retry_res);
-                $log("REINSERT WalletObject tras class mismatch HTTP $api_code | body: " . substr($api_body, 0, 600));
-            }
+            list($api_code, $api_body) = $insert_object('after_class_mismatch_delete');
+        } elseif ((int) $get_code === 200) {
+            $log('Objeto existente usa la class correcta. Se aplicará PATCH sin classId. current=' . $current_class . ' | wanted=' . $class_id);
+            list($api_code, $api_body) = $patch_object('same_class');
+        } elseif ((int) $get_code === 404) {
+            $log('El POST devolvió 409 pero el GET ya no encuentra el objeto. Se reintentará INSERT.');
+            list($api_code, $api_body) = $insert_object('after_409_get_404');
         } else {
-            $patch_payload = $object_payload;
-            unset($patch_payload['id'], $patch_payload['classId']);
-
-            $patch_res = wp_remote_request($object_url, [
-                'timeout' => 20,
-                'headers' => [
-                    'Authorization' => "Bearer $access_token",
-                    'Content-Type'  => 'application/json'
-                ],
-                'body'   => wp_json_encode($patch_payload),
-                'method' => 'PATCH',
-            ]);
-            if (is_wp_error($patch_res)) {
-                $log('Error en PATCH del objeto existente (WP_Error): ' . $patch_res->get_error_message());
-            } else {
-                $api_code = wp_remote_retrieve_response_code($patch_res);
-                $api_body = wp_remote_retrieve_body($patch_res);
-                $log("PATCH WalletObject HTTP $api_code | body: " . substr($api_body, 0, 600));
-            }
+            $log('No se pudo consultar objeto existente tras 409. Se intentará PATCH conservador sin classId.');
+            list($api_code, $api_body) = $patch_object('get_failed_after_409');
         }
     }
 
-    if ($api_code !== 200 && $api_code !== 409) {
-        $log("Creación/actualización de objeto falló (esperado 200/409).");
+    if (!in_array((int) $api_code, [200, 201], true)) {
+        $log("Creación/actualización de objeto falló (esperado 200/201). Último HTTP $api_code | body: " . substr((string) $api_body, 0, 700));
         update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log', implode("\n", $logs));
         return $debug ? implode("<br>", array_map('esc_html', $logs)) : '';
     }
@@ -1125,9 +1098,12 @@ if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
     // 10) Persistir
     update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', $url);
     update_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', $object_id);
+    update_post_meta($ticket_id, '_eventosapp_wallet_object_id', $object_id);
     update_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', $class_id);
+    update_post_meta($ticket_id, '_eventosapp_wallet_google_last_generated_at', current_time('mysql'));
     update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_log', implode("\n", $logs));
     $log("URL guardada en meta: $url");
+    $log("Objeto Google Wallet efectivo guardado: object_id=$object_id | class_id=$class_id");
 
     if ($debug) {
         $log("Proceso finalizado (debug ON).");
