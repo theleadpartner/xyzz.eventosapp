@@ -27,6 +27,16 @@ function eventosapp_ticket_generar_ics($ticket_id) {
     $lugar_evento    = get_post_meta($evento_id, '_eventosapp_direccion', true) ?: '';
     $zona_horaria    = get_post_meta($evento_id, '_eventosapp_zona_horaria', true) ?: 'America/Bogota';
 
+    $ticket_modalidad       = function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($ticket_id) : get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
+    $ticket_modalidad_label = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : ucfirst((string) $ticket_modalidad);
+    $is_virtual_ticket      = ($ticket_modalidad === 'virtual') || (function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id));
+    $virtual_platform       = trim((string) get_post_meta($evento_id, '_eventosapp_virtual_platform', true));
+    $virtual_landing_url    = ($is_virtual_ticket && function_exists('eventosapp_get_virtual_landing_url')) ? eventosapp_get_virtual_landing_url($ticket_id) : '';
+
+    if ($is_virtual_ticket) {
+        $lugar_evento = $virtual_platform ? ('Virtual - ' . $virtual_platform) : 'Virtual';
+    }
+
     // Fechas del evento
     $tipo_fecha = get_post_meta($evento_id, '_eventosapp_tipo_fecha', true);
     $fechas = [];
