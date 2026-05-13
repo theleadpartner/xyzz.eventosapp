@@ -594,11 +594,7 @@ if (!function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
 
         if ($code_get === 200) {
             $patch_payload = $payload;
-            // En clases existentes aprobadas, Google puede exigir que los cambios revisables
-            // se envíen con reviewStatus=UNDER_REVIEW. Nunca reenviamos APPROVED desde el GET.
-            unset($patch_payload['id']);
-            $patch_payload['reviewStatus'] = 'UNDER_REVIEW';
-
+            unset($patch_payload['id'], $patch_payload['reviewStatus']);
             $res_patch = wp_remote_request($class_url, [
                 'timeout' => 20,
                 'method'  => 'PATCH',
@@ -607,26 +603,7 @@ if (!function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
             ]);
             $code_patch = is_wp_error($res_patch) ? 0 : wp_remote_retrieve_response_code($res_patch);
             $body_patch = is_wp_error($res_patch) ? ('WP_Error: ' . $res_patch->get_error_message()) : wp_remote_retrieve_body($res_patch);
-            error_log('EVENTOSAPP WALLET ENSURE CLASS PATCH [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_patch . ' | payload_keys=' . implode(',', array_keys($patch_payload)) . ' | ' . substr($body_patch, 0, 400));
-
-            // Fallback defensivo: algunas clases antiguas pueden rechazar reviewStatus en PATCH.
-            // Si ocurre, reintentamos sin reviewStatus, pero jamás enviamos APPROVED.
-            if (!in_array((int) $code_patch, [200, 201], true) && (stripos($body_patch, 'reviewStatus') !== false || stripos($body_patch, 'review status') !== false)) {
-                $fallback_payload = $patch_payload;
-                unset($fallback_payload['reviewStatus']);
-                $res_patch_fallback = wp_remote_request($class_url, [
-                    'timeout' => 20,
-                    'method'  => 'PATCH',
-                    'headers' => $headers_json,
-                    'body'    => wp_json_encode($fallback_payload),
-                ]);
-                $code_patch_fb = is_wp_error($res_patch_fallback) ? 0 : wp_remote_retrieve_response_code($res_patch_fallback);
-                $body_patch_fb = is_wp_error($res_patch_fallback) ? ('WP_Error: ' . $res_patch_fallback->get_error_message()) : wp_remote_retrieve_body($res_patch_fallback);
-                error_log('EVENTOSAPP WALLET ENSURE CLASS PATCH FALLBACK [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_patch_fb . ' | payload_keys=' . implode(',', array_keys($fallback_payload)) . ' | ' . substr($body_patch_fb, 0, 400));
-                $code_patch = $code_patch_fb;
-                $body_patch = $body_patch_fb;
-            }
-
+            error_log('EVENTOSAPP WALLET ENSURE CLASS PATCH [evento:' . $evento_id . ' ticket:' . $ticket_id . ' class:' . $class_id . '] HTTP ' . $code_patch . ' | ' . substr($body_patch, 0, 400));
             // Aunque el PATCH no sea aceptado, el GET 200 confirma que la clase existe.
             // Se devuelve true para no bloquear la actualización del objeto.
             $ensured_classes[$class_id] = true;
@@ -652,33 +629,27 @@ if (!function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
     }
 }
 
-
 if (!function_exists('eventosapp_wallet_resolve_object_id_for_ticket')) {
     /**
-     * Resuelve un Object ID estable para Google Wallet.
-     * Prioriza el ID público del ticket porque el generador principal de Save-to-Wallet usa ese mismo identificador.
+     * Object ID canónico para Google Wallet.
+     * Debe coincidir con el objeto usado por google-wallet-android.php y por el enlace Save-to-Wallet.
+     * Prioriza eventosapp_ticketID porque ese es el identificador público usado por el QR Manager.
      */
     function eventosapp_wallet_resolve_object_id_for_ticket($issuer_id, $ticket_id) {
         $issuer_id = trim((string) $issuer_id);
         $ticket_id = absint($ticket_id);
         if ($issuer_id === '' || !$ticket_id) return '';
 
-        $saved = get_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', true);
-        if (!$saved) $saved = get_post_meta($ticket_id, '_eventosapp_wallet_object_id', true);
-        $saved = trim((string) $saved);
+        $public_ticket_id = trim((string) get_post_meta($ticket_id, 'eventosapp_ticketID', true));
+        if ($public_ticket_id !== '') {
+            return $issuer_id . '.' . preg_replace('/[^A-Za-z0-9._-]/', '_', $public_ticket_id);
+        }
+
+        $saved = trim((string) get_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', true));
+        if ($saved === '') $saved = trim((string) get_post_meta($ticket_id, '_eventosapp_wallet_object_id', true));
         if ($saved !== '') return $saved;
 
-        $public_id = trim((string) get_post_meta($ticket_id, 'eventosapp_ticketID', true));
-        $object_suffix = $public_id !== '' ? $public_id : ('ticket_' . $ticket_id);
-        $object_suffix = preg_replace('/[^A-Za-z0-9._-]+/', '_', $object_suffix);
-        $object_suffix = trim((string) $object_suffix, '._-');
-        if ($object_suffix === '') $object_suffix = 'ticket_' . $ticket_id;
-
-        $object_id = $issuer_id . '.' . $object_suffix;
-        update_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', $object_id);
-        update_post_meta($ticket_id, '_eventosapp_wallet_object_id', $object_id);
-
-        return $object_id;
+        return $issuer_id . '.ticket_' . $ticket_id;
     }
 }
 
@@ -716,8 +687,6 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
         $nombre_evento   = $ctx['nombre_evento'];
     }
 
-    error_log('EVENTOSAPP WALLET CONTEXT [evento:' . (int) $evento_id . ' ticket:' . (int) $ticket_id . '] class=' . (string) $class_id_wanted . ' | variant=' . (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true) . ' | class_source=' . (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_source', true));
-
     // Asegurar que la clase Google Wallet exista antes de insertar/recrear el objeto.
     // Esto es crítico cuando la variante usa una clase distinta a la clase principal del evento.
     if (function_exists('eventosapp_wallet_ensure_event_ticket_class')) {
@@ -732,7 +701,8 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
     $asistente_apellido = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
     $asistente_email    = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
     $localidad          = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
-    $codigo_qr          = get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: $ticket_id;
+    $codigo_qr_base     = get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: $ticket_id;
+    $codigo_qr          = $codigo_qr_base ? ((string) $codigo_qr_base . '-gwallet') : (string) $ticket_id;
 
     // Fecha legible
     $tipo = get_post_meta($evento_id, '_eventosapp_tipo_fecha', true) ?: 'unica';
@@ -753,11 +723,12 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
         $fecha_label = implode(', ', $fmt);
     }
 
-    // ID canónico del objeto.
-    // Se usa el ID público cuando existe para coincidir con el generador principal de Save-to-Wallet.
+    // ID canónico del objeto: debe ser el mismo que usa google-wallet-android.php.
     $object_id = function_exists('eventosapp_wallet_resolve_object_id_for_ticket')
         ? eventosapp_wallet_resolve_object_id_for_ticket($issuer_id, $ticket_id)
-        : ($issuer_id . '.ticket_' . $ticket_id);
+        : ($issuer_id . '.' . (get_post_meta($ticket_id, 'eventosapp_ticketID', true) ?: ('ticket_' . $ticket_id)));
+
+    error_log('EVENTOSAPP WALLET OBJECT RESOLVED [evento:' . (int) $evento_id . ' ticket:' . (int) $ticket_id . '] object=' . $object_id . ' | class=' . $class_id_wanted . ' | variant=' . (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true));
 
     // Construye payload común (usado en INSERT/PATCH)
     $base_payload = [
@@ -834,14 +805,14 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
         ]);
         $code_ins = is_wp_error($res_ins) ? 0 : wp_remote_retrieve_response_code($res_ins);
         $body_ins = is_wp_error($res_ins) ? ('WP_Error: '.$res_ins->get_error_message()) : wp_remote_retrieve_body($res_ins);
-        error_log("EVENTOSAPP WALLET INSERT OBJECT [evento:$evento_id ticket:$ticket_id object:$object_id class:$class_id_wanted] HTTP $code_ins | ".substr($body_ins,0,400));
+        error_log("EVENTOSAPP WALLET INSERT OBJECT [evento:$evento_id ticket:$ticket_id object:$object_id class:$class_id_wanted] HTTP $code_ins | ".substr($body_ins,0,500));
         if (in_array((int) $code_ins, [200, 201], true)) {
             update_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', $object_id);
             update_post_meta($ticket_id, '_eventosapp_wallet_object_id', $object_id);
             update_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', $class_id_wanted);
-            return true;
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_last_flow', 'patch_single_insert');
         }
-        return false;
+        return in_array((int) $code_ins, [200, 201], true);
     };
 
     // 2) Flujo según GET
@@ -862,7 +833,7 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
             ]);
             $code_del = is_wp_error($res_del) ? 0 : wp_remote_retrieve_response_code($res_del);
             $body_del = is_wp_error($res_del) ? ('WP_Error: '.$res_del->get_error_message()) : wp_remote_retrieve_body($res_del);
-            error_log("EVENTOSAPP WALLET DELETE OBJECT (class mismatch) [evento:$evento_id ticket:$ticket_id object:$object_id wanted:$wanted have:$have] HTTP $code_del | ".substr($body_del,0,300));
+            error_log("EVENTOSAPP WALLET DELETE OBJECT (class mismatch) [evento:$evento_id ticket:$ticket_id] HTTP $code_del | ".substr($body_del,0,300));
 
             // Intentar insertar con la clase correcta
             return $do_insert();
@@ -878,14 +849,14 @@ function eventosapp_wallet_patch_single_ticket($evento_id, $ticket_id, $access_t
         ]);
         $code_patch = is_wp_error($res_patch) ? 0 : wp_remote_retrieve_response_code($res_patch);
         $body_patch = is_wp_error($res_patch) ? ('WP_Error: '.$res_patch->get_error_message()) : wp_remote_retrieve_body($res_patch);
-        error_log("EVENTOSAPP WALLET PATCH OBJECT [evento:$evento_id ticket:$ticket_id object:$object_id class:$class_id_wanted] HTTP $code_patch | ".substr($body_patch,0,400));
+        error_log("EVENTOSAPP WALLET PATCH OBJECT [evento:$evento_id ticket:$ticket_id object:$object_id class:$class_id_wanted] HTTP $code_patch | ".substr($body_patch,0,500));
         if ((int) $code_patch === 200) {
             update_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', $object_id);
             update_post_meta($ticket_id, '_eventosapp_wallet_object_id', $object_id);
             update_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', $class_id_wanted);
-            return true;
+            update_post_meta($ticket_id, '_eventosapp_wallet_google_last_flow', 'patch_single_patch');
         }
-        return false;
+        return (int) $code_patch === 200;
     } else {
         // Error inesperado al consultar → intenta INSERT de todas formas (idempotencia)
         error_log("EVENTOSAPP WALLET GET OBJECT [evento:$evento_id ticket:$ticket_id] HTTP $code_get | ".substr($body_get,0,300)." | fallback=INSERT");
@@ -2221,13 +2192,6 @@ function eventosapp_wallet_patch_objects_for_event($evento_id) {
         $wallet_apple_on ? 'ON' : 'OFF',
         $reason
     ));
-
-    // Procesa inmediatamente la primera página para no depender únicamente de WP-Cron/Action Scheduler.
-    // Si hay más páginas, el worker seguirá programando las siguientes como antes.
-    if (!empty($job['total'])) {
-        error_log('EVENTOSAPP WALLET BATCH immediate evento:' . (int) $evento_id . ' - Ejecutando primera página tras guardar evento.');
-        do_action('eventosapp_wallet_bulk_patch', ['evento_id' => (int) $evento_id]);
-    }
 }
 
 add_action('eventosapp_wallet_bulk_patch', function($args){
