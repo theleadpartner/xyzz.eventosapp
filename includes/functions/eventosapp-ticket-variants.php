@@ -851,6 +851,170 @@ if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
     }
 }
 
+if (!function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context')) {
+    /**
+     * Prepara un ticket para procesos masivos antes de generar anexos o después de editar campos.
+     *
+     * Objetivo:
+     * - Recalcular la variante efectiva usando los metadatos actuales del ticket.
+     * - Sincronizar una sola vez por evento/contexto las clases Google Wallet de variantes.
+     * - Dejar trazabilidad en el ticket y en wp_debug sin exponer payloads extensos al frontend.
+     *
+     * Esta función no elimina ni reemplaza generadores existentes. Solo garantiza que los
+     * metadatos de variante estén listos para que QR, PDF, ICS, Google Wallet, Apple Wallet,
+     * correo y refresh por lotes consuman la configuración correcta.
+     *
+     * @param int    $ticket_id ID del ticket.
+     * @param int    $event_id  ID del evento. Si viene vacío, se toma de _eventosapp_ticket_evento_id.
+     * @param string $context   Contexto de ejecución: import, bulk_edit, batch_refresh, etc.
+     * @param array  $args      Opciones:
+     *                          - sync_google_classes bool: sincroniza clases Android de variantes una vez por evento/contexto.
+     *                          - mark_assets_stale bool: marca anexos como pendientes si cambia la variante.
+     *                          - clear_assets_stale bool: limpia la marca de pendiente después de un refresh/generación.
+     *                          - log bool: escribe log en wp_debug/error_log.
+     *
+     * @return array Resumen seguro del resultado.
+     */
+    function eventosapp_ticket_variants_prepare_ticket_for_batch_context($ticket_id, $event_id = 0, $context = 'batch', $args = []) {
+        static $synced_google_classes = [];
+
+        $ticket_id = absint($ticket_id);
+        $event_id  = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $context   = sanitize_key((string) $context);
+        if ($context === '') $context = 'batch';
+
+        $defaults = [
+            'sync_google_classes' => true,
+            'mark_assets_stale'   => false,
+            'clear_assets_stale'  => false,
+            'log'                 => true,
+        ];
+        $args = is_array($args) ? array_merge($defaults, $args) : $defaults;
+
+        $summary = [
+            'ok'                    => false,
+            'ticket_id'             => $ticket_id,
+            'event_id'              => $event_id,
+            'context'               => $context,
+            'applied'               => false,
+            'reason'                => '',
+            'variant_key'           => '',
+            'variant_name'          => '',
+            'matched_index'         => null,
+            'changed'               => false,
+            'assets_marked_stale'   => false,
+            'assets_stale_cleared'  => false,
+            'google_classes_synced' => false,
+            'google_sync_reason'    => '',
+        ];
+
+        if (!$ticket_id || !$event_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            $summary['reason'] = 'ticket_or_event_invalid';
+            return $summary;
+        }
+
+        $before = [
+            'variant_key'    => (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true),
+            'variant_name'   => (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true),
+            'email_template' => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true),
+            'google_class'   => (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true),
+            'apple_strip'    => (string) get_post_meta($ticket_id, '_eventosapp_apple_variant_strip_url', true),
+        ];
+
+        if (!empty($args['sync_google_classes']) && function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_for_event')) {
+            $wallet_android_on = get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true);
+            $wallet_android_on = ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true || $wallet_android_on === 'yes' || $wallet_android_on === 'on');
+            $sync_key = $event_id . '|' . $context;
+
+            if ($wallet_android_on && empty($synced_google_classes[$sync_key])) {
+                try {
+                    $sync = eventosapp_ticket_variants_sync_google_wallet_classes_for_event($event_id, $context);
+                    $summary['google_classes_synced'] = is_array($sync) && !empty($sync['ok']);
+                    $summary['google_sync_reason'] = is_array($sync) ? (string) ($sync['reason'] ?? '') : '';
+                } catch (Throwable $e) {
+                    $summary['google_classes_synced'] = false;
+                    $summary['google_sync_reason'] = 'exception: ' . $e->getMessage();
+                    error_log('EVENTOSAPP VARIANTS | Error sincronizando clases Google Wallet en contexto masivo | ' . wp_json_encode([
+                        'ticket_id' => $ticket_id,
+                        'event_id'  => $event_id,
+                        'context'   => $context,
+                        'error'     => $e->getMessage(),
+                    ]));
+                }
+                $synced_google_classes[$sync_key] = true;
+            }
+        }
+
+        if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+            $summary['reason'] = 'variants_apply_function_missing';
+            return $summary;
+        }
+
+        $result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
+        if (!is_array($result)) $result = [];
+
+        $after = [
+            'variant_key'    => (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true),
+            'variant_name'   => (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true),
+            'email_template' => (string) get_post_meta($ticket_id, '_eventosapp_ticket_email_template_override', true),
+            'google_class'   => (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true),
+            'apple_strip'    => (string) get_post_meta($ticket_id, '_eventosapp_apple_variant_strip_url', true),
+        ];
+
+        $summary['ok']            = true;
+        $summary['applied']       = !empty($result['applied']);
+        $summary['reason']        = (string) ($result['reason'] ?? ($summary['applied'] ? 'applied' : 'not_applied'));
+        $summary['variant_key']   = (string) ($result['variant_key'] ?? $after['variant_key']);
+        $summary['variant_name']  = (string) ($result['variant_name'] ?? $after['variant_name']);
+        $summary['matched_index'] = isset($result['matched_index']) ? (int) $result['matched_index'] : null;
+        $summary['changed']       = ($before !== $after);
+
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_batch_context', $context);
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_batch_at', current_time('mysql'));
+        update_post_meta($ticket_id, '_eventosapp_ticket_variant_last_batch_result', [
+            'context'       => $context,
+            'applied'       => $summary['applied'],
+            'reason'        => $summary['reason'],
+            'variant_key'   => $summary['variant_key'],
+            'variant_name'  => $summary['variant_name'],
+            'matched_index' => $summary['matched_index'],
+            'changed'       => $summary['changed'],
+            'before'        => $before,
+            'after'         => $after,
+        ]);
+
+        if (!empty($args['mark_assets_stale']) && $summary['changed']) {
+            update_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh', '1');
+            update_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh_since', current_time('mysql'));
+            $summary['assets_marked_stale'] = true;
+        }
+
+        if (!empty($args['clear_assets_stale'])) {
+            delete_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh');
+            delete_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh_since');
+            $summary['assets_stale_cleared'] = true;
+        }
+
+        if (!empty($args['log'])) {
+            eventosapp_ticket_variants_log('Preparación de variante para proceso masivo', [
+                'ticket_id' => $ticket_id,
+                'event_id' => $event_id,
+                'context' => $context,
+                'applied' => $summary['applied'] ? 'yes' : 'no',
+                'reason' => $summary['reason'],
+                'variant_key' => $summary['variant_key'],
+                'changed' => $summary['changed'] ? 'yes' : 'no',
+                'assets_marked_stale' => $summary['assets_marked_stale'] ? 'yes' : 'no',
+                'assets_stale_cleared' => $summary['assets_stale_cleared'] ? 'yes' : 'no',
+                'google_classes_synced' => $summary['google_classes_synced'] ? 'yes' : 'no',
+                'google_sync_reason' => $summary['google_sync_reason'],
+            ]);
+        }
+
+        return $summary;
+    }
+}
+
 if (!function_exists('eventosapp_ticket_variants_apply_on_save')) {
     add_action('save_post_eventosapp_ticket', 'eventosapp_ticket_variants_apply_on_save', 21, 3);
     function eventosapp_ticket_variants_apply_on_save($post_id, $post = null, $update = null) {
