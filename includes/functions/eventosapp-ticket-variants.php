@@ -56,6 +56,148 @@ if (!function_exists('eventosapp_ticket_variants_build_auto_google_class_id')) {
     }
 }
 
+
+if (!function_exists('eventosapp_ticket_variants_fill_auto_google_class_ids_in_rules')) {
+    /**
+     * Garantiza que cada variante tenga escrito en la configuración del metabox
+     * el Class ID efectivo de Google Wallet.
+     *
+     * Antes el sistema podía crear la clase automática en Google Wallet, pero el
+     * campo del metabox quedaba vacío. Eso hacía difícil diagnosticar y, además,
+     * algunos flujos que leen directamente la configuración guardada podían seguir
+     * trabajando con la clase base del evento. Esta función rellena el campo vacío
+     * con el ID automático, por ejemplo:
+     * 3388000000022917111.event_15200_variant_vip
+     */
+    function eventosapp_ticket_variants_fill_auto_google_class_ids_in_rules($event_id, $rules) {
+        $event_id = absint($event_id);
+        if (!$event_id || !is_array($rules)) {
+            return [
+                'rules' => is_array($rules) ? $rules : [],
+                'changed' => false,
+                'filled' => 0,
+            ];
+        }
+
+        $changed = false;
+        $filled = 0;
+
+        foreach ($rules as $index => $rule) {
+            if (!is_array($rule)) {
+                continue;
+            }
+
+            $current = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
+
+            if ($current !== '') {
+                // Normaliza el valor guardado para que siempre quede completo con issuer_id.
+                if (($rule['google_wallet_class_id'] ?? '') !== $current) {
+                    $rules[$index]['google_wallet_class_id'] = $current;
+                    $changed = true;
+                }
+                continue;
+            }
+
+            $variant_key = isset($rule['key']) ? sanitize_key($rule['key']) : '';
+            if ($variant_key === '' && !empty($rule['name'])) {
+                $variant_key = sanitize_key($rule['name']);
+            }
+            if ($variant_key === '') {
+                $variant_key = 'variant_' . ((int) $index + 1);
+            }
+
+            $auto_class_id = eventosapp_ticket_variants_normalize_class_id(
+                eventosapp_ticket_variants_build_auto_google_class_id($event_id, $variant_key)
+            );
+
+            if ($auto_class_id === '') {
+                continue;
+            }
+
+            $rules[$index]['google_wallet_class_id'] = $auto_class_id;
+            $changed = true;
+            $filled++;
+        }
+
+        return [
+            'rules' => $rules,
+            'changed' => $changed,
+            'filled' => $filled,
+        ];
+    }
+}
+
+if (!function_exists('eventosapp_ticket_variants_persist_auto_google_class_ids_for_event')) {
+    /**
+     * Rellena en la meta del evento los Class ID automáticos que falten en el metabox.
+     * Se ejecuta desde el guardado del evento y también desde el sync de clases.
+     */
+    function eventosapp_ticket_variants_persist_auto_google_class_ids_for_event($event_id, $reason = '') {
+        $event_id = absint($event_id);
+        if (!$event_id || get_post_type($event_id) !== 'eventosapp_event') {
+            return [
+                'ok' => false,
+                'reason' => 'invalid_event',
+                'filled' => 0,
+                'changed' => false,
+            ];
+        }
+
+        $raw_config = get_post_meta($event_id, '_eventosapp_ticket_variants_config', true);
+        if (!is_array($raw_config)) {
+            $raw_config = [];
+        }
+
+        $rules = [];
+        if (!empty($raw_config['rules']) && is_array($raw_config['rules'])) {
+            foreach ($raw_config['rules'] as $rule) {
+                $clean = eventosapp_ticket_variants_sanitize_rule($rule);
+                if ($clean) {
+                    $rules[] = $clean;
+                }
+            }
+        }
+
+        if (empty($rules)) {
+            return [
+                'ok' => true,
+                'reason' => 'no_rules',
+                'filled' => 0,
+                'changed' => false,
+            ];
+        }
+
+        $filled = eventosapp_ticket_variants_fill_auto_google_class_ids_in_rules($event_id, $rules);
+        if (empty($filled['changed'])) {
+            return [
+                'ok' => true,
+                'reason' => 'no_change',
+                'filled' => 0,
+                'changed' => false,
+            ];
+        }
+
+        $raw_config['rules'] = $filled['rules'];
+        $raw_config['updated_at'] = current_time('mysql');
+        $raw_config['google_wallet_class_ids_autofilled_at'] = current_time('mysql');
+
+        update_post_meta($event_id, '_eventosapp_ticket_variants_config', $raw_config);
+
+        eventosapp_ticket_variants_log('Class ID Android automático escrito en metabox de variantes', [
+            'event_id' => $event_id,
+            'reason' => $reason,
+            'filled' => (int) ($filled['filled'] ?? 0),
+        ]);
+
+        return [
+            'ok' => true,
+            'reason' => 'updated',
+            'filled' => (int) ($filled['filled'] ?? 0),
+            'changed' => true,
+        ];
+    }
+}
+
 if (!function_exists('eventosapp_ticket_variants_meta_keys')) {
     function eventosapp_ticket_variants_meta_keys() {
         return [
@@ -422,7 +564,7 @@ if (!function_exists('eventosapp_ticket_variants_sanitize_rule')) {
             'email_heading_color'     => isset($rule['email_heading_color']) ? eventosapp_ticket_variants_sanitize_hex($rule['email_heading_color']) : '',
             'email_subheading_color'  => isset($rule['email_subheading_color']) ? eventosapp_ticket_variants_sanitize_hex($rule['email_subheading_color']) : '',
             'email_text_color'        => isset($rule['email_text_color']) ? eventosapp_ticket_variants_sanitize_hex($rule['email_text_color']) : '',
-            'google_wallet_class_id'  => isset($rule['google_wallet_class_id']) ? sanitize_text_field($rule['google_wallet_class_id']) : '',
+            'google_wallet_class_id'  => isset($rule['google_wallet_class_id']) ? eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id']) : '',
             'google_wallet_logo_url'  => isset($rule['google_wallet_logo_url']) ? esc_url_raw($rule['google_wallet_logo_url']) : '',
             'google_wallet_hero_url'  => isset($rule['google_wallet_hero_url']) ? esc_url_raw($rule['google_wallet_hero_url']) : '',
             'google_wallet_hex_color' => isset($rule['google_wallet_hex_color']) ? eventosapp_ticket_variants_sanitize_hex($rule['google_wallet_hex_color']) : '',
@@ -1028,10 +1170,19 @@ if (!function_exists('eventosapp_ticket_variants_get_google_class_id_for_rule'))
 }
 
 if (!function_exists('eventosapp_ticket_variants_get_google_class_source_for_rule')) {
-    function eventosapp_ticket_variants_get_google_class_source_for_rule($rule) {
+    function eventosapp_ticket_variants_get_google_class_source_for_rule($rule, $event_id = 0) {
         $rule = is_array($rule) ? $rule : [];
-        $manual = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
-        return $manual !== '' ? 'manual' : 'auto';
+        $class_id = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
+        if ($class_id === '') return 'auto';
+
+        $event_id = absint($event_id);
+        if ($event_id) {
+            $variant_key = isset($rule['key']) ? sanitize_key($rule['key']) : '';
+            $auto = eventosapp_ticket_variants_normalize_class_id(eventosapp_ticket_variants_build_auto_google_class_id($event_id, $variant_key));
+            if ($auto !== '' && $auto === $class_id) return 'auto';
+        }
+
+        return 'manual';
     }
 }
 
@@ -1065,7 +1216,7 @@ if (!function_exists('eventosapp_ticket_variants_apply_rule_to_google_context'))
 
         $ctx['variant_key'] = isset($rule['key']) ? sanitize_key($rule['key']) : '';
         $ctx['variant_name'] = isset($rule['name']) ? sanitize_text_field($rule['name']) : '';
-        $ctx['variant_class_source'] = eventosapp_ticket_variants_get_google_class_source_for_rule($rule);
+        $ctx['variant_class_source'] = eventosapp_ticket_variants_get_google_class_source_for_rule($rule, $event_id);
 
         return $ctx;
     }
@@ -1106,6 +1257,10 @@ if (!function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_for_
             ]);
             return $summary;
         }
+
+        // Antes de sincronizar, asegura que el Class ID automático también quede escrito
+        // en el metabox. Así el admin lo ve y todos los flujos leen el mismo valor.
+        eventosapp_ticket_variants_persist_auto_google_class_ids_for_event($event_id, $reason ?: 'sync_google_wallet_classes_for_event');
 
         $config = eventosapp_ticket_variants_get_config($event_id);
         $rules = isset($config['rules']) && is_array($config['rules']) ? $config['rules'] : [];
@@ -1342,7 +1497,7 @@ if (!function_exists('eventosapp_ticket_variants_render_metabox')) {
                     <p class="evapp-var-no-rules evapp-var-muted">No hay variantes configuradas. Agrega una regla para empezar.</p>
                 <?php else: ?>
                     <?php foreach ($rules as $index => $rule): ?>
-                        <?php eventosapp_ticket_variants_render_rule($index, $rule, $fields, $templates, $operators); ?>
+                        <?php eventosapp_ticket_variants_render_rule($index, $rule, $fields, $templates, $operators, $post->ID); ?>
                     <?php endforeach; ?>
                 <?php endif; ?>
             </div>
@@ -1419,7 +1574,7 @@ if (!function_exists('eventosapp_ticket_variants_render_metabox')) {
                     '</div>'+
                     '<div class="evapp-var-section">Google Wallet / Android</div>'+
                     '<div class="evapp-var-grid-2">'+
-                        '<div class="evapp-var-field"><label>Class ID de Google Wallet</label><input type="text" name="'+base+'[google_wallet_class_id]" placeholder="3388...event_vip"><span class="evapp-var-help">Puede ser una clase distinta del mismo evento. Si no existe, el sistema intentará crearla en Google Wallet antes de generar el objeto. Si no incluye issuer ID, se antepone automáticamente.</span></div>'+
+                        '<div class="evapp-var-field"><label>Class ID de Google Wallet</label><input type="text" name="'+base+'[google_wallet_class_id]" placeholder="3388...event_vip"><span class="evapp-var-help">Puede ser una clase distinta del mismo evento. Si se deja vacío, el sistema la escribe automáticamente aquí al guardar el evento y la crea/actualiza en Google Wallet antes de generar el objeto. Si no incluye issuer ID, se antepone automáticamente.</span></div>'+
                         '<div class="evapp-var-field"><label>Nombre del evento en Google Wallet</label><input type="text" name="'+base+'[google_wallet_event_name]" placeholder="Opcional"></div>'+
                         '<div class="evapp-var-field"><label>Logo URL Google Wallet</label><input type="url" name="'+base+'[google_wallet_logo_url]" placeholder="https://..."></div>'+
                         '<div class="evapp-var-field"><label>Hero image URL Google Wallet</label><input type="url" name="'+base+'[google_wallet_hero_url]" placeholder="https://..."></div>'+
@@ -1503,12 +1658,19 @@ if (!function_exists('eventosapp_ticket_variants_render_metabox')) {
 }
 
 if (!function_exists('eventosapp_ticket_variants_render_rule')) {
-    function eventosapp_ticket_variants_render_rule($index, $rule, $fields, $templates, $operators) {
+    function eventosapp_ticket_variants_render_rule($index, $rule, $fields, $templates, $operators, $event_id = 0) {
         $rule = eventosapp_ticket_variants_sanitize_rule($rule);
         if (!$rule) return;
 
         $base = 'evapp_ticket_variants_rules[' . (int) $index . ']';
         $conditions = isset($rule['conditions']) && is_array($rule['conditions']) ? $rule['conditions'] : [];
+
+        $google_wallet_class_value = eventosapp_ticket_variants_normalize_class_id($rule['google_wallet_class_id'] ?? '');
+        if ($google_wallet_class_value === '') {
+            $google_wallet_class_value = eventosapp_ticket_variants_normalize_class_id(
+                eventosapp_ticket_variants_build_auto_google_class_id($event_id, $rule['key'] ?? '')
+            );
+        }
         ?>
         <div class="evapp-var-rule" data-index="<?php echo esc_attr((int) $index); ?>">
             <div class="evapp-var-rule-header">
@@ -1613,8 +1775,8 @@ if (!function_exists('eventosapp_ticket_variants_render_rule')) {
             <div class="evapp-var-grid-2">
                 <div class="evapp-var-field">
                     <label>Class ID de Google Wallet</label>
-                    <input type="text" name="<?php echo esc_attr($base); ?>[google_wallet_class_id]" value="<?php echo esc_attr($rule['google_wallet_class_id'] ?? ''); ?>" placeholder="3388...event_vip">
-                    <span class="evapp-var-help">Puede ser una clase distinta del mismo evento. Si no existe, el sistema intentará crearla en Google Wallet antes de generar el objeto.</span>
+                    <input type="text" name="<?php echo esc_attr($base); ?>[google_wallet_class_id]" value="<?php echo esc_attr($google_wallet_class_value); ?>" placeholder="3388...event_vip">
+                    <span class="evapp-var-help">Puede ser una clase distinta del mismo evento. Si se deja vacío, el sistema la escribe automáticamente aquí al guardar el evento y la crea/actualiza en Google Wallet antes de generar el objeto.</span>
                 </div>
                 <div class="evapp-var-field">
                     <label>Nombre del evento en Google Wallet</label>
@@ -1690,6 +1852,19 @@ add_action('save_post_eventosapp_event', function($post_id) {
     foreach ($rules_raw as $rule) {
         $clean = eventosapp_ticket_variants_sanitize_rule($rule);
         if ($clean) $rules[] = $clean;
+    }
+
+    // Si el campo Class ID de Google Wallet de una variante está vacío,
+    // se escribe en la configuración guardada el Class ID automático.
+    // Esto hace que el metabox muestre la clase creada y que los tickets
+    // lean siempre una clase explícita de variante.
+    $auto_fill = eventosapp_ticket_variants_fill_auto_google_class_ids_in_rules($post_id, $rules);
+    $rules = $auto_fill['rules'];
+    if (!empty($auto_fill['filled'])) {
+        eventosapp_ticket_variants_log('Class ID Android automático preparado durante guardado de variantes', [
+            'event_id' => (int) $post_id,
+            'filled' => (int) $auto_fill['filled'],
+        ]);
     }
 
     $previous_config = get_post_meta($post_id, '_eventosapp_ticket_variants_config', true);
