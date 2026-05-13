@@ -414,19 +414,119 @@ if (!function_exists('evapp_webhook_ticket_matches_event')) {
  * No se usa para permitir cambios de evento; solo se ejecuta cuando el ticket
  * encontrado ya pertenece al evento recibido.
  */
-if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
-  function evapp_webhook_refresh_ticket_assets($ticket_id, $evento_id, $context = 'webhook_update') : array {
+if (!function_exists('evapp_webhook_event_flag_on')) {
+  /**
+   * Lee flags booleanos del evento de forma tolerante.
+   * Mantiene compatibilidad con valores guardados como string, entero o booleano.
+   */
+  function evapp_webhook_event_flag_on($evento_id, $meta_key) : bool {
+    $evento_id = absint($evento_id);
+    if (!$evento_id || $meta_key === '') return false;
+    $value = get_post_meta($evento_id, (string)$meta_key, true);
+    return ($value === '1' || $value === 1 || $value === true || $value === 'true' || $value === 'on');
+  }
+}
+
+if (!function_exists('evapp_webhook_qr_manager')) {
+  /**
+   * Devuelve una instancia única del QR Manager sin registrar hooks duplicados.
+   */
+  function evapp_webhook_qr_manager() {
+    if (!class_exists('EventosApp_QR_Manager')) return null;
+
+    if (method_exists('EventosApp_QR_Manager', 'get_instance')) {
+      return EventosApp_QR_Manager::get_instance();
+    }
+
+    static $fallback_qr_manager = null;
+    if (!$fallback_qr_manager instanceof EventosApp_QR_Manager) {
+      $fallback_qr_manager = new EventosApp_QR_Manager();
+    }
+    return $fallback_qr_manager;
+  }
+}
+
+if (!function_exists('evapp_webhook_apply_ticket_variant')) {
+  /**
+   * Aplica la variante de ticket y deja trazas legibles para WP_DEBUG.
+   */
+  function evapp_webhook_apply_ticket_variant($ticket_id, $evento_id, $context = 'webhook') : array {
     $ticket_id = absint($ticket_id);
     $evento_id = absint($evento_id);
 
     $result = [
-      'qr'             => null,
-      'pdf'            => null,
-      'ics'            => null,
-      'wallet_android' => null,
-      'wallet_apple'   => null,
-      'search_index'   => null,
-      'errors'         => [],
+      'applied' => false,
+      'reason'  => 'helper_not_available',
+    ];
+
+    if (!$ticket_id || !$evento_id) {
+      $result['reason'] = 'ticket_or_event_invalid';
+      return $result;
+    }
+
+    if (!function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+      update_post_meta($ticket_id, '_eventosapp_webhook_variant_result', $result);
+      return $result;
+    }
+
+    try {
+      $result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+      if (!is_array($result)) {
+        $result = ['applied' => (bool)$result, 'reason' => 'non_array_result'];
+      }
+      update_post_meta($ticket_id, '_eventosapp_webhook_variant_result', $result);
+      update_post_meta($ticket_id, '_eventosapp_webhook_variant_last_context', sanitize_key((string)$context));
+      update_post_meta($ticket_id, '_eventosapp_webhook_variant_last_sync', current_time('mysql'));
+
+      error_log('[EventosApp] Webhook variant '.$context.' ticket='.$ticket_id.' event='.$evento_id.' result='.wp_json_encode($result));
+    } catch (\Throwable $e) {
+      $result = [
+        'applied' => false,
+        'reason'  => 'exception',
+        'error'   => $e->getMessage(),
+      ];
+      update_post_meta($ticket_id, '_eventosapp_webhook_variant_result', $result);
+      error_log('[EventosApp] Webhook variant ERROR '.$context.' ticket='.$ticket_id.' event='.$evento_id.' error='.$e->getMessage());
+    }
+
+    return $result;
+  }
+}
+
+/**
+ * Regenera/actualiza anexos en tickets creados o actualizados vía webhook del mismo evento.
+ *
+ * Importante:
+ * - Nunca mueve tickets entre eventos.
+ * - Aplica variante antes de correo, PDF, ICS, Android Wallet y Apple Wallet.
+ * - Sincroniza clases Android de variantes antes de crear/actualizar objetos Google Wallet.
+ * - Genera solo QR faltantes o con archivo físico perdido, sin tocar QR válidos existentes.
+ */
+if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
+  function evapp_webhook_refresh_ticket_assets($ticket_id, $evento_id, $context = 'webhook_update') : array {
+    $ticket_id = absint($ticket_id);
+    $evento_id = absint($evento_id);
+    $context   = sanitize_key((string)$context);
+    if ($context === '') $context = 'webhook';
+
+    $result = [
+      'context'                    => $context,
+      'ticket_variant'             => null,
+      'variant_key'                => '',
+      'variant_name'               => '',
+      'variant_google_class_id'    => '',
+      'google_wallet_classes_sync' => null,
+      'qr'                         => null,
+      'pdf'                        => null,
+      'ics'                        => null,
+      'wallet_android'             => null,
+      'wallet_android_url'         => '',
+      'wallet_android_object_id'   => '',
+      'wallet_android_class_id'    => '',
+      'wallet_apple'               => null,
+      'wallet_apple_url'           => '',
+      'search_index'               => null,
+      'errors'                     => [],
     ];
 
     if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
@@ -436,46 +536,52 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
 
     if (!evapp_webhook_ticket_matches_event($ticket_id, $evento_id)) {
       $result['errors'][] = 'evento_no_coincide';
-      error_log('[EventosApp] Webhook assets SKIPPED: ticket '.$ticket_id.' no pertenece al evento '.$evento_id);
+      error_log('[EventosApp] Webhook assets SKIPPED: ticket '.$ticket_id.' no pertenece al evento '.$evento_id.' context='.$context);
       return $result;
     }
 
-    // Aplicar variantes antes de regenerar assets.
-    // Así Google Wallet/Apple/correo usan clase, branding y plantilla según la regla coincidente.
-    if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+    update_post_meta($ticket_id, '_eventosapp_webhook_assets_last_context', $context);
+
+    // 1) Variante primero: todos los anexos posteriores deben leer estos metadatos.
+    $variant_result = evapp_webhook_apply_ticket_variant($ticket_id, $evento_id, $context);
+    $result['ticket_variant']          = $variant_result;
+    $result['variant_key']             = (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true);
+    $result['variant_name']            = (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_name', true);
+    $result['variant_google_class_id'] = (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true);
+
+    // 2) Si hay Android Wallet y variantes, asegurar que las clases existan antes de crear objetos.
+    $wallet_android_on = evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_wallet_android');
+    if ($wallet_android_on && function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_for_event')) {
       try {
-        $variant_result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
-        $result['ticket_variant'] = $variant_result;
-        error_log('[EventosApp] Webhook assets variant ticket='.$ticket_id.' event='.$evento_id.' result='.wp_json_encode($variant_result));
+        $result['google_wallet_classes_sync'] = eventosapp_ticket_variants_sync_google_wallet_classes_for_event($evento_id, $context);
       } catch (\Throwable $e) {
-        $result['errors'][] = 'ticket_variant: '.$e->getMessage();
+        $result['errors'][] = 'google_wallet_classes_sync: '.$e->getMessage();
       }
     }
 
-    // QR: completar faltantes sin cambiar URLs existentes.
-    if (class_exists('EventosApp_QR_Manager')) {
+    // 3) QR: completar faltantes o archivos físicos perdidos. No regenera QR existentes válidos.
+    $qr_manager = evapp_webhook_qr_manager();
+    if ($qr_manager) {
       try {
-        $qr_manager = method_exists('EventosApp_QR_Manager', 'get_instance')
-          ? EventosApp_QR_Manager::get_instance()
-          : new EventosApp_QR_Manager();
-
-        if ($qr_manager && method_exists($qr_manager, 'generate_missing_qr_codes')) {
+        if (method_exists($qr_manager, 'generate_missing_qr_codes')) {
           $result['qr'] = $qr_manager->generate_missing_qr_codes($ticket_id);
-        } elseif ($qr_manager && method_exists($qr_manager, 'generate_all_qr_codes')) {
+        } elseif (method_exists($qr_manager, 'generate_all_qr_codes')) {
           $qr_manager->generate_all_qr_codes($ticket_id);
           $result['qr'] = 'checked';
         }
       } catch (\Throwable $e) {
         $result['errors'][] = 'qr: '.$e->getMessage();
       }
+    } else {
+      $result['qr'] = 'manager_not_available';
     }
 
-    // PDF: se sobrescribe el mismo archivo del ticket, manteniendo la URL.
-    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
+    // 4) PDF: usa QR tipo PDF y metadatos de variante ya aplicados.
+    $pdf_on = evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_pdf');
     if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) {
       try {
         eventosapp_ticket_generar_pdf($ticket_id);
-        $result['pdf'] = 'regenerated';
+        $result['pdf'] = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true) ? 'regenerated' : 'generated_no_url_meta';
       } catch (\Throwable $e) {
         $result['errors'][] = 'pdf: '.$e->getMessage();
       }
@@ -483,12 +589,12 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
       $result['pdf'] = $pdf_on ? 'helper_not_available' : 'disabled';
     }
 
-    // ICS: se delega al generador actual si está disponible.
-    $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
+    // 5) ICS: se delega al generador actual si está disponible.
+    $ics_on = evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_ics');
     if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) {
       try {
         eventosapp_ticket_generar_ics($ticket_id);
-        $result['ics'] = 'regenerated';
+        $result['ics'] = get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true) ? 'regenerated' : 'generated_no_url_meta';
       } catch (\Throwable $e) {
         $result['errors'][] = 'ics: '.$e->getMessage();
       }
@@ -496,32 +602,63 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
       $result['ics'] = $ics_on ? 'helper_not_available' : 'disabled';
     }
 
-    // Google Wallet.
-    $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
-    if (($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) && function_exists('eventosapp_generar_enlace_wallet_android')) {
-      try {
-        eventosapp_generar_enlace_wallet_android($ticket_id, false);
-        $result['wallet_android'] = 'regenerated';
-      } catch (\Throwable $e) {
-        $result['errors'][] = 'wallet_android: '.$e->getMessage();
+    // 6) Google Wallet / Android.
+    if ($wallet_android_on) {
+      if (function_exists('eventosapp_generar_enlace_wallet_android')) {
+        try {
+          $before_effective_class = (string) get_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', true);
+          $before_object_id       = (string) get_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', true);
+
+          $android_url = eventosapp_generar_enlace_wallet_android($ticket_id, false);
+          if ($android_url) {
+            update_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', esc_url_raw($android_url));
+          }
+
+          $after_effective_class = (string) get_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', true);
+          $after_object_id       = (string) get_post_meta($ticket_id, '_eventosapp_wallet_google_object_id', true);
+          $variant_class_id      = (string) get_post_meta($ticket_id, '_eventosapp_wallet_variant_class_id', true);
+
+          $result['wallet_android_url']       = $android_url ? (string)$android_url : (string) get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', true);
+          $result['wallet_android_object_id'] = $after_object_id;
+          $result['wallet_android_class_id']  = $after_effective_class;
+
+          if (!$android_url) {
+            $result['wallet_android'] = 'failed_or_empty_url';
+            error_log('[EventosApp] Webhook Android Wallet URL vacía ticket='.$ticket_id.' event='.$evento_id.' context='.$context.' variant_class='.$variant_class_id.' before_class='.$before_effective_class.' after_class='.$after_effective_class.' before_object='.$before_object_id.' after_object='.$after_object_id);
+          } elseif ($variant_class_id !== '' && $after_effective_class !== '' && $after_effective_class !== $variant_class_id && function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
+            // Respaldo para instalaciones donde el generador principal todavía no toma el class_id de variante.
+            $refresh = eventosapp_ticket_variants_refresh_google_wallet_object($ticket_id, $evento_id);
+            $result['wallet_android'] = $refresh ? 'regenerated_variant_refresh' : 'regenerated_variant_refresh_failed';
+            $result['wallet_android_class_id'] = (string) get_post_meta($ticket_id, '_eventosapp_wallet_google_class_id_effective', true);
+          } else {
+            $result['wallet_android'] = 'regenerated';
+          }
+        } catch (\Throwable $e) {
+          $result['errors'][] = 'wallet_android: '.$e->getMessage();
+        }
+      } else {
+        $result['wallet_android'] = 'helper_not_available';
       }
     } else {
-      $result['wallet_android'] = ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) ? 'helper_not_available' : 'disabled';
+      $result['wallet_android'] = 'disabled';
     }
 
-    // Apple Wallet.
-    $wallet_ios_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true);
-    if ($wallet_ios_on === '1' || $wallet_ios_on === 1 || $wallet_ios_on === true) {
+    // 7) Apple Wallet.
+    $wallet_ios_on = evapp_webhook_event_flag_on($evento_id, '_eventosapp_ticket_wallet_apple');
+    if ($wallet_ios_on) {
       try {
         if (function_exists('eventosapp_apple_generate_pass')) {
-          eventosapp_apple_generate_pass($ticket_id);
-          $result['wallet_apple'] = 'regenerated';
+          $apple_url = eventosapp_apple_generate_pass($ticket_id);
+          $result['wallet_apple'] = $apple_url ? 'regenerated' : 'generated_empty_url';
         } elseif (function_exists('eventosapp_generar_enlace_wallet_apple')) {
-          eventosapp_generar_enlace_wallet_apple($ticket_id);
-          $result['wallet_apple'] = 'regenerated';
+          $apple_url = eventosapp_generar_enlace_wallet_apple($ticket_id);
+          $result['wallet_apple'] = $apple_url ? 'regenerated' : 'generated_empty_url';
         } else {
+          $apple_url = '';
           $result['wallet_apple'] = 'helper_not_available';
         }
+
+        $result['wallet_apple_url'] = $apple_url ? (string)$apple_url : (string) get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple', true);
       } catch (\Throwable $e) {
         $result['errors'][] = 'wallet_apple: '.$e->getMessage();
       }
@@ -529,6 +666,7 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
       $result['wallet_apple'] = 'disabled';
     }
 
+    // 8) Índice de búsqueda.
     if (function_exists('eventosapp_ticket_build_search_blob')) {
       try {
         eventosapp_ticket_build_search_blob($ticket_id);
@@ -540,6 +678,8 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
 
     update_post_meta($ticket_id, '_eventosapp_webhook_assets_last_sync', current_time('mysql'));
     update_post_meta($ticket_id, '_eventosapp_webhook_assets_last_result', $result);
+
+    do_action('eventosapp_webhook_assets_refreshed', $ticket_id, $evento_id, $context, $result);
 
     error_log('[EventosApp] Webhook assets '.$context.' ticket='.$ticket_id.' event='.$evento_id.' result='.wp_json_encode($result));
 
@@ -1009,53 +1149,12 @@ if ($existing) {
   }
 
   // ============================================================================
-  // NUEVO SISTEMA DE QR - Generar todos los códigos QR con el sistema moderno
+  // Compatibilidad webhook + variantes + anexos.
+  // Unifica el mismo flujo usado en updates para que creación por webhook genere:
+  // QRs, PDF, ICS, Google Wallet, Apple Wallet, clase Android de variante y search index
+  // después de guardar datos base/extras y antes de evaluar condicionales/correo.
   // ============================================================================
-  if (class_exists('EventosApp_QR_Manager')) {
-    // Instanciar el QR Manager y generar todos los QR codes
-    $qr_manager = new EventosApp_QR_Manager();
-    
-    // Forzar la generación eliminando cualquier QR existente primero (por si acaso)
-    delete_post_meta($post_id, '_eventosapp_qr_codes');
-    
-    // Generar todos los QR codes del nuevo sistema
-    $qr_manager->generate_all_qr_codes($post_id);
-    
-    error_log('[EventosApp] Webhook CREATE: Nuevos QR codes generados para ticket '.$post_id);
-  } else {
-    error_log('[EventosApp] Webhook CREATE: ADVERTENCIA - EventosApp_QR_Manager no disponible para ticket '.$post_id);
-  }
-
-  // Aplicar variantes después de guardar datos base, extras y QR, antes de generar wallets/correo.
-  if (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
-    try {
-      $variant_result_create = eventosapp_ticket_variants_apply_to_ticket($post_id, $evento_id, true);
-      update_post_meta($post_id, '_eventosapp_webhook_variant_result', $variant_result_create);
-      error_log('[EventosApp] Webhook CREATE variant ticket='.$post_id.' event='.$evento_id.' result='.wp_json_encode($variant_result_create));
-    } catch (\Throwable $e) {
-      error_log('[EventosApp] Webhook CREATE variant ERROR ticket='.$post_id.' event='.$evento_id.' error='.$e->getMessage());
-    }
-  }
-
-  // ============================================================================
-  // FUNCIONES LEGACY - Mantener compatibilidad con archivos antiguos
-  // ============================================================================
-  // Generar adjuntos/archivos según flags del evento (opcional; el helper de email también genera si están ON)
-  $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
-  $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
-  if ($pdf_on && function_exists('eventosapp_ticket_generar_pdf')) eventosapp_ticket_generar_pdf($post_id);
-  if ($ics_on && function_exists('eventosapp_ticket_generar_ics')) eventosapp_ticket_generar_ics($post_id);
-
-  $wallet_android_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true);
-  if ($wallet_android_on==='1' || $wallet_android_on===1 || $wallet_android_on===true) {
-    if (function_exists('eventosapp_generar_enlace_wallet_android')) eventosapp_generar_enlace_wallet_android($post_id, false);
-    if (function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
-      eventosapp_ticket_variants_refresh_google_wallet_object($post_id, $evento_id);
-    }
-  }
-
-  // Indexar para búsquedas
-  if (function_exists('eventosapp_ticket_build_search_blob')) eventosapp_ticket_build_search_blob($post_id);
+  $asset_refresh_result_create = evapp_webhook_refresh_ticket_assets($post_id, $evento_id, 'webhook_create');
 
   // --- Marcar origen ---
   update_post_meta($post_id, '_eventosapp_ticket_origin', 'webhook');
@@ -1150,7 +1249,14 @@ if ($existing) {
 
   // Respuesta REST incluyendo el resultado del correo
   $response = array_merge(
-    ['ok'=>true, 'ticket_id'=>$post_id, 'public_id'=>$ticket_public_id, 'created'=>true, 'dedupe_by'=>$dedupe_used],
+    [
+      'ok'=>true,
+      'ticket_id'=>$post_id,
+      'public_id'=>$ticket_public_id,
+      'created'=>true,
+      'dedupe_by'=>$dedupe_used,
+      'asset_refresh'=>isset($asset_refresh_result_create) ? $asset_refresh_result_create : null,
+    ],
     $email_result
   );
 
