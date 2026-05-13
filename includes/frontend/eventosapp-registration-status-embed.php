@@ -49,6 +49,7 @@ if ( ! function_exists( 'eventosapp_registration_status_default_config' ) ) {
             'show_checkin_status'     => '1',
             'show_localidad'          => '1',
             'resend_enabled'          => '0',
+            'resend_cooldown_hours'   => '24',
             'primary_color'           => '#2271b1',
             'background_color'        => '#ffffff',
             'text_color'              => '#1d2327',
@@ -99,6 +100,7 @@ if ( ! function_exists( 'eventosapp_registration_status_default_config' ) ) {
                 'resend_subject'         => 'Tu ticket para {{evento}}',
                 'resend_success_message' => 'El ticket fue reenviado al correo registrado.',
                 'resend_error_message'   => 'No fue posible reenviar el ticket en este momento.',
+                'resend_cooldown_message' => 'Ya solicitaste el reenvío de este ticket. Podrás solicitarlo nuevamente en {{tiempo_restante}}.',
             ],
         ];
     }
@@ -150,6 +152,12 @@ if ( ! function_exists( 'eventosapp_registration_status_get_config' ) ) {
         if ( empty( $config['text_align'] ) || ! in_array( $config['text_align'], [ 'left', 'center', 'right' ], true ) ) {
             $config['text_align'] = $defaults['text_align'];
         }
+
+        $cooldown_hours = isset( $config['resend_cooldown_hours'] ) ? absint( $config['resend_cooldown_hours'] ) : absint( $defaults['resend_cooldown_hours'] );
+        if ( $cooldown_hours < 0 || $cooldown_hours > 720 ) {
+            $cooldown_hours = absint( $defaults['resend_cooldown_hours'] );
+        }
+        $config['resend_cooldown_hours'] = (string) $cooldown_hours;
 
         foreach ( [ 'content_max_width' => [ 320, 1400 ], 'outer_padding' => [ 0, 120 ], 'card_padding' => [ 0, 120 ] ] as $size_key => $range ) {
             $value = isset( $config[ $size_key ] ) ? absint( $config[ $size_key ] ) : absint( $defaults[ $size_key ] );
@@ -686,6 +694,12 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
                 </label>
             </p>
 
+            <p>
+                <label><strong>Tiempo mínimo entre reenvíos del mismo ticket</strong></label><br>
+                <input type="number" class="evapp-rs-number" min="0" max="720" step="1" name="eventosapp_registration_status_config[resend_cooldown_hours]" value="<?php echo esc_attr( $config['resend_cooldown_hours'] ); ?>"> horas
+                <br><span class="evapp-rs-muted">Por defecto son 24 horas. Usa 0 solo si quieres permitir reenvíos sin bloqueo por ticket.</span>
+            </p>
+
             <div class="evapp-rs-grid">
                 <p>
                     <label><strong>Texto del botón de reenvío</strong></label><br>
@@ -707,6 +721,12 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
                     <textarea class="evapp-rs-textarea" name="eventosapp_registration_status_config[texts][resend_error_message]"><?php echo esc_textarea( $config['texts']['resend_error_message'] ); ?></textarea>
                 </p>
             </div>
+
+            <p>
+                <label><strong>Mensaje cuando el usuario está en bloqueo por tiempo</strong></label><br>
+                <textarea class="evapp-rs-textarea" name="eventosapp_registration_status_config[texts][resend_cooldown_message]"><?php echo esc_textarea( $config['texts']['resend_cooldown_message'] ); ?></textarea>
+                <br><span class="evapp-rs-muted">Variable disponible: <code>{{tiempo_restante}}</code>.</span>
+            </p>
         </div>
 
         <div class="evapp-rs-box">
@@ -841,6 +861,11 @@ if ( ! function_exists( 'eventosapp_registration_status_save_metabox' ) ) {
         $config['show_checkin_status'] = ! empty( $raw['show_checkin_status'] ) ? '1' : '0';
         $config['show_localidad']      = ! empty( $raw['show_localidad'] ) ? '1' : '0';
         $config['resend_enabled']      = ! empty( $raw['resend_enabled'] ) ? '1' : '0';
+        $cooldown_hours               = isset( $raw['resend_cooldown_hours'] ) ? absint( $raw['resend_cooldown_hours'] ) : absint( $defaults['resend_cooldown_hours'] );
+        if ( $cooldown_hours < 0 || $cooldown_hours > 720 ) {
+            $cooldown_hours = absint( $defaults['resend_cooldown_hours'] );
+        }
+        $config['resend_cooldown_hours'] = (string) $cooldown_hours;
 
         foreach ( [ 'primary_color', 'background_color', 'text_color', 'border_color', 'title_color', 'subtitle_color', 'button_text_color', 'input_background_color' ] as $color_key ) {
             $value = isset( $raw[ $color_key ] ) ? sanitize_text_field( $raw[ $color_key ] ) : $defaults[ $color_key ];
@@ -899,7 +924,8 @@ if ( ! function_exists( 'eventosapp_registration_status_save_metabox' ) ) {
             'event_id'       => $post_id,
             'enabled'        => $config['enabled'],
             'match_mode'     => $config['match_mode'],
-            'resend_enabled' => $config['resend_enabled'],
+            'resend_enabled'        => $config['resend_enabled'],
+            'resend_cooldown_hours' => $config['resend_cooldown_hours'],
         ] );
     }
 }
@@ -938,6 +964,179 @@ if ( ! function_exists( 'eventosapp_registration_status_rate_limit' ) ) {
 
         set_transient( $key, $num + 1, absint( $window_seconds ) );
         return true;
+    }
+}
+
+/**
+ * Retorna el tiempo configurado de bloqueo por ticket entre reenvíos.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_get_resend_cooldown_seconds' ) ) {
+    function eventosapp_registration_status_get_resend_cooldown_seconds( $config ) {
+        $hours = isset( $config['resend_cooldown_hours'] ) ? absint( $config['resend_cooldown_hours'] ) : 24;
+        if ( $hours > 720 ) {
+            $hours = 24;
+        }
+
+        return $hours * HOUR_IN_SECONDS;
+    }
+}
+
+/**
+ * Formatea segundos restantes para mostrar el bloqueo en el formulario público.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_format_remaining_time' ) ) {
+    function eventosapp_registration_status_format_remaining_time( $seconds ) {
+        $seconds = max( 0, absint( $seconds ) );
+        if ( $seconds <= 0 ) {
+            return '0 minutos';
+        }
+
+        $hours   = floor( $seconds / HOUR_IN_SECONDS );
+        $minutes = ceil( ( $seconds % HOUR_IN_SECONDS ) / MINUTE_IN_SECONDS );
+
+        if ( $hours > 0 && $minutes > 0 ) {
+            return $hours . ' hora' . ( $hours === 1 ? '' : 's' ) . ' y ' . $minutes . ' minuto' . ( $minutes === 1 ? '' : 's' );
+        }
+
+        if ( $hours > 0 ) {
+            return $hours . ' hora' . ( $hours === 1 ? '' : 's' );
+        }
+
+        return $minutes . ' minuto' . ( $minutes === 1 ? '' : 's' );
+    }
+}
+
+/**
+ * Estado de disponibilidad del botón de reenvío para un ticket específico.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_get_resend_cooldown_state' ) ) {
+    function eventosapp_registration_status_get_resend_cooldown_state( $ticket_id, $config ) {
+        $ticket_id         = absint( $ticket_id );
+        $cooldown_seconds  = eventosapp_registration_status_get_resend_cooldown_seconds( $config );
+        $last_resend_ts    = absint( get_post_meta( $ticket_id, '_eventosapp_registration_status_last_resend_ts', true ) );
+        $now               = current_time( 'timestamp' );
+        $remaining_seconds = 0;
+
+        if ( $ticket_id && $cooldown_seconds > 0 && $last_resend_ts > 0 ) {
+            $elapsed = max( 0, $now - $last_resend_ts );
+            if ( $elapsed < $cooldown_seconds ) {
+                $remaining_seconds = $cooldown_seconds - $elapsed;
+            }
+        }
+
+        $remaining_text = eventosapp_registration_status_format_remaining_time( $remaining_seconds );
+        $message        = ! empty( $config['texts']['resend_cooldown_message'] ) ? $config['texts']['resend_cooldown_message'] : 'Ya solicitaste el reenvío de este ticket. Podrás solicitarlo nuevamente en {{tiempo_restante}}.';
+        $message        = str_replace( '{{tiempo_restante}}', $remaining_text, $message );
+
+        return [
+            'allowed'           => $remaining_seconds <= 0,
+            'remaining_seconds' => $remaining_seconds,
+            'remaining_text'    => $remaining_text,
+            'message'           => sanitize_text_field( $message ),
+            'last_resend_ts'    => $last_resend_ts,
+            'cooldown_seconds'  => $cooldown_seconds,
+        ];
+    }
+}
+
+/**
+ * Agrega una entrada resumida al historial de consulta externa del ticket.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_append_ticket_activity' ) ) {
+    function eventosapp_registration_status_append_ticket_activity( $ticket_id, $entry ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id || ! is_array( $entry ) ) {
+            return;
+        }
+
+        $history = get_post_meta( $ticket_id, '_eventosapp_registration_status_embed_history', true );
+        if ( ! is_array( $history ) ) {
+            $history = [];
+        }
+
+        $entry = wp_parse_args( $entry, [
+            'at'      => current_time( 'mysql' ),
+            'action'  => '',
+            'status'  => '',
+            'message' => '',
+            'source'  => 'registration_status_embed',
+        ] );
+
+        $history[] = [
+            'at'      => sanitize_text_field( $entry['at'] ),
+            'action'  => sanitize_key( $entry['action'] ),
+            'status'  => sanitize_key( $entry['status'] ),
+            'message' => sanitize_text_field( $entry['message'] ),
+            'source'  => sanitize_key( $entry['source'] ),
+        ];
+
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_history', array_slice( $history, -30 ) );
+    }
+}
+
+/**
+ * Marca que el ticket fue consultado desde el formulario incrustable.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_record_lookup_activity' ) ) {
+    function eventosapp_registration_status_record_lookup_activity( $ticket_id, $event_id ) {
+        $ticket_id = absint( $ticket_id );
+        $event_id  = absint( $event_id );
+        if ( ! $ticket_id ) {
+            return;
+        }
+
+        $count = absint( get_post_meta( $ticket_id, '_eventosapp_registration_status_embed_lookup_count', true ) ) + 1;
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_consulted', '1' );
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_lookup_count', $count );
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_last_lookup_at', current_time( 'mysql' ) );
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_last_event_id', $event_id );
+
+        eventosapp_registration_status_append_ticket_activity( $ticket_id, [
+            'action'  => 'lookup',
+            'status'  => 'found',
+            'message' => 'Ticket consultado desde formulario incrustable.',
+        ] );
+    }
+}
+
+/**
+ * Marca intentos y resultados de reenvío solicitados desde el formulario incrustable.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_record_resend_activity' ) ) {
+    function eventosapp_registration_status_record_resend_activity( $ticket_id, $event_id, $status, $message = '', $mark_success = false ) {
+        $ticket_id = absint( $ticket_id );
+        $event_id  = absint( $event_id );
+        if ( ! $ticket_id ) {
+            return;
+        }
+
+        $now                  = current_time( 'mysql' );
+        $status_key           = sanitize_key( $status );
+        $should_count_request = in_array( $status_key, [ 'requested', 'rate_limited', 'cooldown_blocked' ], true );
+        $request_count        = absint( get_post_meta( $ticket_id, '_eventosapp_registration_status_embed_resend_request_count', true ) );
+
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_resend_requested', '1' );
+        if ( $should_count_request ) {
+            $request_count++;
+            update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_resend_request_count', $request_count );
+            update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_last_resend_request_at', $now );
+        }
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_last_resend_status', $status_key );
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_last_resend_message', sanitize_text_field( $message ) );
+        update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_last_event_id', $event_id );
+
+        if ( $mark_success ) {
+            $sent_count = absint( get_post_meta( $ticket_id, '_eventosapp_registration_status_embed_resend_sent_count', true ) ) + 1;
+            update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_resend_sent_count', $sent_count );
+            update_post_meta( $ticket_id, '_eventosapp_registration_status_embed_last_resend_at', $now );
+            update_post_meta( $ticket_id, '_eventosapp_registration_status_last_resend_ts', current_time( 'timestamp' ) );
+        }
+
+        eventosapp_registration_status_append_ticket_activity( $ticket_id, [
+            'action'  => 'resend',
+            'status'  => $status,
+            'message' => $message,
+        ] );
     }
 }
 
@@ -1136,7 +1335,14 @@ if ( ! function_exists( 'eventosapp_registration_status_render_public_embed' ) )
                             if (node) {
                                 node.textContent = message || (json && json.success ? 'Ticket reenviado.' : 'No fue posible reenviar el ticket.');
                             }
-                            btn.disabled = false;
+                            if (json && json.success) {
+                                btn.disabled = true;
+                                if (json.data && json.data.cooldown_message && node) {
+                                    node.textContent = message + ' ' + json.data.cooldown_message;
+                                }
+                            } else {
+                                btn.disabled = false;
+                            }
                             btn.textContent = originalText;
                             resizeFrame();
                         })
@@ -1147,7 +1353,7 @@ if ( ! function_exists( 'eventosapp_registration_status_render_public_embed' ) )
                             btn.textContent = originalText;
                             resizeFrame();
                         });
-                    }, { once:true });
+                    });
                 }
 
                 if (form) {
@@ -1435,8 +1641,9 @@ if ( ! function_exists( 'eventosapp_registration_status_render_found_html' ) ) {
         </table>
 
         <?php if ( ! empty( $config['resend_enabled'] ) && $config['resend_enabled'] === '1' && $lookup_key ) : ?>
-            <button type="button" id="evapp-rs-resend" class="evapp-rs-resend"><?php echo esc_html( $config['texts']['resend_button_label'] ); ?></button>
-            <span id="evapp-rs-resend-message" class="evapp-rs-small"></span>
+            <?php $cooldown_state = eventosapp_registration_status_get_resend_cooldown_state( $ticket_id, $config ); ?>
+            <button type="button" id="evapp-rs-resend" class="evapp-rs-resend" <?php disabled( ! $cooldown_state['allowed'] ); ?>><?php echo esc_html( $config['texts']['resend_button_label'] ); ?></button>
+            <span id="evapp-rs-resend-message" class="evapp-rs-small"><?php echo $cooldown_state['allowed'] ? '' : esc_html( $cooldown_state['message'] ); ?></span>
         <?php endif; ?>
         <?php
         return ob_get_clean();
@@ -1506,6 +1713,8 @@ if ( ! function_exists( 'eventosapp_registration_status_ajax_lookup' ) ) {
             ],
             15 * MINUTE_IN_SECONDS
         );
+
+        eventosapp_registration_status_record_lookup_activity( $ticket_id, $event_id );
 
         eventosapp_registration_status_log( 'Consulta con coincidencia', [
             'event_id'  => $event_id,
@@ -1676,7 +1885,7 @@ if ( ! function_exists( 'eventosapp_registration_status_resend_ticket_email' ) )
 
         /**
          * Permite que una instalación conecte aquí su enviador oficial sin editar este archivo.
-         * Retornar true si el envío fue exitoso, WP_Error si falló, o null para continuar con el respaldo.
+         * Retornar true si el envío fue exitoso, WP_Error si falló, o null para continuar con el enviador oficial.
          */
         $custom_result = apply_filters( 'eventosapp_registration_status_custom_resend_ticket', null, $ticket_id, $event_id, $config );
         if ( $custom_result === true ) {
@@ -1686,6 +1895,36 @@ if ( ! function_exists( 'eventosapp_registration_status_resend_ticket_email' ) )
         if ( is_wp_error( $custom_result ) ) {
             eventosapp_registration_status_record_email_history( $ticket_id, $email, 'failed', $custom_result->get_error_message() );
             return $custom_result;
+        }
+
+        /**
+         * Enviador oficial de EventosApp.
+         * Este es el mismo flujo usado por los otros medios: aplica variantes, prepara Wallet/PDF/ICS,
+         * construye el HTML desde la plantilla efectiva y registra el historial de correo.
+         */
+        if ( function_exists( 'eventosapp_send_ticket_email_now' ) ) {
+            $result = eventosapp_send_ticket_email_now( $ticket_id, [
+                'source' => 'registration_status_embed',
+                'force'  => true,
+            ] );
+
+            $ok      = is_array( $result ) && isset( $result[0] ) ? (bool) $result[0] : ( $result === true );
+            $message = is_array( $result ) && isset( $result[1] ) ? (string) $result[1] : '';
+
+            eventosapp_registration_status_log( 'Resultado enviador oficial', [
+                'ticket_id'   => $ticket_id,
+                'event_id'    => $event_id,
+                'ok'          => $ok ? 'yes' : 'no',
+                'message'     => $message,
+                'variant_key' => get_post_meta( $ticket_id, '_eventosapp_ticket_variant_key', true ),
+                'template'    => get_post_meta( $ticket_id, '_eventosapp_ticket_email_template_override', true ),
+            ] );
+
+            if ( $ok ) {
+                return true;
+            }
+
+            return new WP_Error( 'official_mail_failed', $message ?: 'El enviador oficial no pudo completar el reenvío.' );
         }
 
         $candidate_functions = [
@@ -1727,6 +1966,9 @@ if ( ! function_exists( 'eventosapp_registration_status_resend_ticket_email' ) )
             }
         }
 
+        /**
+         * Respaldo extremo: solo se usa si el enviador oficial no existe en esta instalación.
+         */
         return eventosapp_registration_status_send_basic_ticket_email( $ticket_id, $event_id, $config );
     }
 }
@@ -1772,25 +2014,46 @@ if ( ! function_exists( 'eventosapp_registration_status_ajax_resend' ) ) {
         }
 
         if ( ! eventosapp_registration_status_rate_limit( 'resend', $event_id, 3, 15 * MINUTE_IN_SECONDS, (string) $ticket_id ) ) {
+            eventosapp_registration_status_record_resend_activity( $ticket_id, $event_id, 'rate_limited', 'Bloqueado por rate limit de seguridad.', false );
             wp_send_json_error( [ 'message' => 'Has solicitado demasiados reenvíos. Intenta nuevamente más tarde.' ], 429 );
         }
+
+        $cooldown_state = eventosapp_registration_status_get_resend_cooldown_state( $ticket_id, $config );
+        if ( empty( $cooldown_state['allowed'] ) ) {
+            eventosapp_registration_status_record_resend_activity( $ticket_id, $event_id, 'cooldown_blocked', $cooldown_state['message'], false );
+            wp_send_json_error( [
+                'message'           => $cooldown_state['message'],
+                'cooldown_remaining' => $cooldown_state['remaining_seconds'],
+            ], 429 );
+        }
+
+        eventosapp_registration_status_record_resend_activity( $ticket_id, $event_id, 'requested', 'Solicitud de reenvío recibida.', false );
 
         $result = eventosapp_registration_status_resend_ticket_email( $ticket_id, $event_id, $config );
 
         if ( is_wp_error( $result ) || $result !== true ) {
+            $error_message = is_wp_error( $result ) ? $result->get_error_message() : 'unknown';
+            eventosapp_registration_status_record_resend_activity( $ticket_id, $event_id, 'failed', $error_message, false );
             eventosapp_registration_status_log( 'Reenvío fallido', [
                 'event_id'  => $event_id,
                 'ticket_id' => $ticket_id,
-                'error'     => is_wp_error( $result ) ? $result->get_error_message() : 'unknown',
+                'error'     => $error_message,
             ] );
             wp_send_json_error( [ 'message' => $config['texts']['resend_error_message'] ], 500 );
         }
+
+        eventosapp_registration_status_record_resend_activity( $ticket_id, $event_id, 'sent', 'Correo reenviado correctamente.', true );
+        $cooldown_state = eventosapp_registration_status_get_resend_cooldown_state( $ticket_id, $config );
 
         eventosapp_registration_status_log( 'Reenvío exitoso', [
             'event_id'  => $event_id,
             'ticket_id' => $ticket_id,
         ] );
 
-        wp_send_json_success( [ 'message' => $config['texts']['resend_success_message'] ] );
+        wp_send_json_success( [
+            'message'           => $config['texts']['resend_success_message'],
+            'cooldown_remaining' => $cooldown_state['remaining_seconds'],
+            'cooldown_message'   => $cooldown_state['message'],
+        ] );
     }
 }
