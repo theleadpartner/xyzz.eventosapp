@@ -158,6 +158,7 @@ function eventosapp_get_conditional_fields($event_id) {
         'ciudad'    => 'Ciudad',
         'pais'      => 'País',
         'localidad' => 'Localidad',
+        'modalidad' => 'Modalidad del ticket',
     ];
 
     // Alias aceptados por el webhook para evitar que una regla vieja quede apuntando a un campo vacío.
@@ -168,6 +169,8 @@ function eventosapp_get_conditional_fields($event_id) {
     $fields['city']             = 'Ciudad (alias webhook city)';
     $fields['country']          = 'País (alias webhook country)';
     $fields['ticket_localidad'] = 'Localidad (alias webhook ticket_localidad)';
+    $fields['ticket_modalidad'] = 'Modalidad (alias webhook ticket_modalidad)';
+    $fields['attendance_mode']  = 'Modalidad (alias webhook attendance_mode)';
     $fields['external_id']      = 'External ID / ID externo';
 
     // Agregar campos extras del evento si existen.
@@ -224,6 +227,12 @@ function eventosapp_get_ticket_field_value($ticket_id, $field_key) {
         'city'             => 'ciudad',
         'country'          => 'pais',
         'ticket_localidad' => 'localidad',
+        'ticket_modalidad' => 'modalidad',
+        'modality'         => 'modalidad',
+        'mode'             => 'modalidad',
+        'attendance_mode'  => 'modalidad',
+        'modalidad_asistencia' => 'modalidad',
+        'tipo_asistencia'  => 'modalidad',
         'submission_id'    => 'external_id',
         'ac_submission_id' => 'external_id',
         'payload_id'       => 'external_id',
@@ -231,6 +240,13 @@ function eventosapp_get_ticket_field_value($ticket_id, $field_key) {
 
     if (isset($aliases[$field_key])) {
         $field_key = $aliases[$field_key];
+    }
+
+    if ($field_key === 'modalidad') {
+        if (function_exists('eventosapp_get_ticket_modalidad')) {
+            return eventosapp_condition_value_to_string(eventosapp_get_ticket_modalidad($ticket_id));
+        }
+        return eventosapp_condition_value_to_string(get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true));
     }
 
     // Mapeo de campos base a sus meta_keys.
@@ -248,6 +264,7 @@ function eventosapp_get_ticket_field_value($ticket_id, $field_key) {
         'ciudad'      => '_eventosapp_asistente_ciudad',
         'pais'        => '_eventosapp_asistente_pais',
         'localidad'   => '_eventosapp_asistente_localidad',
+        'modalidad'   => '_eventosapp_ticket_modalidad',
         'external_id' => '_eventosapp_external_id',
     ];
 
