@@ -361,9 +361,13 @@ function eventosapp_sync_wallet_class($evento_id, $args = []) {
 
     if ($code === 409) {
         $patch_url = 'https://walletobjects.googleapis.com/walletobjects/v1/eventTicketClass/' . rawurlencode($class_id);
-        // en patch, mandamos campos que pueden cambiar
+        // En PATCH también se envía reviewStatus=UNDER_REVIEW.
+        // Google Wallet rechaza la actualización de clases aprobadas cuando el payload
+        // queda validado con reviewStatus=APPROVED. Para editar una clase existente,
+        // el estado correcto solicitado por la API es UNDER_REVIEW.
         $patch_payload = [
             'issuerName'         => $issuerName,
+            'reviewStatus'       => 'UNDER_REVIEW',
             'eventName'          => ['defaultValue' => ['language' => 'es', 'value' => $nombreEvento]],
             'hexBackgroundColor' => $hex_color,
         ];
@@ -846,14 +850,29 @@ if (empty($unique_ticket_id)) {
     return $debug ? implode("<br>", array_map('esc_html', $logs)) : '';
 }
 
-// Construir object_id usando el ticketID único (sin prefijo 'ticket_')
-// Formato: issuerID.uniqueTicketID (ejemplo: 123456789.tkkoN5NsBdvhXQQ)
-$object_id = $issuer_id . '.' . $unique_ticket_id;
+// Construir object_id canónico.
+// Para tickets con variante de Android se usa un objeto distinto por variante.
+// Esto evita el conflicto irreversible donde un objeto ya existente nació con la clase base
+// y Google Wallet no permite moverlo a otra classId mediante PATCH.
+$object_ticket_suffix = preg_replace('/[^A-Za-z0-9._-]/', '_', (string) $unique_ticket_id);
+$variant_object_suffix = '';
+if (!empty($variant_key) && !empty($variant_class_id)) {
+    $variant_object_suffix = sanitize_key((string) $variant_key);
+    if ($variant_object_suffix !== '') {
+        $object_ticket_suffix .= '_variant_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $variant_object_suffix);
+        $log('Object ID dirigido por variante Android: variant_key=' . $variant_object_suffix . ' | public_ticket_id=' . $unique_ticket_id);
+    }
+}
+
+// Formato base sin variante: issuerID.uniqueTicketID
+// Formato con variante: issuerID.uniqueTicketID_variant_{variant_key}
+$object_id = $issuer_id . '.' . $object_ticket_suffix;
 
 $log("=== OBJECT ID GENERADO ===");
 $log("issuer_id: $issuer_id");
 $log("class_id: $class_id");
 $log("unique_ticket_id (eventosapp_ticketID): $unique_ticket_id");
+$log("variant_key para object_id: " . ($variant_object_suffix !== '' ? $variant_object_suffix : ''));
 $log("object_id final: $object_id");
 $log("QR content (debe coincidir con ticketID): $qr_content_for_validation");
 
@@ -952,7 +971,7 @@ if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
         'Content-Type'  => 'application/json',
     ];
 
-    $insert_object = function($reason = 'insert') use ($api_url, $headers_json, $object_payload, $object_id, $class_id, $ticket_id, $evento_id, $log) {
+    $insert_object = function($reason = 'insert') use ($api_url, $headers_json, &$object_payload, &$object_id, $class_id, $ticket_id, $evento_id, $log) {
         $res = wp_remote_post($api_url, [
             'timeout' => 20,
             'headers' => $headers_json,
@@ -972,7 +991,7 @@ if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
         return [$code, $body];
     };
 
-    $patch_object = function($reason = 'patch') use ($object_url, $headers_json, $object_payload, $object_id, $class_id, $ticket_id, $evento_id, $log) {
+    $patch_object = function($reason = 'patch') use (&$object_url, $headers_json, &$object_payload, &$object_id, $class_id, $ticket_id, $evento_id, $log) {
         $patch_payload = $object_payload;
         unset($patch_payload['id'], $patch_payload['classId']);
 
@@ -1046,17 +1065,27 @@ if (strpos($qr_content_for_validation, $unique_ticket_id) !== 0) {
         }
 
         if ((int) $get_code === 200 && $current_class !== '' && $current_class !== (string) $class_id) {
-            $log('Class mismatch detectado. current=' . $current_class . ' | wanted=' . $class_id . ' | se eliminará y recreará el objeto.');
-            $del_res = wp_remote_request($object_url, [
-                'timeout' => 20,
-                'method'  => 'DELETE',
-                'headers' => ['Authorization' => "Bearer $access_token"],
-            ]);
-            $del_code = is_wp_error($del_res) ? 0 : wp_remote_retrieve_response_code($del_res);
-            $del_body = is_wp_error($del_res) ? ('WP_Error: ' . $del_res->get_error_message()) : wp_remote_retrieve_body($del_res);
-            $log('DELETE WalletObject por class mismatch HTTP ' . $del_code . ' | object=' . $object_id . ' | body: ' . substr($del_body, 0, 500));
+            // No se intenta mover el objeto existente de clase base a clase variante.
+            // Google Wallet no permite cambiar classId con PATCH y en algunos entornos DELETE
+            // devuelve 404 aunque el GET confirme que el objeto existe.
+            // La solución segura es usar un object_id distinto para la variante.
+            $log('Class mismatch detectado. current=' . $current_class . ' | wanted=' . $class_id . ' | object_id actual=' . $object_id . '. Se usará object_id alternativo de variante si aplica.');
 
-            list($api_code, $api_body) = $insert_object('after_class_mismatch_delete');
+            if (!empty($variant_key)) {
+                $suffix_alt = preg_replace('/[^A-Za-z0-9._-]/', '_', (string) $unique_ticket_id) . '_variant_' . preg_replace('/[^A-Za-z0-9._-]/', '_', sanitize_key((string) $variant_key));
+                $object_id = $issuer_id . '.' . $suffix_alt;
+                $object_url = $api_url . '/' . rawurlencode($object_id);
+                $log('Object ID alternativo por class mismatch: ' . $object_id);
+                $object_payload['id'] = $object_id;
+                list($api_code, $api_body) = $insert_object('variant_object_after_class_mismatch');
+                if ((int) $api_code === 409) {
+                    $log('El object_id alternativo ya existe. Se aplicará PATCH conservador sobre la clase de variante.');
+                    list($api_code, $api_body) = $patch_object('variant_object_existing_after_class_mismatch');
+                }
+            } else {
+                $log('Class mismatch sin variant_key. Se aplicará PATCH conservador sin classId para no romper el objeto existente.');
+                list($api_code, $api_body) = $patch_object('class_mismatch_no_variant_key');
+            }
         } elseif ((int) $get_code === 200) {
             $log('Objeto existente usa la class correcta. Se aplicará PATCH sin classId. current=' . $current_class . ' | wanted=' . $class_id);
             list($api_code, $api_body) = $patch_object('same_class');
