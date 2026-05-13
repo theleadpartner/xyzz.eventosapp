@@ -928,6 +928,40 @@ function eventosapp_refresh_ticket_full($ticket_id, $mode = 'complete', $options
     $assets     = isset($normalized['assets']) && is_array($normalized['assets']) ? $normalized['assets'] : array();
     $stats      = eventosapp_batch_refresh_make_stats($normalized['mode'], $assets);
 
+    // Compatibilidad con Variantes:
+    // Todo refresh por lote debe recalcular primero la variante efectiva del ticket para que
+    // los generadores posteriores usen la plantilla de correo, clase Google Wallet, branding
+    // Android/Apple y demás overrides correctos antes de regenerar los anexos.
+    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context')) {
+        $variant_prepare = eventosapp_ticket_variants_prepare_ticket_for_batch_context(
+            $ticket_id,
+            $evento_id,
+            'batch_refresh_' . sanitize_key((string) $normalized['mode']),
+            array(
+                'sync_google_classes' => true,
+                'mark_assets_stale'   => false,
+                'clear_assets_stale'  => false,
+                'log'                 => true,
+            )
+        );
+        $stats['details'][] = array(
+            'asset' => 'variants',
+            'status' => 'info',
+            'message' => !empty($variant_prepare['applied'])
+                ? 'Variante preparada antes del refresh: ' . sanitize_text_field($variant_prepare['variant_name'] ?: $variant_prepare['variant_key'])
+                : 'Sin variante aplicable antes del refresh: ' . sanitize_text_field($variant_prepare['reason'] ?? 'not_applied'),
+            'variant_key' => sanitize_text_field($variant_prepare['variant_key'] ?? ''),
+            'changed' => !empty($variant_prepare['changed']) ? 1 : 0,
+        );
+    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+        $stats['details'][] = array(
+            'asset' => 'variants',
+            'status' => 'info',
+            'message' => 'Variante recalculada antes del refresh mediante fallback apply_to_ticket().',
+        );
+    }
+
     if (!$assets) {
         eventosapp_batch_refresh_add_detail($stats, 'batch', 'skipped', 'No se seleccionó ningún recurso para refrescar.');
         update_post_meta($ticket_id, '_eventosapp_last_batch_refresh', current_time('mysql'));
@@ -981,6 +1015,16 @@ function eventosapp_refresh_ticket_full($ticket_id, $mode = 'complete', $options
                 eventosapp_batch_refresh_add_detail($stats, $asset, 'skipped', 'Recurso no reconocido.');
                 break;
         }
+    }
+
+    if (empty($stats['failed'])) {
+        delete_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh_since');
+        $stats['details'][] = array(
+            'asset' => 'variants',
+            'status' => 'info',
+            'message' => 'Marca de anexos pendientes por variante limpiada después del refresh exitoso.',
+        );
     }
 
     update_post_meta($ticket_id, '_eventosapp_last_batch_refresh', current_time('mysql'));
