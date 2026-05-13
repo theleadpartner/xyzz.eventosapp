@@ -18,6 +18,7 @@ function eventosapp_build_ac_webhook_body_template($event_id){
         'city'        => '<<ciudad>>',
         'country'     => 'Colombia',
         'localidad'   => '<<localidad>>',
+        'modalidad'   => '<<presencial_o_virtual>>',
     ];
 
     // Extras del evento (si existen)
@@ -182,7 +183,8 @@ function eventosapp_render_curl_template_metabox($post){
         txt.push("- email");
         txt.push("");
         txt.push("4) Campos recomendados (si los tienes):");
-        txt.push("- first_name, last_name, phone, company, cc, nit, cargo, city, country, localidad");
+        txt.push("- first_name, last_name, phone, company, cc, nit, cargo, city, country, localidad, modalidad");
+        txt.push("- modalidad: usa presencial o virtual. Si el evento es solo presencial o solo virtual, EventosApp la asigna automáticamente aunque no llegue el campo.");
         txt.push("- external_id (opcional; puede ser cédula o ID del envío. La deduplicación queda limitada al event_id, por lo que no pisa tickets de otros eventos)");
         txt.push("- extras específicos del evento (usa la key exacta del campo, o eventosapp_extra[key])");
         txt.push("");
