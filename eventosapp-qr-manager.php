@@ -280,6 +280,78 @@ class EventosApp_QR_Manager {
         return $security_code;
     }
 
+
+    /**
+     * Valida que un registro de QR tenga contenido y archivo físico disponible.
+     * Esto evita que un ticket parezca completo solo porque conserva metadata,
+     * aunque el archivo PNG haya sido borrado, movido o no exista en uploads.
+     *
+     * @param array|string $qr_data Datos del QR guardados en _eventosapp_qr_codes.
+     * @param string       $type    Tipo de QR esperado.
+     * @return bool
+     */
+    private function qr_data_has_valid_file($qr_data, $type) {
+        if (!is_array($qr_data)) {
+            return false;
+        }
+
+        if (empty($qr_data['content'])) {
+            return false;
+        }
+
+        if (!empty($qr_data['type']) && (string) $qr_data['type'] !== (string) $type) {
+            return false;
+        }
+
+        $path = '';
+
+        if (!empty($qr_data['path'])) {
+            $path = (string) $qr_data['path'];
+        } elseif (!empty($qr_data['url'])) {
+            $upload  = wp_upload_dir();
+            $baseurl = isset($upload['baseurl']) ? (string) $upload['baseurl'] : '';
+            $basedir = isset($upload['basedir']) ? (string) $upload['basedir'] : '';
+            $url     = strtok((string) $qr_data['url'], '?');
+
+            if ($baseurl !== '' && $basedir !== '' && strpos($url, $baseurl) === 0) {
+                $path = str_replace($baseurl, $basedir, $url);
+            }
+        }
+
+        if ($path === '') {
+            return false;
+        }
+
+        return file_exists($path) && is_file($path) && filesize($path) > 0;
+    }
+
+    /**
+     * Elimina de forma segura el archivo físico de un QR inválido, si existe.
+     * No borra archivos fuera del directorio de uploads.
+     *
+     * @param array $qr_data Datos del QR.
+     * @return bool
+     */
+    private function maybe_delete_qr_file($qr_data) {
+        if (!is_array($qr_data) || empty($qr_data['path'])) {
+            return false;
+        }
+
+        $path   = (string) $qr_data['path'];
+        $upload = wp_upload_dir();
+        $basedir = isset($upload['basedir']) ? trailingslashit((string) $upload['basedir']) : '';
+
+        if ($path === '' || $basedir === '' || strpos($path, $basedir) !== 0) {
+            return false;
+        }
+
+        if (file_exists($path) && is_file($path)) {
+            return @unlink($path);
+        }
+
+        return false;
+    }
+
 /**
      * Valida que el contenido del QR sea compatible con el sistema de check-in
      * MODIFICADO: Añade validación para formato GWALLET de Google Wallet
@@ -1019,9 +1091,9 @@ class EventosApp_QR_Manager {
             return false;
         }
 
-        // Verificar que existan los 5 tipos de QR
+        // Verificar que existan los 5 tipos de QR y que el archivo físico exista.
         foreach (self::QR_TYPES as $type => $label) {
-            if (!isset($all_qr_codes[$type]) || empty($all_qr_codes[$type]['content'])) {
+            if (!isset($all_qr_codes[$type]) || !$this->qr_data_has_valid_file($all_qr_codes[$type], $type)) {
                 return false;
             }
         }
@@ -1037,10 +1109,10 @@ class EventosApp_QR_Manager {
      */
     public function generate_missing_qr_codes($ticket_id) {
         if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
-            return ['generated' => 0, 'skipped' => 0, 'failed' => 0];
+            return ['generated' => 0, 'skipped' => 0, 'failed' => 0, 'invalidated' => 0, 'regenerated_missing_file' => 0];
         }
 
-        $stats = ['generated' => 0, 'skipped' => 0, 'failed' => 0];
+        $stats = ['generated' => 0, 'skipped' => 0, 'failed' => 0, 'invalidated' => 0, 'regenerated_missing_file' => 0];
         
         // Asegurar código de seguridad
         $this->ensure_security_code($ticket_id);
@@ -1051,23 +1123,48 @@ class EventosApp_QR_Manager {
             $existing_qrs = [];
         }
 
-        // Generar solo los QR que faltan
         foreach (self::QR_TYPES as $type => $label) {
-            // Verificar si ya existe este tipo de QR
-            if (isset($existing_qrs[$type]) && !empty($existing_qrs[$type]['content'])) {
+            $existing_for_type = isset($existing_qrs[$type]) && is_array($existing_qrs[$type]) ? $existing_qrs[$type] : [];
+            $had_meta          = !empty($existing_for_type);
+
+            // Si la metadata y el archivo físico están correctos, no tocar el QR existente.
+            if ($had_meta && $this->qr_data_has_valid_file($existing_for_type, $type)) {
                 $stats['skipped']++;
                 continue;
             }
 
-            // No existe, generarlo
+            // Si había metadata incompleta o el archivo físico no existe, limpiar solo ese tipo.
+            if ($had_meta) {
+                $this->maybe_delete_qr_file($existing_for_type);
+                unset($existing_qrs[$type]);
+                delete_post_meta($ticket_id, '_eventosapp_qr_' . $type);
+                update_post_meta($ticket_id, '_eventosapp_qr_codes', $existing_qrs);
+                $stats['invalidated']++;
+            }
+
             $result = $this->generate_qr_code($ticket_id, $type);
             
             if ($result && is_array($result)) {
                 $stats['generated']++;
+                if ($had_meta) {
+                    $stats['regenerated_missing_file']++;
+                }
             } else {
                 $stats['failed']++;
+                error_log('EventosApp QR Manager: No se pudo generar QR faltante tipo ' . $type . ' para ticket ' . (int) $ticket_id);
+            }
+
+            // Refrescar el array después de cada generación para no pisar cambios hechos por generate_qr_code().
+            $existing_qrs = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+            if (!is_array($existing_qrs)) {
+                $existing_qrs = [];
             }
         }
+
+        update_post_meta($ticket_id, '_eventosapp_qr_last_integrity_check', [
+            'checked_at' => current_time('mysql'),
+            'stats'      => $stats,
+        ]);
 
         return $stats;
     }
