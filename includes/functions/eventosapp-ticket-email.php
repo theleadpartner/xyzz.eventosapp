@@ -150,9 +150,20 @@ function eventosapp_send_ticket_email_handler() {
         ], 'manual_variant_' . $post_id . '_' . $evento_id);
     }
 
-    // Asegurar enlaces de Wallet antes de armar HTML
-    $wa_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
-    $wi_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+    $is_virtual_ticket = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($post_id);
+
+    // Asegurar enlaces de Wallet antes de armar HTML. Los tickets virtuales no usan Wallet.
+    $wa_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
+    $wi_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+
+    if ($is_virtual_ticket) {
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_android_url');
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_android');
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple');
+        delete_post_meta($post_id, '_eventosapp_ticket_wallet_apple_url');
+        delete_post_meta($post_id, '_eventosapp_ticket_pkpass_url');
+        delete_post_meta($post_id, '_eventosapp_ticket_pdf_url');
+    }
 
     if ($wa_on && !get_post_meta($post_id, '_eventosapp_ticket_wallet_android_url', true)) {
         if (function_exists('eventosapp_generate_wallet_android_ticket')) {
@@ -167,7 +178,7 @@ function eventosapp_send_ticket_email_handler() {
 
     // Attachments
     $attachments = [];
-    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
+    $pdf_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
     $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
 
     if ($pdf_on && function_exists('eventosapp_url_to_path')) {
@@ -352,9 +363,20 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
         ], 'programmatic_variant_' . $ticket_id . '_' . $evento_id . '_' . $source);
     }
 
-    // Asegurar enlaces de Wallet antes de armar HTML
-    $wa_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
-    $wi_on = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+    $is_virtual_ticket = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id);
+
+    // Asegurar enlaces de Wallet antes de armar HTML. Los tickets virtuales no usan Wallet.
+    $wa_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
+    $wi_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+
+    if ($is_virtual_ticket) {
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+    }
 
     if ($wa_on && !get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', true)) {
         if (function_exists('eventosapp_generate_wallet_android_ticket')) {
@@ -369,7 +391,7 @@ function eventosapp_send_ticket_email_now($ticket_id, $args = []) {
 
     // Attachments
     $attachments = [];
-    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
+    $pdf_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
     $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
 
     if ($pdf_on && function_exists('eventosapp_url_to_path')) {
@@ -521,16 +543,37 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         $header_img = 'https://eventosapp.com/wp-content/uploads/2025/08/header_ticket_gen.jpg';
     }
 
-    // Flags del evento
-    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true)            === '1';
+    // Modalidad del ticket/evento.
+    $ticket_modalidad       = function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($ticket_id) : get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
+    $ticket_modalidad_label = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : ucfirst((string) $ticket_modalidad);
+    $is_virtual_ticket      = ($ticket_modalidad === 'virtual') || (function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id));
+
+    // Flags del evento. Los tickets virtuales solo conservan ICS; no generan QR, PDF ni Wallet.
+    $pdf_on = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_pdf', true)            === '1';
     $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true)            === '1';
-    $wa_on  = get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
-    $wi_on  = get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+    $wa_on  = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_android', true) === '1';
+    $wi_on  = (!$is_virtual_ticket) && get_post_meta($evento_id, '_eventosapp_ticket_wallet_apple', true)   === '1';
+
+    if ($is_virtual_ticket) {
+        delete_post_meta($ticket_id, '_eventosapp_ticket_pdf_url');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_android');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url');
+        delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url');
+    }
 
     // Datos evento
     $evento_nombre = $evento_id ? get_the_title($evento_id) : '';
     $organizador   = $evento_id ? ( function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($evento_id) : (get_post_meta($evento_id, '_eventosapp_organizador', true) ?: '') ) : '';
     $lugar_evento  = $evento_id ? (get_post_meta($evento_id, '_eventosapp_direccion', true) ?: '') : '';
+    $lugar_evento_label = 'Lugar:';
+
+    if ($is_virtual_ticket) {
+        $virtual_platform = $evento_id ? trim((string) get_post_meta($evento_id, '_eventosapp_virtual_platform', true)) : '';
+        $lugar_evento = $virtual_platform ? ('Virtual - ' . $virtual_platform) : 'Virtual';
+        $lugar_evento_label = 'Acceso:';
+    }
 
     // Fecha legible
     $tipo_fecha = $evento_id ? get_post_meta($evento_id, '_eventosapp_tipo_fecha', true) : '';
@@ -577,7 +620,11 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         $qr_url = $ticket_code ? eventosapp_get_ticket_qr_url($ticket_code) : '';
     }
     
-    $pdf_url = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
+    if ($is_virtual_ticket) {
+        $qr_url = '';
+    }
+
+    $pdf_url = $is_virtual_ticket ? '' : get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
     $ics_url = get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true);
 
     // === Wallet URLs (con generación "just in time" si están activos) ===
@@ -607,6 +654,11 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         $wallet_apple_url = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple', true)
                          ?: get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url', true)
                          ?: get_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url', true);
+    }
+
+    if ($is_virtual_ticket) {
+        $wallet_android_url = '';
+        $wallet_apple_url   = '';
     }
 
 // Mensaje adicional (opcional) + imagen
@@ -668,6 +720,41 @@ function eventosapp_build_ticket_email_html($ticket_id) {
     $wallet_google_img = eventosapp_asset_url_with_version('assets/graphics/wallet_icons/google_wallet_btn.png');
     $wallet_apple_img  = eventosapp_asset_url_with_version('assets/graphics/wallet_icons/apple_wallet_btn.png');
 
+    $virtual_access_url = ($is_virtual_ticket && function_exists('eventosapp_get_virtual_landing_url')) ? eventosapp_get_virtual_landing_url($ticket_id) : '';
+
+    if ($is_virtual_ticket) {
+        $ticket_access_block = '<div class="kvs" style="text-align:center;"><p style="margin:0 0 10px 0;"><strong>Acceso virtual del evento</strong></p>';
+        if ($virtual_access_url) {
+            $ticket_access_block .= '<p style="margin-top:8px;"><a class="btn btn-dark" href="' . esc_url($virtual_access_url) . '" target="_blank" rel="noopener noreferrer" aria-label="Abrir acceso virtual">Abrir acceso virtual</a></p>';
+            $ticket_access_block .= '<p class="muted" style="margin-top:8px;">El ingreso se habilitará en la landing de acuerdo con la fecha y hora configurada para el evento.</p>';
+        } else {
+            $ticket_access_block .= '<p class="muted">El acceso virtual aún no tiene enlace configurado.</p>';
+        }
+        $ticket_access_block .= '</div>';
+    } else {
+        $ticket_access_block = '<div class="qr-box"><img class="qr-img" src="' . esc_url($qr_url) . '" alt="QR del ticket"></div><p class="muted" style="margin-top:8px;">Presenta este código en el acceso.</p>';
+    }
+
+    $ticket_downloads_block = '';
+    if (!$is_virtual_ticket && $pdf_on && !empty($pdf_url)) {
+        $ticket_downloads_block .= '<p style="margin-top:8px;"><a class="btn btn-gray" href="' . esc_url($pdf_url) . '" target="_blank" rel="noopener noreferrer" aria-label="Descargar PDF">Descargar PDF</a></p>';
+    }
+    if ($ics_on && !empty($ics_url)) {
+        $ticket_downloads_block .= '<p style="margin-top:8px;"><a class="btn btn-gray" href="' . esc_url($ics_url) . '" target="_blank" rel="noopener noreferrer" aria-label="Añadir al Calendario (ICS)">Añadir al Calendario (ICS)</a></p>';
+    }
+
+    $wallet_actions_block = '';
+    if (!$is_virtual_ticket && (($wa_on && !empty($wallet_android_url)) || ($wi_on && !empty($wallet_apple_url)))) {
+        $wallet_actions_block .= '<div class="actions-wallet" style="margin-top:16px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" class="row-wallet" align="center"><tr>';
+        if ($wa_on && !empty($wallet_android_url)) {
+            $wallet_actions_block .= '<td align="center"><a class="btn wallet-google btn-img" href="' . esc_url($wallet_android_url) . '" target="_blank" rel="noopener noreferrer" aria-label="Añadir a Google Wallet"><img src="' . esc_url($wallet_google_img) . '" alt="Ver en Google Wallet" width="200"></a></td>';
+        }
+        if ($wi_on && !empty($wallet_apple_url)) {
+            $wallet_actions_block .= '<td align="center"><a class="btn wallet-apple btn-img" href="' . esc_url($wallet_apple_url) . '" target="_blank" rel="noopener noreferrer" aria-label="Añadir a Apple Wallet"><img src="' . esc_url($wallet_apple_img) . '" alt="Agregar a Apple Wallet" width="200"></a></td>';
+        }
+        $wallet_actions_block .= '</tr></table></div>';
+    }
+
     // Reemplazos base
     $replacements = [
         '{{evento_nombre}}'       => esc_html($evento_nombre),
@@ -675,6 +762,12 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         '{{fecha_evento}}'        => esc_html($fecha_legible),
         '{{hora_evento}}'         => esc_html($hora_legible),
         '{{lugar_evento}}'        => esc_html($lugar_evento),
+        '{{lugar_evento_label}}'  => esc_html($lugar_evento_label),
+        '{{ticket_modalidad}}'    => esc_html($ticket_modalidad_label),
+        '{{virtual_access_url}}'  => esc_url($virtual_access_url),
+        '{{ticket_access_block}}' => $ticket_access_block,
+        '{{ticket_downloads_block}}' => $ticket_downloads_block,
+        '{{wallet_actions_block}}' => $wallet_actions_block,
         '{{asistente_nombre}}'    => esc_html($asistente_nombre),
         '{{asistente_email}}'     => esc_html($asistente_email),
         '{{asistente_tel}}'       => esc_html($asistente_tel),
@@ -696,6 +789,20 @@ function eventosapp_build_ticket_email_html($ticket_id) {
     if (!is_array($replacements)) $replacements = [];
 
     $html = strtr($body, $replacements);
+
+    // Compatibilidad con plantillas antiguas o de variantes que todavía usen QR/PDF/Wallet directos.
+    // Para tickets virtuales se reemplaza el bloque QR por el botón de acceso y se eliminan enlaces presenciales.
+    if ($is_virtual_ticket) {
+        if (strpos($body, '{{ticket_access_block}}') === false) {
+            $legacy_replaced = 0;
+            $html = preg_replace('/<div[^>]*class="[^"]*qr-box[^"]*"[^>]*>.*?<\/div>\s*<p[^>]*>.*?Presenta este código.*?<\/p>/is', $ticket_access_block, $html, 1, $legacy_replaced);
+            $html = preg_replace('/<img[^>]+alt="[^"]*QR[^"]*"[^>]*>/is', '', $html);
+            if (!$legacy_replaced) {
+                $html .= '<div style="margin-top:16px;text-align:center;">' . $ticket_access_block . $ticket_downloads_block . '</div>';
+            }
+        }
+        $html = preg_replace('/<a[^>]*href=""[^>]*>.*?<\/a>/is', '', $html);
+    }
 
     // === Color de encabezados (h1 y h2) desde meta/variante ===
     $h_color = !empty($variant_branding['heading_color'])
@@ -754,6 +861,8 @@ function eventosapp_build_ticket_email_html($ticket_id) {
         'template'       => $tpl_file ?? '',
         'template_path'  => $tpl_path ?? '',
         'header_img'     => $header_img,
+        'modalidad'      => $ticket_modalidad,
+        'virtual'        => $is_virtual_ticket ? 'yes' : 'no',
         'wallet_android' => !empty($wallet_android_url) ? 'yes' : 'no',
         'wallet_apple'   => !empty($wallet_apple_url) ? 'yes' : 'no',
     ], 'html_built_' . $ticket_id . '_' . md5((string) ($tpl_file ?? '') . '|' . (string) get_post_meta($ticket_id, '_eventosapp_ticket_variant_key', true)));
