@@ -389,6 +389,10 @@ if (!function_exists('eventosapp_ticket_variants_get_ticket_field_value')) {
             'city'             => 'ciudad',
             'country'          => 'pais',
             'ticket_localidad' => 'localidad',
+            'ticket_modalidad' => 'modalidad',
+            'modality'         => 'modalidad',
+            'mode'             => 'modalidad',
+            'attendance_mode'  => 'modalidad',
             'submission_id'    => 'external_id',
             'ac_submission_id' => 'external_id',
             'payload_id'       => 'external_id',
@@ -409,6 +413,7 @@ if (!function_exists('eventosapp_ticket_variants_get_ticket_field_value')) {
             'ciudad'      => '_eventosapp_asistente_ciudad',
             'pais'        => '_eventosapp_asistente_pais',
             'localidad'   => '_eventosapp_asistente_localidad',
+            'modalidad'   => '_eventosapp_ticket_modalidad',
             'external_id' => '_eventosapp_external_id',
         ];
 
@@ -444,7 +449,11 @@ if (!function_exists('eventosapp_ticket_variants_get_available_fields')) {
 
         if (function_exists('eventosapp_get_conditional_fields')) {
             $fields = eventosapp_get_conditional_fields($event_id);
-            return is_array($fields) ? $fields : [];
+            if (!is_array($fields)) $fields = [];
+            if (!isset($fields['modalidad'])) {
+                $fields = ['modalidad' => 'Modalidad'] + $fields;
+            }
+            return $fields;
         }
 
         $fields = [
@@ -459,6 +468,7 @@ if (!function_exists('eventosapp_ticket_variants_get_available_fields')) {
             'ciudad'    => 'Ciudad',
             'pais'      => 'País',
             'localidad' => 'Localidad',
+            'modalidad' => 'Modalidad',
         ];
 
         if (function_exists('eventosapp_get_event_extra_fields') && $event_id) {
