@@ -139,6 +139,22 @@ add_shortcode('eventosapp_front_edit', function($atts){
                     // Disparar guardado reutilizando la misma lógica del admin
                     do_action('save_post_eventosapp_ticket', $ticket_id, get_post($ticket_id), true);
 
+                    // Compatibilidad Variantes de Tickets: al editar desde frontend,
+                    // recalcula la variante efectiva después de guardar los campos.
+                    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
+                        eventosapp_ticket_variants_prepare_ticket_for_frontend_context($ticket_id, $_POST['eventosapp_ticket_evento_id'], 'frontend_edit_update', [
+                            'sync_google_classes' => true,
+                            'mark_assets_stale'   => false,
+                            'clear_assets_stale'  => true,
+                            'refresh_wallets'     => false,
+                            'refresh_pdf_ics'     => false,
+                            'rebuild_search_index'=> true,
+                            'log'                 => true,
+                        ]);
+                    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+                        eventosapp_ticket_variants_apply_to_ticket($ticket_id, $_POST['eventosapp_ticket_evento_id'], true);
+                    }
+
                     // Mensaje
                     $pub = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
                     $msg = '<div style="padding:12px;border:1px solid #d1fae5;background:#ecfdf5;border-radius:10px;color:#065f46;">
@@ -687,6 +703,23 @@ add_action('wp_ajax_eventosapp_front_send_ticket_email', function(){
     $to     = $alt ?: $stored;
     if ( ! $to || ! is_email($to) ) {
         wp_send_json_error(['message' => 'Correo destino inválido'], 400);
+    }
+
+    // Compatibilidad Variantes de Tickets: antes de reenviar desde frontend,
+    // recalcula la variante y refresca Wallets habilitados para evitar enlaces antiguos
+    // cuando la variante cambió por edición de campos o por ajustes del evento.
+    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
+        eventosapp_ticket_variants_prepare_ticket_for_frontend_context($tid, $evento_id, 'frontend_edit_send_email', [
+            'sync_google_classes' => true,
+            'mark_assets_stale'   => false,
+            'clear_assets_stale'  => true,
+            'refresh_wallets'     => true,
+            'refresh_pdf_ics'     => false,
+            'rebuild_search_index'=> true,
+            'log'                 => true,
+        ]);
+    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($tid, $evento_id, true);
     }
 
     // 6) Flags del evento: generar PDF e ICS antes de enviar si aplica
