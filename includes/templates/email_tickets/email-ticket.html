@@ -62,7 +62,7 @@
 
   <!-- Preheader oculto para inbox preview -->
   <div style="display:none;max-height:0;overflow:hidden;color:transparent;opacity:0;">
-    Tu ticket para {{evento_nombre}}. Guarda el pase en Apple Wallet o Google Wallet, descarga el PDF o añade al calendario.
+    Tu ticket para {{evento_nombre}}. Revisa tu modalidad y añade el evento a tu calendario.
   </div>
 
   <!-- Wrapper de ancho completo -->
@@ -96,7 +96,7 @@
                             <div class="kv"><b>Organizador:</b><span>{{organizador}}</span></div>
                             <div class="kv"><b>Fecha:</b><span>{{fecha_evento}}</span></div>
                             <div class="kv"><b>Hora:</b><span>{{hora_evento}}</span></div>
-                            <div class="kv"><b>Lugar:</b><span>{{lugar_evento}}</span></div>
+                            <div class="kv"><b>{{lugar_evento_label}}</b><span>{{lugar_evento}}</span></div>
                           </div>
 
                           <h2 style="margin-top:16px;">Tu ticket</h2>
@@ -105,6 +105,7 @@
                             <div class="kv"><b>Correo:</b><span>{{asistente_email}}</span></div>
                             <div class="kv"><b>Contacto:</b><span>{{asistente_tel}}</span></div>
                             <!--<div class="kv"><b>Localidad:</b><span>{{asistente_localidad}}</span></div>-->
+                            <div class="kv"><b>Modalidad:</b><span>{{ticket_modalidad}}</span></div>
                             <div class="kv"><b>ID:</b><span>{{ticket_id}}</span></div>
                           </div>
 
@@ -116,16 +117,8 @@
 
                         <!-- Col derecha (QR) -->
                         <td class="col stack-center" width="40%" align="center" style="padding-left:12px;">
-                          <div class="qr-box">
-                            <img class="qr-img" src="{{qr_url}}" alt="QR del ticket">
-                          </div>
-                          <p class="muted" style="margin-top:8px;">Presenta este código en el acceso.</p>
-                          <p style="margin-top:8px;">
-                            <a class="btn btn-gray" href="{{pdf_url}}" target="_blank" rel="noopener noreferrer" aria-label="Descargar PDF">Descargar PDF</a>
-                          </p>
-                          <p style="margin-top:8px;">
-                            <a class="btn btn-gray" href="{{ics_url}}" target="_blank" rel="noopener noreferrer" aria-label="Añadir al Calendario (ICS)">Añadir al Calendario (ICS)</a>
-                          </p>
+                          {{ticket_access_block}}
+                          {{ticket_downloads_block}}
                         </td>
                       </tr>
 
@@ -134,23 +127,8 @@
                       </tr>
                     </table>
 
-                    <!-- Fila a ancho completo con botones gráficos de Wallet -->
-                    <div class="actions-wallet" style="margin-top:16px;">
-                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="row-wallet" align="center">
-                        <tr>
-                          <td align="center">
-                            <a class="btn wallet-google btn-img" href="{{wallet_android_url}}" target="_blank" rel="noopener noreferrer" aria-label="Añadir a Google Wallet">
-                              <img src="{{wallet_android_img}}" alt="Ver en Google Wallet" width="200">
-                            </a>
-                          </td>
-                          <td align="center">
-                            <a class="btn wallet-apple btn-img" href="{{wallet_apple_url}}" target="_blank" rel="noopener noreferrer" aria-label="Añadir a Apple Wallet">
-                              <img src="{{wallet_apple_img}}" alt="Agregar a Apple Wallet" width="200">
-                            </a>
-                          </td>
-                        </tr>
-                      </table>
-                    </div>
+                    <!-- Fila a ancho completo con botones gráficos de Wallet (solo tickets presenciales) -->
+                    {{wallet_actions_block}}
 
                   </td>
                 </tr>
