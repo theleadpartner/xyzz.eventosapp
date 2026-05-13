@@ -186,6 +186,23 @@ function eventosapp_pubreg_submit(){
         if ( ! $public_id ) $public_id = '#'.$post_id;
     }
 
+    // Compatibilidad Variantes de Tickets: este flujo guarda metas directamente,
+    // por eso se recalcula la variante antes de PDF/ICS y correo público.
+    $variant_context = $existing_ticket_id ? 'public_register_update' : 'public_register_create';
+    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
+        eventosapp_ticket_variants_prepare_ticket_for_frontend_context($post_id, $event_id, $variant_context, [
+            'sync_google_classes' => true,
+            'mark_assets_stale'   => false,
+            'clear_assets_stale'  => true,
+            'refresh_wallets'     => false,
+            'refresh_pdf_ics'     => false,
+            'rebuild_search_index'=> true,
+            'log'                 => true,
+        ]);
+    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($post_id, $event_id, true);
+    }
+
     // PDF/ICS, índice
     if ( function_exists('eventosapp_ticket_generar_pdf') ) eventosapp_ticket_generar_pdf($post_id);
     if ( function_exists('eventosapp_ticket_generar_ics') )  eventosapp_ticket_generar_ics($post_id);
