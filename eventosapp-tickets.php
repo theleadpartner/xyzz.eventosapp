@@ -1437,17 +1437,25 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     if ($wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true) {
         // Flujo dirigido: el generador principal de Android ya resuelve la variante ANTES de crear/actualizar el objeto.
         // Solo se usa el refresh de variantes como respaldo si el class efectivo no coincide después de generar.
+        $android_url_result = '';
         if (function_exists('eventosapp_generar_enlace_wallet_android')) {
-            eventosapp_generar_enlace_wallet_android($post_id, false);
+            $android_url_result = eventosapp_generar_enlace_wallet_android($post_id, false);
         }
 
         $variant_class_id = get_post_meta($post_id, '_eventosapp_wallet_variant_class_id', true);
         $effective_class  = get_post_meta($post_id, '_eventosapp_wallet_google_class_id_effective', true);
-        if ($variant_class_id && $effective_class !== $variant_class_id && function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
-            error_log('EVENTOSAPP WALLET ANDROID FALLBACK REFRESH ticket=' . (int) $post_id . ' evento=' . (int) $evento_id . ' variant_class=' . $variant_class_id . ' effective_class=' . $effective_class);
+        $effective_object = get_post_meta($post_id, '_eventosapp_wallet_google_object_id', true);
+
+        if (!$android_url_result) {
+            error_log('EVENTOSAPP WALLET ANDROID DIRECTED FLOW FAILED ticket=' . (int) $post_id . ' evento=' . (int) $evento_id . ' variant_class=' . $variant_class_id . ' effective_class=' . $effective_class . ' object=' . $effective_object);
+            if (function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
+                eventosapp_ticket_variants_refresh_google_wallet_object($post_id, $evento_id);
+            }
+        } elseif ($variant_class_id && $effective_class !== $variant_class_id && function_exists('eventosapp_ticket_variants_refresh_google_wallet_object')) {
+            error_log('EVENTOSAPP WALLET ANDROID FALLBACK REFRESH ticket=' . (int) $post_id . ' evento=' . (int) $evento_id . ' variant_class=' . $variant_class_id . ' effective_class=' . $effective_class . ' object=' . $effective_object);
             eventosapp_ticket_variants_refresh_google_wallet_object($post_id, $evento_id);
         } else {
-            error_log('EVENTOSAPP WALLET ANDROID DIRECTED FLOW OK ticket=' . (int) $post_id . ' evento=' . (int) $evento_id . ' variant_class=' . $variant_class_id . ' effective_class=' . $effective_class);
+            error_log('EVENTOSAPP WALLET ANDROID DIRECTED FLOW OK ticket=' . (int) $post_id . ' evento=' . (int) $evento_id . ' variant_class=' . $variant_class_id . ' effective_class=' . $effective_class . ' object=' . $effective_object);
         }
     } else {
         if (function_exists('eventosapp_eliminar_enlace_wallet_android')) eventosapp_eliminar_enlace_wallet_android($post_id);
