@@ -124,6 +124,15 @@ add_action('add_meta_boxes', function() {
         'side',
         'high'
     );
+
+    add_meta_box(
+        'eventosapp_ticket_registration_status_embed',
+        'Consulta externa del ticket',
+        'eventosapp_ticket_registration_status_embed_metabox_render',
+        'eventosapp_ticket',
+        'side',
+        'default'
+    );
 	
 	// === Metabox: Networking – Enviar resumen (manual/QA) ===
    add_meta_box(
@@ -283,6 +292,135 @@ function eventosapp_ticket_networking_digest_metabox_render($post){
  * Metabox: Enviar Ticket por Correo
  * Ahora muestra el historial de envíos: status, primera fecha, último envío y los 3 últimos
  */
+function eventosapp_ticket_registration_status_embed_metabox_render($post) {
+    $consulted     = get_post_meta($post->ID, '_eventosapp_registration_status_embed_consulted', true) === '1';
+    $lookup_count  = absint(get_post_meta($post->ID, '_eventosapp_registration_status_embed_lookup_count', true));
+    $last_lookup   = get_post_meta($post->ID, '_eventosapp_registration_status_embed_last_lookup_at', true);
+
+    $resend_requested = get_post_meta($post->ID, '_eventosapp_registration_status_embed_resend_requested', true) === '1';
+    $request_count    = absint(get_post_meta($post->ID, '_eventosapp_registration_status_embed_resend_request_count', true));
+    $sent_count       = absint(get_post_meta($post->ID, '_eventosapp_registration_status_embed_resend_sent_count', true));
+    $last_request     = get_post_meta($post->ID, '_eventosapp_registration_status_embed_last_resend_request_at', true);
+    $last_resend      = get_post_meta($post->ID, '_eventosapp_registration_status_embed_last_resend_at', true);
+    $last_status      = get_post_meta($post->ID, '_eventosapp_registration_status_embed_last_resend_status', true);
+    $last_message     = get_post_meta($post->ID, '_eventosapp_registration_status_embed_last_resend_message', true);
+    $last_resend_ts   = absint(get_post_meta($post->ID, '_eventosapp_registration_status_last_resend_ts', true));
+    $history          = get_post_meta($post->ID, '_eventosapp_registration_status_embed_history', true);
+
+    $evento_id = (int) get_post_meta($post->ID, '_eventosapp_ticket_evento_id', true);
+    $cooldown_hours = 24;
+    if ($evento_id && function_exists('eventosapp_registration_status_get_config')) {
+        $embed_config = eventosapp_registration_status_get_config($evento_id);
+        $cooldown_hours = isset($embed_config['resend_cooldown_hours']) ? absint($embed_config['resend_cooldown_hours']) : 24;
+    }
+
+    $next_allowed_text = '—';
+    if ($last_resend_ts && $cooldown_hours > 0) {
+        $next_allowed_ts = $last_resend_ts + ($cooldown_hours * HOUR_IN_SECONDS);
+        $next_allowed_text = date_i18n('Y-m-d H:i:s', $next_allowed_ts);
+    } elseif ($cooldown_hours === 0) {
+        $next_allowed_text = 'Sin bloqueo configurado';
+    }
+
+    if (!is_array($history)) {
+        $history = [];
+    }
+
+    $status_labels = [
+        'requested'        => 'Solicitud recibida',
+        'sent'             => 'Reenviado',
+        'failed'           => 'Error en reenvío',
+        'rate_limited'     => 'Bloqueado por seguridad',
+        'cooldown_blocked' => 'Bloqueado por tiempo',
+        'found'            => 'Consulta encontrada',
+        'lookup'           => 'Consulta',
+    ];
+
+    ?>
+    <style>
+        .evapp-rs-ticket-box { font-size:12px; line-height:1.45; }
+        .evapp-rs-ticket-row { display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px solid #f0f0f1; }
+        .evapp-rs-ticket-row strong { color:#1d2327; }
+        .evapp-rs-ticket-badge { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:600; }
+        .evapp-rs-ticket-badge.yes { background:#e7f7ed; color:#146c2e; }
+        .evapp-rs-ticket-badge.no { background:#f6f7f7; color:#646970; }
+        .evapp-rs-ticket-history { max-height:150px; overflow:auto; margin-top:8px; padding:8px; border:1px solid #e5e7eb; border-radius:6px; background:#f8fafc; }
+        .evapp-rs-ticket-history-item { padding-bottom:7px; margin-bottom:7px; border-bottom:1px solid #e5e7eb; }
+        .evapp-rs-ticket-history-item:last-child { border-bottom:0; margin-bottom:0; padding-bottom:0; }
+    </style>
+    <div class="evapp-rs-ticket-box">
+        <div class="evapp-rs-ticket-row">
+            <strong>Consultado por formulario</strong>
+            <span class="evapp-rs-ticket-badge <?php echo $consulted ? 'yes' : 'no'; ?>"><?php echo $consulted ? 'Sí' : 'No'; ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Total consultas</strong>
+            <span><?php echo esc_html($lookup_count); ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Última consulta</strong>
+            <span><?php echo $last_lookup ? esc_html($last_lookup) : '—'; ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Solicitó reenvío</strong>
+            <span class="evapp-rs-ticket-badge <?php echo $resend_requested ? 'yes' : 'no'; ?>"><?php echo $resend_requested ? 'Sí' : 'No'; ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Intentos de reenvío</strong>
+            <span><?php echo esc_html($request_count); ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Reenvíos exitosos</strong>
+            <span><?php echo esc_html($sent_count); ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Última solicitud</strong>
+            <span><?php echo $last_request ? esc_html($last_request) : '—'; ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Último reenvío exitoso</strong>
+            <span><?php echo $last_resend ? esc_html($last_resend) : '—'; ?></span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Bloqueo configurado</strong>
+            <span><?php echo esc_html($cooldown_hours); ?> horas</span>
+        </div>
+        <div class="evapp-rs-ticket-row">
+            <strong>Próximo reenvío permitido</strong>
+            <span><?php echo esc_html($next_allowed_text); ?></span>
+        </div>
+        <?php if ($last_status || $last_message): ?>
+            <p style="margin:10px 0 0;color:#646970;">
+                <strong>Último estado:</strong>
+                <?php echo esc_html($status_labels[$last_status] ?? ($last_status ?: '—')); ?>
+                <?php if ($last_message): ?><br><?php echo esc_html($last_message); ?><?php endif; ?>
+            </p>
+        <?php endif; ?>
+
+        <?php if (!empty($history)): ?>
+            <hr style="margin:12px 0 8px;">
+            <strong>Historial reciente</strong>
+            <div class="evapp-rs-ticket-history">
+                <?php foreach (array_reverse(array_slice($history, -8)) as $entry):
+                    if (!is_array($entry)) continue;
+                    $action = sanitize_key($entry['action'] ?? '');
+                    $status = sanitize_key($entry['status'] ?? '');
+                    $label_key = $status ?: $action;
+                    ?>
+                    <div class="evapp-rs-ticket-history-item">
+                        <strong><?php echo esc_html($entry['at'] ?? ''); ?></strong><br>
+                        <?php echo esc_html($status_labels[$label_key] ?? ($label_key ?: 'Registro')); ?>
+                        <?php if (!empty($entry['message'])): ?><br><span style="color:#646970;"><?php echo esc_html($entry['message']); ?></span><?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php else: ?>
+            <p style="color:#888;margin:10px 0 0;">Sin actividad registrada desde el formulario incrustable.</p>
+        <?php endif; ?>
+    </div>
+    <?php
+}
+
 function eventosapp_ticket_email_metabox_render($post) {
     $asistente_email = get_post_meta($post->ID, '_eventosapp_asistente_email', true);
     $is_admin = current_user_can('manage_options');
