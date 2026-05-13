@@ -46,6 +46,53 @@ if (!function_exists('evapp_event_debug_append')) {
     }
 }
 
+
+if (!function_exists('evapp_apple_apply_ticket_variant_before_pass')) {
+    /**
+     * Aplica la variante efectiva del ticket antes de generar el pkpass.
+     * Es idempotente y solo actúa si el módulo de variantes está disponible.
+     *
+     * @param int    $ticket_id ID del ticket.
+     * @param string $context   Contexto de ejecución para logs/debug.
+     * @return array|false|null
+     */
+    function evapp_apple_apply_ticket_variant_before_pass($ticket_id, $context = 'apple_wallet') {
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return null;
+        }
+
+        $evento_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if (!$evento_id || !function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+            return null;
+        }
+
+        try {
+            $result = eventosapp_ticket_variants_apply_to_ticket($ticket_id, $evento_id, true);
+            update_post_meta($ticket_id, '_eventosapp_apple_variant_last_context', sanitize_key($context));
+            update_post_meta($ticket_id, '_eventosapp_apple_variant_last_apply_at', current_time('mysql'));
+            update_post_meta($ticket_id, '_eventosapp_apple_variant_last_result', $result);
+
+            evapp_pk_debug_append($ticket_id, 'Apple Wallet: variante aplicada antes de generar pase', [
+                'evento_id' => $evento_id,
+                'context'   => $context,
+                'matched'   => is_array($result) && !empty($result['matched']) ? 'yes' : 'no',
+                'variant'   => is_array($result) ? ($result['variant_key'] ?? '') : '',
+            ]);
+
+            return $result;
+        } catch (Throwable $e) {
+            error_log('EVENTOSAPP APPLE VARIANT ERROR ticket=' . $ticket_id . ' event=' . $evento_id . ' context=' . $context . ' error=' . $e->getMessage());
+            evapp_pk_debug_append($ticket_id, 'Apple Wallet: error aplicando variante', [
+                'evento_id' => $evento_id,
+                'context'   => $context,
+                'error'     => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+}
+
 /** Inyección de consola para TICKETS (deshabilitada en producción) */
 if (!defined('EVAPP_PK_DEBUG_CONSOLE_HOOK')) {
     add_action('admin_footer', function(){
@@ -169,6 +216,7 @@ add_action('save_post_eventosapp_ticket', function($post_id){
             if (!$url) $url = get_post_meta($post_id, '_eventosapp_ticket_wallet_apple', true);
             if (!$url) $url = get_post_meta($post_id, '_eventosapp_ticket_wallet_apple_url', true);
             if (!$url && function_exists('eventosapp_generar_enlace_wallet_apple')) {
+                evapp_apple_apply_ticket_variant_before_pass($post_id, 'save_ticket_nonce_missing_url');
                 evapp_pk_debug_append($post_id, 'Generación (porque no había URL)', ['razón'=>'no había ninguna URL previa']);
                 $url = eventosapp_generar_enlace_wallet_apple($post_id);
             } else {
@@ -176,6 +224,7 @@ add_action('save_post_eventosapp_ticket', function($post_id){
             }
         } else {
             if (function_exists('eventosapp_generar_enlace_wallet_apple')) {
+                evapp_apple_apply_ticket_variant_before_pass($post_id, 'save_ticket_canonical');
                 evapp_pk_debug_append($post_id, 'Generación (llamada canonizada)', ['func'=>'eventosapp_generar_enlace_wallet_apple']);
                 $url = eventosapp_generar_enlace_wallet_apple($post_id); // <- llamada canonizada
             } else {
@@ -333,6 +382,7 @@ add_action('eventosapp_apple_bulk_regen', function($args){
                 evapp_pk_debug_append($ticket_id, 'WORKER: regen (inicio)', [
                     'evento_id'=>$evento_id, 'page'=>$page, 'per_page'=>$per_page
                 ]);
+                evapp_apple_apply_ticket_variant_before_pass($ticket_id, 'batch_regen');
                 $url = eventosapp_generar_enlace_wallet_apple($ticket_id);
                 if (!empty($url) && function_exists('evapp_pkws_push_ticket_update')) {
                     evapp_pkws_push_ticket_update($ticket_id);
