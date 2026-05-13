@@ -9,6 +9,12 @@
  * Meta clave asistente   : _asistente_tickets_asociados  (array de ticket IDs)
  * Meta clave changelog   : _asistente_ticket_changelog   (array de entradas)
  *
+ * Compatibilidad variantes:
+ * - La vinculación NO modifica ni elimina metadatos de variantes.
+ * - Antes de vincular, recalcula la variante efectiva si el módulo está disponible.
+ * - El CPT Asistente conserva su historial y muestra la variante aplicada por ticket
+ *   solo como referencia administrativa.
+ *
  * @package EventosApp
  * @file    includes/admin/eventosapp-asistente-ticket-vincular.php
  */
@@ -17,7 +23,8 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 // ============================================================
 // 1. HOOK: Vincular ticket con asistente al guardar un ticket
-//    Prioridad 40 → corre después del QR Manager (20) y el PDF (30)
+//    Prioridad 40 → corre después del guardado del ticket (20), variantes (21),
+//    QR Manager (20) y PDF/otros anexos que corran antes de esta prioridad.
 //    Cubre: creación/edición manual desde backend y frontend.
 //    El caso webhook se cubre via eventosapp_ticket_created_via_webhook
 //    y eventosapp_ticket_updated_via_webhook (ver sección 1b).
@@ -55,7 +62,167 @@ function evapp_vincular_desde_webhook_update( $ticket_id, $data ) {
 }
 
 // ============================================================
-// 1c. FUNCIÓN CENTRAL: Lógica de vinculación (reutilizable desde
+// 1c. HELPERS: Compatibilidad con variantes de ticket
+//     La vinculación al CPT Asistente debe ser informativa y no debe
+//     sobrescribir, limpiar ni recalcular assets por sí misma.
+// ============================================================
+
+if ( ! function_exists( 'evapp_asistente_ticket_log' ) ) {
+    function evapp_asistente_ticket_log( $message, $context = [] ) {
+        if ( ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ) return;
+
+        $line = 'EVENTOSAPP ASISTENTE LINK | ' . (string) $message;
+        if ( ! empty( $context ) ) {
+            $line .= ' | ' . wp_json_encode( $context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+        }
+        error_log( $line );
+    }
+}
+
+if ( ! function_exists( 'evapp_get_ticket_variant_snapshot_for_asistente' ) ) {
+    function evapp_get_ticket_variant_snapshot_for_asistente( $ticket_id ) {
+        $ticket_id = (int) $ticket_id;
+        if ( ! $ticket_id ) return [];
+
+        return [
+            'variant_key'                 => (string) get_post_meta( $ticket_id, '_eventosapp_ticket_variant_key', true ),
+            'variant_name'                => (string) get_post_meta( $ticket_id, '_eventosapp_ticket_variant_name', true ),
+            'variant_rule_index'          => get_post_meta( $ticket_id, '_eventosapp_ticket_variant_rule_index', true ),
+            'email_template_override'     => (string) get_post_meta( $ticket_id, '_eventosapp_ticket_email_template_override', true ),
+            'email_header_image_url'      => (string) get_post_meta( $ticket_id, '_eventosapp_ticket_email_header_image_url', true ),
+            'google_wallet_variant_class' => (string) get_post_meta( $ticket_id, '_eventosapp_wallet_variant_class_id', true ),
+            'apple_wallet_variant_strip'  => (string) get_post_meta( $ticket_id, '_eventosapp_apple_variant_strip_url', true ),
+        ];
+    }
+}
+
+if ( ! function_exists( 'evapp_prepare_ticket_variant_before_asistente_link' ) ) {
+    function evapp_prepare_ticket_variant_before_asistente_link( $ticket_id, $evento_id, $context = 'asistente_link' ) {
+        $ticket_id = (int) $ticket_id;
+        $evento_id = (int) $evento_id;
+
+        $summary = [
+            'available' => false,
+            'applied'   => false,
+            'reason'    => 'variant_module_unavailable',
+            'before'    => evapp_get_ticket_variant_snapshot_for_asistente( $ticket_id ),
+            'after'     => [],
+            'changed'   => false,
+            'context'   => sanitize_key( (string) $context ),
+        ];
+
+        if ( ! $ticket_id || ! $evento_id ) {
+            $summary['reason'] = 'ticket_or_event_invalid';
+            $summary['after']  = $summary['before'];
+            return $summary;
+        }
+
+        if ( ! function_exists( 'eventosapp_ticket_variants_apply_to_ticket' ) && ! function_exists( 'eventosapp_ticket_variants_prepare_ticket_for_batch_context' ) ) {
+            $summary['after'] = $summary['before'];
+            return $summary;
+        }
+
+        $summary['available'] = true;
+
+        try {
+            if ( function_exists( 'eventosapp_ticket_variants_prepare_ticket_for_batch_context' ) ) {
+                $result = eventosapp_ticket_variants_prepare_ticket_for_batch_context( $ticket_id, $evento_id, 'asistente_link', [
+                    // La vinculación al CPT Asistente no debe hacer trabajo pesado de Wallet.
+                    // Solo recalcula la variante y, si detecta un cambio tardío, deja los assets marcados para refresh.
+                    'sync_google_classes' => false,
+                    'mark_assets_stale'   => true,
+                    'clear_assets_stale'  => false,
+                    'log'                 => defined( 'WP_DEBUG' ) && WP_DEBUG,
+                ] );
+
+                $summary['applied']             = ! empty( $result['applied'] );
+                $summary['reason']              = isset( $result['reason'] ) ? sanitize_text_field( (string) $result['reason'] ) : ( $summary['applied'] ? 'applied' : 'not_applied' );
+                $summary['assets_marked_stale'] = ! empty( $result['assets_marked_stale'] );
+            } else {
+                $result = eventosapp_ticket_variants_apply_to_ticket( $ticket_id, $evento_id, true );
+                $summary['applied'] = ! empty( $result['applied'] );
+                $summary['reason']  = isset( $result['reason'] ) ? sanitize_text_field( (string) $result['reason'] ) : ( $summary['applied'] ? 'applied' : 'not_applied' );
+            }
+        } catch ( Throwable $e ) {
+            $summary['reason'] = 'variant_apply_error';
+            $summary['error']  = $e->getMessage();
+            evapp_asistente_ticket_log( 'Error recalculando variante antes de vincular asistente', [
+                'ticket_id' => $ticket_id,
+                'event_id'  => $evento_id,
+                'error'     => $e->getMessage(),
+            ] );
+        }
+
+        $summary['after']   = evapp_get_ticket_variant_snapshot_for_asistente( $ticket_id );
+        $summary['changed'] = wp_json_encode( $summary['before'] ) !== wp_json_encode( $summary['after'] );
+
+        if ( $summary['changed'] ) {
+            evapp_asistente_ticket_log( 'Variante recalculada antes de vincular asistente', [
+                'ticket_id'            => $ticket_id,
+                'event_id'             => $evento_id,
+                'context'              => $summary['context'],
+                'variant_before'       => $summary['before']['variant_key'] ?? '',
+                'variant_after'        => $summary['after']['variant_key'] ?? '',
+                'assets_marked_stale'  => ! empty( $summary['assets_marked_stale'] ) ? 'yes' : 'no',
+            ] );
+        }
+
+        return $summary;
+    }
+}
+
+if ( ! function_exists( 'evapp_get_ticket_variant_label_for_asistente' ) ) {
+    function evapp_get_ticket_variant_label_for_asistente( $ticket_id ) {
+        $ticket_id = (int) $ticket_id;
+        if ( ! $ticket_id ) return '';
+
+        $variant_name = (string) get_post_meta( $ticket_id, '_eventosapp_ticket_variant_name', true );
+        $variant_key  = (string) get_post_meta( $ticket_id, '_eventosapp_ticket_variant_key', true );
+
+        if ( $variant_name !== '' && $variant_key !== '' ) {
+            return $variant_name . ' (' . $variant_key . ')';
+        }
+
+        if ( $variant_name !== '' ) return $variant_name;
+        if ( $variant_key !== '' ) return $variant_key;
+
+        return '';
+    }
+}
+
+if ( ! function_exists( 'evapp_get_ticket_variant_admin_html_for_asistente' ) ) {
+    function evapp_get_ticket_variant_admin_html_for_asistente( $ticket_id ) {
+        $ticket_id = (int) $ticket_id;
+        if ( ! $ticket_id ) return '<span style="color:#aaa;">—</span>';
+
+        $variant_name = (string) get_post_meta( $ticket_id, '_eventosapp_ticket_variant_name', true );
+        $variant_key  = (string) get_post_meta( $ticket_id, '_eventosapp_ticket_variant_key', true );
+        $wallet_class = (string) get_post_meta( $ticket_id, '_eventosapp_wallet_variant_class_id', true );
+        $email_tpl    = (string) get_post_meta( $ticket_id, '_eventosapp_ticket_email_template_override', true );
+
+        if ( $variant_name === '' && $variant_key === '' ) {
+            return '<span style="color:#888;">Sin variante</span>';
+        }
+
+        $label = $variant_name !== '' ? $variant_name : $variant_key;
+        $html  = '<strong>' . esc_html( $label ) . '</strong>';
+
+        if ( $variant_key !== '' && $variant_key !== $label ) {
+            $html .= '<br><code>' . esc_html( $variant_key ) . '</code>';
+        }
+        if ( $email_tpl !== '' ) {
+            $html .= '<br><span style="color:#555;">Email: <code>' . esc_html( $email_tpl ) . '</code></span>';
+        }
+        if ( $wallet_class !== '' ) {
+            $html .= '<br><span style="color:#555;">Wallet: <code>' . esc_html( $wallet_class ) . '</code></span>';
+        }
+
+        return $html;
+    }
+}
+
+// ============================================================
+// 1d. FUNCIÓN CENTRAL: Lógica de vinculación (reutilizable desde
 //     cualquier canal: save_post, webhook create, webhook update,
 //     edición masiva, etc.)
 // ============================================================
@@ -81,6 +248,16 @@ if ( ! function_exists( 'evapp_process_vincular_asistente' ) ) {
         // ── Obtener cédula del ticket ─────────────────────────────────────────
         $cedula = sanitize_text_field( get_post_meta( $ticket_id, '_eventosapp_asistente_cc', true ) );
         if ( ! $cedula ) return;
+
+        // ── Compatibilidad variantes ──────────────────────────────────────────
+        // Garantiza que, si el módulo de variantes está activo, la variante efectiva
+        // esté calculada antes de registrar la relación ticket ↔ asistente.
+        // No refresca anexos ni modifica datos del CPT Asistente con campos de variante.
+        $variant_context = evapp_prepare_ticket_variant_before_asistente_link(
+            $ticket_id,
+            $evento_id,
+            'asistente_link'
+        );
 
         // ── Buscar o crear asistente ──────────────────────────────────────────
         $asistente_id = function_exists( 'eventosapp_find_asistente_by_cedula' )
@@ -158,7 +335,8 @@ if ( ! function_exists( 'evapp_process_vincular_asistente' ) ) {
                 $ticket_id,
                 $evento_id,
                 $datos_anteriores,
-                $datos_nuevos
+                $datos_nuevos,
+                $variant_context
             );
         }
     }
@@ -247,7 +425,7 @@ if ( ! function_exists( 'evapp_get_campos_map' ) ) {
 // ============================================================
 
 if ( ! function_exists( 'evapp_registrar_changelog_asistente' ) ) {
-    function evapp_registrar_changelog_asistente( $asistente_id, $ticket_id, $evento_id, $datos_anteriores, $datos_nuevos ) {
+    function evapp_registrar_changelog_asistente( $asistente_id, $ticket_id, $evento_id, $datos_anteriores, $datos_nuevos, $variant_context = [] ) {
 
         $evento_nombre = get_the_title( $evento_id );
         $campos_log    = [];
@@ -260,11 +438,26 @@ if ( ! function_exists( 'evapp_registrar_changelog_asistente' ) ) {
             ];
         }
 
+        $ticket_variant_label = evapp_get_ticket_variant_label_for_asistente( $ticket_id );
+
         $entrada = [
             'timestamp'          => current_time( 'mysql' ),
             'ticket_id'          => $ticket_id,
             'evento_id'          => $evento_id,
             'evento_nombre'      => $evento_nombre,
+            'ticket_variant'     => $ticket_variant_label,
+            'variant_context'    => is_array( $variant_context ) ? [
+                'available' => ! empty( $variant_context['available'] ),
+                'applied'   => ! empty( $variant_context['applied'] ),
+                'reason'    => sanitize_text_field( (string) ( $variant_context['reason'] ?? '' ) ),
+                'changed'   => ! empty( $variant_context['changed'] ),
+                'after'     => isset( $variant_context['after'] ) && is_array( $variant_context['after'] ) ? [
+                    'variant_key'                 => sanitize_text_field( (string) ( $variant_context['after']['variant_key'] ?? '' ) ),
+                    'variant_name'                => sanitize_text_field( (string) ( $variant_context['after']['variant_name'] ?? '' ) ),
+                    'email_template_override'     => sanitize_file_name( (string) ( $variant_context['after']['email_template_override'] ?? '' ) ),
+                    'google_wallet_variant_class' => sanitize_text_field( (string) ( $variant_context['after']['google_wallet_variant_class'] ?? '' ) ),
+                ] : [],
+            ] : [],
             'campos_actualizados'=> $campos_log,
         ];
 
@@ -410,6 +603,7 @@ function evapp_render_metabox_tickets_asociados( $post ) {
             <tr>
                 <th>Ticket ID</th>
                 <th>Evento</th>
+                <th>Variante</th>
                 <th>Fecha del Evento</th>
                 <th>Check-In</th>
                 <th>Ir al Evento</th>
@@ -427,6 +621,7 @@ function evapp_render_metabox_tickets_asociados( $post ) {
             $ticket_uid  = get_post_meta( $t_id, 'eventosapp_ticketID', true ) ?: "#{$t_id}";
             $evento_id   = (int) get_post_meta( $t_id, '_eventosapp_ticket_evento_id', true );
             $evento_nombre = $evento_id ? get_the_title( $evento_id ) : '—';
+            $variant_html  = evapp_get_ticket_variant_admin_html_for_asistente( $t_id );
             $fecha_label   = $evento_id ? evapp_get_event_date_label( $evento_id )    : '—';
             $checkin_label = evapp_get_checkin_status_label( $t_id );
             $evento_edit_url = $evento_id ? get_edit_post_link( $evento_id ) : '';
@@ -434,6 +629,7 @@ function evapp_render_metabox_tickets_asociados( $post ) {
             <tr>
                 <td class="evapp-ticket-id"><?php echo esc_html( $ticket_uid ); ?></td>
                 <td><?php echo esc_html( $evento_nombre ); ?></td>
+                <td><?php echo $variant_html; ?></td>
                 <td><?php echo esc_html( $fecha_label ); ?></td>
                 <td><?php echo $checkin_label; ?></td>
                 <td>
@@ -481,6 +677,10 @@ function evapp_render_metabox_asistente_changelog( $post ) {
         $ticket_id      = isset( $entrada['ticket_id'] ) ? (int) $entrada['ticket_id'] : 0;
         $ticket_uid     = $ticket_id ? get_post_meta( $ticket_id, 'eventosapp_ticketID', true ) : '';
         $ticket_label   = $ticket_uid ?: ( $ticket_id ? "#{$ticket_id}" : '—' );
+        $ticket_variant = isset( $entrada['ticket_variant'] ) ? sanitize_text_field( (string) $entrada['ticket_variant'] ) : '';
+        if ( $ticket_variant === '' && $ticket_id ) {
+            $ticket_variant = evapp_get_ticket_variant_label_for_asistente( $ticket_id );
+        }
         $campos         = isset( $entrada['campos_actualizados'] ) && is_array( $entrada['campos_actualizados'] )
                             ? $entrada['campos_actualizados'] : [];
         $num            = count( $changelog ) - $idx;
@@ -490,6 +690,9 @@ function evapp_render_metabox_asistente_changelog( $post ) {
             <strong>Actualización #<?php echo $num; ?></strong>
             <span class="evapp-cl-meta">📅 <?php echo $ts; ?></span>
             <span class="evapp-cl-meta">🎟 Ticket: <em><?php echo esc_html( $ticket_label ); ?></em></span>
+            <?php if ( $ticket_variant !== '' ) : ?>
+                <span class="evapp-cl-meta">🏷 Variante: <em><?php echo esc_html( $ticket_variant ); ?></em></span>
+            <?php endif; ?>
             <span class="evapp-cl-meta">🎪 <?php echo $evento_nombre; ?></span>
         </div>
         <div class="evapp-cl-body">
