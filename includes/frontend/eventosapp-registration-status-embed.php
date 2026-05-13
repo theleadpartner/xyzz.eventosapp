@@ -53,6 +53,14 @@ if ( ! function_exists( 'eventosapp_registration_status_default_config' ) ) {
             'background_color'        => '#ffffff',
             'text_color'              => '#1d2327',
             'border_color'            => '#dcdcde',
+            'title_color'             => '#1d2327',
+            'subtitle_color'          => '#646970',
+            'button_text_color'       => '#ffffff',
+            'input_background_color'  => '#ffffff',
+            'content_max_width'       => '760',
+            'outer_padding'           => '18',
+            'card_padding'            => '22',
+            'text_align'              => 'left',
             'fields'                  => [
                 'email' => [
                     'enabled'     => '1',
@@ -78,6 +86,8 @@ if ( ! function_exists( 'eventosapp_registration_status_default_config' ) ) {
             'texts'                   => [
                 'form_title'             => 'Consulta el estado de tu inscripción',
                 'form_description'       => 'Ingresa los datos solicitados para validar tu identidad y confirmar si tu inscripción está registrada.',
+                'header_title'           => 'Consulta el estado de tu inscripción',
+                'header_subtitle'        => 'Ingresa los datos solicitados para validar tu identidad y confirmar si tu inscripción está registrada.',
                 'submit_label'           => 'Consultar inscripción',
                 'success_title'          => 'Inscripción encontrada',
                 'success_message'        => 'Encontramos una inscripción registrada para {{evento}}.',
@@ -122,10 +132,36 @@ if ( ! function_exists( 'eventosapp_registration_status_get_config' ) ) {
     function eventosapp_registration_status_get_config( $event_id ) {
         $event_id = absint( $event_id );
         $saved    = $event_id ? get_post_meta( $event_id, EVENTOSAPP_REG_STATUS_META_CONFIG, true ) : [];
-        $config   = eventosapp_registration_status_merge_config( eventosapp_registration_status_default_config(), is_array( $saved ) ? $saved : [] );
+        $defaults = eventosapp_registration_status_default_config();
+        $config   = eventosapp_registration_status_merge_config( $defaults, is_array( $saved ) ? $saved : [] );
 
         if ( empty( $config['match_mode'] ) || ! in_array( $config['match_mode'], [ 'all', 'any' ], true ) ) {
             $config['match_mode'] = 'all';
+        }
+
+        if ( empty( $config['texts']['header_title'] ) && ! empty( $config['texts']['form_title'] ) ) {
+            $config['texts']['header_title'] = $config['texts']['form_title'];
+        }
+
+        if ( empty( $config['texts']['header_subtitle'] ) && ! empty( $config['texts']['form_description'] ) ) {
+            $config['texts']['header_subtitle'] = $config['texts']['form_description'];
+        }
+
+        if ( empty( $config['text_align'] ) || ! in_array( $config['text_align'], [ 'left', 'center', 'right' ], true ) ) {
+            $config['text_align'] = $defaults['text_align'];
+        }
+
+        foreach ( [ 'content_max_width' => [ 320, 1400 ], 'outer_padding' => [ 0, 120 ], 'card_padding' => [ 0, 120 ] ] as $size_key => $range ) {
+            $value = isset( $config[ $size_key ] ) ? absint( $config[ $size_key ] ) : absint( $defaults[ $size_key ] );
+            if ( $value < $range[0] || $value > $range[1] ) {
+                $value = absint( $defaults[ $size_key ] );
+            }
+            $config[ $size_key ] = (string) $value;
+        }
+
+        foreach ( [ 'primary_color', 'background_color', 'text_color', 'border_color', 'title_color', 'subtitle_color', 'button_text_color', 'input_background_color' ] as $color_key ) {
+            $hex = sanitize_hex_color( isset( $config[ $color_key ] ) ? $config[ $color_key ] : '' );
+            $config[ $color_key ] = $hex ? $hex : $defaults[ $color_key ];
         }
 
         return $config;
@@ -328,13 +364,20 @@ if ( ! function_exists( 'eventosapp_registration_status_validate_public_access' 
 if ( ! function_exists( 'eventosapp_registration_status_get_embed_url' ) ) {
     function eventosapp_registration_status_get_embed_url( $event_id ) {
         $token = eventosapp_registration_status_get_token( $event_id );
+
+        /**
+         * IMPORTANTE:
+         * No se usa admin-ajax.php para el documento del iframe porque algunas cabeceras de seguridad
+         * aplicadas sobre /wp-admin/ bloquean el embebido externo con frame-ancestors 'self'.
+         * Esta URL entra por el frontend y se intercepta en template_redirect sin requerir reglas rewrite.
+         */
         return add_query_arg(
             [
-                'action'   => 'eventosapp_registration_status_embed',
-                'event_id' => absint( $event_id ),
-                'token'    => rawurlencode( $token ),
+                'eventosapp_registration_status_embed' => '1',
+                'event_id'                            => absint( $event_id ),
+                'token'                               => $token,
             ],
-            admin_url( 'admin-ajax.php' )
+            home_url( '/' )
         );
     }
 }
@@ -344,10 +387,79 @@ if ( ! function_exists( 'eventosapp_registration_status_get_embed_url' ) ) {
  */
 if ( ! function_exists( 'eventosapp_registration_status_get_iframe_code' ) ) {
     function eventosapp_registration_status_get_iframe_code( $event_id ) {
-        $url = eventosapp_registration_status_get_embed_url( $event_id );
-        return '<iframe src="' . esc_url( $url ) . '" width="100%" height="560" style="border:0;max-width:760px;width:100%;" loading="lazy" title="Consulta de inscripción"></iframe>';
+        $url    = eventosapp_registration_status_get_embed_url( $event_id );
+        $config = eventosapp_registration_status_get_config( $event_id );
+        $width  = isset( $config['content_max_width'] ) ? absint( $config['content_max_width'] ) : 760;
+        $title  = ! empty( $config['texts']['header_title'] ) ? $config['texts']['header_title'] : 'Consulta de inscripción';
+
+        return '<iframe src="' . esc_url_raw( $url ) . '" width="100%" height="620" style="border:0;max-width:' . esc_attr( $width ) . 'px;width:100%;display:block;margin:0 auto;" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="' . esc_attr( $title ) . '"></iframe>';
     }
 }
+
+/**
+ * Detecta la solicitud pública del documento iframe por frontend.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_is_embed_request' ) ) {
+    function eventosapp_registration_status_is_embed_request() {
+        return isset( $_GET['eventosapp_registration_status_embed'] ) && sanitize_text_field( wp_unslash( $_GET['eventosapp_registration_status_embed'] ) ) === '1';
+    }
+}
+
+/**
+ * Origen seguro para cabeceras CSP generadas por este documento.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_url_origin' ) ) {
+    function eventosapp_registration_status_url_origin( $url ) {
+        $parts = wp_parse_url( $url );
+        if ( empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+            return '';
+        }
+
+        $origin = $parts['scheme'] . '://' . $parts['host'];
+        if ( ! empty( $parts['port'] ) ) {
+            $origin .= ':' . absint( $parts['port'] );
+        }
+
+        return $origin;
+    }
+}
+
+/**
+ * Cabeceras específicas del documento embedible.
+ * Remueve cabeceras de frame heredadas desde WordPress/plugins cuando aún es posible.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_send_embed_headers' ) ) {
+    function eventosapp_registration_status_send_embed_headers() {
+        if ( headers_sent() ) {
+            return;
+        }
+
+        header_remove( 'X-Frame-Options' );
+        header_remove( 'Content-Security-Policy' );
+        header_remove( 'Content-Security-Policy-Report-Only' );
+
+        $site_origin  = eventosapp_registration_status_url_origin( home_url( '/' ) );
+        $admin_origin = eventosapp_registration_status_url_origin( admin_url( 'admin-ajax.php' ) );
+        $connect_src  = array_unique( array_filter( [ "'self'", $site_origin, $admin_origin ] ) );
+
+        header( 'Content-Type: text/html; charset=' . get_bloginfo( 'charset' ) );
+        header( 'X-Robots-Tag: noindex, nofollow', true );
+        header( 'Referrer-Policy: no-referrer-when-downgrade', true );
+        header( "Content-Security-Policy: frame-ancestors *; default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src " . implode( ' ', $connect_src ) . "; form-action 'self'; base-uri 'self';", true );
+    }
+}
+
+add_action( 'send_headers', function() {
+    if ( eventosapp_registration_status_is_embed_request() ) {
+        eventosapp_registration_status_send_embed_headers();
+    }
+}, 0 );
+
+add_action( 'template_redirect', function() {
+    if ( eventosapp_registration_status_is_embed_request() ) {
+        eventosapp_registration_status_render_public_embed();
+    }
+}, 0 );
 
 /**
  * Registra el metabox independiente en eventosapp_event.
@@ -360,6 +472,28 @@ add_action( 'add_meta_boxes', function() {
         'eventosapp_event',
         'normal',
         'default'
+    );
+} );
+
+/**
+ * Carga el color picker nativo de WordPress solo en el CPT de eventos.
+ */
+add_action( 'admin_enqueue_scripts', function( $hook ) {
+    if ( ! in_array( $hook, [ 'post.php', 'post-new.php' ], true ) ) {
+        return;
+    }
+
+    $screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+    if ( ! $screen || $screen->post_type !== 'eventosapp_event' ) {
+        return;
+    }
+
+    wp_enqueue_style( 'wp-color-picker' );
+    wp_enqueue_script( 'wp-color-picker' );
+
+    wp_add_inline_script(
+        'wp-color-picker',
+        "jQuery(function($){ $('.evapp-rs-color-field').wpColorPicker(); });"
     );
 } );
 
@@ -382,6 +516,7 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
             .evapp-rs-box h4 { margin:0 0 10px; font-size:14px; }
             .evapp-rs-muted { color:#646970; font-size:12px; line-height:1.45; }
             .evapp-rs-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+            .evapp-rs-grid-3 { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }
             .evapp-rs-grid-4 { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px; }
             .evapp-rs-field-table { width:100%; border-collapse:collapse; }
             .evapp-rs-field-table th, .evapp-rs-field-table td { border-bottom:1px solid #f0f0f1; padding:8px 6px; text-align:left; vertical-align:top; }
@@ -390,8 +525,10 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
             .evapp-rs-textarea { width:100%; min-height:76px; }
             .evapp-rs-code { width:100%; font-family:Consolas, Monaco, monospace; font-size:12px; background:#f6f7f7; }
             .evapp-rs-pill { display:inline-block; background:#f0f6fc; color:#0969da; padding:2px 7px; border-radius:999px; font-size:11px; margin-left:4px; }
+            .evapp-rs-number { max-width:120px; }
+            .evapp-rs-color-field.wp-color-picker { max-width:95px; }
             @media (max-width: 980px) {
-                .evapp-rs-grid, .evapp-rs-grid-4 { grid-template-columns:1fr; }
+                .evapp-rs-grid, .evapp-rs-grid-3, .evapp-rs-grid-4 { grid-template-columns:1fr; }
             }
         </style>
 
@@ -462,15 +599,15 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
         </div>
 
         <div class="evapp-rs-box">
-            <h4>Mensajes editables del formulario</h4>
+            <h4>Encabezado, título y subtítulo del formulario</h4>
             <p class="evapp-rs-muted">
-                Puedes usar estas variables: <code>{{evento}}</code>, <code>{{nombre}}</code>, <code>{{apellido}}</code>, <code>{{email}}</code>, <code>{{localidad}}</code>, <code>{{estado_inscripcion}}</code>, <code>{{estado_pago}}</code>, <code>{{estado_checkin}}</code>.
+                Estos textos se muestran en la parte superior del formulario embebido. Puedes usar estas variables: <code>{{evento}}</code>, <code>{{nombre}}</code>, <code>{{apellido}}</code>, <code>{{email}}</code>, <code>{{localidad}}</code>, <code>{{estado_inscripcion}}</code>, <code>{{estado_pago}}</code>, <code>{{estado_checkin}}</code>.
             </p>
 
             <div class="evapp-rs-grid">
                 <p>
-                    <label><strong>Título del formulario</strong></label><br>
-                    <input type="text" class="widefat" name="eventosapp_registration_status_config[texts][form_title]" value="<?php echo esc_attr( $config['texts']['form_title'] ); ?>">
+                    <label><strong>Título del encabezado</strong></label><br>
+                    <input type="text" class="widefat" name="eventosapp_registration_status_config[texts][header_title]" value="<?php echo esc_attr( $config['texts']['header_title'] ); ?>">
                 </p>
                 <p>
                     <label><strong>Texto del botón consultar</strong></label><br>
@@ -479,10 +616,16 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
             </div>
 
             <p>
-                <label><strong>Descripción del formulario</strong></label><br>
-                <textarea class="evapp-rs-textarea" name="eventosapp_registration_status_config[texts][form_description]"><?php echo esc_textarea( $config['texts']['form_description'] ); ?></textarea>
+                <label><strong>Subtítulo del encabezado</strong></label><br>
+                <textarea class="evapp-rs-textarea" name="eventosapp_registration_status_config[texts][header_subtitle]"><?php echo esc_textarea( $config['texts']['header_subtitle'] ); ?></textarea>
             </p>
 
+            <input type="hidden" name="eventosapp_registration_status_config[texts][form_title]" value="<?php echo esc_attr( $config['texts']['header_title'] ); ?>">
+            <input type="hidden" name="eventosapp_registration_status_config[texts][form_description]" value="<?php echo esc_attr( $config['texts']['header_subtitle'] ); ?>">
+        </div>
+
+        <div class="evapp-rs-box">
+            <h4>Mensajes editables de respuesta</h4>
             <div class="evapp-rs-grid">
                 <p>
                     <label><strong>Título cuando existe inscripción</strong></label><br>
@@ -567,25 +710,70 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
         </div>
 
         <div class="evapp-rs-box">
-            <h4>Estilos básicos del formulario embebido</h4>
+            <h4>Estilos del formulario embebido</h4>
+            <p class="evapp-rs-muted">Los colores usan el color picker nativo de WordPress. El padding y ancho se aplican directamente al iframe público.</p>
+
             <div class="evapp-rs-grid-4">
                 <p>
                     <label><strong>Color principal</strong></label><br>
-                    <input type="text" class="widefat" name="eventosapp_registration_status_config[primary_color]" value="<?php echo esc_attr( $config['primary_color'] ); ?>" placeholder="#2271b1">
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[primary_color]" value="<?php echo esc_attr( $config['primary_color'] ); ?>" data-default-color="#2271b1">
                 </p>
                 <p>
-                    <label><strong>Fondo</strong></label><br>
-                    <input type="text" class="widefat" name="eventosapp_registration_status_config[background_color]" value="<?php echo esc_attr( $config['background_color'] ); ?>" placeholder="#ffffff">
+                    <label><strong>Fondo tarjeta</strong></label><br>
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[background_color]" value="<?php echo esc_attr( $config['background_color'] ); ?>" data-default-color="#ffffff">
                 </p>
                 <p>
-                    <label><strong>Texto</strong></label><br>
-                    <input type="text" class="widefat" name="eventosapp_registration_status_config[text_color]" value="<?php echo esc_attr( $config['text_color'] ); ?>" placeholder="#1d2327">
+                    <label><strong>Texto general</strong></label><br>
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[text_color]" value="<?php echo esc_attr( $config['text_color'] ); ?>" data-default-color="#1d2327">
                 </p>
                 <p>
                     <label><strong>Borde</strong></label><br>
-                    <input type="text" class="widefat" name="eventosapp_registration_status_config[border_color]" value="<?php echo esc_attr( $config['border_color'] ); ?>" placeholder="#dcdcde">
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[border_color]" value="<?php echo esc_attr( $config['border_color'] ); ?>" data-default-color="#dcdcde">
                 </p>
             </div>
+
+            <div class="evapp-rs-grid-4">
+                <p>
+                    <label><strong>Color título</strong></label><br>
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[title_color]" value="<?php echo esc_attr( $config['title_color'] ); ?>" data-default-color="#1d2327">
+                </p>
+                <p>
+                    <label><strong>Color subtítulo</strong></label><br>
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[subtitle_color]" value="<?php echo esc_attr( $config['subtitle_color'] ); ?>" data-default-color="#646970">
+                </p>
+                <p>
+                    <label><strong>Texto botón</strong></label><br>
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[button_text_color]" value="<?php echo esc_attr( $config['button_text_color'] ); ?>" data-default-color="#ffffff">
+                </p>
+                <p>
+                    <label><strong>Fondo inputs</strong></label><br>
+                    <input type="text" class="evapp-rs-color-field" name="eventosapp_registration_status_config[input_background_color]" value="<?php echo esc_attr( $config['input_background_color'] ); ?>" data-default-color="#ffffff">
+                </p>
+            </div>
+
+            <div class="evapp-rs-grid-3">
+                <p>
+                    <label><strong>Ancho máximo del formulario</strong></label><br>
+                    <input type="number" class="evapp-rs-number" min="320" max="1400" step="10" name="eventosapp_registration_status_config[content_max_width]" value="<?php echo esc_attr( $config['content_max_width'] ); ?>"> px
+                </p>
+                <p>
+                    <label><strong>Padding externo</strong></label><br>
+                    <input type="number" class="evapp-rs-number" min="0" max="120" step="1" name="eventosapp_registration_status_config[outer_padding]" value="<?php echo esc_attr( $config['outer_padding'] ); ?>"> px
+                </p>
+                <p>
+                    <label><strong>Padding interno tarjeta</strong></label><br>
+                    <input type="number" class="evapp-rs-number" min="0" max="120" step="1" name="eventosapp_registration_status_config[card_padding]" value="<?php echo esc_attr( $config['card_padding'] ); ?>"> px
+                </p>
+            </div>
+
+            <p>
+                <label><strong>Alineación del encabezado y textos</strong></label><br>
+                <select name="eventosapp_registration_status_config[text_align]">
+                    <option value="left" <?php selected( $config['text_align'], 'left' ); ?>>Izquierda</option>
+                    <option value="center" <?php selected( $config['text_align'], 'center' ); ?>>Centro</option>
+                    <option value="right" <?php selected( $config['text_align'], 'right' ); ?>>Derecha</option>
+                </select>
+            </p>
         </div>
 
         <div class="evapp-rs-box">
@@ -654,16 +842,33 @@ if ( ! function_exists( 'eventosapp_registration_status_save_metabox' ) ) {
         $config['show_localidad']      = ! empty( $raw['show_localidad'] ) ? '1' : '0';
         $config['resend_enabled']      = ! empty( $raw['resend_enabled'] ) ? '1' : '0';
 
-        foreach ( [ 'primary_color', 'background_color', 'text_color', 'border_color' ] as $color_key ) {
+        foreach ( [ 'primary_color', 'background_color', 'text_color', 'border_color', 'title_color', 'subtitle_color', 'button_text_color', 'input_background_color' ] as $color_key ) {
             $value = isset( $raw[ $color_key ] ) ? sanitize_text_field( $raw[ $color_key ] ) : $defaults[ $color_key ];
             $hex   = sanitize_hex_color( $value );
             $config[ $color_key ] = $hex ? $hex : $defaults[ $color_key ];
         }
 
+        foreach ( [ 'content_max_width' => [ 320, 1400 ], 'outer_padding' => [ 0, 120 ], 'card_padding' => [ 0, 120 ] ] as $size_key => $range ) {
+            $value = isset( $raw[ $size_key ] ) ? absint( $raw[ $size_key ] ) : absint( $defaults[ $size_key ] );
+            if ( $value < $range[0] || $value > $range[1] ) {
+                $value = absint( $defaults[ $size_key ] );
+            }
+            $config[ $size_key ] = (string) $value;
+        }
+
+        $config['text_align'] = ! empty( $raw['text_align'] ) && in_array( $raw['text_align'], [ 'left', 'center', 'right' ], true ) ? sanitize_key( $raw['text_align'] ) : $defaults['text_align'];
+
         $posted_texts = isset( $raw['texts'] ) && is_array( $raw['texts'] ) ? $raw['texts'] : [];
         foreach ( $defaults['texts'] as $text_key => $default_value ) {
             $value = isset( $posted_texts[ $text_key ] ) ? $posted_texts[ $text_key ] : $default_value;
             $config['texts'][ $text_key ] = sanitize_textarea_field( $value );
+        }
+
+        if ( empty( $config['texts']['form_title'] ) && ! empty( $config['texts']['header_title'] ) ) {
+            $config['texts']['form_title'] = $config['texts']['header_title'];
+        }
+        if ( empty( $config['texts']['form_description'] ) && ! empty( $config['texts']['header_subtitle'] ) ) {
+            $config['texts']['form_description'] = $config['texts']['header_subtitle'];
         }
 
         $posted_fields = isset( $raw['fields'] ) && is_array( $raw['fields'] ) ? $raw['fields'] : [];
@@ -749,7 +954,7 @@ if ( ! function_exists( 'eventosapp_registration_status_render_public_embed' ) )
         $config   = eventosapp_registration_status_validate_public_access( $event_id, $token );
 
         nocache_headers();
-        header( 'Content-Type: text/html; charset=' . get_bloginfo( 'charset' ) );
+        eventosapp_registration_status_send_embed_headers();
 
         if ( is_wp_error( $config ) ) {
             eventosapp_registration_status_log( 'Acceso público rechazado', [
@@ -765,10 +970,20 @@ if ( ! function_exists( 'eventosapp_registration_status_render_public_embed' ) )
         $ajax_url       = admin_url( 'admin-ajax.php' );
         $event_title    = get_the_title( $event_id );
 
-        $primary_color    = sanitize_hex_color( $config['primary_color'] ) ?: '#2271b1';
-        $background_color = sanitize_hex_color( $config['background_color'] ) ?: '#ffffff';
-        $text_color       = sanitize_hex_color( $config['text_color'] ) ?: '#1d2327';
-        $border_color     = sanitize_hex_color( $config['border_color'] ) ?: '#dcdcde';
+        $primary_color          = sanitize_hex_color( $config['primary_color'] ) ?: '#2271b1';
+        $background_color       = sanitize_hex_color( $config['background_color'] ) ?: '#ffffff';
+        $text_color             = sanitize_hex_color( $config['text_color'] ) ?: '#1d2327';
+        $border_color           = sanitize_hex_color( $config['border_color'] ) ?: '#dcdcde';
+        $title_color            = sanitize_hex_color( $config['title_color'] ) ?: '#1d2327';
+        $subtitle_color         = sanitize_hex_color( $config['subtitle_color'] ) ?: '#646970';
+        $button_text_color      = sanitize_hex_color( $config['button_text_color'] ) ?: '#ffffff';
+        $input_background_color = sanitize_hex_color( $config['input_background_color'] ) ?: '#ffffff';
+        $content_max_width      = absint( $config['content_max_width'] );
+        $outer_padding          = absint( $config['outer_padding'] );
+        $card_padding           = absint( $config['card_padding'] );
+        $text_align             = in_array( $config['text_align'], [ 'left', 'center', 'right' ], true ) ? $config['text_align'] : 'left';
+        $header_title           = eventosapp_registration_status_format_public_text( $config['texts']['header_title'], $event_id, 0 );
+        $header_subtitle        = eventosapp_registration_status_format_public_text( $config['texts']['header_subtitle'], $event_id, 0 );
 
         ?>
         <!doctype html>
@@ -776,29 +991,37 @@ if ( ! function_exists( 'eventosapp_registration_status_render_public_embed' ) )
         <head>
             <meta charset="<?php bloginfo( 'charset' ); ?>">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title><?php echo esc_html( $config['texts']['form_title'] ); ?></title>
+            <title><?php echo esc_html( wp_strip_all_tags( $config['texts']['header_title'] ) ); ?></title>
             <style>
                 :root {
                     --evapp-rs-primary: <?php echo esc_html( $primary_color ); ?>;
                     --evapp-rs-bg: <?php echo esc_html( $background_color ); ?>;
                     --evapp-rs-text: <?php echo esc_html( $text_color ); ?>;
                     --evapp-rs-border: <?php echo esc_html( $border_color ); ?>;
+                    --evapp-rs-title: <?php echo esc_html( $title_color ); ?>;
+                    --evapp-rs-subtitle: <?php echo esc_html( $subtitle_color ); ?>;
+                    --evapp-rs-button-text: <?php echo esc_html( $button_text_color ); ?>;
+                    --evapp-rs-input-bg: <?php echo esc_html( $input_background_color ); ?>;
+                    --evapp-rs-max-width: <?php echo esc_html( $content_max_width ); ?>px;
+                    --evapp-rs-outer-padding: <?php echo esc_html( $outer_padding ); ?>px;
+                    --evapp-rs-card-padding: <?php echo esc_html( $card_padding ); ?>px;
+                    --evapp-rs-align: <?php echo esc_html( $text_align ); ?>;
                 }
                 html, body { margin:0; padding:0; background:transparent; }
                 body { font-family: Arial, Helvetica, sans-serif; color:var(--evapp-rs-text); }
-                .evapp-rs-public-wrap { box-sizing:border-box; width:100%; max-width:760px; margin:0 auto; padding:18px; }
-                .evapp-rs-card { background:var(--evapp-rs-bg); border:1px solid var(--evapp-rs-border); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.06); padding:22px; }
-                .evapp-rs-card h2 { margin:0 0 8px; font-size:24px; line-height:1.2; color:var(--evapp-rs-text); }
-                .evapp-rs-desc { margin:0 0 18px; color:rgba(29,35,39,.78); line-height:1.5; font-size:15px; }
+                .evapp-rs-public-wrap { box-sizing:border-box; width:100%; max-width:var(--evapp-rs-max-width); margin:0 auto; padding:var(--evapp-rs-outer-padding); }
+                .evapp-rs-card { background:var(--evapp-rs-bg); border:1px solid var(--evapp-rs-border); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.06); padding:var(--evapp-rs-card-padding); text-align:var(--evapp-rs-align); }
+                .evapp-rs-card h2 { margin:0 0 8px; font-size:24px; line-height:1.2; color:var(--evapp-rs-title); text-align:var(--evapp-rs-align); }
+                .evapp-rs-desc { margin:0 0 18px; color:var(--evapp-rs-subtitle); line-height:1.5; font-size:15px; text-align:var(--evapp-rs-align); }
                 .evapp-rs-event { display:inline-block; margin:0 0 14px; padding:6px 10px; border-radius:999px; background:rgba(34,113,177,.10); color:var(--evapp-rs-primary); font-size:12px; font-weight:700; }
-                .evapp-rs-field { margin-bottom:14px; }
-                .evapp-rs-field label { display:block; font-size:13px; font-weight:700; margin-bottom:6px; }
-                .evapp-rs-field input { box-sizing:border-box; width:100%; border:1px solid var(--evapp-rs-border); border-radius:10px; padding:12px 13px; font-size:15px; color:var(--evapp-rs-text); background:#fff; outline:none; }
+                .evapp-rs-field { margin-bottom:14px; text-align:left; }
+                .evapp-rs-field label { display:block; font-size:13px; font-weight:700; margin-bottom:6px; color:var(--evapp-rs-text); }
+                .evapp-rs-field input { box-sizing:border-box; width:100%; border:1px solid var(--evapp-rs-border); border-radius:10px; padding:12px 13px; font-size:15px; color:var(--evapp-rs-text); background:var(--evapp-rs-input-bg); outline:none; }
                 .evapp-rs-field input:focus { border-color:var(--evapp-rs-primary); box-shadow:0 0 0 3px rgba(34,113,177,.14); }
-                .evapp-rs-submit, .evapp-rs-resend { width:100%; border:0; border-radius:10px; padding:13px 16px; font-size:15px; font-weight:700; cursor:pointer; background:var(--evapp-rs-primary); color:#fff; transition:opacity .2s ease, transform .2s ease; }
+                .evapp-rs-submit, .evapp-rs-resend { width:100%; border:0; border-radius:10px; padding:13px 16px; font-size:15px; font-weight:700; cursor:pointer; background:var(--evapp-rs-primary); color:var(--evapp-rs-button-text); transition:opacity .2s ease, transform .2s ease; }
                 .evapp-rs-submit:hover, .evapp-rs-resend:hover { opacity:.92; }
                 .evapp-rs-submit:disabled, .evapp-rs-resend:disabled { opacity:.58; cursor:not-allowed; transform:none; }
-                .evapp-rs-result { display:none; margin-top:18px; border-radius:12px; padding:16px; border:1px solid var(--evapp-rs-border); background:#f6f7f7; }
+                .evapp-rs-result { display:none; margin-top:18px; border-radius:12px; padding:16px; border:1px solid var(--evapp-rs-border); background:#f6f7f7; text-align:left; }
                 .evapp-rs-result.is-visible { display:block; }
                 .evapp-rs-result h3 { margin:0 0 8px; font-size:18px; line-height:1.25; }
                 .evapp-rs-result p { margin:0 0 10px; line-height:1.5; }
@@ -810,8 +1033,8 @@ if ( ! function_exists( 'eventosapp_registration_status_render_public_embed' ) )
                 .evapp-rs-resend { margin-top:12px; }
                 .evapp-rs-small { display:block; margin-top:10px; font-size:12px; color:rgba(29,35,39,.66); line-height:1.4; }
                 @media (max-width: 520px) {
-                    .evapp-rs-public-wrap { padding:10px; }
-                    .evapp-rs-card { padding:18px; border-radius:12px; }
+                    .evapp-rs-public-wrap { padding:min(var(--evapp-rs-outer-padding), 10px); }
+                    .evapp-rs-card { padding:min(var(--evapp-rs-card-padding), 18px); border-radius:12px; }
                     .evapp-rs-card h2 { font-size:21px; }
                 }
             </style>
@@ -820,9 +1043,11 @@ if ( ! function_exists( 'eventosapp_registration_status_render_public_embed' ) )
             <div class="evapp-rs-public-wrap" id="evapp-rs-public-wrap">
                 <div class="evapp-rs-card">
                     <span class="evapp-rs-event"><?php echo esc_html( $event_title ); ?></span>
-                    <h2><?php echo esc_html( $config['texts']['form_title'] ); ?></h2>
-                    <?php if ( ! empty( $config['texts']['form_description'] ) ) : ?>
-                        <p class="evapp-rs-desc"><?php echo esc_html( $config['texts']['form_description'] ); ?></p>
+                    <?php if ( ! empty( $config['texts']['header_title'] ) ) : ?>
+                        <h2><?php echo $header_title; ?></h2>
+                    <?php endif; ?>
+                    <?php if ( ! empty( $config['texts']['header_subtitle'] ) ) : ?>
+                        <p class="evapp-rs-desc"><?php echo $header_subtitle; ?></p>
                     <?php endif; ?>
 
                     <?php if ( empty( $enabled_fields ) ) : ?>
