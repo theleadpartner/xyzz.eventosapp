@@ -1002,6 +1002,20 @@ if ( ! function_exists( 'evapp_asistente_get_related_ticket_ids' ) ) {
     }
 }
 
+if ( ! function_exists( 'evapp_asistente_get_ticket_modalidad_label' ) ) {
+    function evapp_asistente_get_ticket_modalidad_label( $ticket_id ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) return 'Presencial';
+
+        if ( function_exists( 'eventosapp_get_ticket_modalidad_label' ) ) {
+            return eventosapp_get_ticket_modalidad_label( $ticket_id );
+        }
+
+        $raw = (string) get_post_meta( $ticket_id, '_eventosapp_ticket_modalidad', true );
+        return $raw === 'virtual' ? 'Virtual' : 'Presencial';
+    }
+}
+
 function eventosapp_asistente_tickets_asociados_metabox( $post ) {
     $ticket_ids = evapp_asistente_get_related_ticket_ids( $post->ID );
 
@@ -1014,6 +1028,7 @@ function eventosapp_asistente_tickets_asociados_metabox( $post ) {
     echo '<thead><tr>';
     echo '<th>Ticket ID</th>';
     echo '<th>Evento</th>';
+    echo '<th>Modalidad</th>';
     echo '<th>Fecha del Evento</th>';
     echo '<th>Check-In</th>';
     echo '<th>Ir al Evento</th>';
@@ -1023,6 +1038,7 @@ function eventosapp_asistente_tickets_asociados_metabox( $post ) {
         $evento_id    = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
         $evento_title = $evento_id ? get_the_title( $evento_id ) : '—';
         $fecha_evento = $evento_id ? get_post_meta( $evento_id, '_eventosapp_event_fecha', true ) : '';
+        $modalidad_label = evapp_asistente_get_ticket_modalidad_label( $ticket_id );
         if ( ! $fecha_evento && $evento_id ) {
             $fecha_evento = get_post_meta( $evento_id, '_event_fecha', true );
         }
@@ -1033,6 +1049,7 @@ function eventosapp_asistente_tickets_asociados_metabox( $post ) {
         echo '<tr>';
         echo '<td><code>' . esc_html( get_the_title( $ticket_id ) ?: $ticket_id ) . '</code></td>';
         echo '<td>' . esc_html( $evento_title ?: '—' ) . '</td>';
+        echo '<td>' . esc_html( $modalidad_label ?: 'Presencial' ) . '</td>';
         echo '<td>' . esc_html( $fecha_evento ?: '—' ) . '</td>';
         echo '<td>' . ( $checkin_done ? '<span style="color:#008a20;">✓ Sí</span>' : '<span style="color:#777;">—</span>' ) . '</td>';
         echo '<td>';
