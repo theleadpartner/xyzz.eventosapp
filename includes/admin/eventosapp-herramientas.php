@@ -356,6 +356,21 @@ function evapp_import_generate_assets_now($ticket_id, $event_id){
         return false;
     }
 
+    // Compatibilidad con Variantes:
+    // Antes de crear/regenerar QR, ICS, PDF o Wallets desde la importación masiva,
+    // se recalcula la variante efectiva usando los metadatos ya guardados del ticket.
+    // Esto evita que los anexos se generen con plantilla, clase Wallet o branding del evento base
+    // cuando la fila importada cumple una regla de variante.
+    if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context')) {
+        eventosapp_ticket_variants_prepare_ticket_for_batch_context($ticket_id, $event_id, 'import_generate_assets', [
+            'sync_google_classes' => true,
+            'clear_assets_stale'  => true,
+            'log'                 => true,
+        ]);
+    } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+        eventosapp_ticket_variants_apply_to_ticket($ticket_id, $event_id, true);
+    }
+
     if (class_exists('EventosApp_QR_Manager')) {
         $qr = EventosApp_QR_Manager::get_instance();
         if ($qr && method_exists($qr, 'regenerate_all_qr_codes_forced')) {
@@ -1444,6 +1459,17 @@ function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'man
 
     if (!$skip_heavy_operations) {
         evapp_import_generate_assets_now($post_id, $event_id);
+    } else {
+        // Si se crea el ticket sin anexos pesados, al menos queda guardada su variante efectiva
+        // para que una generación posterior use la configuración correcta.
+        if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context')) {
+            eventosapp_ticket_variants_prepare_ticket_for_batch_context($post_id, $event_id, 'import_create_ticket_skip_assets', [
+                'sync_google_classes' => true,
+                'log'                 => true,
+            ]);
+        } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
+            eventosapp_ticket_variants_apply_to_ticket($post_id, $event_id, true);
+        }
     }
 
     if (function_exists('eventosapp_ticket_build_search_blob')) {
