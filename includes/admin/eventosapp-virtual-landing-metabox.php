@@ -9,6 +9,35 @@ if ( ! defined('ABSPATH') ) exit;
  * y colores de la landing virtual que se carga desde el widget/shortcode de Elementor.
  */
 
+if ( ! function_exists('eventosapp_virtual_landing_event_post_types') ) {
+    function eventosapp_virtual_landing_event_post_types() {
+        $post_types = [ 'eventosapp_event', 'eventosapp_events' ];
+        $post_types = array_values( array_unique( array_filter( $post_types, static function( $post_type ) {
+            return is_string( $post_type ) && $post_type !== '';
+        } ) ) );
+
+        return apply_filters( 'eventosapp_virtual_landing_event_post_types', $post_types );
+    }
+}
+
+if ( ! function_exists('eventosapp_virtual_landing_is_event_post_type') ) {
+    function eventosapp_virtual_landing_is_event_post_type( $post_type ) {
+        return in_array( (string) $post_type, eventosapp_virtual_landing_event_post_types(), true );
+    }
+}
+
+if ( ! function_exists('eventosapp_virtual_landing_active_event_post_types') ) {
+    function eventosapp_virtual_landing_active_event_post_types() {
+        $active = [];
+        foreach ( eventosapp_virtual_landing_event_post_types() as $post_type ) {
+            if ( post_type_exists( $post_type ) ) {
+                $active[] = $post_type;
+            }
+        }
+        return $active ?: [ 'eventosapp_event' ];
+    }
+}
+
 if ( ! function_exists('eventosapp_virtual_landing_default_colors') ) {
     function eventosapp_virtual_landing_default_colors() {
         return [
@@ -46,23 +75,28 @@ if ( ! function_exists('eventosapp_virtual_landing_get_colors') ) {
 
 add_action('admin_enqueue_scripts', function(){
     $screen = function_exists('get_current_screen') ? get_current_screen() : null;
-    if ( $screen && $screen->post_type === 'eventosapp_event' ) {
+    if ( $screen && eventosapp_virtual_landing_is_event_post_type( $screen->post_type ?? '' ) ) {
         wp_enqueue_style('wp-color-picker');
         wp_enqueue_script('wp-color-picker');
         wp_enqueue_media();
     }
 });
 
-add_action('add_meta_boxes', function(){
-    add_meta_box(
-        'eventosapp_virtual_landing_config',
-        'Landing Virtual del Evento',
-        'eventosapp_render_virtual_landing_metabox',
-        'eventosapp_event',
-        'normal',
-        'default'
-    );
-});
+if ( ! function_exists('eventosapp_register_virtual_landing_metabox') ) {
+    function eventosapp_register_virtual_landing_metabox() {
+        foreach ( eventosapp_virtual_landing_active_event_post_types() as $screen ) {
+            add_meta_box(
+                'eventosapp_virtual_landing_config',
+                'Landing Virtual del Evento',
+                'eventosapp_render_virtual_landing_metabox',
+                $screen,
+                'normal',
+                'default'
+            );
+        }
+    }
+}
+add_action('add_meta_boxes', 'eventosapp_register_virtual_landing_metabox', 20);
 
 if ( ! function_exists('eventosapp_render_virtual_landing_metabox') ) {
     function eventosapp_render_virtual_landing_metabox( $post ) {
@@ -232,10 +266,13 @@ if ( ! function_exists('eventosapp_render_virtual_landing_metabox') ) {
     }
 }
 
-add_action('save_post_eventosapp_event', function( $post_id ) {
-    if ( defined('DOING_AUTOSAVE') && DOING_AUTOSAVE ) return;
-    if ( ! current_user_can('edit_post', $post_id) ) return;
-    if ( ! isset($_POST['eventosapp_virtual_landing_nonce']) || ! wp_verify_nonce($_POST['eventosapp_virtual_landing_nonce'], 'eventosapp_virtual_landing_save') ) return;
+if ( ! function_exists('eventosapp_save_virtual_landing_metabox') ) {
+    function eventosapp_save_virtual_landing_metabox( $post_id ) {
+        if ( defined('DOING_AUTOSAVE') && DOING_AUTOSAVE ) return;
+        if ( wp_is_post_revision( $post_id ) || wp_is_post_autosave( $post_id ) ) return;
+        if ( ! eventosapp_virtual_landing_is_event_post_type( get_post_type( $post_id ) ) ) return;
+        if ( ! current_user_can('edit_post', $post_id) ) return;
+        if ( ! isset($_POST['eventosapp_virtual_landing_nonce']) || ! wp_verify_nonce($_POST['eventosapp_virtual_landing_nonce'], 'eventosapp_virtual_landing_save') ) return;
 
     $previous_path = get_post_meta($post_id, '_eventosapp_virtual_landing_path', true);
     $raw_path = isset($_POST['eventosapp_virtual_landing_path']) ? wp_unslash($_POST['eventosapp_virtual_landing_path']) : '';
@@ -270,5 +307,8 @@ add_action('save_post_eventosapp_event', function( $post_id ) {
         $value = isset($posted_colors[$key]) ? sanitize_hex_color(wp_unslash($posted_colors[$key])) : '';
         $colors[$key] = $value ?: $default;
     }
-    update_post_meta($post_id, '_eventosapp_virtual_landing_colors', $colors);
-}, 30);
+        update_post_meta($post_id, '_eventosapp_virtual_landing_colors', $colors);
+    }
+}
+add_action('save_post_eventosapp_event', 'eventosapp_save_virtual_landing_metabox', 30);
+add_action('save_post_eventosapp_events', 'eventosapp_save_virtual_landing_metabox', 30);
