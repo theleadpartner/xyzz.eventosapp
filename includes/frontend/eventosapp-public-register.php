@@ -87,6 +87,18 @@ function eventosapp_pubreg_submit(){
 
     // Validación
     $errors = [];
+
+    // Modalidad del ticket según la modalidad configurada en el evento.
+    $event_modalidad = function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($event_id) : (get_post_meta($event_id, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    $event_modalidad = function_exists('eventosapp_normalize_event_modalidad') ? eventosapp_normalize_event_modalidad($event_modalidad) : (in_array($event_modalidad, ['presencial','virtual','presencial_virtual'], true) ? $event_modalidad : 'presencial');
+    $requested_modalidad = isset($_POST['ticket_modalidad']) ? sanitize_text_field(wp_unslash($_POST['ticket_modalidad'])) : '';
+    if ($event_modalidad === 'presencial_virtual' && !in_array($requested_modalidad, ['presencial','virtual'], true)) {
+        $errors[] = 'Debes seleccionar si asistirás de forma presencial o virtual.';
+    }
+    $ticket_modalidad = function_exists('eventosapp_resolve_ticket_modalidad')
+        ? eventosapp_resolve_ticket_modalidad($event_id, $requested_modalidad, '')
+        : (($event_modalidad === 'virtual') ? 'virtual' : ($requested_modalidad ?: 'presencial'));
+    $is_virtual_ticket = ($ticket_modalidad === 'virtual');
     if ($nombre==='')   $errors[] = 'El campo Nombres es obligatorio.';
     if ($apellido==='') $errors[] = 'El campo Apellidos es obligatorio.';
     if ($cc==='')       $errors[] = 'La Cédula de Ciudadanía es obligatoria.';
@@ -139,6 +151,10 @@ function eventosapp_pubreg_submit(){
 
     // Metas base
     update_post_meta($post_id, '_eventosapp_ticket_evento_id',    $event_id);
+    update_post_meta($post_id, '_eventosapp_ticket_modalidad',    $ticket_modalidad);
+    if ($is_virtual_ticket && function_exists('eventosapp_ticket_clear_presential_assets')) {
+        eventosapp_ticket_clear_presential_assets($post_id);
+    }
     update_post_meta($post_id, '_eventosapp_ticket_user_id',      $creator_id);
     update_post_meta($post_id, '_eventosapp_asistente_nombre',    $nombre);
     update_post_meta($post_id, '_eventosapp_asistente_apellido',  $apellido);
@@ -203,32 +219,40 @@ function eventosapp_pubreg_submit(){
         eventosapp_ticket_variants_apply_to_ticket($post_id, $event_id, true);
     }
 
-    // PDF/ICS, índice
-    if ( function_exists('eventosapp_ticket_generar_pdf') ) eventosapp_ticket_generar_pdf($post_id);
+    // PDF/ICS, índice. Los tickets virtuales no generan PDF/Wallet/QR presencial; conservan ICS.
+    if ( !$is_virtual_ticket && function_exists('eventosapp_ticket_generar_pdf') ) eventosapp_ticket_generar_pdf($post_id);
     if ( function_exists('eventosapp_ticket_generar_ics') )  eventosapp_ticket_generar_ics($post_id);
     if ( function_exists('eventosapp_ticket_build_search_blob') ) eventosapp_ticket_build_search_blob($post_id);
 
-    // Email automático si está activo
+    // Email automático si está activo. Prioriza el enviador oficial para respetar variantes y modalidad.
     $auto_email = get_post_meta($event_id, '_eventosapp_ticket_auto_email_public', true) === '1';
-    if ( $auto_email && function_exists('eventosapp_build_ticket_email_html') ) {
-        $attachments = [];
-        $pdf_on = get_post_meta($event_id, '_eventosapp_ticket_pdf', true) === '1';
-        $ics_on = get_post_meta($event_id, '_eventosapp_ticket_ics', true) === '1';
-        if ($pdf_on && function_exists('eventosapp_url_to_path')) {
-            $pdf_url = get_post_meta($post_id, '_eventosapp_ticket_pdf_url', true);
-            $pdf_path = $pdf_url ? eventosapp_url_to_path($pdf_url) : '';
-            if ($pdf_path && file_exists($pdf_path)) $attachments[] = $pdf_path;
+    if ( $auto_email ) {
+        if ( function_exists('eventosapp_send_ticket_email_now') ) {
+            eventosapp_send_ticket_email_now($post_id, [
+                'source'          => 'public_register_auto',
+                'force'           => true,
+                'refresh_wallets' => !$is_virtual_ticket,
+            ]);
+        } elseif ( function_exists('eventosapp_build_ticket_email_html') ) {
+            $attachments = [];
+            $pdf_on = (!$is_virtual_ticket && get_post_meta($event_id, '_eventosapp_ticket_pdf', true) === '1');
+            $ics_on = (get_post_meta($event_id, '_eventosapp_ticket_ics', true) === '1') || $is_virtual_ticket;
+            if ($pdf_on && function_exists('eventosapp_url_to_path')) {
+                $pdf_url = get_post_meta($post_id, '_eventosapp_ticket_pdf_url', true);
+                $pdf_path = $pdf_url ? eventosapp_url_to_path($pdf_url) : '';
+                if ($pdf_path && file_exists($pdf_path)) $attachments[] = $pdf_path;
+            }
+            if ($ics_on && function_exists('eventosapp_url_to_path')) {
+                $ics_url = get_post_meta($post_id, '_eventosapp_ticket_ics_url', true);
+                $ics_path = $ics_url ? eventosapp_url_to_path($ics_url) : '';
+                if ($ics_path && file_exists($ics_path)) $attachments[] = $ics_path;
+            }
+            $subject = 'Tu ticket para ' . get_the_title($event_id);
+            $html    = eventosapp_build_ticket_email_html($post_id);
+            $headers = ['Content-Type: text/html; charset=UTF-8'];
+            $to      = get_post_meta($post_id, '_eventosapp_asistente_email', true);
+            if ( is_email($to) ) { @wp_mail($to, $subject, $html, $headers, $attachments); }
         }
-        if ($ics_on && function_exists('eventosapp_url_to_path')) {
-            $ics_url = get_post_meta($post_id, '_eventosapp_ticket_ics_url', true);
-            $ics_path = $ics_url ? eventosapp_url_to_path($ics_url) : '';
-            if ($ics_path && file_exists($ics_path)) $attachments[] = $ics_path;
-        }
-        $subject = 'Tu ticket para ' . get_the_title($event_id);
-        $html    = eventosapp_build_ticket_email_html($post_id);
-        $headers = ['Content-Type: text/html; charset=UTF-8'];
-        $to      = get_post_meta($post_id, '_eventosapp_asistente_email', true);
-        if ( is_email($to) ) { @wp_mail($to, $subject, $html, $headers, $attachments); }
     }
 
     $success_html = eventosapp_public_success_box();
@@ -240,7 +264,7 @@ function eventosapp_pubreg_submit(){
  * Uso: [eventosapp_public_register event_id="123" localidad="VIP"]
  */
 add_shortcode('eventosapp_public_register', function( $atts ){
-    $a = shortcode_atts(['event_id'=>0,'localidad'=>''], $atts, 'eventosapp_public_register');
+    $a = shortcode_atts(['event_id'=>0,'localidad'=>'','modalidad'=>''], $atts, 'eventosapp_public_register');
 
     $event_id = absint($a['event_id']);
     if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' || get_post_status($event_id) !== 'publish' ) {
@@ -250,6 +274,20 @@ add_shortcode('eventosapp_public_register', function( $atts ){
     }
 
     $localidad_override = trim((string)$a['localidad']);
+
+    // Modalidad del registro público. En eventos mixtos se puede fijar por shortcode o permitir que el asistente elija.
+    $event_modalidad = function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($event_id) : (get_post_meta($event_id, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    $event_modalidad = function_exists('eventosapp_normalize_event_modalidad') ? eventosapp_normalize_event_modalidad($event_modalidad) : (in_array($event_modalidad, ['presencial','virtual','presencial_virtual'], true) ? $event_modalidad : 'presencial');
+    $ticket_modalidad_labels = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial'=>'Presencial','virtual'=>'Virtual'];
+    $allowed_modalidades = function_exists('eventosapp_ticket_allowed_modalidades_for_event')
+        ? eventosapp_ticket_allowed_modalidades_for_event($event_id)
+        : (($event_modalidad === 'virtual') ? ['virtual'] : (($event_modalidad === 'presencial_virtual') ? ['presencial','virtual'] : ['presencial']));
+    $fixed_modalidad = function_exists('eventosapp_normalize_ticket_modalidad') ? eventosapp_normalize_ticket_modalidad($a['modalidad']) : sanitize_key($a['modalidad']);
+    if ($fixed_modalidad && !in_array($fixed_modalidad, $allowed_modalidades, true)) {
+        $fixed_modalidad = '';
+    }
+    $default_ticket_modalidad = $fixed_modalidad ?: (reset($allowed_modalidades) ?: 'presencial');
+    $show_modalidad_select = ($event_modalidad === 'presencial_virtual' && !$fixed_modalidad);
 
     // Metadatos de privacidad
     $priv_empresa  = trim((string) get_post_meta($event_id, '_eventosapp_priv_empresa', true));
@@ -270,6 +308,8 @@ if ($priv_empresa==='') $priv_empresa = ( function_exists('eventosapp_get_nombre
 .evapp-field{width:100%}
 .evapp-actions{margin-top:16px}
 .evapp-consent{margin-top:18px;padding:12px 12px 10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}
+.evapp-modalidad-box{margin-top:10px;padding:12px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff}
+.evapp-modalidad-box small{display:block;margin-top:5px;color:#1f4f82;line-height:1.35}
 
 /* Botón con estados */
 .evapp-btn{
@@ -332,6 +372,20 @@ CSS;
         <input type="text" name="evapp_hp" value="" style="display:none!important;" tabindex="-1" autocomplete="off">
 
         <h3 style="margin-top:0;">Registro de Asistente</h3>
+
+        <?php if ($show_modalidad_select): ?>
+            <div class="evapp-modalidad-box">
+                <label><strong>Modalidad de asistencia *</strong></label>
+                <select name="ticket_modalidad" class="evapp-field" required style="padding:8px;border:1px solid #bfdbfe;border-radius:8px;margin-top:6px;">
+                    <?php foreach ($allowed_modalidades as $mod_key): ?>
+                        <option value="<?php echo esc_attr($mod_key); ?>" <?php selected($default_ticket_modalidad, $mod_key); ?>><?php echo esc_html($ticket_modalidad_labels[$mod_key] ?? ucfirst($mod_key)); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <small>Selecciona Presencial si asistirás al lugar físico o Virtual si recibirás acceso al evento en línea.</small>
+            </div>
+        <?php else: ?>
+            <input type="hidden" name="ticket_modalidad" value="<?php echo esc_attr($default_ticket_modalidad); ?>">
+        <?php endif; ?>
 
         <div class="evapp-grid-2">
             <div>
