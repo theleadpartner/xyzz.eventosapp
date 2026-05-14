@@ -111,6 +111,9 @@ $css = <<<CSS
 .evfs-print:hover{background:#205483;color:#fff}
 .evfs-virtual{background:#7c3aed;color:#fff;text-align:center;text-decoration:none}
 .evfs-virtual:hover{background:#5b21b6;color:#fff}
+.evfs-virtual-badge{background:#7c3aed;color:#fff;text-align:center;cursor:default}
+.evfs-virtual-badge.is-checked{background:#6d28d9;color:#fff}
+.evfs-virtual-badge small{display:block;font-size:.75rem;font-weight:500;opacity:.92;line-height:1.15;margin-top:2px}
 .evfs-muted-action{background:#e5e7eb;color:#374151;cursor:not-allowed}
 .evfs-note{position:absolute;bottom:-6px;right:0;transform:translateY(100%);font-size:.9rem;padding:.35rem .55rem;border-radius:6px;background:#ffe9e9;color:#9a2424;border:1px solid #ffd3d3}
 .evfs-note.ok{background:#e9ffe9;color:#1e6f2b;border-color:#c9f2c9}
@@ -164,11 +167,12 @@ jQuery(function($){
            ' data-ticket-id="'+escAttr(ticketId)+'"' + disabledAttr + '>'+ txt +'</button>';
   }
 
-  function btnVirtual(it){
-    if(it.virtual_url){
-      return '<a class="evfs-btn evfs-virtual" href="'+escAttr(it.virtual_url)+'" target="_blank" rel="noopener noreferrer">Abrir acceso virtual</a>';
-    }
-    return '<button class="evfs-btn evfs-muted-action" type="button" disabled>Acceso virtual pendiente</button>';
+  function btnVirtualBadge(it){
+    var checked = it.virtual_today_status === 'checked_in' || it.virtual_checked === true;
+    var sub = checked ? '✓ Check-in virtual registrado' : 'Sin check-in virtual';
+    return '<div class="evfs-btn evfs-virtual-badge' + (checked ? ' is-checked' : '') + '" role="status" aria-live="polite">'
+         + 'Asistente Virtual<small>' + escHtml(sub) + '</small>'
+         + '</div>';
   }
 
   function render(rows){
@@ -177,9 +181,9 @@ jQuery(function($){
     $.each(rows,function(i,it){
       it = it || {};
       var isVirtual = it.is_virtual === true || it.modalidad === 'virtual';
-      var actions = isVirtual
-        ? btnVirtual(it)
-        : btnCheck(it.today_status, it.ticket_id, it.today_allowed) + '<button class="evfs-btn evfs-print" data-ticket-id="'+escAttr(it.ticket_id)+'" data-event-id="'+escAttr(it.event_id)+'">Imprimir escarapela</button>';
+      var actions = (isVirtual ? btnVirtualBadge(it) : '')
+        + btnCheck(it.today_status, it.ticket_id, it.today_allowed)
+        + '<button class="evfs-btn evfs-print" data-ticket-id="'+escAttr(it.ticket_id)+'" data-event-id="'+escAttr(it.event_id)+'">Imprimir escarapela</button>';
       html += '<div class="evfs-row">'
            +   '<div class="evfs-data">'
            +     '<strong>'+ escHtml((it.first_name||'') +' '+ (it.last_name||'')) +'</strong>'
@@ -465,10 +469,18 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         if (!is_array($status_arr)) $status_arr = [];
         $today_status = $status_arr[$today] ?? 'not_checked_in';
 
-        // Si hoy NO es día del evento, ignorar lo guardado
-        $today_allowed = $is_virtual ? false : eventosapp_is_today_valid_for_event($ev_id);
+        $virtual_status_arr = get_post_meta($tid, '_eventosapp_virtual_checkin_status', true);
+        if (is_string($virtual_status_arr)) $virtual_status_arr = @unserialize($virtual_status_arr);
+        if (!is_array($virtual_status_arr)) $virtual_status_arr = [];
+        $virtual_today_status = isset($virtual_status_arr[$today]) && in_array($virtual_status_arr[$today], ['checked_in','checked-in'], true)
+            ? 'checked_in'
+            : 'not_checked_in';
+
+        // Si hoy NO es día del evento, ignorar lo guardado para la acción del día actual.
+        $today_allowed = eventosapp_is_today_valid_for_event($ev_id);
         if (!$today_allowed) {
             $today_status = 'not_checked_in';
+            $virtual_today_status = 'not_checked_in';
         }
 
         $out[] = [
@@ -484,9 +496,11 @@ add_action('wp_ajax_eventosapp_front_search', function(){
             'modalidad'        => $modalidad,
             'modalidad_label'  => $modalidad_label,
             'is_virtual'       => $is_virtual,
-            'virtual_url'      => $virtual_url,
-            'today_status'     => $today_status,
-            'today_allowed'    => $today_allowed,
+            'virtual_url'            => $virtual_url,
+            'virtual_today_status' => $virtual_today_status,
+            'virtual_checked'       => ($virtual_today_status === 'checked_in'),
+            'today_status'          => $today_status,
+            'today_allowed'         => $today_allowed,
         ];
     }
 
@@ -513,10 +527,6 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     }
     $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
     if ( ! $evento_id ) wp_send_json_error(['message'=>'Ticket sin evento'], 400);
-
-    if ( function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id) ) {
-        wp_send_json_error(['message'=>'Este ticket es virtual y no usa check-in presencial desde esta herramienta.'], 400);
-    }
 
     // 🔒 Forzar evento activo para no-admins
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
@@ -562,12 +572,15 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     $now = new DateTime('now', $tz);
 
     $log_entry = [
-        'fecha'   => $now->format('Y-m-d'),
-        'hora'    => $now->format('H:i:s'),
-        'dia'     => $today,
-        'status'  => $new,
-        'usuario' => $user->display_name . ' (' . $user->user_email . ')',
-        'origen'  => 'frontend-search',
+        'fecha'        => $now->format('Y-m-d'),
+        'hora'         => $now->format('H:i:s'),
+        'dia'          => $today,
+        'status'       => $new,
+        'status_label' => ($new === 'checked_in') ? 'Check-in presencial' : 'Check-in presencial removido',
+        'checkin_type' => 'presencial',
+        'modalidad'    => function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($ticket_id) : get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true),
+        'usuario'      => $user->display_name . ' (' . $user->user_email . ')',
+        'origen'       => 'frontend-search',
     ];
 
     // Registrar como tipo 'Counter' cuando se activa el check-in manualmente
@@ -625,10 +638,6 @@ function eventosapp_ajax_render_badge() {
         }
     } elseif ( ! current_user_can('manage_options') && ! eventosapp_user_can_manage_event($event_id) ) {
         wp_die('Sin permisos', '', 403);
-    }
-
-    if ( function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id) ) {
-        wp_die('Los tickets virtuales no tienen escarapela presencial.', '', 400);
     }
 
     echo eventosapp_get_badge_html_from_event($event_id, $ticket_id);
@@ -695,10 +704,9 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id ) {
         $labels['pais']        = $pais    ?: 'País';
         $labels['localidad']   = $localidad ?: 'Localidad';
 
-        // QR: solo para tickets presenciales.
-        if (function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id)) {
-            $labels['qr'] = '';
-        } elseif ($code && function_exists('eventosapp_get_ticket_qr_url')) {
+        // QR: se mantiene disponible para la escarapela manual, incluso si el ticket es virtual.
+        // Esto permite imprimir escarapela cuando un asistente virtual también llega físicamente.
+        if ($code && function_exists('eventosapp_get_ticket_qr_url')) {
             $labels['qr'] = eventosapp_get_ticket_qr_url($code);
         } else {
             $labels['qr'] = '';
