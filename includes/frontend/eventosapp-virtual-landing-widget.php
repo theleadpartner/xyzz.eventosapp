@@ -202,6 +202,93 @@ if ( ! function_exists('eventosapp_virtual_landing_escape_css_color') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_virtual_landing_replace_text_variables') ) {
+    /**
+     * Reemplaza variables disponibles en los textos configurables de la landing virtual.
+     *
+     * Variable soportada por defecto:
+     * - {{evento_nombre}} => Nombre/título real del evento.
+     *
+     * Esta versión es tolerante a entidades HTML y espacios internos, por ejemplo:
+     * - {{evento_nombre}}
+     * - {{ evento_nombre }}
+     * - &#123;&#123;evento_nombre&#125;&#125;
+     *
+     * El valor guardado en el metabox no se modifica; el reemplazo ocurre solo al renderizar.
+     */
+    function eventosapp_virtual_landing_replace_text_variables( $text, $event_id, $extra_context = [] ) {
+        $event_id = absint($event_id);
+
+        if ( is_array($text) || is_object($text) ) {
+            return '';
+        }
+
+        $text = (string) $text;
+        if ( $text === '' || ! $event_id ) {
+            return $text;
+        }
+
+        $charset = function_exists('get_bloginfo') ? get_bloginfo('charset') : 'UTF-8';
+        $charset = $charset ?: 'UTF-8';
+
+        // Decodifica casos en los que el editor, el navegador o algún filtro guarde las llaves como entidades HTML.
+        $decoded_text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, $charset);
+
+        $event_title = get_the_title($event_id);
+        $event_title = is_string($event_title) ? $event_title : '';
+
+        $variables = [
+            'evento_nombre' => $event_title,
+        ];
+
+        /**
+         * Permite ampliar variables de texto sin modificar este archivo.
+         *
+         * @param array  $variables     Mapa variable_key => valor. No incluir las llaves {{ }}.
+         * @param int    $event_id      ID del evento.
+         * @param array  $extra_context Contexto adicional opcional.
+         */
+        $variables = apply_filters('eventosapp_virtual_landing_text_variables', $variables, $event_id, is_array($extra_context) ? $extra_context : []);
+
+        if ( ! is_array($variables) || empty($variables) ) {
+            return $decoded_text;
+        }
+
+        $safe_variables = [];
+        foreach ( $variables as $key => $value ) {
+            if ( ! is_string($key) || $key === '' ) {
+                continue;
+            }
+
+            $normalized_key = sanitize_key(str_replace('-', '_', $key));
+            if ( $normalized_key === '' ) {
+                continue;
+            }
+
+            if ( is_scalar($value) || $value === null ) {
+                $safe_variables[$normalized_key] = (string) $value;
+            }
+        }
+
+        if ( empty($safe_variables) ) {
+            return $decoded_text;
+        }
+
+        $replaced = preg_replace_callback('/\{\{\s*([a-zA-Z0-9_\-]+)\s*\}\}/u', function( $matches ) use ( $safe_variables ) {
+            $raw_key = isset($matches[1]) ? (string) $matches[1] : '';
+            $key     = sanitize_key(str_replace('-', '_', $raw_key));
+
+            if ( array_key_exists($key, $safe_variables) ) {
+                return $safe_variables[$key];
+            }
+
+            return isset($matches[0]) ? $matches[0] : '';
+        }, $decoded_text);
+
+        return is_string($replaced) ? $replaced : $decoded_text;
+    }
+}
+
 if ( ! function_exists('eventosapp_render_virtual_landing') ) {
     function eventosapp_render_virtual_landing( $atts = [] ) {
         $atts = shortcode_atts([
@@ -240,9 +327,12 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
         $organizer_name   = function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($event_id) : get_post_meta($event_id, '_eventosapp_organizador', true);
         $organizer_logo   = eventosapp_get_virtual_landing_organizer_logo_url($event_id);
         $header_url       = get_post_meta($event_id, '_eventosapp_virtual_landing_header_url', true);
-        $intro_title      = get_post_meta($event_id, '_eventosapp_virtual_landing_intro_title', true) ?: 'Bienvenido a ' . $event_title;
-        $intro_text       = get_post_meta($event_id, '_eventosapp_virtual_landing_intro_text', true);
-        $button_label     = get_post_meta($event_id, '_eventosapp_virtual_landing_button_label', true) ?: 'Ingresar a la sesión virtual';
+        $intro_title_raw  = get_post_meta($event_id, '_eventosapp_virtual_landing_intro_title', true);
+        $intro_text_raw   = get_post_meta($event_id, '_eventosapp_virtual_landing_intro_text', true);
+        $button_label_raw = get_post_meta($event_id, '_eventosapp_virtual_landing_button_label', true);
+        $intro_title      = eventosapp_virtual_landing_replace_text_variables($intro_title_raw ?: 'Bienvenido a {{evento_nombre}}', $event_id, [ 'field' => 'intro_title' ]);
+        $intro_text       = eventosapp_virtual_landing_replace_text_variables($intro_text_raw, $event_id, [ 'field' => 'intro_text' ]);
+        $button_label     = eventosapp_virtual_landing_replace_text_variables($button_label_raw ?: 'Ingresar a la sesión virtual', $event_id, [ 'field' => 'button_label' ]);
         $platform         = get_post_meta($event_id, '_eventosapp_virtual_platform', true) ?: 'Virtual';
         $platform_url     = esc_url_raw(get_post_meta($event_id, '_eventosapp_virtual_url', true));
         $dates_label      = eventosapp_virtual_landing_get_event_dates_label($event_id);
@@ -270,7 +360,6 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
         $ticket_email     = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_asistente_email', true) : '';
         $ticket_cc        = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_asistente_cc', true) : '';
         $ticket_company   = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true) : '';
-        $ticket_localidad = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true) : '';
         $ticket_modalidad = $ticket_id && function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : '';
         $virtual_checked  = $ticket_id && function_exists('eventosapp_ticket_has_checkin_type') ? eventosapp_ticket_has_checkin_type($ticket_id, 'virtual') : false;
 
@@ -364,7 +453,6 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
                             <div class="evapp-vl-ticket-row"><strong>Correo</strong><span><?php echo esc_html($ticket_email ?: '-'); ?></span></div>
                             <?php if ( $ticket_cc ): ?><div class="evapp-vl-ticket-row"><strong>ID</strong><span><?php echo esc_html($ticket_cc); ?></span></div><?php endif; ?>
                             <?php if ( $ticket_company ): ?><div class="evapp-vl-ticket-row"><strong>Empresa</strong><span><?php echo esc_html($ticket_company); ?></span></div><?php endif; ?>
-                            <?php if ( $ticket_localidad ): ?><div class="evapp-vl-ticket-row"><strong>Localidad</strong><span><?php echo esc_html($ticket_localidad); ?></span></div><?php endif; ?>
                             <?php if ( $ticket_modalidad ): ?><div class="evapp-vl-ticket-row"><strong>Modalidad</strong><span><?php echo esc_html($ticket_modalidad); ?></span></div><?php endif; ?>
                             <div class="evapp-vl-ticket-row"><strong>TicketID</strong><span><?php echo esc_html($ticket_public_id ?: '-'); ?></span></div>
 
