@@ -1983,7 +1983,10 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     }
 
     // 13) Guardar ID preimpreso (numérico)
-    if (isset($_POST['eventosapp_ticket_preprintedID'])) {
+    // Los tickets virtuales no usan QR físico preimpreso.
+    if ($ticket_modalidad === 'virtual') {
+        delete_post_meta($post_id, 'eventosapp_ticket_preprintedID');
+    } elseif (isset($_POST['eventosapp_ticket_preprintedID'])) {
         $raw = wp_unslash($_POST['eventosapp_ticket_preprintedID']);
         $num = preg_replace('/\D+/', '', (string)$raw);
         update_post_meta($post_id, 'eventosapp_ticket_preprintedID', $num);
