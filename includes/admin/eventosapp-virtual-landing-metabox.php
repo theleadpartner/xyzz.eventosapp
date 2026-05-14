@@ -154,6 +154,14 @@ if ( ! function_exists('eventosapp_render_virtual_landing_metabox') ) {
                 <div>
                     <h3>URL y contenido</h3>
 
+                    <div class="evapp-vlanding-effective" style="margin-bottom:14px;">
+                        <strong>Variable disponible para textos:</strong><br>
+                        <code>{{evento_nombre}}</code>
+                        <p class="evapp-vlanding-help">
+                            Puedes usar <code>{{evento_nombre}}</code> en el título personalizado, texto introductorio y texto del botón. En la landing pública se reemplazará automáticamente por el nombre real del evento: <strong><?php echo esc_html(get_the_title($event_id)); ?></strong>.
+                        </p>
+                    </div>
+
                     <div class="evapp-vlanding-field">
                         <label for="eventosapp_virtual_landing_path">URL personalizada de la landing</label>
                         <input type="text" id="eventosapp_virtual_landing_path" name="eventosapp_virtual_landing_path" value="<?php echo esc_attr($stored_path); ?>" placeholder="<?php echo esc_attr($effective_path); ?>">
@@ -184,17 +192,20 @@ if ( ! function_exists('eventosapp_render_virtual_landing_metabox') ) {
 
                     <div class="evapp-vlanding-field">
                         <label for="eventosapp_virtual_landing_intro_title">Título personalizado</label>
-                        <input type="text" id="eventosapp_virtual_landing_intro_title" name="eventosapp_virtual_landing_intro_title" value="<?php echo esc_attr($intro_title); ?>" placeholder="Bienvenido al evento virtual">
+                        <input type="text" id="eventosapp_virtual_landing_intro_title" name="eventosapp_virtual_landing_intro_title" value="<?php echo esc_attr($intro_title); ?>" placeholder="Bienvenido a {{evento_nombre}}">
+                        <p class="evapp-vlanding-help">Puedes usar <code>{{evento_nombre}}</code>. Ejemplo: <code>Bienvenido a {{evento_nombre}}</code>.</p>
                     </div>
 
                     <div class="evapp-vlanding-field">
                         <label for="eventosapp_virtual_landing_intro_text">Texto introductorio</label>
-                        <textarea id="eventosapp_virtual_landing_intro_text" name="eventosapp_virtual_landing_intro_text" placeholder="Agrega una instrucción breve para los asistentes virtuales."><?php echo esc_textarea($intro_text); ?></textarea>
+                        <textarea id="eventosapp_virtual_landing_intro_text" name="eventosapp_virtual_landing_intro_text" placeholder="Estás a punto de ingresar a la sesión virtual de {{evento_nombre}}."><?php echo esc_textarea($intro_text); ?></textarea>
+                        <p class="evapp-vlanding-help">Puedes usar <code>{{evento_nombre}}</code>. Ejemplo: <code>Gracias por registrarte a {{evento_nombre}}. Presiona el botón para ingresar.</code></p>
                     </div>
 
                     <div class="evapp-vlanding-field">
                         <label for="eventosapp_virtual_landing_button_label">Texto del botón de ingreso</label>
-                        <input type="text" id="eventosapp_virtual_landing_button_label" name="eventosapp_virtual_landing_button_label" value="<?php echo esc_attr($button_label); ?>" placeholder="Ingresar a la sesión virtual">
+                        <input type="text" id="eventosapp_virtual_landing_button_label" name="eventosapp_virtual_landing_button_label" value="<?php echo esc_attr($button_label); ?>" placeholder="Ingresar a {{evento_nombre}}">
+                        <p class="evapp-vlanding-help">Puedes usar <code>{{evento_nombre}}</code>. Ejemplo: <code>Ingresar a {{evento_nombre}}</code>.</p>
                     </div>
                 </div>
 
