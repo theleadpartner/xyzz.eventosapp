@@ -21,9 +21,9 @@ if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
  *   3) Barras por hora (00–23): check-in principal (azul) + sesiones (colores determinísticos)
  *      -> Con filtro: Acumulado (rango) o Por día
  *   4) Tabla por Localidad (Check-ins, Not check-ins, % Asistencia, Check-ins sesiones adicionales*, % asistentes a sesiones*)
- *   5) NUEVO: Gráfico de torta de tipos de QR
- *   6) NUEVO: Tabla de estadísticas por tipo de QR
- *   7) Botón descargar base de datos (XLSX compatible con Excel) con columna de medio de checkin
+ *   5) Gráfico de torta de medios de check-in
+ *   6) Tabla de estadísticas por medio de check-in
+ *   7) Botón descargar base de datos (XLSX compatible con Excel) con modalidad y medios de check-in
  *
  * (*) Por "sesiones adicionales", se contabiliza el número de asistentes ÚNICOS con al menos un check-in de sesión.
  */
@@ -111,7 +111,7 @@ add_shortcode('eventosapp_front_metrics', function(){
           border-top:2px solid rgba(255,255,255,.25);
         }
         
-      /* NUEVO: Estilos para gráfico y tabla de QR */
+      /* Estilos para gráfico y tabla de medios de check-in */
       .evapp-qr-pie { grid-column: span 12; }
       .evapp-qr-table { grid-column: span 12; }
       @media(min-width:740px){
@@ -183,6 +183,15 @@ add_shortcode('eventosapp_front_metrics', function(){
         </div>
 
         <div class="grp">
+          <label for="evappCheckinType">Tipo de check-in</label>
+          <select id="evappCheckinType">
+            <option value="all">Todos</option>
+            <option value="presencial">Presencial</option>
+            <option value="virtual">Virtual</option>
+          </select>
+        </div>
+
+        <div class="grp">
           <label>&nbsp;</label>
           <button class="button" id="evappApply">Aplicar</button>
         </div>
@@ -209,7 +218,7 @@ add_shortcode('eventosapp_front_metrics', function(){
         <div class="evapp-card evapp-bars">
           <h3 id="evappBarsTitle">Check-ins por hora (acumulado)</h3>
           <canvas id="evappBars"></canvas>
-          <div class="evapp-hint">Azul = Check-in principal. Sesiones = colores variados.</div>
+          <div class="evapp-hint">Azul = check-in presencial. Violeta = check-in virtual. Sesiones = colores variados.</div>
         </div>
 
         <!-- Tabla -->
@@ -217,7 +226,7 @@ add_shortcode('eventosapp_front_metrics', function(){
           <h3>Resumen por Localidad</h3>
           <div style="overflow:auto">
             <table>
-              <thead>
+              <thead id="evappTableHead">
                 <tr>
                   <th>Localidad</th>
                   <th>Check-ins</th>
@@ -237,21 +246,21 @@ add_shortcode('eventosapp_front_metrics', function(){
           </div>
         </div>
         
-        <!-- NUEVO: Gráfico de torta de tipos de QR -->
+        <!-- Gráfico de torta de medios de check-in -->
         <div class="evapp-card evapp-qr-pie">
-          <h3>Check-ins por Tipo de QR</h3>
+          <h3>Check-ins por Medio</h3>
           <canvas id="evappQrPie"></canvas>
           <div class="evapp-hint" id="evappQrPieHint"></div>
         </div>
         
-        <!-- NUEVO: Tabla de estadísticas de tipos de QR -->
+        <!-- Tabla de estadísticas de medios de check-in -->
         <div class="evapp-card evapp-qr-table">
-          <h3>Estadísticas por Tipo de QR</h3>
+          <h3>Estadísticas por Medio</h3>
           <div style="overflow:auto">
             <table>
               <thead>
                 <tr>
-                  <th>Tipo de QR</th>
+                  <th>Medio</th>
                   <th>Check-ins</th>
                   <th>% del Total</th>
                 </tr>
@@ -296,10 +305,11 @@ $js = <<<'JS'
         const kpiTotal   = document.getElementById('evappKpiTotal');
         const kpiChecked = document.getElementById('evappKpiChecked');
         const tableBody  = document.getElementById('evappTableBody');
+        const tableHead  = document.getElementById('evappTableHead');
         const pieHint    = document.getElementById('evappPieHint');
         const barsTitle  = document.getElementById('evappBarsTitle');
         
-        // NUEVO: Referencias para gráfico y tabla de QR
+        // Referencias para gráfico y tabla de medios de check-in
         const qrPieHint = document.getElementById('evappQrPieHint');
         const qrTableBody = document.getElementById('evappQrTableBody');
         const customMetricsWrap = document.getElementById('evappCustomMetrics');
@@ -313,6 +323,7 @@ $js = <<<'JS'
         const inTo    = document.getElementById('evappTo');
         const inDay   = document.getElementById('evappDay');
         const btnApply= document.getElementById('evappApply');
+        const checkinTypeSel = document.getElementById('evappCheckinType');
 
         function toggleInputs(){
             const mode = modeSel.value;
@@ -331,7 +342,7 @@ $js = <<<'JS'
 
         let pieChart = null;
         let barChart = null;
-        let qrPieChart = null; // NUEVO: Chart para tipos de QR
+        let qrPieChart = null; // Chart para medios de check-in
         let customCharts = {}; // Gráficos personalizados por evento
 
         // Color estable por nombre de sesión
@@ -379,21 +390,42 @@ $js = <<<'JS'
             const ctx = document.getElementById('evappBars').getContext('2d');
             const labels = (data.bar && data.bar.labels) ? data.bar.labels : [];
             const datasets = [];
+            const selectedType = (data.bar && data.bar.checkin_type) ? data.bar.checkin_type : 'all';
+            const showVirtual = !!data.show_virtual_metrics;
+            const showPresencial = data.show_presencial_metrics !== false;
 
-            // Principal (azul)
-            datasets.push({ label: 'Principal', data: (data.bar && data.bar.main) ? data.bar.main : [], backgroundColor: '#4f7cff', borderWidth: 0, stack: 'x' });
+            if (showPresencial && (selectedType === 'all' || selectedType === 'presencial')) {
+                datasets.push({
+                    label: 'Presencial',
+                    data: (data.bar && data.bar.main) ? data.bar.main : [],
+                    backgroundColor: '#4f7cff',
+                    borderWidth: 0,
+                    stack: 'checkins'
+                });
+            }
 
-            // Sesiones
+            if (showVirtual && (selectedType === 'all' || selectedType === 'virtual')) {
+                datasets.push({
+                    label: 'Virtual',
+                    data: (data.bar && data.bar.virtual) ? data.bar.virtual : [],
+                    backgroundColor: '#8b5cf6',
+                    borderWidth: 0,
+                    stack: 'checkins'
+                });
+            }
+
+            // Sesiones adicionales se conservan porque son un tercer medio operativo del dashboard.
             const ses = (data.bar && data.bar.sessions) ? data.bar.sessions : {};
             Object.keys(ses).sort().forEach(name=>{
-                datasets.push({ label: name, data: ses[name], backgroundColor: colorFor(name), borderWidth: 0, stack: 'x' });
+                datasets.push({ label: name, data: ses[name], backgroundColor: colorFor(name), borderWidth: 0, stack: 'sessions' });
             });
 
             // Título dinámico
+            const suffix = data.checkin_filter_label ? (' · ' + data.checkin_filter_label) : '';
             if (data.bar && data.bar.mode === 'day'){
-                barsTitle.textContent = 'Check-ins por hora — ' + (data.bar.day || '');
+                barsTitle.textContent = 'Check-ins por hora — ' + (data.bar.day || '') + suffix;
             } else if (data.bar) {
-                barsTitle.textContent = 'Check-ins por hora (acumulado) — ' + (data.bar.from || '') + ' a ' + (data.bar.to || '');
+                barsTitle.textContent = 'Check-ins por hora (acumulado) — ' + (data.bar.from || '') + ' a ' + (data.bar.to || '') + suffix;
             }
 
             const cfg = {
@@ -421,55 +453,91 @@ $js = <<<'JS'
                 .replace(/'/g,'&#039;');
         }
 
-        function renderTable(rows){
+        function renderTable(rows, data){
+            data = data || {};
+            const selectedType = data.checkin_type || 'all';
+            const showVirtual = !!data.show_virtual_metrics;
+            const showPresencial = data.show_presencial_metrics !== false;
+            const useDetailed = showVirtual && showPresencial;
+
+            function setTableHeader(cols){
+                if (!tableHead) return;
+                tableHead.innerHTML = '<tr>' + cols.map(function(col){ return '<th>' + escapeHTML(col) + '</th>'; }).join('') + '</tr>';
+            }
+
+            let cols = ['Localidad'];
+            if (useDetailed && selectedType === 'all') {
+                cols = cols.concat(['Check-ins presenciales', 'Check-ins virtuales', 'Check-ins únicos', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+            } else if (selectedType === 'virtual') {
+                cols = cols.concat(['Check-ins virtuales', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+            } else if (selectedType === 'presencial') {
+                cols = cols.concat(['Check-ins presenciales', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+            } else {
+                cols = cols.concat(['Check-ins', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+            }
+            setTableHeader(cols);
+
             if (!rows || !rows.length){
-                tableBody.innerHTML = '<tr><td colspan="6" class="evapp-muted">Sin datos.</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="' + cols.length + '" class="evapp-muted">Sin datos.</td></tr>';
                 return;
             }
 
-            // Totales
-            let sumChk = 0, sumNot = 0, sumSesUniq = 0;
+            let sumChk = 0, sumNot = 0, sumSesUniq = 0, sumPres = 0, sumVirt = 0;
             rows.forEach(r=>{
                 sumChk     += (r.checkins || 0);
                 sumNot     += (r.not_checkins || 0);
                 sumSesUniq += (r.checkins_sesiones_unicos || 0);
+                sumPres    += (r.checkins_presencial || 0);
+                sumVirt    += (r.checkins_virtual || 0);
             });
             const totalTickets = sumChk + sumNot;
             const pctAsisTotal = totalTickets ? (sumChk * 100 / totalTickets) : 0;
             const pctSesTotal  = totalTickets ? (sumSesUniq * 100 / totalTickets) : 0;
 
-            // Filas por localidad
             const bodyHTML = rows.map(function(r){
-                return (
-                    '<tr>'
-                    + '<td>' + escapeHTML(r.localidad || '—') + '</td>'
-                    + '<td>' + fmt(r.checkins) + '</td>'
-                    + '<td>' + fmt(r.not_checkins) + '</td>'
-                    + '<td>' + (r.pct_asistencia != null ? (Math.round(r.pct_asistencia*100)/100).toFixed(2) : '0.00') + '%</td>'
-                    + '<td>' + fmt(r.checkins_sesiones_unicos) + '</td>'
-                    + '<td>' + (r.pct_sesiones != null ? (Math.round(r.pct_sesiones*100)/100).toFixed(2) : '0.00') + '%</td>'
-                    + '</tr>'
-                );
+                let cells = '<td>' + escapeHTML(r.localidad || '—') + '</td>';
+                if (useDetailed && selectedType === 'all') {
+                    cells += '<td>' + fmt(r.checkins_presencial) + '</td>';
+                    cells += '<td>' + fmt(r.checkins_virtual) + '</td>';
+                    cells += '<td>' + fmt(r.checkins) + '</td>';
+                } else if (selectedType === 'virtual') {
+                    cells += '<td>' + fmt(r.checkins_virtual != null ? r.checkins_virtual : r.checkins) + '</td>';
+                } else if (selectedType === 'presencial') {
+                    cells += '<td>' + fmt(r.checkins_presencial != null ? r.checkins_presencial : r.checkins) + '</td>';
+                } else {
+                    cells += '<td>' + fmt(r.checkins) + '</td>';
+                }
+                cells += '<td>' + fmt(r.not_checkins) + '</td>';
+                cells += '<td>' + (r.pct_asistencia != null ? (Math.round(r.pct_asistencia*100)/100).toFixed(2) : '0.00') + '%</td>';
+                cells += '<td>' + fmt(r.checkins_sesiones_unicos) + '</td>';
+                cells += '<td>' + (r.pct_sesiones != null ? (Math.round(r.pct_sesiones*100)/100).toFixed(2) : '0.00') + '%</td>';
+                return '<tr>' + cells + '</tr>';
             }).join('');
 
-            // Fila de totales
-            const totalsHTML =
-                '<tr class="evapp-total">'
-                + '<td>Total</td>'
-                + '<td>' + fmt(sumChk) + '</td>'
-                + '<td>' + fmt(sumNot) + '</td>'
-                + '<td>' + (pctAsisTotal.toFixed(2)) + '%</td>'
-                + '<td>' + fmt(sumSesUniq) + '</td>'
-                + '<td>' + (pctSesTotal.toFixed(2)) + '%</td>'
-                + '</tr>';
+            let totalCells = '<td>Total</td>';
+            if (useDetailed && selectedType === 'all') {
+                totalCells += '<td>' + fmt(sumPres) + '</td>';
+                totalCells += '<td>' + fmt(sumVirt) + '</td>';
+                totalCells += '<td>' + fmt(sumChk) + '</td>';
+            } else if (selectedType === 'virtual') {
+                totalCells += '<td>' + fmt(sumVirt) + '</td>';
+            } else if (selectedType === 'presencial') {
+                totalCells += '<td>' + fmt(sumPres) + '</td>';
+            } else {
+                totalCells += '<td>' + fmt(sumChk) + '</td>';
+            }
+            totalCells += '<td>' + fmt(sumNot) + '</td>';
+            totalCells += '<td>' + (pctAsisTotal.toFixed(2)) + '%</td>';
+            totalCells += '<td>' + fmt(sumSesUniq) + '</td>';
+            totalCells += '<td>' + (pctSesTotal.toFixed(2)) + '%</td>';
 
-            tableBody.innerHTML = bodyHTML + totalsHTML;
+            tableBody.innerHTML = bodyHTML + '<tr class="evapp-total">' + totalCells + '</tr>';
         }
         
-        // NUEVO: Renderizar gráfico de torta de tipos de QR
+        // Renderizar gráfico de torta de medios de check-in
         function renderQrPie(qrStats){
             if (!qrStats || !qrStats.types || Object.keys(qrStats.types).length === 0) {
-                qrPieHint.textContent = 'No hay datos de tipos de QR disponibles';
+                qrPieHint.textContent = 'No hay datos de medios de check-in disponibles';
                 if (qrPieChart) {
                     qrPieChart.destroy();
                     qrPieChart = null;
@@ -488,7 +556,9 @@ $js = <<<'JS'
                 'PDF Impreso': '#f59e0b',
                 'Escarapela Impresa': '#8b5cf6',
                 'QR Legacy': '#94a3b8',
-                'QR Preimpreso': '#64748b'
+                'QR Preimpreso': '#64748b',
+                'Acceso virtual': '#8b5cf6',
+                'Check-in virtual': '#8b5cf6'
             };
             
             const backgroundColors = [];
@@ -541,10 +611,10 @@ $js = <<<'JS'
             }
         }
         
-        // NUEVO: Renderizar tabla de tipos de QR
+        // Renderizar tabla de medios de check-in
         function renderQrTable(qrStats){
             if (!qrStats || !qrStats.types || Object.keys(qrStats.types).length === 0) {
-                qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-muted">Sin datos de tipos de QR.</td></tr>';
+                qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-muted">Sin datos de medios de check-in.</td></tr>';
                 return;
             }
             
@@ -743,9 +813,10 @@ $js = <<<'JS'
             drawCustomCharts(chartJobs);
         }
 
-        function setKpis(total, checked){
+        function setKpis(total, checked, label){
             kpiTotal.textContent   = fmt(total||0);
-            kpiChecked.textContent = fmt(checked||0) + ' Checked In';
+            const suffix = label ? (' · ' + label) : '';
+            kpiChecked.textContent = fmt(checked||0) + ' Checked In' + suffix;
         }
 
         async function fetchData(){
@@ -757,6 +828,8 @@ $js = <<<'JS'
                 // Filtros actuales
                 const mode = modeSel.value;
                 fd.append('mode', mode);
+                const checkinType = checkinTypeSel ? checkinTypeSel.value : 'all';
+                fd.append('checkin_type', checkinType);
                 if (mode === 'sum'){
                     if (inFrom.value) fd.append('from', inFrom.value);
                     if (inTo.value)   fd.append('to',   inTo.value);
@@ -775,12 +848,16 @@ $js = <<<'JS'
                 if (!inFrom.value && d.bar && d.bar.from) inFrom.value = d.bar.from;
                 if (!inTo.value && d.bar && d.bar.to)     inTo.value   = d.bar.to;
 
-                setKpis(d.total_tickets, d.checked_in_total);
+                if (checkinTypeSel && d.checkin_type && checkinTypeSel.value !== d.checkin_type) {
+                    checkinTypeSel.value = d.checkin_type;
+                }
+
+                setKpis(d.total_tickets, d.checked_in_total, d.checkin_filter_label || '');
                 renderPie(d);
                 renderBars(d);
-                renderTable((d.table && d.table.rows) ? d.table.rows : []);
+                renderTable((d.table && d.table.rows) ? d.table.rows : [], d);
                 
-                // NUEVO: Renderizar gráfico y tabla de tipos de QR
+                // Renderizar gráfico y tabla de medios de check-in
                 renderQrPie(d.qr_stats);
                 renderQrTable(d.qr_stats);
 
@@ -789,7 +866,7 @@ $js = <<<'JS'
             } catch(e){
                 console.error(e);
                 tableBody.innerHTML = '<tr><td colspan="6" class="evapp-bad">No se pudieron cargar las métricas.</td></tr>';
-                qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-bad">Error al cargar datos de QR.</td></tr>';
+                qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-bad">Error al cargar datos de medios de check-in.</td></tr>';
                 renderCustomMetrics(null);
             }
         }
@@ -833,6 +910,30 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
     // Evento activo
     $event_id = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
     if ( ! $event_id ) wp_send_json_error(['error'=>'No hay evento activo.']);
+
+    $event_modalidad = function_exists('eventosapp_get_event_modalidad')
+        ? eventosapp_get_event_modalidad($event_id)
+        : (get_post_meta($event_id, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    if (function_exists('eventosapp_normalize_event_modalidad')) {
+        $event_modalidad = eventosapp_normalize_event_modalidad($event_modalidad);
+    } else {
+        $event_modalidad = in_array($event_modalidad, ['presencial','virtual','presencial_virtual'], true) ? $event_modalidad : 'presencial';
+    }
+    $event_has_presencial = in_array($event_modalidad, ['presencial','presencial_virtual'], true);
+    $event_has_virtual    = in_array($event_modalidad, ['virtual','presencial_virtual'], true);
+
+    $checkin_type = isset($_POST['checkin_type']) ? sanitize_text_field($_POST['checkin_type']) : 'all';
+    if (!in_array($checkin_type, ['all','presencial','virtual'], true)) $checkin_type = 'all';
+    if (!$event_has_virtual && $checkin_type === 'virtual') $checkin_type = 'presencial';
+    if (!$event_has_presencial && $checkin_type === 'presencial') $checkin_type = 'virtual';
+    if ($event_modalidad === 'virtual' && $checkin_type === 'all') $checkin_type = 'virtual';
+    if ($event_modalidad === 'presencial' && $checkin_type === 'all') $checkin_type = 'presencial';
+
+    $checkin_filter_label = [
+        'all'        => 'Todos',
+        'presencial' => 'Presencial',
+        'virtual'    => 'Virtual',
+    ][$checkin_type] ?? 'Todos';
 
     // TZ del evento (o del sitio)
     $event_tz = get_post_meta($event_id, '_eventosapp_zona_horaria', true);
@@ -897,7 +998,13 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         return is_string($fecha) && isset($event_days_lookup[$fecha]);
     };
 
-    $ticket_has_valid_main_checkin = function($status_arr) use ($event_days_lookup) {
+    $status_array = function($ticket_id, $meta_key){
+        $arr = get_post_meta($ticket_id, $meta_key, true);
+        if (is_string($arr)) $arr = @unserialize($arr);
+        return is_array($arr) ? $arr : [];
+    };
+
+    $ticket_has_valid_status = function($status_arr) use ($event_days_lookup) {
         if (!is_array($status_arr)) return false;
         if (empty($event_days_lookup)) {
             return in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true);
@@ -910,87 +1017,122 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         return false;
     };
 
+    $in_filter = function($fecha) use ($mode, $day, $from, $to){
+        if (!$fecha) return false;
+        if ($mode === 'day') return $fecha === $day;
+        return ($fecha >= $from && $fecha <= $to);
+    };
+
+    $type_is_enabled = function($type) use ($checkin_type) {
+        return $checkin_type === 'all' || $checkin_type === $type;
+    };
+
     // Agregadores
-    $checked_total    = 0;
-    $hourly_main      = array_fill(0, 24, 0);
-    $hourly_ses       = []; // nombre_sesion => [24]
-    $loc_totals       = []; // localidad => total
-    $loc_checked      = []; // localidad => checked_total
-    $loc_ses_uniques  = []; // localidad => set(ticket_id => true)
-    
-    // NUEVO: Agregador para tipos de QR
+    $checked_total             = 0; // según filtro: presencial, virtual o unión de ambos
+    $checked_presencial_total  = 0;
+    $checked_virtual_total     = 0;
+    $checked_unique_total      = 0;
+    $hourly_main              = array_fill(0, 24, 0);
+    $hourly_virtual           = array_fill(0, 24, 0);
+    $hourly_ses               = []; // nombre_sesion => [24]
+    $loc_totals               = []; // localidad => total
+    $loc_checked              = []; // localidad => checked según filtro
+    $loc_checked_presencial   = [];
+    $loc_checked_virtual      = [];
+    $loc_ses_uniques          = []; // localidad => set(ticket_id => true)
+
+    // Agregador para medios de check-in
     $qr_types_count = [
-        'Email' => 0,
-        'Google Wallet' => 0,
-        'Apple Wallet' => 0,
-        'PDF Impreso' => 0,
+        'Email'              => 0,
+        'Google Wallet'      => 0,
+        'Apple Wallet'       => 0,
+        'PDF Impreso'        => 0,
         'Escarapela Impresa' => 0,
-        'QR Legacy' => 0,
-        'QR Preimpreso' => 0
+        'Acceso virtual'     => 0,
+        'QR Legacy'          => 0,
+        'QR Preimpreso'      => 0,
     ];
 
     $all_localidades = get_post_meta($event_id, '_eventosapp_localidades', true);
     if (!is_array($all_localidades)) $all_localidades = ['General','VIP','Platino'];
 
     foreach ($all_localidades as $L) {
-        $loc_totals[$L] = 0;
-        $loc_checked[$L] = 0;
-        $loc_ses_uniques[$L] = [];
+        $loc_totals[$L]             = 0;
+        $loc_checked[$L]            = 0;
+        $loc_checked_presencial[$L] = 0;
+        $loc_checked_virtual[$L]    = 0;
+        $loc_ses_uniques[$L]        = [];
     }
 
-    // Helper: fecha en filtro
-    $in_filter = function($fecha) use ($mode, $day, $from, $to){
-        if (!$fecha) return false;
-        if ($mode === 'day') {
-            return $fecha === $day;
-        } else {
-            return ($fecha >= $from && $fecha <= $to);
-        }
-    };
-
-// Procesar tickets
     foreach ($ids as $tid) {
         $loc = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
         if ($loc === '' || $loc === null) $loc = '(Sin localidad)';
         if (!array_key_exists($loc, $loc_totals)) {
-            $loc_totals[$loc] = 0;
-            $loc_checked[$loc] = 0;
-            $loc_ses_uniques[$loc] = [];
+            $loc_totals[$loc]             = 0;
+            $loc_checked[$loc]            = 0;
+            $loc_checked_presencial[$loc] = 0;
+            $loc_checked_virtual[$loc]    = 0;
+            $loc_ses_uniques[$loc]        = [];
         }
         $loc_totals[$loc]++;
 
-        // Estado principal (algún día checked_in)
-        $status_arr = get_post_meta($tid, '_eventosapp_checkin_status', true);
-        if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
-        if (!is_array($status_arr)) $status_arr = [];
-        $any_checked = $ticket_has_valid_main_checkin($status_arr);
-        if ($any_checked) {
+        $status_arr         = $status_array($tid, '_eventosapp_checkin_status');
+        $virtual_status_arr = $status_array($tid, '_eventosapp_virtual_checkin_status');
+        $pres_checked       = $ticket_has_valid_status($status_arr);
+        $virt_checked       = $ticket_has_valid_status($virtual_status_arr);
+        $unique_checked     = ($pres_checked || $virt_checked);
+
+        if ($pres_checked) {
+            $checked_presencial_total++;
+            $loc_checked_presencial[$loc]++;
+        }
+        if ($virt_checked) {
+            $checked_virtual_total++;
+            $loc_checked_virtual[$loc]++;
+        }
+        if ($unique_checked) {
+            $checked_unique_total++;
+        }
+
+        if ($checkin_type === 'virtual') {
+            $selected_checked = $virt_checked;
+        } elseif ($checkin_type === 'presencial') {
+            $selected_checked = $pres_checked;
+        } else {
+            $selected_checked = $unique_checked;
+        }
+
+        if ($selected_checked) {
             $checked_total++;
             $loc_checked[$loc]++;
         }
 
-        // Log para barras, sesiones únicas y tipos de QR
         $log = get_post_meta($tid, '_eventosapp_checkin_log', true);
         if (is_string($log)) $log = @unserialize($log);
         if (!is_array($log)) $log = [];
 
-        // FLAG: solo contar el primer check-in principal por ticket para estadísticas de QR
-        $qr_type_ya_contado = false;
+        $qr_presencial_contado = false;
+        $qr_virtual_contado    = false;
 
         foreach ($log as $row) {
             $fecha = isset($row['fecha']) ? $row['fecha'] : '';
             $hora  = isset($row['hora'])  ? $row['hora']  : '';
             $status= isset($row['status'])? $row['status']: '';
             $ses   = isset($row['sesion'])? $row['sesion']: '';
-            $entry_event_date = $fecha ?: (isset($row['dia']) ? $row['dia'] : '');
+            $checkin_log_type = isset($row['checkin_type']) ? (string)$row['checkin_type'] : '';
+            $entry_event_date = !empty($row['dia']) ? (string)$row['dia'] : $fecha;
             $entry_is_valid_event_day = $date_is_current_event_day($entry_event_date);
-            $H     = ($hora && preg_match('/^\d{2}/', $hora)) ? intval(substr($hora,0,2)) : null;
-
+            $H = ($hora && preg_match('/^\d{2}/', $hora)) ? intval(substr($hora,0,2)) : null;
             if ($H === null || $H < 0 || $H > 23) $H = null;
 
+            $is_presencial_log = ($status === 'checked_in' || $status === 'checked-in') && $checkin_log_type !== 'virtual';
+            $is_virtual_log    = ($status === 'virtual_checked_in') || $checkin_log_type === 'virtual';
+
             if ($entry_is_valid_event_day && $in_filter($fecha) && $H !== null) {
-                if ($status === 'checked_in' || $status === 'checked-in') {
+                if ($is_presencial_log) {
                     $hourly_main[$H] = (isset($hourly_main[$H]) ? $hourly_main[$H] : 0) + 1;
+                } elseif ($is_virtual_log) {
+                    $hourly_virtual[$H] = (isset($hourly_virtual[$H]) ? $hourly_virtual[$H] : 0) + 1;
                 } elseif ($status === 'session_checked_in' && $ses) {
                     if (!isset($hourly_ses[$ses])) $hourly_ses[$ses] = array_fill(0,24,0);
                     $hourly_ses[$ses][$H] = (isset($hourly_ses[$ses][$H]) ? $hourly_ses[$ses][$H] : 0) + 1;
@@ -1002,33 +1144,26 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
                 $loc_ses_uniques[$loc][$tid] = true;
             }
 
-            // Contar tipos de QR: UNA SOLA VEZ por ticket (primer check-in principal)
-            // Esto garantiza que el total de QR sea igual al total de checked_in general
-            if (($status === 'checked_in' || $status === 'checked-in') && !$qr_type_ya_contado && $entry_is_valid_event_day) {
-                $qr_type_ya_contado = true;
-                if (isset($row['qr_type_label']) && $row['qr_type_label'] !== '') {
-                    $qr_label = $row['qr_type_label'];
-                } else {
-                    // Fallback para check-ins sin etiqueta de QR (registros legacy)
-                    $qr_label = 'Sin clasificar';
-                }
-                if (isset($qr_types_count[$qr_label])) {
-                    $qr_types_count[$qr_label]++;
-                } else {
-                    $qr_types_count[$qr_label] = 1;
-                }
+            // Mezcla de medios: contar una vez por ticket y por tipo de check-in.
+            if ($entry_is_valid_event_day && $is_presencial_log && !$qr_presencial_contado && $type_is_enabled('presencial')) {
+                $qr_presencial_contado = true;
+                $qr_label = isset($row['qr_type_label']) && $row['qr_type_label'] !== '' ? (string)$row['qr_type_label'] : 'Sin clasificar';
+                $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
+            }
+
+            if ($entry_is_valid_event_day && $is_virtual_log && !$qr_virtual_contado && $type_is_enabled('virtual')) {
+                $qr_virtual_contado = true;
+                $qr_label = isset($row['qr_type_label']) && $row['qr_type_label'] !== '' ? (string)$row['qr_type_label'] : 'Acceso virtual';
+                $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
             }
         }
 
-        // Si el ticket está checked_in pero el log no tiene ninguna entrada checked_in con qr_type
-        // (puede ocurrir en tickets migrados o con log vacío), igual lo contamos en QR stats
-        if ($any_checked && !$qr_type_ya_contado) {
-            $fallback_label = 'Sin clasificar';
-            if (isset($qr_types_count[$fallback_label])) {
-                $qr_types_count[$fallback_label]++;
-            } else {
-                $qr_types_count[$fallback_label] = 1;
-            }
+        // Fallbacks para tickets migrados o con log vacío.
+        if ($pres_checked && !$qr_presencial_contado && $type_is_enabled('presencial')) {
+            $qr_types_count['Sin clasificar'] = isset($qr_types_count['Sin clasificar']) ? $qr_types_count['Sin clasificar'] + 1 : 1;
+        }
+        if ($virt_checked && !$qr_virtual_contado && $type_is_enabled('virtual')) {
+            $qr_types_count['Acceso virtual'] = isset($qr_types_count['Acceso virtual']) ? $qr_types_count['Acceso virtual'] + 1 : 1;
         }
     }
 
@@ -1044,7 +1179,10 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
 
         $rows[] = [
             'localidad'                => $L,
+            'total'                    => (int)$tot,
             'checkins'                 => (int)$chk,
+            'checkins_presencial'      => (int)($loc_checked_presencial[$L] ?? 0),
+            'checkins_virtual'         => (int)($loc_checked_virtual[$L] ?? 0),
             'not_checkins'             => (int)$not,
             'pct_asistencia'           => round($pctA, 2),
             'checkins_sesiones_unicos' => (int)$sesUniq,
@@ -1053,12 +1191,13 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
     }
     usort($rows, function($a,$b){ return $b['checkins'] <=> $a['checkins']; });
 
-    // Respuesta (meta de barras según modo)
     $bar_meta = [
-        'labels'   => array_map(function($h){ return str_pad((string)$h, 2, '0', STR_PAD_LEFT); }, range(0,23)),
-        'main'     => array_values($hourly_main),
-        'sessions' => $hourly_ses,
-        'mode'     => $mode,
+        'labels'       => array_map(function($h){ return str_pad((string)$h, 2, '0', STR_PAD_LEFT); }, range(0,23)),
+        'main'         => array_values($hourly_main),
+        'virtual'      => array_values($hourly_virtual),
+        'sessions'     => $hourly_ses,
+        'mode'         => $mode,
+        'checkin_type' => $checkin_type,
     ];
     if ($mode === 'day') {
         $bar_meta['day']  = $day;
@@ -1069,8 +1208,7 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         $bar_meta['to']   = $to;
         $bar_meta['day']  = $today;
     }
-    
-    // NUEVO: Preparar estadísticas de tipos de QR (filtrar los que tienen 0)
+
     $qr_stats_filtered = [];
     $qr_total = 0;
     foreach ($qr_types_count as $type => $count) {
@@ -1081,14 +1219,22 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
     }
 
     $out = [
-        'total_tickets'        => $total,
-        'checked_in_total'     => $checked_total,
-        'not_checked_in_total' => max($total - $checked_total, 0),
-        'bar'   => $bar_meta,
-        'table' => [ 'rows' => $rows ],
-        'qr_stats' => [ // NUEVO: Estadísticas de tipos de QR
+        'total_tickets'              => $total,
+        'checked_in_total'           => $checked_total,
+        'checked_in_presencial_total'=> $checked_presencial_total,
+        'checked_in_virtual_total'   => $checked_virtual_total,
+        'checked_in_unique_total'    => $checked_unique_total,
+        'not_checked_in_total'       => max($total - $checked_total, 0),
+        'event_modalidad'            => $event_modalidad,
+        'show_presencial_metrics'    => $event_has_presencial,
+        'show_virtual_metrics'       => $event_has_virtual,
+        'checkin_type'               => $checkin_type,
+        'checkin_filter_label'       => $checkin_filter_label,
+        'bar'                        => $bar_meta,
+        'table'                      => [ 'rows' => $rows ],
+        'qr_stats'                   => [
             'types' => $qr_stats_filtered,
-            'total' => $qr_total
+            'total' => $qr_total,
         ],
         'custom_metrics' => function_exists('eventosapp_custom_metrics_get_payload')
             ? eventosapp_custom_metrics_get_payload($event_id)
@@ -1338,6 +1484,10 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
             if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
             if (is_array($status_arr)) foreach ($status_arr as $d => $st) if ($is_date($d)) $days_set[$d] = true;
 
+            $virtual_status_arr = get_post_meta($tid, '_eventosapp_virtual_checkin_status', true);
+            if (is_string($virtual_status_arr)) $virtual_status_arr = @unserialize($virtual_status_arr);
+            if (is_array($virtual_status_arr)) foreach ($virtual_status_arr as $d => $st) if ($is_date($d)) $days_set[$d] = true;
+
             $log = get_post_meta($tid, '_eventosapp_checkin_log', true);
             if (is_string($log)) $log = @unserialize($log);
             if (is_array($log)) foreach ($log as $row) {
@@ -1431,17 +1581,20 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
     $headers = [
         'Ticket Public ID','Ticket Post ID','Evento ID','Evento',
         'Secuencia Interna',
-        'Nombre','Apellido','CC','Email','Teléfono','Empresa','NIT','Cargo','Localidad',
-        'Checked-In (algún día)'
+        'Nombre','Apellido','CC','Email','Teléfono','Empresa','NIT','Cargo','Localidad','Modalidad del Ticket',
+        'Checked-In (algún día)', 'Checked-In presencial (algún día)', 'Checked-In virtual (algún día)'
     ];
     if (!empty($extra_fields)) {
         foreach ($extra_fields as $f) { $headers[] = 'Extra: ' . ($f['label'] ?? ''); }
     }
 
     // Check-in por día (SI/NO) + Hora por día
+    // Se conserva la columna legacy "Check-in" como check-in presencial para no romper descargas existentes.
     foreach ($event_days as $d) {
         $headers[] = 'Check-in — '.$d;
         $headers[] = 'Hora check-in — '.$d;
+        $headers[] = 'Check-in virtual — '.$d;
+        $headers[] = 'Hora check-in virtual — '.$d;
     }
 
     // Sesiones (acceso y check-in por sesión)
@@ -1501,10 +1654,31 @@ $headers[] = 'Fecha creación';
         $loc      = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
         $ev_title = get_the_title($event_id);
 
+        $ticket_modalidad = function_exists('eventosapp_get_ticket_modalidad')
+            ? eventosapp_get_ticket_modalidad($tid)
+            : (get_post_meta($tid, '_eventosapp_ticket_modalidad', true) ?: 'presencial');
+        if (function_exists('eventosapp_normalize_ticket_modalidad')) {
+            $ticket_modalidad = eventosapp_normalize_ticket_modalidad($ticket_modalidad);
+        } else {
+            $ticket_modalidad = in_array($ticket_modalidad, ['presencial','virtual'], true) ? $ticket_modalidad : 'presencial';
+        }
+        $ticket_modalidad_label = function_exists('eventosapp_ticket_modalidad_options')
+            ? ((eventosapp_ticket_modalidad_options())[$ticket_modalidad] ?? ucfirst($ticket_modalidad))
+            : ($ticket_modalidad === 'virtual' ? 'Virtual' : 'Presencial');
+
         $status_arr = get_post_meta($tid, '_eventosapp_checkin_status', true);
         if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
         if (!is_array($status_arr)) $status_arr = [];
-        $any_checked = $ticket_has_valid_main_checkin($status_arr) ? 'SI' : 'NO';
+
+        $virtual_status_arr = get_post_meta($tid, '_eventosapp_virtual_checkin_status', true);
+        if (is_string($virtual_status_arr)) $virtual_status_arr = @unserialize($virtual_status_arr);
+        if (!is_array($virtual_status_arr)) $virtual_status_arr = [];
+
+        $any_presencial_checked = $ticket_has_valid_main_checkin($status_arr);
+        $any_virtual_checked    = $ticket_has_valid_main_checkin($virtual_status_arr);
+        $any_checked            = ($any_presencial_checked || $any_virtual_checked) ? 'SI' : 'NO';
+        $any_presencial_checked_label = $any_presencial_checked ? 'SI' : 'NO';
+        $any_virtual_checked_label    = $any_virtual_checked ? 'SI' : 'NO';
 
         $acc = get_post_meta($tid, '_eventosapp_ticket_sesiones_acceso', true);
         if (!is_array($acc)) $acc = [];
@@ -1517,9 +1691,13 @@ $headers[] = 'Fecha creación';
 
         $created = get_post_time('Y-m-d H:i:s', true, $tid);
 
-        // Mapear horas por día (principal) y por sesión x día
+        // Mapear horas por día (principal presencial, virtual) y por sesión x día
         $main_time_by_day = [];
-        foreach ($event_days as $d) $main_time_by_day[$d] = '';
+        $virtual_time_by_day = [];
+        foreach ($event_days as $d) {
+            $main_time_by_day[$d] = '';
+            $virtual_time_by_day[$d] = '';
+        }
 
         $session_time_by_day = []; // [sname][day] => 'HH:MM[:SS]'
         foreach ($all_sessions as $sname) {
@@ -1527,7 +1705,8 @@ $headers[] = 'Fecha creación';
             foreach ($event_days as $d) $session_time_by_day[$sname][$d] = '';
         }
         
-        // NUEVO: Variable para almacenar el tipo de QR del primer check-in
+        // Medios de check-in detectados para este ticket.
+        $checkin_media_labels = [];
         $qr_type_checkin = '';
 
         $log = get_post_meta($tid, '_eventosapp_checkin_log', true);
@@ -1542,20 +1721,31 @@ $headers[] = 'Fecha creación';
 
             if (!$f || !$h) continue;
 
-            // principal por día: tomar la PRIMERA hora del día
-            if (in_array($f, $event_days, true) && ($st === 'checked_in' || $st === 'checked-in')) {
-                $main_time_by_day[$f] = $min_time($main_time_by_day[$f], $h);
-                
-                // NUEVO: Capturar el tipo de QR del primer check-in principal
-                if ($qr_type_checkin === '' && isset($entry['qr_type_label'])) {
-                    $qr_type_checkin = $entry['qr_type_label'];
+            $checkin_log_type = isset($entry['checkin_type']) ? (string)$entry['checkin_type'] : '';
+            $entry_day = isset($entry['dia']) && $entry['dia'] ? (string)$entry['dia'] : $f;
+
+            // principal presencial por día: tomar la PRIMERA hora del día
+            if (in_array($entry_day, $event_days, true) && ($st === 'checked_in' || $st === 'checked-in') && $checkin_log_type !== 'virtual') {
+                $main_time_by_day[$entry_day] = $min_time($main_time_by_day[$entry_day], $h);
+
+                $label = isset($entry['qr_type_label']) && $entry['qr_type_label'] !== '' ? (string)$entry['qr_type_label'] : 'Sin clasificar';
+                $checkin_media_labels[$label] = true;
+                if ($qr_type_checkin === '') {
+                    $qr_type_checkin = $label;
                 }
             }
 
+            // virtual por día: tomar la PRIMERA hora del día
+            if (in_array($entry_day, $event_days, true) && ($st === 'virtual_checked_in' || $checkin_log_type === 'virtual')) {
+                $virtual_time_by_day[$entry_day] = $min_time($virtual_time_by_day[$entry_day], $h);
+                $label = isset($entry['qr_type_label']) && $entry['qr_type_label'] !== '' ? (string)$entry['qr_type_label'] : 'Acceso virtual';
+                $checkin_media_labels[$label] = true;
+            }
+
             // sesión por día
-            if ($sn && in_array($f, $event_days, true) && ($st === 'session_checked_in')) {
+            if ($sn && in_array($entry_day, $event_days, true) && ($st === 'session_checked_in')) {
                 if (isset($session_time_by_day[$sn])) {
-                    $session_time_by_day[$sn][$f] = $min_time($session_time_by_day[$sn][$f], $h);
+                    $session_time_by_day[$sn][$entry_day] = $min_time($session_time_by_day[$sn][$entry_day], $h);
                 }
             }
         }
@@ -1575,7 +1765,10 @@ $headers[] = 'Fecha creación';
         $row[] = (string)$nit;
         $row[] = (string)$role;
         $row[] = (string)$loc;
+        $row[] = (string)$ticket_modalidad_label;
         $row[] = (string)$any_checked;
+        $row[] = (string)$any_presencial_checked_label;
+        $row[] = (string)$any_virtual_checked_label;
 
         // extras
         if (!empty($extra_fields)) {
@@ -1606,11 +1799,14 @@ $headers[] = 'Fecha creación';
             }
         }
 
-        // por día: SI/NO + HORA
+        // por día: SI/NO + HORA. La columna legacy "Check-in" se mantiene como presencial.
         foreach ($event_days as $d) {
             $st  = isset($status_arr[$d]) ? $status_arr[$d] : '';
+            $vst = isset($virtual_status_arr[$d]) ? $virtual_status_arr[$d] : '';
             $row[] = ($st === 'checked_in' || $st === 'checked-in') ? 'SI' : 'NO';
             $row[] = (string)$main_time_by_day[$d];
+            $row[] = ($vst === 'checked_in' || $vst === 'checked-in') ? 'SI' : 'NO';
+            $row[] = (string)$virtual_time_by_day[$d];
         }
 
         // sesiones acceso
@@ -1656,7 +1852,13 @@ $headers[] = 'Fecha creación';
             : ($email_source_raw ?: '');
         
 // Medio de check-in
-        $row[] = (string)$qr_type_checkin;
+        if (empty($checkin_media_labels) && $any_presencial_checked && $qr_type_checkin !== '') {
+            $checkin_media_labels[$qr_type_checkin] = true;
+        }
+        if (empty($checkin_media_labels) && $any_virtual_checked) {
+            $checkin_media_labels['Acceso virtual'] = true;
+        }
+        $row[] = implode(', ', array_keys($checkin_media_labels));
 
         // NUEVO: Acompañantes sin QR (total acumulado del ticket)
         $acompanantes_total = (int) get_post_meta($tid, '_eventosapp_ticket_acompanantes_sin_qr', true);
