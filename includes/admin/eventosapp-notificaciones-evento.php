@@ -284,6 +284,13 @@ function evapp_collect_snapshot($post_id){
     $h_fin     = get_post_meta($post_id, '_eventosapp_hora_cierre', true) ?: '';
     $tz        = get_post_meta($post_id, '_eventosapp_zona_horaria', true) ?: '';
 
+    // Modalidad / acceso virtual
+    $modalidad       = function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($post_id) : (get_post_meta($post_id, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    $modalidad_label = function_exists('eventosapp_get_event_modalidad_label') ? eventosapp_get_event_modalidad_label($post_id) : ucfirst(str_replace('_', ' y ', $modalidad));
+    $virtual_platform = get_post_meta($post_id, '_eventosapp_virtual_platform', true) ?: '';
+    $virtual_access   = get_post_meta($post_id, '_eventosapp_virtual_access_datetime', true) ?: '';
+    $virtual_url      = get_post_meta($post_id, '_eventosapp_virtual_url', true) ?: '';
+
     // Lugar / contacto
     $dir       = get_post_meta($post_id, '_eventosapp_direccion', true) ?: '';
     $org       = function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($post_id) : (get_post_meta($post_id, '_eventosapp_organizador', true) ?: '');
@@ -300,9 +307,14 @@ function evapp_collect_snapshot($post_id){
         'fechas_noco'  => $f_noco,
         'hora_inicio'  => $h_ini,
         'hora_cierre'  => $h_fin,
-        'zona_horaria' => $tz,
-        'direccion'    => $dir,
-        'organizador'  => $org,
+        'zona_horaria'     => $tz,
+        'modalidad'       => $modalidad,
+        'modalidad_label' => $modalidad_label,
+        'virtual_platform'=> $virtual_platform,
+        'virtual_access'  => $virtual_access,
+        'virtual_url'     => $virtual_url,
+        'direccion'       => $dir,
+        'organizador'     => $org,
         'productor'    => $prod_n,
         'operador'     => $oper_n,
     ];
@@ -375,6 +387,10 @@ function evapp_build_email_html($post_id, $tipo = 'creacion', $changed_keys = []
     $h_ini    = $snap['hora_inicio'] ?: '-';
     $h_fin    = $snap['hora_cierre'] ?: '-';
     $tz       = $snap['zona_horaria'] ?: '-';
+    $modalidad = $snap['modalidad_label'] ?: '-';
+    $virtual_platform = $snap['virtual_platform'] ?: '-';
+    $virtual_access   = $snap['virtual_access'] ?: '-';
+    $virtual_url      = $snap['virtual_url'] ?: '-';
     $dir      = $snap['direccion'] ?: '-';
     $org      = $snap['organizador'] ?: '-';
     $prod_n   = $snap['productor'] ?: '-';
@@ -398,7 +414,11 @@ function evapp_build_email_html($post_id, $tipo = 'creacion', $changed_keys = []
         ['label' => 'Hora de inicio',      'key' => 'hora_inicio',  'val' => $h_ini, 'is_changed' => in_array('hora_inicio', $changed_keys, true)],
         ['label' => 'Hora de cierre',      'key' => 'hora_cierre',  'val' => $h_fin, 'is_changed' => in_array('hora_cierre', $changed_keys, true)],
         ['label' => 'Zona horaria',        'key' => 'zona_horaria', 'val' => $tz,    'is_changed' => in_array('zona_horaria', $changed_keys, true)],
+        ['label' => 'Modalidad',           'key' => 'modalidad',    'val' => $modalidad, 'is_changed' => in_array('modalidad', $changed_keys, true)],
         ['label' => 'Dirección',           'key' => 'direccion',    'val' => $dir,   'is_changed' => in_array('direccion', $changed_keys, true)],
+        ['label' => 'Plataforma virtual',  'key' => 'virtual_platform', 'val' => $virtual_platform, 'is_changed' => in_array('virtual_platform', $changed_keys, true)],
+        ['label' => 'Acceso virtual desde','key' => 'virtual_access','val' => $virtual_access, 'is_changed' => in_array('virtual_access', $changed_keys, true)],
+        ['label' => 'Enlace virtual',      'key' => 'virtual_url',   'val' => $virtual_url, 'is_changed' => in_array('virtual_url', $changed_keys, true)],
         ['label' => 'Organizador',         'key' => 'organizador',  'val' => $org,   'is_changed' => in_array('organizador', $changed_keys, true)],
         ['label' => 'Productor',           'key' => 'productor',    'val' => $prod_n,'is_changed' => in_array('productor', $changed_keys, true)],
         ['label' => 'Operador',            'key' => 'operador',     'val' => $oper_n,'is_changed' => in_array('operador', $changed_keys, true)],
