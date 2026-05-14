@@ -14,6 +14,176 @@ if ( ! defined( 'EVENTOSAPP_PLUGIN_URL' ) ) {
     define( 'EVENTOSAPP_PLUGIN_PATH', plugin_dir_path( __FILE__ ) ); // Con trailing slash
 }
 
+/**
+ * Helpers globales de modalidad de evento/ticket.
+ * Se definen antes de cargar el resto de archivos para que todos los flujos
+ * usen la misma normalización sin depender del orden de includes.
+ */
+if ( ! function_exists('eventosapp_event_modalidad_options') ) {
+    function eventosapp_event_modalidad_options() {
+        return [
+            'presencial'         => 'Presencial',
+            'virtual'            => 'Virtual',
+            'presencial_virtual' => 'Presencial y Virtual',
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_modalidad_options') ) {
+    function eventosapp_ticket_modalidad_options() {
+        return [
+            'presencial' => 'Presencial',
+            'virtual'    => 'Virtual',
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_normalize_event_modalidad') ) {
+    function eventosapp_normalize_event_modalidad( $modalidad ) {
+        $modalidad = sanitize_key( (string) $modalidad );
+        $aliases = [
+            'fisico'             => 'presencial',
+            'físico'             => 'presencial',
+            'presencial_y_virtual'=> 'presencial_virtual',
+            'presencial-virtual' => 'presencial_virtual',
+            'hibrido'            => 'presencial_virtual',
+            'híbrido'            => 'presencial_virtual',
+            'mixto'              => 'presencial_virtual',
+        ];
+        if ( isset( $aliases[$modalidad] ) ) {
+            $modalidad = $aliases[$modalidad];
+        }
+        return in_array( $modalidad, [ 'presencial', 'virtual', 'presencial_virtual' ], true ) ? $modalidad : 'presencial';
+    }
+}
+
+if ( ! function_exists('eventosapp_normalize_ticket_modalidad') ) {
+    function eventosapp_normalize_ticket_modalidad( $modalidad ) {
+        $modalidad = sanitize_key( (string) $modalidad );
+        if ( in_array( $modalidad, [ 'presencial', 'virtual' ], true ) ) {
+            return $modalidad;
+        }
+        return '';
+    }
+}
+
+if ( ! function_exists('eventosapp_get_event_modalidad') ) {
+    function eventosapp_get_event_modalidad( $event_id ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return 'presencial';
+        }
+        return eventosapp_normalize_event_modalidad( get_post_meta( $event_id, '_eventosapp_event_modalidad', true ) ?: 'presencial' );
+    }
+}
+
+if ( ! function_exists('eventosapp_get_event_modalidad_label') ) {
+    function eventosapp_get_event_modalidad_label( $event_id ) {
+        $modalidad = eventosapp_get_event_modalidad( $event_id );
+        $options   = eventosapp_event_modalidad_options();
+        return $options[$modalidad] ?? 'Presencial';
+    }
+}
+
+if ( ! function_exists('eventosapp_event_has_physical_access') ) {
+    function eventosapp_event_has_physical_access( $event_id ) {
+        return in_array( eventosapp_get_event_modalidad( $event_id ), [ 'presencial', 'presencial_virtual' ], true );
+    }
+}
+
+if ( ! function_exists('eventosapp_event_has_virtual_access') ) {
+    function eventosapp_event_has_virtual_access( $event_id ) {
+        return in_array( eventosapp_get_event_modalidad( $event_id ), [ 'virtual', 'presencial_virtual' ], true );
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_allowed_modalidades_for_event') ) {
+    function eventosapp_ticket_allowed_modalidades_for_event( $event_id ) {
+        $event_mode = eventosapp_get_event_modalidad( $event_id );
+        if ( $event_mode === 'virtual' ) {
+            return [ 'virtual' ];
+        }
+        if ( $event_mode === 'presencial_virtual' ) {
+            return [ 'presencial', 'virtual' ];
+        }
+        return [ 'presencial' ];
+    }
+}
+
+if ( ! function_exists('eventosapp_resolve_ticket_modalidad') ) {
+    function eventosapp_resolve_ticket_modalidad( $event_id, $requested = '', $current = '' ) {
+        $allowed   = eventosapp_ticket_allowed_modalidades_for_event( $event_id );
+        $requested = eventosapp_normalize_ticket_modalidad( $requested );
+        $current   = eventosapp_normalize_ticket_modalidad( $current );
+
+        if ( $requested && in_array( $requested, $allowed, true ) ) {
+            return $requested;
+        }
+        if ( $current && in_array( $current, $allowed, true ) ) {
+            return $current;
+        }
+        return reset( $allowed ) ?: 'presencial';
+    }
+}
+
+if ( ! function_exists('eventosapp_get_ticket_modalidad') ) {
+    function eventosapp_get_ticket_modalidad( $ticket_id ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) {
+            return 'presencial';
+        }
+
+        $event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        $stored   = get_post_meta( $ticket_id, '_eventosapp_ticket_modalidad', true );
+        $resolved = eventosapp_resolve_ticket_modalidad( $event_id, $stored, $stored );
+
+        if ( $resolved && $stored !== $resolved ) {
+            update_post_meta( $ticket_id, '_eventosapp_ticket_modalidad', $resolved );
+        }
+
+        return $resolved ?: 'presencial';
+    }
+}
+
+if ( ! function_exists('eventosapp_get_ticket_modalidad_label') ) {
+    function eventosapp_get_ticket_modalidad_label( $ticket_id ) {
+        $modalidad = eventosapp_get_ticket_modalidad( $ticket_id );
+        $options   = eventosapp_ticket_modalidad_options();
+        return $options[$modalidad] ?? 'Presencial';
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_is_virtual') ) {
+    function eventosapp_ticket_is_virtual( $ticket_id ) {
+        return eventosapp_get_ticket_modalidad( $ticket_id ) === 'virtual';
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_clear_presential_assets') ) {
+    function eventosapp_ticket_clear_presential_assets( $ticket_id ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) {
+            return;
+        }
+
+        $meta_keys = [
+            '_eventosapp_ticket_pdf_url',
+            '_eventosapp_ticket_wallet_android',
+            '_eventosapp_ticket_wallet_android_url',
+            '_eventosapp_wallet_google_object_id',
+            '_eventosapp_wallet_google_class_id_effective',
+            '_eventosapp_ticket_wallet_apple',
+            '_eventosapp_ticket_wallet_apple_url',
+            '_eventosapp_ticket_pkpass_url',
+            '_eventosapp_qr_codes',
+        ];
+
+        foreach ( $meta_keys as $meta_key ) {
+            delete_post_meta( $ticket_id, $meta_key );
+        }
+    }
+}
+
 require_once plugin_dir_path(__FILE__) . 'eventosapp-tickets.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-integraciones.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/google-wallet-android.php';
