@@ -1565,6 +1565,7 @@ if ( ! function_exists( 'eventosapp_registration_status_get_placeholders' ) ) {
             '{{estado_inscripcion}}' => $ticket_id ? 'Confirmada' : 'No encontrada',
             '{{estado_pago}}'        => '',
             '{{estado_checkin}}'     => '',
+            '{{modalidad}}'          => '',
         ];
 
         if ( $ticket_id ) {
@@ -1574,6 +1575,7 @@ if ( ! function_exists( 'eventosapp_registration_status_get_placeholders' ) ) {
             $data['{{localidad}}']      = get_post_meta( $ticket_id, '_eventosapp_asistente_localidad', true );
             $data['{{estado_pago}}']    = eventosapp_registration_status_get_payment_label( $ticket_id );
             $data['{{estado_checkin}}'] = eventosapp_registration_status_get_checkin_label( $ticket_id );
+            $data['{{modalidad}}']      = function_exists( 'eventosapp_get_ticket_modalidad_label' ) ? eventosapp_get_ticket_modalidad_label( $ticket_id ) : '';
         }
 
         foreach ( $data as $key => $value ) {
@@ -1616,6 +1618,27 @@ if ( ! function_exists( 'eventosapp_registration_status_render_found_html' ) ) {
                     <th>Estado de inscripción</th>
                     <td>Confirmada</td>
                 </tr>
+                <?php
+                $modalidad_label = function_exists( 'eventosapp_get_ticket_modalidad_label' )
+                    ? eventosapp_get_ticket_modalidad_label( $ticket_id )
+                    : '';
+                $is_virtual_ticket = function_exists( 'eventosapp_ticket_is_virtual' ) && eventosapp_ticket_is_virtual( $ticket_id );
+                $virtual_url       = ( $is_virtual_ticket && function_exists( 'eventosapp_get_virtual_landing_url' ) )
+                    ? eventosapp_get_virtual_landing_url( $ticket_id )
+                    : '';
+                ?>
+                <?php if ( $modalidad_label ) : ?>
+                    <tr>
+                        <th>Modalidad</th>
+                        <td><?php echo esc_html( $modalidad_label ); ?></td>
+                    </tr>
+                <?php endif; ?>
+                <?php if ( $is_virtual_ticket && $virtual_url ) : ?>
+                    <tr>
+                        <th>Acceso virtual</th>
+                        <td><a href="<?php echo esc_url( $virtual_url ); ?>" target="_blank" rel="noopener">Abrir acceso virtual</a></td>
+                    </tr>
+                <?php endif; ?>
                 <?php if ( ! empty( $config['show_payment_status'] ) && $config['show_payment_status'] === '1' ) : ?>
                     <tr>
                         <th>Estado de pago</th>
@@ -1797,15 +1820,23 @@ if ( ! function_exists( 'eventosapp_registration_status_send_basic_ticket_email'
         $subject = strtr( $config['texts']['resend_subject'], eventosapp_registration_status_get_placeholders( $event_id, $ticket_id ) );
         $subject = sanitize_text_field( $subject ?: 'Tu ticket para ' . $event_name );
 
+        $is_virtual_ticket = function_exists( 'eventosapp_ticket_is_virtual' ) && eventosapp_ticket_is_virtual( $ticket_id );
+        $modalidad_label    = function_exists( 'eventosapp_get_ticket_modalidad_label' )
+            ? eventosapp_get_ticket_modalidad_label( $ticket_id )
+            : ( $is_virtual_ticket ? 'Virtual' : 'Presencial' );
+        $virtual_url        = ( $is_virtual_ticket && function_exists( 'eventosapp_get_virtual_landing_url' ) )
+            ? eventosapp_get_virtual_landing_url( $ticket_id )
+            : '';
+
         $qr_url = '';
-        if ( $ticket_uid && function_exists( 'eventosapp_get_ticket_qr_url' ) ) {
+        if ( ! $is_virtual_ticket && $ticket_uid && function_exists( 'eventosapp_get_ticket_qr_url' ) ) {
             $qr_url = eventosapp_get_ticket_qr_url( $ticket_uid );
         }
 
-        $pdf_url            = get_post_meta( $ticket_id, '_eventosapp_ticket_pdf_url', true );
+        $pdf_url            = $is_virtual_ticket ? '' : get_post_meta( $ticket_id, '_eventosapp_ticket_pdf_url', true );
         $ics_url            = get_post_meta( $ticket_id, '_eventosapp_ticket_ics_url', true );
-        $wallet_android_url = get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_android_url', true );
-        $wallet_apple_url   = get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple', true );
+        $wallet_android_url = $is_virtual_ticket ? '' : get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_android_url', true );
+        $wallet_apple_url   = $is_virtual_ticket ? '' : get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple', true );
         if ( ! $wallet_apple_url ) {
             $wallet_apple_url = get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple_url', true );
         }
@@ -1814,6 +1845,9 @@ if ( ! function_exists( 'eventosapp_registration_status_send_basic_ticket_email'
         }
 
         $links = [];
+        if ( $virtual_url ) {
+            $links[] = '<li><a href="' . esc_url( $virtual_url ) . '">Abrir acceso virtual del evento</a></li>';
+        }
         if ( $qr_url ) {
             $links[] = '<li><a href="' . esc_url( $qr_url ) . '">Ver código QR</a></li>';
         }
@@ -1838,6 +1872,9 @@ if ( ! function_exists( 'eventosapp_registration_status_send_basic_ticket_email'
         if ( $ticket_uid ) {
             $body .= '<p><strong>ID del ticket:</strong> ' . esc_html( $ticket_uid ) . '</p>';
         }
+        if ( $modalidad_label ) {
+            $body .= '<p><strong>Modalidad:</strong> ' . esc_html( $modalidad_label ) . '</p>';
+        }
         if ( ! empty( $links ) ) {
             $body .= '<ul>' . implode( '', $links ) . '</ul>';
         } else {
@@ -1849,9 +1886,11 @@ if ( ! function_exists( 'eventosapp_registration_status_send_basic_ticket_email'
         $headers = [ 'Content-Type: text/html; charset=UTF-8' ];
         $attachments = [];
 
-        $pdf_path = eventosapp_registration_status_upload_url_to_path( $pdf_url );
-        if ( $pdf_path ) {
-            $attachments[] = $pdf_path;
+        if ( ! $is_virtual_ticket ) {
+            $pdf_path = eventosapp_registration_status_upload_url_to_path( $pdf_url );
+            if ( $pdf_path ) {
+                $attachments[] = $pdf_path;
+            }
         }
 
         $ics_path = eventosapp_registration_status_upload_url_to_path( $ics_url );
@@ -1903,9 +1942,11 @@ if ( ! function_exists( 'eventosapp_registration_status_resend_ticket_email' ) )
          * construye el HTML desde la plantilla efectiva y registra el historial de correo.
          */
         if ( function_exists( 'eventosapp_send_ticket_email_now' ) ) {
+            $is_virtual_ticket = function_exists( 'eventosapp_ticket_is_virtual' ) && eventosapp_ticket_is_virtual( $ticket_id );
             $result = eventosapp_send_ticket_email_now( $ticket_id, [
-                'source' => 'registration_status_embed',
-                'force'  => true,
+                'source'          => 'registration_status_embed',
+                'force'           => true,
+                'refresh_wallets' => ! $is_virtual_ticket,
             ] );
 
             $ok      = is_array( $result ) && isset( $result[0] ) ? (bool) $result[0] : ( $result === true );
