@@ -583,6 +583,15 @@ if ( ! function_exists('eventosapp_ticket_is_session_checkin_log') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_ticket_is_virtual_checkin_log') ) {
+    function eventosapp_ticket_is_virtual_checkin_log($entry) {
+        if (!is_array($entry)) return false;
+        $status = isset($entry['status']) ? (string) $entry['status'] : '';
+        return in_array($status, ['virtual_checked_in', 'virtual_not_checked_in'], true)
+            || (isset($entry['checkin_type']) && (string)$entry['checkin_type'] === 'virtual');
+    }
+}
+
 if ( ! function_exists('eventosapp_ticket_session_has_remaining_log') ) {
     function eventosapp_ticket_session_has_remaining_log($log, $session_name, $valid_days_lookup = []) {
         if (!is_array($log) || $session_name === '') return false;
@@ -627,8 +636,14 @@ function eventosapp_ticket_status_metabox($post) {
         return;
     }
 
-    // Estado por día
+    // Estado presencial por día
     $status_arr = eventosapp_ticket_meta_array($post->ID, '_eventosapp_checkin_status');
+
+    // Estado virtual por día (independiente del presencial)
+    $virtual_status_arr = eventosapp_ticket_meta_array($post->ID, '_eventosapp_virtual_checkin_status');
+    $ticket_modalidad = function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($post->ID) : (get_post_meta($post->ID, '_eventosapp_ticket_modalidad', true) ?: 'presencial');
+    $event_modalidad  = $evento_id && function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($evento_id) : 'presencial';
+    $show_virtual_checkin = in_array($ticket_modalidad, ['virtual'], true) || in_array($event_modalidad, ['virtual','presencial_virtual'], true);
 
     // Log
     $log = eventosapp_ticket_meta_array($post->ID, '_eventosapp_checkin_log');
@@ -642,9 +657,17 @@ function eventosapp_ticket_status_metabox($post) {
         }
     }
     if (!$has_invalid_checkins) {
+        foreach ($virtual_status_arr as $saved_day => $saved_status) {
+            if (($saved_status === 'checked_in' || $saved_status === 'checked-in') && !isset($valid_days_lookup[$saved_day])) {
+                $has_invalid_checkins = true;
+                break;
+            }
+        }
+    }
+    if (!$has_invalid_checkins) {
         foreach ($log as $entry) {
             $entry_status = is_array($entry) ? (string)($entry['status'] ?? '') : '';
-            if (!in_array($entry_status, ['checked_in', 'checked-in', 'session_checked_in'], true)) continue;
+            if (!in_array($entry_status, ['checked_in', 'checked-in', 'session_checked_in', 'virtual_checked_in'], true)) continue;
             $entry_day = eventosapp_ticket_log_entry_event_date($entry);
             if ($entry_day && !isset($valid_days_lookup[$entry_day])) {
                 $has_invalid_checkins = true;
@@ -655,7 +678,7 @@ function eventosapp_ticket_status_metabox($post) {
 
     wp_nonce_field('eventosapp_checkin_cleanup_guardar', 'eventosapp_checkin_cleanup_nonce');
 
-    echo '<b>Check-in por día (editable):</b><br>';
+    echo '<b>Check-in presencial por día (editable):</b><br>';
     echo '<small style="color:#666;display:block;margin:4px 0 10px;line-height:1.35">Marca una opción de limpieza y luego presiona <b>Actualizar</b>. Al limpiar un check-in se cambia el estado a <b>Not Checked In</b> y se eliminan las entradas del log que alimentan métricas y exportación.</small>';
 
     if ($has_invalid_checkins) {
@@ -723,9 +746,53 @@ function eventosapp_ticket_status_metabox($post) {
 
         echo "</div>";
     }
+    if ($show_virtual_checkin) {
+        echo '<hr style="margin:14px 0 10px;">';
+        echo '<b>Check-in virtual por día (editable):</b><br>';
+        echo '<small style="color:#666;display:block;margin:4px 0 10px;line-height:1.35">Este estado se marca automáticamente cuando el asistente presiona el botón de acceso virtual de la landing. Es independiente del check-in presencial.</small>';
+
+        foreach ($days as $day) {
+            $vstatus = $virtual_status_arr[$day] ?? 'not_checked_in';
+            $field_name = "eventosapp_virtual_checkin_status[".$day."]";
+
+            echo "<div style='margin-bottom:15px; padding:10px; background:#f5f0ff; border:1px solid #ddd6fe; border-radius:5px;'>";
+            echo "<b>" . esc_html(date_i18n("D, d M Y", strtotime($day))) . "</b><br>";
+            echo "<select name='{$field_name}' style='width:100%; margin-top:5px;'>
+                    <option value='not_checked_in' ".selected($vstatus,'not_checked_in',false).">Sin check-in virtual</option>
+                    <option value='checked_in' ".selected($vstatus,'checked_in',false).">Check-in virtual registrado</option>
+                  </select>";
+
+            $day_virtual_logs = array_filter($log, function($entry) use ($day) {
+                return eventosapp_ticket_is_virtual_checkin_log($entry) && eventosapp_ticket_log_entry_event_date($entry) === $day;
+            });
+            if (!empty($day_virtual_logs)) {
+                $last_virtual = end($day_virtual_logs);
+                echo "<div style='margin-top:8px; padding:8px; background:#ede9fe; border-left:3px solid #7c3aed; font-size:12px;'>";
+                echo "<strong>🟣 Último acceso virtual:</strong> " . esc_html($last_virtual['hora'] ?? '') . "<br>";
+                if (!empty($last_virtual['origen'])) {
+                    echo "<strong>Origen:</strong> " . esc_html($last_virtual['origen']) . "<br>";
+                }
+                if (!empty($last_virtual['usuario'])) {
+                    echo "<strong>Usuario:</strong> " . esc_html($last_virtual['usuario']);
+                }
+                echo "</div>";
+            }
+
+            if ($vstatus === 'checked_in' || $vstatus === 'checked-in' || !empty($day_virtual_logs)) {
+                echo '<label style="display:block;margin-top:8px;padding:6px 8px;background:#fff5f5;border:1px solid #f2b8b8;border-radius:5px;color:#8a1f1f;font-size:12px;line-height:1.3">';
+                echo '<input type="checkbox" name="eventosapp_clear_virtual_checkin_days[]" value="' . esc_attr($day) . '"> Borrar check-in virtual y log de este día';
+                echo '</label>';
+            }
+            echo "</div>";
+        }
+    }
+
     echo '<div style="margin:10px 0;padding:9px 10px;background:#fff5f5;border:1px solid #f2b8b8;border-radius:6px;font-size:12px;line-height:1.35">';
     echo '<strong style="color:#8a1f1f">Zona de limpieza manual</strong><br>';
-    echo '<label style="display:block;margin-top:6px;color:#8a1f1f"><input type="checkbox" name="eventosapp_clear_checkin_all" value="1"> Borrar todos los check-ins principales de este ticket</label>';
+    echo '<label style="display:block;margin-top:6px;color:#8a1f1f"><input type="checkbox" name="eventosapp_clear_checkin_all" value="1"> Borrar todos los check-ins presenciales de este ticket</label>';
+    if ($show_virtual_checkin) {
+        echo '<label style="display:block;margin-top:6px;color:#8a1f1f"><input type="checkbox" name="eventosapp_clear_virtual_checkin_all" value="1"> Borrar todos los check-ins virtuales de este ticket</label>';
+    }
     echo '<small style="display:block;margin-top:5px;color:#666">No borra accesos ni check-ins de sesiones internas; esos se limpian en el metabox de sesiones.</small>';
     echo '</div>';
     echo '<small style="color:#666;display:block;margin:6px 0 10px">Puedes cambiar el estado manualmente para corregir lecturas accidentales. Se registrará en el log.</small>';
@@ -751,6 +818,9 @@ function eventosapp_ticket_status_metabox($post) {
                     case 'pdf':
                         $border_color = '#d32f2f'; // Rojo PDF
                         break;
+                    case 'virtual_access':
+                        $border_color = '#7c3aed'; // Violeta acceso virtual
+                        break;
                     case 'badge':
                         $border_color = '#ff9800'; // Naranja Badge
                         break;
@@ -772,7 +842,7 @@ function eventosapp_ticket_status_metabox($post) {
             echo '</div>';
             
             // Estado
-            $status_emoji = ($row['status'] ?? '') === 'checked_in' ? '✅' : '❌';
+            $status_emoji = in_array(($row['status'] ?? ''), ['checked_in','virtual_checked_in'], true) ? '✅' : '❌';
             echo '<div style="margin-bottom:3px;">';
             echo '<strong>Estado:</strong> ' . $status_emoji . ' ' . esc_html($row['status'] ?? '-');
             echo '</div>';
@@ -786,12 +856,13 @@ function eventosapp_ticket_status_metabox($post) {
                         case 'google_wallet': $qr_emoji = '📱'; break;
                         case 'apple_wallet': $qr_emoji = '🍎'; break;
                         case 'pdf': $qr_emoji = '📄'; break;
+                        case 'virtual_access': $qr_emoji = '🟣'; break;
                         case 'badge': $qr_emoji = '🏷️'; break;
                         default: $qr_emoji = '📱';
                     }
                 }
                 echo '<div style="margin-bottom:3px; background:#f0f8ff; padding:3px 6px; border-radius:3px; display:inline-block;">';
-                echo '<strong>' . $qr_emoji . ' QR:</strong> ' . esc_html($row['qr_type_label']);
+                echo '<strong>' . $qr_emoji . ' Medio:</strong> ' . esc_html($row['qr_type_label']);
                 echo '</div><br>';
             }
             
@@ -1732,6 +1803,10 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
     if (!is_array($status_arr)) $status_arr = [];
 
+    $virtual_status_arr = get_post_meta($post_id, '_eventosapp_virtual_checkin_status', true);
+    if (is_string($virtual_status_arr)) $virtual_status_arr = @unserialize($virtual_status_arr);
+    if (!is_array($virtual_status_arr)) $virtual_status_arr = [];
+
     $log = get_post_meta($post_id, '_eventosapp_checkin_log', true);
     if (is_string($log)) $log = @unserialize($log);
     if (!is_array($log)) $log = [];
@@ -1758,6 +1833,17 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         }
     }
 
+    $clear_all_virtual = !empty($_POST['eventosapp_clear_virtual_checkin_all']);
+    $clear_virtual_days = [];
+    if (!empty($_POST['eventosapp_clear_virtual_checkin_days']) && is_array($_POST['eventosapp_clear_virtual_checkin_days'])) {
+        foreach ($_POST['eventosapp_clear_virtual_checkin_days'] as $raw_day) {
+            $raw_day = sanitize_text_field(wp_unslash($raw_day));
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw_day)) {
+                $clear_virtual_days[$raw_day] = true;
+            }
+        }
+    }
+
     $session_clear_all = !empty($_POST['eventosapp_clear_session_checkins_all']);
     $session_clear_names = [];
     if (!empty($_POST['eventosapp_clear_session_checkins']) && is_array($_POST['eventosapp_clear_session_checkins'])) {
@@ -1772,7 +1858,7 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     $cleanup_labels = [];
     $removed_log_entries = 0;
 
-    if ($clear_all_main || !empty($clear_days) || $clear_invalid_dates || $session_clear_all || !empty($session_clear_names)) {
+    if ($clear_all_main || !empty($clear_days) || $clear_all_virtual || !empty($clear_virtual_days) || $clear_invalid_dates || $session_clear_all || !empty($session_clear_names)) {
         if ($clear_all_main) {
             foreach ($days as $d) {
                 $status_arr[$d] = 'not_checked_in';
@@ -1792,10 +1878,34 @@ function eventosapp_save_ticket($post_id, $post, $update) {
             $cleanup_labels[] = 'check-ins principales por día: ' . implode(', ', array_keys($clear_days));
         }
 
+        if ($clear_all_virtual) {
+            foreach ($days as $d) {
+                $virtual_status_arr[$d] = 'not_checked_in';
+            }
+            foreach (array_keys($virtual_status_arr) as $saved_day) {
+                if (!isset($valid_days_lookup[$saved_day])) {
+                    unset($virtual_status_arr[$saved_day]);
+                }
+            }
+            $cleanup_labels[] = 'check-ins virtuales completos';
+        }
+
+        if (!empty($clear_virtual_days)) {
+            foreach (array_keys($clear_virtual_days) as $d) {
+                $virtual_status_arr[$d] = 'not_checked_in';
+            }
+            $cleanup_labels[] = 'check-ins virtuales por día: ' . implode(', ', array_keys($clear_virtual_days));
+        }
+
         if ($clear_invalid_dates && !empty($valid_days_lookup)) {
             foreach (array_keys($status_arr) as $saved_day) {
                 if (!isset($valid_days_lookup[$saved_day])) {
                     unset($status_arr[$saved_day]);
+                }
+            }
+            foreach (array_keys($virtual_status_arr) as $saved_day) {
+                if (!isset($valid_days_lookup[$saved_day])) {
+                    unset($virtual_status_arr[$saved_day]);
                 }
             }
             $cleanup_labels[] = 'registros fuera de fechas del evento';
@@ -1811,10 +1921,11 @@ function eventosapp_save_ticket($post_id, $post, $update) {
             $entry_date = eventosapp_ticket_log_entry_event_date($entry);
             $is_primary = eventosapp_ticket_is_primary_checkin_log($entry);
             $is_session = eventosapp_ticket_is_session_checkin_log($entry);
+            $is_virtual = function_exists('eventosapp_ticket_is_virtual_checkin_log') ? eventosapp_ticket_is_virtual_checkin_log($entry) : ((string)($entry['status'] ?? '') === 'virtual_checked_in');
             $entry_session = (string)($entry['sesion'] ?? '');
             $remove_entry = false;
 
-            if ($clear_invalid_dates && $entry_date !== '' && !isset($valid_days_lookup[$entry_date]) && ($is_primary || $is_session)) {
+            if ($clear_invalid_dates && $entry_date !== '' && !isset($valid_days_lookup[$entry_date]) && ($is_primary || $is_session || $is_virtual)) {
                 $remove_entry = true;
             }
 
@@ -1823,6 +1934,14 @@ function eventosapp_save_ticket($post_id, $post, $update) {
             }
 
             if (!$remove_entry && $is_primary && $entry_date !== '' && isset($clear_days[$entry_date])) {
+                $remove_entry = true;
+            }
+
+            if (!$remove_entry && $is_virtual && $clear_all_virtual) {
+                $remove_entry = true;
+            }
+
+            if (!$remove_entry && $is_virtual && $entry_date !== '' && isset($clear_virtual_days[$entry_date])) {
                 $remove_entry = true;
             }
 
@@ -1844,6 +1963,7 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         $log = array_values($filtered_log);
 
         update_post_meta($post_id, '_eventosapp_checkin_status', $status_arr);
+        update_post_meta($post_id, '_eventosapp_virtual_checkin_status', $virtual_status_arr);
         update_post_meta($post_id, '_eventosapp_checkin_log', $log);
 
         if ($session_clear_all || !empty($session_clear_names) || $clear_invalid_dates) {
@@ -1873,8 +1993,9 @@ function eventosapp_save_ticket($post_id, $post, $update) {
                 'Limpieza ejecutada: ' . implode(' · ', $cleanup_labels),
                 $removed_log_entries,
                 [
-                    'days'     => array_keys($clear_days),
-                    'sessions' => array_keys($session_clear_names),
+                    'days'         => array_keys($clear_days),
+                    'virtual_days' => array_keys($clear_virtual_days),
+                    'sessions'     => array_keys($session_clear_names),
                 ]
             );
         }
@@ -1901,6 +2022,9 @@ function eventosapp_save_ticket($post_id, $post, $update) {
                     'hora'          => $now->format('H:i:s'),
                     'dia'           => $day,
                     'status'        => $nuevo,
+                    'status_label'  => ($nuevo === 'checked_in') ? 'Check-in presencial' : 'Check-in presencial removido',
+                    'checkin_type'  => 'presencial',
+                    'modalidad'     => function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($post_id) : get_post_meta($post_id, '_eventosapp_ticket_modalidad', true),
                     'usuario'       => $usuario,
                     'origen'        => 'manual',
                     'previo'        => $prev,
@@ -1926,6 +2050,47 @@ function eventosapp_save_ticket($post_id, $post, $update) {
         if (empty($status_arr) && !empty($days)) {
             foreach ($days as $d) $status_arr[$d] = 'not_checked_in';
             update_post_meta($post_id, '_eventosapp_checkin_status', $status_arr);
+        }
+    }
+
+    if (isset($_POST['eventosapp_virtual_checkin_status']) && is_array($_POST['eventosapp_virtual_checkin_status'])) {
+        foreach ($days as $day) {
+            if (!array_key_exists($day, $_POST['eventosapp_virtual_checkin_status'])) continue;
+            $prev = $virtual_status_arr[$day] ?? 'not_checked_in';
+            if ($clear_all_virtual || isset($clear_virtual_days[$day])) {
+                $nuevo = 'not_checked_in';
+            } else {
+                $nuevo = sanitize_text_field($_POST['eventosapp_virtual_checkin_status'][$day]);
+                if (!in_array($nuevo, ['checked_in','not_checked_in'], true)) $nuevo = $prev;
+            }
+
+            if ($nuevo !== $prev) {
+                $virtual_status_arr[$day] = $nuevo;
+                $u = wp_get_current_user();
+                $usuario = ($u && $u->exists()) ? ($u->display_name.' ('.$u->user_email.')') : 'Sistema';
+
+                $log[] = [
+                    'fecha'         => $now->format('Y-m-d'),
+                    'hora'          => $now->format('H:i:s'),
+                    'dia'           => $day,
+                    'status'        => ($nuevo === 'checked_in') ? 'virtual_checked_in' : 'virtual_not_checked_in',
+                    'status_label'  => ($nuevo === 'checked_in') ? 'Check-in virtual' : 'Check-in virtual removido',
+                    'checkin_type'  => 'virtual',
+                    'modalidad'     => function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($post_id) : get_post_meta($post_id, '_eventosapp_ticket_modalidad', true),
+                    'usuario'       => $usuario,
+                    'origen'        => 'manual-admin',
+                    'previo'        => $prev,
+                    'qr_type'       => 'virtual_access',
+                    'qr_type_label' => 'Acceso virtual',
+                ];
+            }
+        }
+        update_post_meta($post_id, '_eventosapp_virtual_checkin_status', $virtual_status_arr);
+        update_post_meta($post_id, '_eventosapp_checkin_log', $log);
+    } else {
+        if (empty($virtual_status_arr) && !empty($days)) {
+            foreach ($days as $d) $virtual_status_arr[$d] = 'not_checked_in';
+            update_post_meta($post_id, '_eventosapp_virtual_checkin_status', $virtual_status_arr);
         }
     }
 
