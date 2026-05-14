@@ -98,6 +98,8 @@ wp_localize_script('eventosapp-front-search', 'EvFrontSearch', [
 // CSS como inline style
 $css = <<<CSS
 .evfs-wrap{max-width:900px;margin:0 auto}
+.evfs-searchbar{display:grid;grid-template-columns:minmax(185px,240px) 1fr;gap:8px;align-items:center}
+.evfs-select{width:100%;padding:.6rem .7rem;font-size:1rem;border:1px solid #dfe3e7;border-radius:10px;background:#fff;color:#111}
 .evfs-input{width:100%;padding:.6rem .7rem;font-size:1.05rem;border:1px solid #dfe3e7;border-radius:10px}
 .evfs-results{margin-top:.6rem}
 .evfs-row{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:.8rem;border:1px solid #eee;border-radius:12px;background:#fff;margin-bottom:8px;box-shadow:0 1px 5px rgba(120,140,160,.07)}
@@ -128,6 +130,7 @@ $css = <<<CSS
 .evfs-acomp-btn:disabled{opacity:.55;cursor:not-allowed}
 .evfs-acomp-status{margin-top:5px;font-size:.82rem}
 @media(max-width:600px){
+  .evfs-searchbar{grid-template-columns:1fr}
   .evfs-row{flex-direction:column}
   .evfs-actions{flex-direction:row;align-items:stretch;width:100%;justify-content:stretch}
   .evfs-btn{width:100%}
@@ -142,6 +145,7 @@ wp_enqueue_style('eventosapp-front-search');
 $js = <<<'JS'
 jQuery(function($){
   var $w = $('#evfs-wrap'),
+      $type = $('#evfs-search-type'),
       $in = $('#evfs-input'),
       $out= $('#evfs-results'),
       eventId = EvFrontSearch.event_id,
@@ -155,6 +159,26 @@ jQuery(function($){
   function escAttr(value){
     return escHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
+
+  function searchPlaceholder(type){
+    var labels = {
+      name: 'Buscar por nombres y apellidos…',
+      cc: 'Buscar por cédula…',
+      phone: 'Buscar por celular…',
+      email: 'Buscar por correo electrónico…',
+      all: 'Buscar en todos los datos…'
+    };
+    return labels[type] || labels.cc;
+  }
+
+  function getSearchType(){
+    return ($type.val() || 'cc').toString();
+  }
+
+  function updateSearchPlaceholder(){
+    $in.attr('placeholder', searchPlaceholder(getSearchType()));
+  }
+
 
   function btnCheck(status, ticketId, allowed){
     var isChecked      = (status === 'checked_in');
@@ -210,22 +234,34 @@ jQuery(function($){
     setTimeout(function(){ $n.fadeOut(180, function(){ $(this).remove(); }); }, 3000);
   }
 
-  $in.on('input', function(){
+  function runSearch(){
     clearTimeout(timer);
     var q = $in.val().trim();
+    var searchType = getSearchType();
     if(!q || q.length < 2){ $out.empty(); return; }
     timer = setTimeout(function(){
       $.getJSON(EvFrontSearch.ajax_url, {
         action: 'eventosapp_front_search',
         security: EvFrontSearch.search_nonce,
         q: q,
+        search_type: searchType,
         event_id: eventId
       }).done(function(resp){
         if(resp && resp.success){ render(resp.data||[]); }
         else { render([]); }
-      });
-    }, 250);
+      }).fail(function(){ render([]); });
+    }, 300);
+  }
+
+  $in.on('input', runSearch);
+
+  $type.on('change', function(){
+    updateSearchPlaceholder();
+    $out.empty();
+    runSearch();
   });
+
+  updateSearchPlaceholder();
 
 // Toggle check-in
   $(document).on('click','.evfs-check', function(){
@@ -348,7 +384,17 @@ wp_enqueue_script('eventosapp-front-search');
     }
     ?>
     <div id="evfs-wrap" class="evfs-wrap" data-event-id="<?php echo esc_attr($eid); ?>">
-        <input id="evfs-input" class="evfs-input" type="text" placeholder="Buscar asistentes por nombre, apellido, email, CC o TicketID…">
+        <div class="evfs-searchbar">
+            <label class="screen-reader-text" for="evfs-search-type">Tipo de búsqueda</label>
+            <select id="evfs-search-type" class="evfs-select" aria-label="Tipo de búsqueda">
+                <option value="name">Nombres y apellidos</option>
+                <option value="cc" selected>Cédula</option>
+                <option value="phone">Celular</option>
+                <option value="email">Correo electrónico</option>
+                <option value="all">Todos los datos</option>
+            </select>
+            <input id="evfs-input" class="evfs-input" type="text" placeholder="Buscar por cédula…" autocomplete="off">
+        </div>
         <div id="evfs-results" class="evfs-results"></div>
     </div>
     <?php
@@ -356,20 +402,32 @@ wp_enqueue_script('eventosapp-front-search');
 });
 
 /**
- * AJAX: búsqueda (optimizada con índice _evapp_search_blob)
- * - Si no viene event_id, se usa el evento activo (dashboard)
- * - Si no es admin, queda amarrado a su evento activo
- * - El estado "de hoy" se calcula con la TZ del evento
+ * AJAX: búsqueda segmentada y optimizada.
+ *
+ * Mejora de rendimiento:
+ * - Por defecto busca solo por Cédula (_evapp_search_cc).
+ * - Permite segmentar por nombres/apellidos, celular, correo o todos.
+ * - "Todos" conserva compatibilidad con el índice amplio _evapp_search_blob,
+ *   pero queda como última opción porque es la consulta más costosa.
+ * - Si un ticket antiguo todavía no tiene los índices nuevos, usa fallback seguro
+ *   sobre los metadatos principales sin modificar permisos ni flujos existentes.
  */
-// === AJAX: búsqueda (optimizada con índice _evapp_search_blob) ===
 add_action('wp_ajax_eventosapp_front_search', function(){
     if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('search') ) {
         wp_send_json_error(['message' => 'Permisos insuficientes'], 403);
     }
     check_ajax_referer('eventosapp_front_search','security');
 
+    global $wpdb;
+
     $q        = isset($_GET['q']) ? sanitize_text_field(wp_unslash($_GET['q'])) : '';
     $event_id = isset($_GET['event_id']) ? absint($_GET['event_id']) : 0;
+
+    $allowed_search_types = [ 'name', 'cc', 'phone', 'email', 'all' ];
+    $search_type = isset($_GET['search_type']) ? sanitize_key(wp_unslash($_GET['search_type'])) : 'cc';
+    if ( ! in_array($search_type, $allowed_search_types, true) ) {
+        $search_type = 'cc';
+    }
 
     if ( ! $event_id && function_exists('eventosapp_get_active_event') ) {
         $event_id = (int) eventosapp_get_active_event();
@@ -386,9 +444,17 @@ add_action('wp_ajax_eventosapp_front_search', function(){
             return trim($s);
         }
     }
-    $q_norm = eventosapp_normalize_text($q);
 
-    // No admin: forzar a su evento activo
+    if ( ! function_exists('eventosapp_search_digits_only') ) {
+        function eventosapp_search_digits_only($value) {
+            return preg_replace('/\D+/', '', (string) $value);
+        }
+    }
+
+    $q_norm   = eventosapp_normalize_text($q);
+    $q_digits = eventosapp_search_digits_only($q);
+
+    // No admin: forzar a su evento activo.
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
         $active = (int) eventosapp_get_active_event();
         if ( ! $active || ($event_id && $event_id !== $active) ) {
@@ -397,15 +463,9 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $event_id = $active;
     }
 
-    // === Meta query: filtra por evento e índice de búsqueda ===
-    $meta_query = ['relation'=>'AND'];
-
+    $allowed_event_ids = [];
     if ( $event_id ) {
-        $meta_query[] = [
-            'key'     => '_eventosapp_ticket_evento_id',
-            'value'   => $event_id,
-            'compare' => '=',
-        ];
+        $allowed_event_ids = [ (int) $event_id ];
     } elseif ( ! current_user_can('manage_options') ) {
         $u = wp_get_current_user();
         $mine = get_posts([
@@ -416,29 +476,95 @@ add_action('wp_ajax_eventosapp_front_search', function(){
             'fields'      => 'ids'
         ]);
         $allowed_event_ids = array_map('intval', $mine);
-        $meta_query[] = [
-            'key'     => '_eventosapp_ticket_evento_id',
-            'value'   => $allowed_event_ids ?: [0],
-            'compare' => 'IN',
-        ];
+        if ( empty($allowed_event_ids) ) {
+            wp_send_json_success([]);
+        }
     }
 
-    $meta_query[] = [
-        'key'     => '_evapp_search_blob',
-        'value'   => $q_norm,
-        'compare' => 'LIKE',
+    $search_meta_map = [
+        'name'  => '_evapp_search_name',
+        'cc'    => '_evapp_search_cc',
+        'phone' => '_evapp_search_phone',
+        'email' => '_evapp_search_email',
+        'all'   => '_evapp_search_blob',
     ];
 
-    $tickets = get_posts([
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'any',
-        'fields'         => 'ids',
-        'no_found_rows'  => true,
-        'posts_per_page' => 30,
-        'orderby'        => 'ID',
-        'order'          => 'DESC',
-        'meta_query'     => $meta_query,
-    ]);
+    $raw_meta_fallback_map = [
+        'cc'    => [ '_eventosapp_asistente_cc' ],
+        'phone' => [ '_eventosapp_asistente_tel' ],
+        'email' => [ '_eventosapp_asistente_email' ],
+        'name'  => [ '_eventosapp_asistente_nombre', '_eventosapp_asistente_apellido' ],
+        'all'   => [ '_evapp_search_blob' ],
+    ];
+
+    if ( $search_type === 'cc' || $search_type === 'phone' ) {
+        $search_value = $q_digits !== '' ? $q_digits : $q_norm;
+    } else {
+        $search_value = $q_norm;
+    }
+
+    if ( $search_value === '' || mb_strlen($search_value) < 2 ) {
+        wp_send_json_success([]);
+    }
+
+    $like = '%' . $wpdb->esc_like($search_value) . '%';
+
+    $find_ticket_ids = function( $meta_keys, $like_value, $limit = 30 ) use ( $wpdb, $allowed_event_ids ) {
+        $meta_keys = array_values(array_filter(array_map('sanitize_key', (array) $meta_keys)));
+        if ( empty($meta_keys) ) return [];
+
+        $join_event = '';
+        $params = [];
+
+        if ( ! empty($allowed_event_ids) ) {
+            $placeholders = implode(',', array_fill(0, count($allowed_event_ids), '%d'));
+            $join_event = " INNER JOIN {$wpdb->postmeta} evm ON evm.post_id = p.ID AND evm.meta_key = %s AND CAST(evm.meta_value AS UNSIGNED) IN ($placeholders)";
+            $params[] = '_eventosapp_ticket_evento_id';
+            foreach ( $allowed_event_ids as $aid ) {
+                $params[] = (int) $aid;
+            }
+        }
+
+        $meta_placeholders = implode(',', array_fill(0, count($meta_keys), '%s'));
+        $sql = "
+            SELECT DISTINCT p.ID
+            FROM {$wpdb->posts} p
+            {$join_event}
+            INNER JOIN {$wpdb->postmeta} sm ON sm.post_id = p.ID
+            WHERE p.post_type = %s
+              AND p.post_status NOT IN ('trash','auto-draft','inherit')
+              AND sm.meta_key IN ($meta_placeholders)
+              AND sm.meta_value LIKE %s
+            ORDER BY p.ID DESC
+            LIMIT %d
+        ";
+
+        $params[] = 'eventosapp_ticket';
+        foreach ( $meta_keys as $mk ) {
+            $params[] = $mk;
+        }
+        $params[] = $like_value;
+        $params[] = (int) $limit;
+
+        $prepared = $wpdb->prepare($sql, $params);
+        $ids = $wpdb->get_col($prepared);
+        return array_map('intval', (array) $ids);
+    };
+
+    // 1) Consulta principal sobre índice segmentado.
+    $tickets = $find_ticket_ids([ $search_meta_map[$search_type] ], $like, 30);
+
+    // 2) Fallback para tickets antiguos que aún no hayan sido reindexados con los nuevos metadatos.
+    if ( empty($tickets) && isset($raw_meta_fallback_map[$search_type]) ) {
+        $fallback_value = ($search_type === 'cc' || $search_type === 'phone') ? ($q_digits !== '' ? $q_digits : $q) : $q_norm;
+        $fallback_like  = '%' . $wpdb->esc_like($fallback_value) . '%';
+        $tickets = $find_ticket_ids($raw_meta_fallback_map[$search_type], $fallback_like, 30);
+    }
+
+    // 3) Último fallback compatible: índice amplio legado, solo si no se pidió "todos" y no hubo resultados.
+    if ( empty($tickets) && $search_type !== 'all' ) {
+        $tickets = $find_ticket_ids([ '_evapp_search_blob' ], '%' . $wpdb->esc_like($q_norm) . '%', 30);
+    }
 
     $out = [];
 
@@ -453,7 +579,7 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $ln         = get_post_meta($tid, '_eventosapp_asistente_apellido', true);
         $email      = get_post_meta($tid, '_eventosapp_asistente_email', true);
         $cc         = get_post_meta($tid, '_eventosapp_asistente_cc', true);
-        $localidad  = get_post_meta($tid, '_eventosapp_asistente_localidad', true); // 👈 NUEVO
+        $localidad  = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
         $ticketP    = get_post_meta($tid, 'eventosapp_ticketID', true);
         $evname     = $ev_id ? get_the_title($ev_id) : '';
         $modalidad  = function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($tid) : (get_post_meta($tid, '_eventosapp_ticket_modalidad', true) ?: 'presencial');
@@ -484,28 +610,29 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         }
 
         $out[] = [
-            'ticket_id'     => $tid,
-            'event_id'      => $ev_id,
-            'event_name'    => $evname,
-            'first_name'    => $fn,
-            'last_name'     => $ln,
-            'email'         => $email,
-            'cc'            => $cc,
-            'localidad'        => $localidad,     // 👈 NUEVO (se envía al front)
-            'ticket_pub'       => $ticketP,
-            'modalidad'        => $modalidad,
-            'modalidad_label'  => $modalidad_label,
-            'is_virtual'       => $is_virtual,
-            'virtual_url'            => $virtual_url,
+            'ticket_id'            => $tid,
+            'event_id'             => $ev_id,
+            'event_name'           => $evname,
+            'first_name'           => $fn,
+            'last_name'            => $ln,
+            'email'                => $email,
+            'cc'                   => $cc,
+            'localidad'            => $localidad,
+            'ticket_pub'           => $ticketP,
+            'modalidad'            => $modalidad,
+            'modalidad_label'      => $modalidad_label,
+            'is_virtual'           => $is_virtual,
+            'virtual_url'          => $virtual_url,
             'virtual_today_status' => $virtual_today_status,
-            'virtual_checked'       => ($virtual_today_status === 'checked_in'),
-            'today_status'          => $today_status,
-            'today_allowed'         => $today_allowed,
+            'virtual_checked'      => ($virtual_today_status === 'checked_in'),
+            'today_status'         => $today_status,
+            'today_allowed'        => $today_allowed,
         ];
     }
 
     wp_send_json_success( $out );
 });
+
 
 
 
