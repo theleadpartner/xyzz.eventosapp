@@ -436,8 +436,18 @@ add_shortcode('eventosapp_front_edit', function($atts){
         <!-- Buscador -->
         <div class="evfe-card" style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 5px rgba(120,140,160,.06);box-sizing:border-box;width:100%;">
             <h2 style="margin:0 0 10px;font-size:22px;">Editar tickets</h2>
-            <p style="margin:0 0 10px;color:#555">Busca al asistente por nombre, apellido, email, CC o TicketID. Haz clic en <b>Editar</b>.</p>
-            <input id="evfe-input" type="text" class="evfe-input" placeholder="Buscar…" style="width:100%;padding:.65rem .7rem;border:1px solid #dfe3e7;border-radius:10px;box-sizing:border-box;">
+            <p style="margin:0 0 10px;color:#555">Busca al asistente segmentando el dato principal. Por defecto se busca por <b>Cédula</b> para acelerar la consulta.</p>
+            <div class="evfe-searchbar">
+                <label class="screen-reader-text" for="evfe-search-type">Tipo de búsqueda</label>
+                <select id="evfe-search-type" class="evfe-select" aria-label="Tipo de búsqueda">
+                    <option value="name">Nombres y apellidos</option>
+                    <option value="cc" selected>Cédula</option>
+                    <option value="phone">Celular</option>
+                    <option value="email">Correo electrónico</option>
+                    <option value="all">Todos los datos</option>
+                </select>
+                <input id="evfe-input" type="text" class="evfe-input" placeholder="Buscar por cédula…" autocomplete="off" style="width:100%;padding:.65rem .7rem;border:1px solid #dfe3e7;border-radius:10px;box-sizing:border-box;">
+            </div>
             <div id="evfe-results" class="evfe-results" style="margin-top:10px"></div>
         </div>
 
@@ -549,6 +559,8 @@ add_shortcode('eventosapp_front_edit', function($atts){
 .evfe-wrap{max-width:980px;margin:0 auto;clear:both;position:relative;z-index:1;box-sizing:border-box;width:100%}
 .evfe-wrap *{box-sizing:border-box}
 .evfe-card,#evfe-form{width:100%;box-sizing:border-box}
+.evfe-searchbar{display:grid;grid-template-columns:minmax(185px,240px) 1fr;gap:8px;align-items:center}
+.evfe-select{width:100%;padding:.65rem .7rem;border:1px solid #dfe3e7;border-radius:10px;background:#fff;color:#111;box-sizing:border-box}
 .evfe-row{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:.8rem;border:1px solid #eee;border-radius:12px;background:#fff;margin-bottom:8px;box-shadow:0 1px 5px rgba(120,140,160,.07)}
 .evfe-data{flex:1 1 auto;min-width:0;word-break:break-word}
 .evfe-actions{flex:0 0 auto;display:flex;gap:8px}
@@ -562,6 +574,7 @@ add_shortcode('eventosapp_front_edit', function($atts){
 .evfe-virtual-link:hover{background:#5b21b6;color:#fff}
 .evfe-mail-actions input{max-width:100%}
 @media(max-width:650px){
+  .evfe-searchbar{grid-template-columns:1fr}
   .evfe-row{flex-direction:column}
   .evfe-actions{justify-content:stretch;width:100%}
   .evfe-btn{width:100%;text-align:center}
@@ -612,7 +625,8 @@ CSS;
     // JS en NOWDOC para evitar interpolación de PHP y permitir nombres $var en JS
     $js = <<<'JS'
 jQuery(function($){
-  var $in  = $('#evfe-input'),
+  var $type = $('#evfe-search-type'),
+      $in  = $('#evfe-input'),
       $out = $('#evfe-results'),
       $form= $('#evfe-form'),
       eventId = EvFrontEdit.event_id,
@@ -626,6 +640,26 @@ jQuery(function($){
   function escAttr(value){
     return escHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
+
+  function searchPlaceholder(type){
+    var labels = {
+      name: 'Buscar por nombres y apellidos…',
+      cc: 'Buscar por cédula…',
+      phone: 'Buscar por celular…',
+      email: 'Buscar por correo electrónico…',
+      all: 'Buscar en todos los datos…'
+    };
+    return labels[type] || labels.cc;
+  }
+
+  function getSearchType(){
+    return ($type.val() || 'cc').toString();
+  }
+
+  function updateSearchPlaceholder(){
+    $in.attr('placeholder', searchPlaceholder(getSearchType()));
+  }
+
 
   function optionHtml(value, label, selected){
     return '<option value="'+escAttr(value)+'"'+(selected ? ' selected' : '')+'>'+escHtml(label)+'</option>';
@@ -661,21 +695,33 @@ jQuery(function($){
     $out.html(html);
   }
 
-  $in.on('input', function(){
+  function runSearch(){
     clearTimeout(timer);
     var q = $in.val().trim();
+    var searchType = getSearchType();
     if(!q || q.length < 2){ $out.empty(); return; }
     timer = setTimeout(function(){
       $.getJSON(EvFrontEdit.ajax_url, {
         action: 'eventosapp_front_search',
         security: EvFrontEdit.search_nonce,
         q: q,
+        search_type: searchType,
         event_id: eventId
       }).done(function(resp){
         if(resp && resp.success){ render(resp.data||[]); } else { render([]); }
       }).fail(function(){ render([]); });
-    }, 250);
+    }, 300);
+  }
+
+  $in.on('input', runSearch);
+
+  $type.on('change', function(){
+    updateSearchPlaceholder();
+    $out.empty();
+    runSearch();
   });
+
+  updateSearchPlaceholder();
 
   function setBadge(status){
     var $b = $('#evfe-checkin-badge');
