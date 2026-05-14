@@ -437,7 +437,86 @@ if ( ! function_exists('eventosapp_resolve_ticket_from_request') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_sanitize_virtual_landing_path') ) {
+    /**
+     * Normaliza cualquier valor escrito en el metabox para que siempre sea una ruta pública segura.
+     * La landing virtual oficial se mantiene bajo /virtual/{slug-del-evento} para que el widget pueda
+     * resolver el evento desde la URL sin exponer admin-ajax.php al asistente.
+     */
+    function eventosapp_sanitize_virtual_landing_path( $raw_path, $event_id = 0 ) {
+        $event_id = absint( $event_id );
+        $fallback_slug = $event_id ? sanitize_title( get_the_title( $event_id ) ) : '';
+        if ( $fallback_slug === '' ) {
+            $fallback_slug = 'evento-virtual';
+        }
+
+        $raw_path = is_string( $raw_path ) ? wp_unslash( $raw_path ) : '';
+        $raw_path = trim( wp_strip_all_tags( $raw_path ) );
+
+        if ( $raw_path === '' ) {
+            return '/virtual/' . $fallback_slug;
+        }
+
+        $home_url = home_url();
+        if ( $home_url && strpos( $raw_path, $home_url ) === 0 ) {
+            $raw_path = substr( $raw_path, strlen( $home_url ) );
+        }
+
+        $parsed_path = wp_parse_url( $raw_path, PHP_URL_PATH );
+        if ( is_string( $parsed_path ) && $parsed_path !== '' ) {
+            $raw_path = $parsed_path;
+        }
+
+        $raw_path = trim( $raw_path, " \t\n\r\0\x0B/" );
+        $raw_path = preg_replace( '#^virtual/#i', '', $raw_path );
+        $raw_path = trim( (string) $raw_path, '/' );
+
+        if ( $raw_path === '' ) {
+            return '/virtual/' . $fallback_slug;
+        }
+
+        $segments = array_values( array_filter( explode( '/', $raw_path ), static function( $segment ) {
+            return trim( (string) $segment ) !== '';
+        } ) );
+
+        $last_segment = $segments ? end( $segments ) : $fallback_slug;
+        $slug = sanitize_title( $last_segment );
+        if ( $slug === '' ) {
+            $slug = $fallback_slug;
+        }
+
+        return '/virtual/' . $slug;
+    }
+}
+
+if ( ! function_exists('eventosapp_get_event_virtual_landing_path') ) {
+    function eventosapp_get_event_virtual_landing_path( $event_id ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return '/virtual/evento-virtual';
+        }
+
+        $stored_path = get_post_meta( $event_id, '_eventosapp_virtual_landing_path', true );
+        return eventosapp_sanitize_virtual_landing_path( $stored_path, $event_id );
+    }
+}
+
+if ( ! function_exists('eventosapp_get_event_virtual_landing_url') ) {
+    function eventosapp_get_event_virtual_landing_url( $event_id ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return '';
+        }
+
+        return home_url( eventosapp_get_event_virtual_landing_path( $event_id ) );
+    }
+}
+
 if ( ! function_exists('eventosapp_get_virtual_access_redirect_url') ) {
+    /**
+     * URL técnica de respaldo. No debe usarse como URL principal del correo.
+     * Se conserva para compatibilidad con enlaces antiguos que ya hayan sido enviados.
+     */
     function eventosapp_get_virtual_access_redirect_url( $ticket_id ) {
         $ticket_id = absint( $ticket_id );
         if ( ! $ticket_id ) return '';
@@ -451,8 +530,36 @@ if ( ! function_exists('eventosapp_get_virtual_access_redirect_url') ) {
 }
 
 if ( ! function_exists('eventosapp_get_virtual_landing_url') ) {
+    /**
+     * URL pública que debe usar el botón del correo/ticket virtual.
+     * Ejemplo final: /virtual/nombre-del-evento?ticket_pub=tkXXXX
+     */
     function eventosapp_get_virtual_landing_url( $ticket_id ) {
-        return eventosapp_get_virtual_access_redirect_url( $ticket_id );
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id || get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
+            return '';
+        }
+
+        $event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        if ( ! $event_id || get_post_type( $event_id ) !== 'eventosapp_event' ) {
+            return eventosapp_get_virtual_access_redirect_url( $ticket_id );
+        }
+
+        $public_id = get_post_meta( $ticket_id, 'eventosapp_ticketID', true );
+        $landing_url = eventosapp_get_event_virtual_landing_url( $event_id );
+
+        if ( ! $landing_url ) {
+            return eventosapp_get_virtual_access_redirect_url( $ticket_id );
+        }
+
+        $args = [];
+        if ( $public_id !== '' ) {
+            $args['ticket_pub'] = $public_id;
+        } else {
+            $args['ticket_id'] = $ticket_id;
+        }
+
+        return add_query_arg( $args, $landing_url );
     }
 }
 
@@ -505,7 +612,7 @@ if ( ! function_exists('eventosapp_ajax_virtual_access_redirect') ) {
             wp_die( 'El enlace virtual todavía no está configurado.', '', 404 );
         }
 
-        wp_safe_redirect( $target );
+        wp_redirect( esc_url_raw( $target ) );
         exit;
     }
 }
@@ -537,7 +644,28 @@ if ( ! function_exists('eventosapp_ticket_clear_presential_assets') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_require_first_existing_file') ) {
+    function eventosapp_require_first_existing_file( array $relative_paths ) {
+        foreach ( $relative_paths as $relative_path ) {
+            $full_path = plugin_dir_path( __FILE__ ) . ltrim( $relative_path, '/' );
+            if ( file_exists( $full_path ) ) {
+                require_once $full_path;
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 require_once plugin_dir_path(__FILE__) . 'eventosapp-tickets.php';
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-virtual-landing-metabox.php',
+    'eventosapp-virtual-landing-metabox.php',
+]);
+eventosapp_require_first_existing_file([
+    'includes/frontend/eventosapp-virtual-landing-widget.php',
+    'eventosapp-virtual-landing-widget.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-integraciones.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/google-wallet-android.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-badges.php';
