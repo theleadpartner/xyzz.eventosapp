@@ -104,6 +104,18 @@ function eventosapp_evreg_submit(){
     if (!is_array($localidades) || empty($localidades)) $localidades = ['General','VIP','Platino'];
     $localidades_allowed = array_fill_keys(array_map('strval', $localidades), true);
 
+    // Modalidad del ticket según la modalidad del evento.
+    $event_modalidad = function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($eid) : (get_post_meta($eid, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    $event_modalidad = function_exists('eventosapp_normalize_event_modalidad') ? eventosapp_normalize_event_modalidad($event_modalidad) : (in_array($event_modalidad, ['presencial','virtual','presencial_virtual'], true) ? $event_modalidad : 'presencial');
+    $requested_modalidad = isset($_POST['as_ticket_modalidad']) ? sanitize_text_field(wp_unslash($_POST['as_ticket_modalidad'])) : '';
+    if ($event_modalidad === 'presencial_virtual' && !in_array($requested_modalidad, ['presencial','virtual'], true)) {
+        wp_send_json_error(['message'=>'Selecciona si el asistente participará de forma presencial o virtual.']);
+    }
+    $ticket_modalidad = function_exists('eventosapp_resolve_ticket_modalidad')
+        ? eventosapp_resolve_ticket_modalidad($eid, $requested_modalidad, '')
+        : (($event_modalidad === 'virtual') ? 'virtual' : ($requested_modalidad ?: 'presencial'));
+    $is_virtual_ticket = ($ticket_modalidad === 'virtual');
+
     // Idempotencia (token de un solo uso)
     $ev_token = isset($_POST['evreg_token']) ? sanitize_text_field( wp_unslash($_POST['evreg_token']) ) : '';
     $tval     = $ev_token ? get_transient('evreg_token_'.$ev_token) : false;
@@ -152,6 +164,7 @@ function eventosapp_evreg_submit(){
     // Preparar payload para hooks (compat con save_post existente)
     $_POST['eventosapp_ticket_nonce']       = wp_create_nonce('eventosapp_ticket_guardar');
     $_POST['eventosapp_ticket_evento_id']   = $eid;
+    $_POST['eventosapp_ticket_modalidad']   = $ticket_modalidad;
     $_POST['eventosapp_ticket_user_id']     = get_current_user_id();
     $_POST['eventosapp_asistente_nombre']   = $nombre;
     $_POST['eventosapp_asistente_apellido'] = $apellido;
@@ -165,7 +178,7 @@ function eventosapp_evreg_submit(){
     $_POST['eventosapp_asistente_pais']     = $pais;
     $_POST['eventosapp_asistente_localidad']= $localidad;
 
-    if ($use_preprinted_qr && $preprinted_qr_id !== '') {
+    if (!$is_virtual_ticket && $use_preprinted_qr && $preprinted_qr_id !== '') {
         $_POST['eventosapp_ticket_preprintedID'] = preg_replace('/\D+/', '', (string) $preprinted_qr_id);
     }
 
@@ -294,6 +307,17 @@ add_shortcode('eventosapp_front_register', function($atts){
     $use_preprinted_qr = (bool) apply_filters('eventosapp_use_preprinted_qr', $use_preprinted_qr, $eid);
     $dbg[] = 'use_preprinted_qr='.($use_preprinted_qr?'1':'0');
 
+    // Modalidad del evento/ticket para el formulario.
+    $event_modalidad = function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($eid) : (get_post_meta($eid, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    $event_modalidad = function_exists('eventosapp_normalize_event_modalidad') ? eventosapp_normalize_event_modalidad($event_modalidad) : (in_array($event_modalidad, ['presencial','virtual','presencial_virtual'], true) ? $event_modalidad : 'presencial');
+    $ticket_modalidad_labels = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial'=>'Presencial','virtual'=>'Virtual'];
+    $allowed_modalidades = function_exists('eventosapp_ticket_allowed_modalidades_for_event')
+        ? eventosapp_ticket_allowed_modalidades_for_event($eid)
+        : (($event_modalidad === 'virtual') ? ['virtual'] : (($event_modalidad === 'presencial_virtual') ? ['presencial','virtual'] : ['presencial']));
+    $default_ticket_modalidad = reset($allowed_modalidades) ?: 'presencial';
+    $show_modalidad_select = ($event_modalidad === 'presencial_virtual');
+    $dbg[] = 'event_modalidad='.$event_modalidad;
+
     // Localidades
     $localidades = get_post_meta($eid, '_eventosapp_localidades', true);
     if (!is_array($localidades) || empty($localidades)) $localidades = ['General','VIP','Platino'];
@@ -359,6 +383,20 @@ add_shortcode('eventosapp_front_register', function($atts){
             <h2 class="evreg-title">Registro manual de asistente</h2>
             <p class="evreg-sub">Crea un ticket para el evento activo. Los campos marcados con * son obligatorios.</p>
 
+            <?php if ($show_modalidad_select): ?>
+                <div class="evreg-modalidad-box">
+                    <label class="evreg-label" for="as_ticket_modalidad_<?php echo esc_attr($uid); ?>">Modalidad del asistente *</label>
+                    <select class="evreg-input" id="as_ticket_modalidad_<?php echo esc_attr($uid); ?>" name="as_ticket_modalidad" required data-controls-preprinted="1">
+                        <?php foreach ($allowed_modalidades as $mod_key): ?>
+                            <option value="<?php echo esc_attr($mod_key); ?>" <?php selected($default_ticket_modalidad, $mod_key); ?>><?php echo esc_html($ticket_modalidad_labels[$mod_key] ?? ucfirst($mod_key)); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small class="evreg-help">Este evento permite asistentes presenciales y virtuales. Esta selección define si se generan anexos presenciales o acceso virtual.</small>
+                </div>
+            <?php else: ?>
+                <input type="hidden" name="as_ticket_modalidad" value="<?php echo esc_attr($default_ticket_modalidad); ?>">
+            <?php endif; ?>
+
             <div class="evreg-grid">
                 <div>
                     <label class="evreg-label">Nombre *</label>
@@ -418,11 +456,11 @@ add_shortcode('eventosapp_front_register', function($atts){
                     </select>
                 </div>
 
-                <?php if ($use_preprinted_qr): ?>
-                <div>
+                <?php if ($use_preprinted_qr && $event_modalidad !== 'virtual'): ?>
+                <div id="evreg-preprinted-wrap" data-presential-only="1">
                     <label class="evreg-label">ID de QR preimpreso</label>
                     <input class="evreg-input" type="text" name="as_preprinted_qr_id" placeholder="Ej: 00012345">
-                    <small class="evreg-help">Este campo aparece porque el evento usa QR preimpreso.</small>
+                    <small class="evreg-help">Este campo aplica solo para tickets presenciales.</small>
                 </div>
                 <?php endif; ?>
             </div>
@@ -489,6 +527,7 @@ add_shortcode('eventosapp_front_register', function($atts){
         .evreg-form{ background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 5px rgba(120,140,160,.06) }
         .evreg-title{margin:0 0 12px;font-size:22px}
         .evreg-sub{margin:6px 0 16px;color:#555}
+        .evreg-modalidad-box{border:1px solid #dbeafe;background:#eff6ff;border-radius:12px;padding:12px;margin:0 0 14px}
         .evreg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
         .evreg-grid--extras{margin-top:6px}
         .evreg-extras-title{margin-top:10px}
@@ -547,6 +586,21 @@ add_shortcode('eventosapp_front_register', function($atts){
         var nonce = "<?php echo esc_js( wp_create_nonce('eventosapp_evreg_ajax') ); ?>";
         var baseUrl   = "<?php echo esc_js( $base_url ); ?>";
         var urlSearch = "<?php echo esc_js( $url_search ); ?>";
+
+        function syncModalidadUI(){
+            var sel = form.querySelector('[name="as_ticket_modalidad"]');
+            var mode = sel ? sel.value : 'presencial';
+            var pre = form.querySelector('#evreg-preprinted-wrap');
+            if(pre){
+                pre.style.display = (mode === 'virtual') ? 'none' : '';
+                var input = pre.querySelector('input');
+                if(input && mode === 'virtual') input.value = '';
+            }
+        }
+        form.addEventListener('change', function(ev){
+            if(ev.target && ev.target.name === 'as_ticket_modalidad') syncModalidadUI();
+        });
+        syncModalidadUI();
 
         // Marca contenedores Elementor como "seguros"
         try{
