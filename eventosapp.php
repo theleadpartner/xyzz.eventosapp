@@ -159,6 +159,359 @@ if ( ! function_exists('eventosapp_ticket_is_virtual') ) {
     }
 }
 
+/**
+ * Helpers globales de check-in presencial/virtual.
+ *
+ * Mantiene intacto el check-in presencial existente (_eventosapp_checkin_status)
+ * y agrega un estado independiente para check-in virtual (_eventosapp_virtual_checkin_status).
+ */
+if ( ! function_exists('eventosapp_get_event_timezone_object') ) {
+    function eventosapp_get_event_timezone_object( $event_id ) {
+        $event_tz = get_post_meta( absint($event_id), '_eventosapp_zona_horaria', true );
+        if ( ! $event_tz ) {
+            $event_tz = wp_timezone_string();
+            if ( ! $event_tz || $event_tz === 'UTC' ) {
+                $offset = get_option('gmt_offset');
+                $event_tz = $offset ? ( timezone_name_from_abbr('', $offset * 3600, 0) ?: 'UTC' ) : 'UTC';
+            }
+        }
+
+        try {
+            return new DateTimeZone( $event_tz );
+        } catch ( Exception $e ) {
+            return wp_timezone();
+        }
+    }
+}
+
+if ( ! function_exists('eventosapp_get_event_current_date') ) {
+    function eventosapp_get_event_current_date( $event_id ) {
+        try {
+            $now = new DateTime( 'now', eventosapp_get_event_timezone_object( $event_id ) );
+        } catch ( Exception $e ) {
+            $now = new DateTime( 'now', wp_timezone() );
+        }
+        return $now->format('Y-m-d');
+    }
+}
+
+if ( ! function_exists('eventosapp_array_meta') ) {
+    function eventosapp_array_meta( $post_id, $meta_key ) {
+        $value = get_post_meta( absint($post_id), $meta_key, true );
+        if ( is_string( $value ) ) {
+            $maybe = @unserialize( $value );
+            if ( $maybe !== false || $value === 'b:0;' ) {
+                $value = $maybe;
+            }
+        }
+        return is_array( $value ) ? $value : [];
+    }
+}
+
+if ( ! function_exists('eventosapp_get_checkin_config') ) {
+    function eventosapp_get_checkin_config( $type = 'presencial' ) {
+        $type = sanitize_key( (string) $type );
+        if ( $type === 'virtual' ) {
+            return [
+                'type'             => 'virtual',
+                'status_meta'      => '_eventosapp_virtual_checkin_status',
+                'status_checked'   => 'checked_in',
+                'log_status'       => 'virtual_checked_in',
+                'log_status_off'   => 'virtual_not_checked_in',
+                'label'            => 'Check-in virtual',
+                'qr_type'          => 'virtual_access',
+                'qr_type_label'    => 'Acceso virtual',
+                'last_meta'        => '_eventosapp_virtual_checkin_last_at',
+                'count_meta'       => '_eventosapp_virtual_checkin_clicks',
+            ];
+        }
+
+        return [
+            'type'             => 'presencial',
+            'status_meta'      => '_eventosapp_checkin_status',
+            'status_checked'   => 'checked_in',
+            'log_status'       => 'checked_in',
+            'log_status_off'   => 'not_checked_in',
+            'label'            => 'Check-in presencial',
+            'qr_type'          => 'counter',
+            'qr_type_label'    => 'Counter',
+            'last_meta'        => '_eventosapp_presencial_checkin_last_at',
+            'count_meta'       => '_eventosapp_presencial_checkin_clicks',
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_checkin_status_for_day') ) {
+    function eventosapp_ticket_checkin_status_for_day( $ticket_id, $type = 'presencial', $day = '' ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) return 'not_checked_in';
+
+        $event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        $day = $day ?: eventosapp_get_event_current_date( $event_id );
+        $cfg = eventosapp_get_checkin_config( $type );
+        $arr = eventosapp_array_meta( $ticket_id, $cfg['status_meta'] );
+        $status = isset( $arr[$day] ) ? (string) $arr[$day] : 'not_checked_in';
+        return in_array( $status, [ 'checked_in', 'checked-in' ], true ) ? 'checked_in' : 'not_checked_in';
+    }
+}
+
+if ( ! function_exists('eventosapp_ticket_has_checkin_type') ) {
+    function eventosapp_ticket_has_checkin_type( $ticket_id, $type = 'presencial', $valid_days = [] ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) return false;
+
+        $cfg = eventosapp_get_checkin_config( $type );
+        $arr = eventosapp_array_meta( $ticket_id, $cfg['status_meta'] );
+        $valid_lookup = [];
+        if ( is_array( $valid_days ) && ! empty( $valid_days ) ) {
+            foreach ( $valid_days as $d ) {
+                if ( is_string( $d ) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) ) {
+                    $valid_lookup[$d] = true;
+                }
+            }
+        }
+
+        foreach ( $arr as $day => $status ) {
+            if ( ! in_array( $status, [ 'checked_in', 'checked-in' ], true ) ) continue;
+            if ( $valid_lookup && ! isset( $valid_lookup[$day] ) ) continue;
+            return true;
+        }
+        return false;
+    }
+}
+
+if ( ! function_exists('eventosapp_register_ticket_checkin') ) {
+    function eventosapp_register_ticket_checkin( $ticket_id, $type = 'presencial', $args = [] ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id || get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
+            return [ 'ok' => false, 'message' => 'Ticket inválido.' ];
+        }
+
+        $event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        if ( ! $event_id || get_post_type( $event_id ) !== 'eventosapp_event' ) {
+            return [ 'ok' => false, 'message' => 'Ticket sin evento válido.' ];
+        }
+
+        $args = is_array( $args ) ? $args : [];
+        $cfg  = eventosapp_get_checkin_config( $type );
+        $type = $cfg['type'];
+
+        $day = ! empty( $args['day'] ) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $args['day'])
+            ? (string) $args['day']
+            : eventosapp_get_event_current_date( $event_id );
+
+        $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days( $event_id ) : [];
+        $days = array_values( array_filter( $days, function( $d ) {
+            return is_string( $d ) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d);
+        } ) );
+
+        $allow_outside_days = ! empty( $args['allow_outside_event_days'] );
+        if ( ! $allow_outside_days && ! empty( $days ) && ! in_array( $day, $days, true ) ) {
+            return [
+                'ok'      => false,
+                'message' => 'El check-in solo está permitido en las fechas del evento. Hoy no corresponde.',
+                'day'     => $day,
+                'type'    => $type,
+            ];
+        }
+
+        try {
+            $now = new DateTime( 'now', eventosapp_get_event_timezone_object( $event_id ) );
+        } catch ( Exception $e ) {
+            $now = new DateTime( 'now', wp_timezone() );
+        }
+
+        $status_arr = eventosapp_array_meta( $ticket_id, $cfg['status_meta'] );
+        $prev = isset( $status_arr[$day] ) ? (string) $status_arr[$day] : 'not_checked_in';
+        $already_checked = in_array( $prev, [ 'checked_in', 'checked-in' ], true );
+        $status_arr[$day] = 'checked_in';
+        update_post_meta( $ticket_id, $cfg['status_meta'], $status_arr );
+        update_post_meta( $ticket_id, $cfg['last_meta'], $now->format('Y-m-d H:i:s') );
+        update_post_meta( $ticket_id, $cfg['count_meta'], (int) get_post_meta( $ticket_id, $cfg['count_meta'], true ) + 1 );
+
+        $force_log = ! empty( $args['force_log'] );
+        if ( ! $already_checked || $force_log ) {
+            $log = eventosapp_array_meta( $ticket_id, '_eventosapp_checkin_log' );
+            $user = wp_get_current_user();
+            $usuario = 'Sistema';
+            if ( $user && $user->exists() ) {
+                $usuario = $user->display_name . ' (' . $user->user_email . ')';
+            } elseif ( $type === 'virtual' ) {
+                $email = get_post_meta( $ticket_id, '_eventosapp_asistente_email', true );
+                $usuario = $email ? ( 'Asistente virtual (' . $email . ')' ) : 'Asistente virtual';
+            }
+
+            $log_entry = [
+                'fecha'          => $now->format('Y-m-d'),
+                'hora'           => $now->format('H:i:s'),
+                'dia'            => $day,
+                'status'         => $cfg['log_status'],
+                'status_label'   => $cfg['label'],
+                'checkin_type'   => $type,
+                'modalidad'      => function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad( $ticket_id ) : get_post_meta( $ticket_id, '_eventosapp_ticket_modalidad', true ),
+                'usuario'        => isset( $args['usuario'] ) && $args['usuario'] !== '' ? sanitize_text_field( (string) $args['usuario'] ) : $usuario,
+                'origen'         => isset( $args['origen'] ) && $args['origen'] !== '' ? sanitize_text_field( (string) $args['origen'] ) : ( $type === 'virtual' ? 'virtual-landing' : 'manual' ),
+                'previo'         => $prev,
+                'qr_type'        => isset( $args['qr_type'] ) && $args['qr_type'] !== '' ? sanitize_key( (string) $args['qr_type'] ) : $cfg['qr_type'],
+                'qr_type_label'  => isset( $args['qr_type_label'] ) && $args['qr_type_label'] !== '' ? sanitize_text_field( (string) $args['qr_type_label'] ) : $cfg['qr_type_label'],
+            ];
+
+            if ( ! empty( $args['ip'] ) ) {
+                $log_entry['ip'] = sanitize_text_field( (string) $args['ip'] );
+            }
+            if ( ! empty( $args['user_agent'] ) ) {
+                $log_entry['user_agent'] = substr( sanitize_text_field( (string) $args['user_agent'] ), 0, 250 );
+            }
+
+            $log[] = $log_entry;
+            update_post_meta( $ticket_id, '_eventosapp_checkin_log', $log );
+        }
+
+        if ( $type === 'presencial' && function_exists('eventosapp_update_qr_usage_stats') && ! $already_checked ) {
+            eventosapp_update_qr_usage_stats( $event_id, ! empty( $args['qr_type'] ) ? sanitize_key( $args['qr_type'] ) : $cfg['qr_type'] );
+        }
+
+        return [
+            'ok'              => true,
+            'ticket_id'       => $ticket_id,
+            'event_id'        => $event_id,
+            'type'            => $type,
+            'day'             => $day,
+            'status'          => 'checked_in',
+            'already_checked' => $already_checked,
+            'message'         => $already_checked ? 'El check-in ya estaba registrado.' : 'Check-in registrado.',
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_register_virtual_checkin') ) {
+    function eventosapp_register_virtual_checkin( $ticket_id, $args = [] ) {
+        $args = is_array( $args ) ? $args : [];
+        $args['origen'] = $args['origen'] ?? 'virtual-landing';
+        $args['qr_type'] = $args['qr_type'] ?? 'virtual_access';
+        $args['qr_type_label'] = $args['qr_type_label'] ?? 'Acceso virtual';
+        return eventosapp_register_ticket_checkin( $ticket_id, 'virtual', $args );
+    }
+}
+
+if ( ! function_exists('eventosapp_find_ticket_by_public_id') ) {
+    function eventosapp_find_ticket_by_public_id( $public_id ) {
+        $public_id = sanitize_text_field( (string) $public_id );
+        if ( $public_id === '' ) return 0;
+
+        $q = new WP_Query( [
+            'post_type'      => 'eventosapp_ticket',
+            'post_status'    => 'any',
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                [
+                    'key'     => 'eventosapp_ticketID',
+                    'value'   => $public_id,
+                    'compare' => '=',
+                ],
+            ],
+        ] );
+
+        return ! empty( $q->posts ) ? (int) $q->posts[0] : 0;
+    }
+}
+
+if ( ! function_exists('eventosapp_resolve_ticket_from_request') ) {
+    function eventosapp_resolve_ticket_from_request( $source = null ) {
+        $source = is_array( $source ) ? $source : $_REQUEST;
+        $ticket_id = isset( $source['ticket_id'] ) ? absint( $source['ticket_id'] ) : 0;
+        if ( $ticket_id && get_post_type( $ticket_id ) === 'eventosapp_ticket' ) {
+            return $ticket_id;
+        }
+
+        foreach ( [ 'ticket_pub', 'ticket', 'public_id', 'ticketID', 'ticket_id_public' ] as $key ) {
+            if ( ! empty( $source[$key] ) ) {
+                $found = eventosapp_find_ticket_by_public_id( wp_unslash( $source[$key] ) );
+                if ( $found ) return $found;
+            }
+        }
+
+        return 0;
+    }
+}
+
+if ( ! function_exists('eventosapp_get_virtual_access_redirect_url') ) {
+    function eventosapp_get_virtual_access_redirect_url( $ticket_id ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) return '';
+        $public_id = get_post_meta( $ticket_id, 'eventosapp_ticketID', true );
+        return add_query_arg( [
+            'action'     => 'eventosapp_virtual_access',
+            'ticket_id'  => $ticket_id,
+            'ticket_pub' => $public_id,
+        ], admin_url('admin-ajax.php') );
+    }
+}
+
+if ( ! function_exists('eventosapp_get_virtual_landing_url') ) {
+    function eventosapp_get_virtual_landing_url( $ticket_id ) {
+        return eventosapp_get_virtual_access_redirect_url( $ticket_id );
+    }
+}
+
+if ( ! function_exists('eventosapp_get_ticket_virtual_platform_url') ) {
+    function eventosapp_get_ticket_virtual_platform_url( $ticket_id ) {
+        $ticket_id = absint( $ticket_id );
+        $event_id  = $ticket_id ? absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) ) : 0;
+        return $event_id ? esc_url_raw( get_post_meta( $event_id, '_eventosapp_virtual_url', true ) ) : '';
+    }
+}
+
+if ( ! function_exists('eventosapp_ajax_register_virtual_checkin') ) {
+    function eventosapp_ajax_register_virtual_checkin() {
+        $ticket_id = eventosapp_resolve_ticket_from_request( $_REQUEST );
+        if ( ! $ticket_id ) {
+            wp_send_json_error( [ 'message' => 'Ticket inválido.' ], 400 );
+        }
+
+        $result = eventosapp_register_virtual_checkin( $ticket_id, [
+            'origen'     => 'virtual-landing',
+            'ip'         => $_SERVER['REMOTE_ADDR'] ?? '',
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
+        ] );
+
+        if ( empty( $result['ok'] ) ) {
+            wp_send_json_error( [ 'message' => $result['message'] ?? 'No se pudo registrar el check-in virtual.' ], 400 );
+        }
+
+        wp_send_json_success( $result );
+    }
+}
+add_action('wp_ajax_eventosapp_register_virtual_checkin', 'eventosapp_ajax_register_virtual_checkin');
+add_action('wp_ajax_nopriv_eventosapp_register_virtual_checkin', 'eventosapp_ajax_register_virtual_checkin');
+
+if ( ! function_exists('eventosapp_ajax_virtual_access_redirect') ) {
+    function eventosapp_ajax_virtual_access_redirect() {
+        $ticket_id = eventosapp_resolve_ticket_from_request( $_REQUEST );
+        if ( ! $ticket_id ) {
+            wp_die( 'Ticket inválido.', '', 400 );
+        }
+
+        eventosapp_register_virtual_checkin( $ticket_id, [
+            'origen'     => 'virtual-access-redirect',
+            'ip'         => $_SERVER['REMOTE_ADDR'] ?? '',
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
+        ] );
+
+        $target = eventosapp_get_ticket_virtual_platform_url( $ticket_id );
+        if ( ! $target ) {
+            wp_die( 'El enlace virtual todavía no está configurado.', '', 404 );
+        }
+
+        wp_safe_redirect( $target );
+        exit;
+    }
+}
+add_action('wp_ajax_eventosapp_virtual_access', 'eventosapp_ajax_virtual_access_redirect');
+add_action('wp_ajax_nopriv_eventosapp_virtual_access', 'eventosapp_ajax_virtual_access_redirect');
+
 if ( ! function_exists('eventosapp_ticket_clear_presential_assets') ) {
     function eventosapp_ticket_clear_presential_assets( $ticket_id ) {
         $ticket_id = absint( $ticket_id );
