@@ -109,6 +109,9 @@ $css = <<<CSS
 .evfs-check[aria-checked="true"]{background:#20FF00;color:#000}
 .evfs-print{border:2px solid #3782C4;background:#fff;color:#3782C4}
 .evfs-print:hover{background:#205483;color:#fff}
+.evfs-virtual{background:#7c3aed;color:#fff;text-align:center;text-decoration:none}
+.evfs-virtual:hover{background:#5b21b6;color:#fff}
+.evfs-muted-action{background:#e5e7eb;color:#374151;cursor:not-allowed}
 .evfs-note{position:absolute;bottom:-6px;right:0;transform:translateY(100%);font-size:.9rem;padding:.35rem .55rem;border-radius:6px;background:#ffe9e9;color:#9a2424;border:1px solid #ffd3d3}
 .evfs-note.ok{background:#e9ffe9;color:#1e6f2b;border-color:#c9f2c9}
 .evfs-check[disabled]{opacity:.55;cursor:not-allowed;filter:grayscale(20%)}
@@ -141,6 +144,15 @@ jQuery(function($){
       eventId = EvFrontSearch.event_id,
       timer;
 
+  function escHtml(value){
+    if(value === null || typeof value === 'undefined') return '';
+    return $('<div>').text(String(value)).html();
+  }
+
+  function escAttr(value){
+    return escHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+
   function btnCheck(status, ticketId, allowed){
     var isChecked      = (status === 'checked_in');
     var showAsChecked  = (allowed !== false) && isChecked;
@@ -149,25 +161,37 @@ jQuery(function($){
     var ariaAttr       = showAsChecked ? ' aria-checked="true"' : '';
 
     return '<button class="evfs-btn evfs-check"' + ariaAttr +
-           ' data-ticket-id="'+ticketId+'"' + disabledAttr + '>'+ txt +'</button>';
+           ' data-ticket-id="'+escAttr(ticketId)+'"' + disabledAttr + '>'+ txt +'</button>';
+  }
+
+  function btnVirtual(it){
+    if(it.virtual_url){
+      return '<a class="evfs-btn evfs-virtual" href="'+escAttr(it.virtual_url)+'" target="_blank" rel="noopener noreferrer">Abrir acceso virtual</a>';
+    }
+    return '<button class="evfs-btn evfs-muted-action" type="button" disabled>Acceso virtual pendiente</button>';
   }
 
   function render(rows){
     if(!rows.length){ $out.html('<div style="padding:.5rem;color:#666;">No hay resultados.</div>'); return; }
     var html='';
     $.each(rows,function(i,it){
+      it = it || {};
+      var isVirtual = it.is_virtual === true || it.modalidad === 'virtual';
+      var actions = isVirtual
+        ? btnVirtual(it)
+        : btnCheck(it.today_status, it.ticket_id, it.today_allowed) + '<button class="evfs-btn evfs-print" data-ticket-id="'+escAttr(it.ticket_id)+'" data-event-id="'+escAttr(it.event_id)+'">Imprimir escarapela</button>';
       html += '<div class="evfs-row">'
            +   '<div class="evfs-data">'
-           +     '<strong>'+ (it.first_name||'') +' '+ (it.last_name||'') +'</strong>'
-           +     ' <span style="color:#888">('+(it.cc||'—')+')</span><br>'
-           +     'Email: '+ (it.email||'—') +'<br>'
-           +     'TicketID: '+ (it.ticket_pub||'—') +'<br>'
-           +     'Evento: '+ (it.event_name||'—') +'<br>'
-           +     'Localidad: '+ (it.localidad||'—')
+           +     '<strong>'+ escHtml((it.first_name||'') +' '+ (it.last_name||'')) +'</strong>'
+           +     ' <span style="color:#888">('+escHtml(it.cc||'—')+')</span><br>'
+           +     'Email: '+ escHtml(it.email||'—') +'<br>'
+           +     'TicketID: '+ escHtml(it.ticket_pub||'—') +'<br>'
+           +     'Evento: '+ escHtml(it.event_name||'—') +'<br>'
+           +     'Localidad: '+ escHtml(it.localidad||'—') +'<br>'
+           +     'Modalidad: '+ escHtml(it.modalidad_label||'Presencial')
            +   '</div>'
            +   '<div class="evfs-actions">'
-           +     btnCheck(it.today_status, it.ticket_id, it.today_allowed)
-           +     '<button class="evfs-btn evfs-print" data-ticket-id="'+it.ticket_id+'" data-event-id="'+it.event_id+'">Imprimir escarapela</button>'
+           +     actions
            +   '</div>'
            + '</div>';
     });
@@ -428,6 +452,11 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $localidad  = get_post_meta($tid, '_eventosapp_asistente_localidad', true); // 👈 NUEVO
         $ticketP    = get_post_meta($tid, 'eventosapp_ticketID', true);
         $evname     = $ev_id ? get_the_title($ev_id) : '';
+        $modalidad  = function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($tid) : (get_post_meta($tid, '_eventosapp_ticket_modalidad', true) ?: 'presencial');
+        $modalidad  = in_array($modalidad, ['presencial','virtual'], true) ? $modalidad : 'presencial';
+        $is_virtual = ($modalidad === 'virtual');
+        $modalidad_label = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($tid) : ucfirst($modalidad);
+        $virtual_url = ($is_virtual && function_exists('eventosapp_get_virtual_landing_url')) ? eventosapp_get_virtual_landing_url($tid) : '';
 
         // Estado del día actual según TZ del evento
         $today = eventosapp_get_today_in_event_tz($ev_id);
@@ -437,7 +466,7 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $today_status = $status_arr[$today] ?? 'not_checked_in';
 
         // Si hoy NO es día del evento, ignorar lo guardado
-        $today_allowed = eventosapp_is_today_valid_for_event($ev_id);
+        $today_allowed = $is_virtual ? false : eventosapp_is_today_valid_for_event($ev_id);
         if (!$today_allowed) {
             $today_status = 'not_checked_in';
         }
@@ -450,10 +479,14 @@ add_action('wp_ajax_eventosapp_front_search', function(){
             'last_name'     => $ln,
             'email'         => $email,
             'cc'            => $cc,
-            'localidad'     => $localidad,     // 👈 NUEVO (se envía al front)
-            'ticket_pub'    => $ticketP,
-            'today_status'  => $today_status,
-            'today_allowed' => $today_allowed,
+            'localidad'        => $localidad,     // 👈 NUEVO (se envía al front)
+            'ticket_pub'       => $ticketP,
+            'modalidad'        => $modalidad,
+            'modalidad_label'  => $modalidad_label,
+            'is_virtual'       => $is_virtual,
+            'virtual_url'      => $virtual_url,
+            'today_status'     => $today_status,
+            'today_allowed'    => $today_allowed,
         ];
     }
 
@@ -480,6 +513,10 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     }
     $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
     if ( ! $evento_id ) wp_send_json_error(['message'=>'Ticket sin evento'], 400);
+
+    if ( function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id) ) {
+        wp_send_json_error(['message'=>'Este ticket es virtual y no usa check-in presencial desde esta herramienta.'], 400);
+    }
 
     // 🔒 Forzar evento activo para no-admins
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
@@ -590,6 +627,10 @@ function eventosapp_ajax_render_badge() {
         wp_die('Sin permisos', '', 403);
     }
 
+    if ( function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id) ) {
+        wp_die('Los tickets virtuales no tienen escarapela presencial.', '', 400);
+    }
+
     echo eventosapp_get_badge_html_from_event($event_id, $ticket_id);
     exit;
 }
@@ -654,8 +695,10 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id ) {
         $labels['pais']        = $pais    ?: 'País';
         $labels['localidad']   = $localidad ?: 'Localidad';
 
-        // QR
-        if ($code && function_exists('eventosapp_get_ticket_qr_url')) {
+        // QR: solo para tickets presenciales.
+        if (function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id)) {
+            $labels['qr'] = '';
+        } elseif ($code && function_exists('eventosapp_get_ticket_qr_url')) {
             $labels['qr'] = eventosapp_get_ticket_qr_url($code);
         } else {
             $labels['qr'] = '';
