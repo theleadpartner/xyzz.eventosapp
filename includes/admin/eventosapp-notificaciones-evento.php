@@ -504,3 +504,167 @@ function evapp_send_event_notification($post_id, $tipo = 'creacion', $manual = f
 
     return (bool) $sent;
 }
+
+/**
+ * Compatibilidad de segmentación por modalidad para recordatorios/notificaciones de tickets.
+ *
+ * Este archivo no contiene el motor cerrado del metabox "Recordatorio de Ticket", pero deja
+ * expuesto el criterio "Modalidad" para los módulos de notificaciones que consumen filtros
+ * y agrega un fallback visual no destructivo en la pantalla de edición del evento.
+ */
+if ( ! function_exists('evapp_notif_modalidad_filter_options') ) {
+    function evapp_notif_modalidad_filter_options($fields) {
+        if (!is_array($fields)) $fields = [];
+
+        $modalidad_options = [
+            'presencial' => 'Presencial',
+            'virtual'    => 'Virtual',
+        ];
+
+        if (function_exists('eventosapp_ticket_modalidad_options')) {
+            $maybe_options = eventosapp_ticket_modalidad_options();
+            if (is_array($maybe_options) && !empty($maybe_options)) {
+                $modalidad_options = $maybe_options;
+            }
+        }
+
+        // Caso 1: arreglo asociativo tipo ['localidad' => 'Localidad'].
+        if (array_keys($fields) !== range(0, count($fields) - 1)) {
+            if (!isset($fields['modalidad'])) {
+                $fields['modalidad'] = 'Modalidad';
+            }
+            return $fields;
+        }
+
+        // Caso 2: arreglo de definiciones tipo [['key'=>'localidad','label'=>'Localidad']].
+        foreach ($fields as $field) {
+            if (is_array($field)) {
+                $key = isset($field['key']) ? (string) $field['key'] : (isset($field['value']) ? (string) $field['value'] : '');
+                if ($key === 'modalidad') return $fields;
+            } elseif ((string) $field === 'modalidad') {
+                return $fields;
+            }
+        }
+
+        $fields[] = [
+            'key'     => 'modalidad',
+            'value'   => 'modalidad',
+            'label'   => 'Modalidad',
+            'type'    => 'select',
+            'options' => $modalidad_options,
+        ];
+
+        return $fields;
+    }
+}
+
+if ( ! function_exists('evapp_notif_ticket_filter_value') ) {
+    function evapp_notif_ticket_filter_value($value, $field = '', $ticket_id = 0, $context = []) {
+        if ($field !== 'modalidad') return $value;
+
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+            return '';
+        }
+
+        if (function_exists('eventosapp_get_ticket_modalidad')) {
+            return eventosapp_get_ticket_modalidad($ticket_id);
+        }
+
+        $modalidad = get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
+        if (function_exists('eventosapp_normalize_ticket_modalidad')) {
+            return eventosapp_normalize_ticket_modalidad($modalidad);
+        }
+
+        return in_array($modalidad, ['presencial', 'virtual'], true) ? $modalidad : 'presencial';
+    }
+}
+
+if ( ! function_exists('evapp_notif_ticket_matches_modalidad_filter') ) {
+    function evapp_notif_ticket_matches_modalidad_filter($matches, $ticket_id, $operator, $expected_value) {
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') return false;
+
+        $current = evapp_notif_ticket_filter_value('', 'modalidad', $ticket_id, []);
+        $expected = function_exists('eventosapp_normalize_ticket_modalidad')
+            ? eventosapp_normalize_ticket_modalidad($expected_value)
+            : sanitize_key((string) $expected_value);
+        $operator = sanitize_key((string) $operator);
+
+        if ($operator === 'not_equals' || $operator === '!=' || $operator === 'not') {
+            return $current !== $expected;
+        }
+
+        return $current === $expected;
+    }
+}
+
+foreach ([
+    'eventosapp_ticket_notification_filter_fields',
+    'eventosapp_email_reminder_filter_fields',
+    'eventosapp_reminder_segment_filter_fields',
+    'eventosapp_mass_email_filter_fields',
+    'eventosapp_notification_segment_fields',
+] as $evapp_modalidad_filter_hook) {
+    add_filter($evapp_modalidad_filter_hook, 'evapp_notif_modalidad_filter_options', 10, 1);
+}
+
+foreach ([
+    'eventosapp_ticket_notification_filter_value',
+    'eventosapp_email_reminder_filter_value',
+    'eventosapp_reminder_segment_filter_value',
+    'eventosapp_mass_email_filter_value',
+    'eventosapp_notification_segment_value',
+] as $evapp_modalidad_value_hook) {
+    add_filter($evapp_modalidad_value_hook, 'evapp_notif_ticket_filter_value', 10, 4);
+}
+
+foreach ([
+    'eventosapp_ticket_notification_filter_match_modalidad',
+    'eventosapp_email_reminder_filter_match_modalidad',
+    'eventosapp_reminder_segment_filter_match_modalidad',
+    'eventosapp_mass_email_filter_match_modalidad',
+] as $evapp_modalidad_match_hook) {
+    add_filter($evapp_modalidad_match_hook, 'evapp_notif_ticket_matches_modalidad_filter', 10, 4);
+}
+
+add_action('admin_footer-post.php', 'evapp_notif_modalidad_admin_segment_fallback');
+add_action('admin_footer-post-new.php', 'evapp_notif_modalidad_admin_segment_fallback');
+
+if ( ! function_exists('evapp_notif_modalidad_admin_segment_fallback') ) {
+    function evapp_notif_modalidad_admin_segment_fallback() {
+        $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+        if (!$screen || $screen->post_type !== 'eventosapp_event') return;
+        ?>
+        <script>
+        (function($){
+            function evappAddModalidadOption(){
+                $('select').each(function(){
+                    var $select = $(this);
+                    if ($select.find('option[value="modalidad"]').length) return;
+
+                    var labels = $select.find('option').map(function(){ return String($(this).text() || '').toLowerCase(); }).get().join(' | ');
+                    var values = $select.find('option').map(function(){ return String($(this).val() || '').toLowerCase(); }).get().join(' | ');
+                    var looksLikeSegmentField =
+                        labels.indexOf('localidad') !== -1 ||
+                        labels.indexOf('estado de envío del correo') !== -1 ||
+                        labels.indexOf('estado de envio del correo') !== -1 ||
+                        values.indexOf('localidad') !== -1 ||
+                        values.indexOf('email') !== -1 ||
+                        values.indexOf('correo') !== -1;
+
+                    if (looksLikeSegmentField) {
+                        $select.append($('<option/>', { value: 'modalidad', text: 'Modalidad' }));
+                    }
+                });
+            }
+
+            $(document).on('ready', evappAddModalidadOption);
+            $(document).on('click', '.button, button, a', function(){ setTimeout(evappAddModalidadOption, 250); });
+            $(document).on('change', 'select', function(){ setTimeout(evappAddModalidadOption, 250); });
+            setTimeout(evappAddModalidadOption, 700);
+        })(jQuery);
+        </script>
+        <?php
+    }
+}
