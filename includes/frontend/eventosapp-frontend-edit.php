@@ -239,6 +239,7 @@ if ( ! function_exists('eventosapp_front_edit_update_ticket_from_post') ) {
             // Mapear campos del formulario a los esperados por el hook save_post_eventosapp_ticket.
             $_POST['eventosapp_ticket_nonce']       = wp_create_nonce('eventosapp_ticket_guardar');
             $_POST['eventosapp_ticket_evento_id']   = $eid; // no permitimos cambiar el evento aquí
+            $_POST['eventosapp_ticket_modalidad']   = sanitize_text_field(wp_unslash($_POST['ed_modalidad'] ?? ''));
             $_POST['eventosapp_ticket_user_id']     = get_current_user_id();
 
             $_POST['eventosapp_asistente_nombre']   = sanitize_text_field(wp_unslash($_POST['ed_nombre']   ?? ''));
@@ -253,9 +254,12 @@ if ( ! function_exists('eventosapp_front_edit_update_ticket_from_post') ) {
             $_POST['eventosapp_asistente_pais']     = sanitize_text_field(wp_unslash($_POST['ed_pais']     ?? 'Colombia'));
             $_POST['eventosapp_asistente_localidad']= sanitize_text_field(wp_unslash($_POST['ed_localidad'] ?? ''));
 
-            // Preimpreso: se conserva la compatibilidad con el guardado existente.
+            // Preimpreso: se conserva la compatibilidad con el guardado existente, solo para modalidad presencial.
+            $resolved_modalidad_for_save = function_exists('eventosapp_resolve_ticket_modalidad')
+                ? eventosapp_resolve_ticket_modalidad($eid, $_POST['eventosapp_ticket_modalidad'], get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true))
+                : (sanitize_key($_POST['eventosapp_ticket_modalidad']) === 'virtual' ? 'virtual' : 'presencial');
             $preprinted_raw = wp_unslash($_POST['ed_preprinted_qr_id'] ?? '');
-            if ( $preprinted_raw !== '' ) {
+            if ( $resolved_modalidad_for_save !== 'virtual' && $preprinted_raw !== '' ) {
                 $_POST['eventosapp_ticket_preprintedID'] = preg_replace('/\D+/', '', (string) $preprinted_raw);
             }
 
@@ -453,6 +457,13 @@ add_shortcode('eventosapp_front_edit', function($atts){
                 <small id="evfe-checkin-note" style="color:#555"></small>
             </div>
 
+            <div id="evfe-modalidad-wrap" class="evfe-modalidad-box" style="display:none;margin:8px 0 12px;padding:10px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;">
+                <label for="ed_modalidad">Modalidad del ticket</label>
+                <select name="ed_modalidad" id="ed_modalidad" class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #bfdbfe;max-width:320px;"></select>
+                <small id="evfe-modalidad-help" style="display:block;color:#1f4f82;margin-top:5px;line-height:1.35"></small>
+                <div id="evfe-virtual-access" style="display:none;margin-top:8px;"></div>
+            </div>
+
             <div class="evfe-form-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">
                 <div><label>Nombre *</label><input type="text" name="ed_nombre" id="ed_nombre" required class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
                 <div><label>Apellido *</label><input type="text" name="ed_apellido" id="ed_apellido" required class="widefat" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7"></div>
@@ -486,7 +497,7 @@ add_shortcode('eventosapp_front_edit', function($atts){
                     </select>
                 </div>
 
-                <div>
+                <div id="evfe-preprinted-wrap">
                     <label>ID de QR preimpreso (numérico)</label>
                     <input type="text" name="ed_preprinted_qr_id" id="ed_preprinted_qr_id" class="widefat" placeholder="Ej: 00012345" style="padding:.55rem;border-radius:10px;border:1px solid #dfe3e7">
                     <small style="color:#666;display:block;margin-top:4px;">
@@ -546,6 +557,9 @@ add_shortcode('eventosapp_front_edit', function($atts){
 .evfe-edit:hover{background:#1d4ed8;color:#fff}
 .evfe-note{display:inline-block;margin-left:8px;font-size:.92rem;color:#0f5132;background:#d1e7dd;border:1px solid #badbcc;padding:.25rem .45rem;border-radius:6px}
 .evfe-form-grid > div label{display:block;margin:0 0 5px}
+.evfe-modalidad-box label{display:block;margin:0 0 5px;font-weight:700;color:#111}
+.evfe-virtual-link{display:inline-flex;align-items:center;justify-content:center;padding:.55rem .9rem;border-radius:8px;background:#7c3aed;color:#fff;text-decoration:none;font-weight:700}
+.evfe-virtual-link:hover{background:#5b21b6;color:#fff}
 .evfe-mail-actions input{max-width:100%}
 @media(max-width:650px){
   .evfe-row{flex-direction:column}
@@ -636,7 +650,8 @@ jQuery(function($){
            +   '<div class="evfe-data">'
            +     '<strong>'+ escHtml(full || 'Sin nombre') +'</strong> <span style="color:#888">('+escHtml(it.cc||'—')+')</span><br>'
            +     'Email: '+escHtml(it.email||'—')+'<br>'
-           +     'TicketID: '+escHtml(it.ticket_pub||'—')+' · Evento: '+escHtml(it.event_name||'—')
+           +     'TicketID: '+escHtml(it.ticket_pub||'—')+' · Evento: '+escHtml(it.event_name||'—')+'<br>'
+           +     'Modalidad: '+escHtml(it.modalidad_label||'Presencial')
            +   '</div>'
            +   '<div class="evfe-actions">'
            +     '<button type="button" class="evfe-btn evfe-edit" data-ticket-id="'+escAttr(it.ticket_id||'')+'">Editar</button>'
@@ -730,6 +745,53 @@ jQuery(function($){
     }
   }
 
+  function renderModalidad(d){
+    d = d || {};
+    var $wrap = $('#evfe-modalidad-wrap');
+    var $sel = $('#ed_modalidad');
+    var labels = d.modalidad_labels || {presencial:'Presencial', virtual:'Virtual'};
+    var allowed = Array.isArray(d.allowed_modalidades) && d.allowed_modalidades.length ? d.allowed_modalidades : ['presencial'];
+    var current = d.modalidad || allowed[0] || 'presencial';
+
+    $sel.empty();
+    allowed.forEach(function(m){
+      $sel.append(optionHtml(m, labels[m] || m, String(m) === String(current)));
+    });
+    setSelectValue($sel, current, allowed[0] || 'presencial');
+    $wrap.show();
+
+    var fixed = allowed.length <= 1;
+    $sel.prop('disabled', false);
+    $('#evfe-modalidad-help').text(d.modalidad_help || (fixed ? 'La modalidad está fijada por la configuración del evento.' : 'Este evento permite cambiar el ticket entre Presencial y Virtual.'));
+
+    var isVirtual = current === 'virtual';
+    var $pre = $('#evfe-preprinted-wrap');
+    if($pre.length){
+      $pre.toggle(!isVirtual);
+      if(isVirtual) $('#ed_preprinted_qr_id').val('');
+    }
+
+    var $access = $('#evfe-virtual-access').empty();
+    if(isVirtual){
+      if(d.virtual_url){
+        $access.html('<a class="evfe-virtual-link" href="'+escAttr(d.virtual_url)+'" target="_blank" rel="noopener noreferrer">Abrir acceso virtual</a>').show();
+      } else {
+        $access.html('<small style="color:#555">El enlace de acceso virtual se generará cuando el ticket tenga ID público.</small>').show();
+      }
+    } else {
+      $access.hide();
+    }
+  }
+
+  $('#ed_modalidad').on('change', function(){
+    var isVirtual = $(this).val() === 'virtual';
+    $('#evfe-preprinted-wrap').toggle(!isVirtual);
+    if(isVirtual){
+      $('#ed_preprinted_qr_id').val('');
+      $('#evfe-checkin-wrap').hide();
+    }
+  });
+
   function renderSesiones(sesiones, sesionesAcceso){
     var $list = $('#evfe-sesiones-list').empty();
     sesiones = Array.isArray(sesiones) ? sesiones : [];
@@ -776,6 +838,7 @@ jQuery(function($){
 
       renderExtras(d.extras_schema, d.extras_values);
       renderLocalidades(d.localidades, d.localidad || '');
+      renderModalidad(d);
 
       // Preimpreso
       $('#ed_preprinted_qr_id').val(d.preprinted||'');
@@ -783,8 +846,10 @@ jQuery(function($){
       // Sesiones checkbox
       renderSesiones(d.sesiones, d.sesiones_acceso);
 
-      // Check-in hoy (igual que el buscador)
-      if (typeof d.today_allowed !== 'undefined') {
+      // Check-in hoy (igual que el buscador). Los tickets virtuales no usan check-in presencial.
+      if (d.is_virtual) {
+        $('#evfe-checkin-wrap').hide();
+      } else if (typeof d.today_allowed !== 'undefined') {
         setBadge(d.today_status || 'not_checked_in');
         $('#evfe-checkin-wrap').css('display','flex');
         var $btn = $('#evfe-toggle-checkin');
@@ -955,8 +1020,24 @@ add_action('wp_ajax_eventosapp_front_get_ticket', function(){
         $extras_values[$fld['key']] = get_post_meta($tid, '_eventosapp_extra_'.$fld['key'], true);
     }
 
+    // Modalidad del ticket y opciones permitidas por el evento.
+    $modalidad = function_exists('eventosapp_get_ticket_modalidad') ? eventosapp_get_ticket_modalidad($tid) : (get_post_meta($tid, '_eventosapp_ticket_modalidad', true) ?: 'presencial');
+    $modalidad = in_array($modalidad, ['presencial','virtual'], true) ? $modalidad : 'presencial';
+    $is_virtual = ($modalidad === 'virtual');
+    $event_modalidad = function_exists('eventosapp_get_event_modalidad') ? eventosapp_get_event_modalidad($evento_id) : (get_post_meta($evento_id, '_eventosapp_event_modalidad', true) ?: 'presencial');
+    $allowed_modalidades = function_exists('eventosapp_ticket_allowed_modalidades_for_event') ? eventosapp_ticket_allowed_modalidades_for_event($evento_id) : (($event_modalidad === 'virtual') ? ['virtual'] : (($event_modalidad === 'presencial_virtual') ? ['presencial','virtual'] : ['presencial']));
+    $modalidad_labels = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial'=>'Presencial','virtual'=>'Virtual'];
+    $virtual_url = ($is_virtual && function_exists('eventosapp_get_virtual_landing_url')) ? eventosapp_get_virtual_landing_url($tid) : '';
+    if ($event_modalidad === 'virtual') {
+        $modalidad_help = 'Este evento es Virtual: todos los tickets quedan como Virtuales.';
+    } elseif ($event_modalidad === 'presencial_virtual') {
+        $modalidad_help = 'Este evento permite Presencial y Virtual: define la modalidad del asistente.';
+    } else {
+        $modalidad_help = 'Este evento es Presencial: todos los tickets quedan como Presenciales.';
+    }
+
     // Info de check-in de HOY (misma lógica del buscador)
-    $today_allowed = eventosapp_is_today_valid_for_event($evento_id);
+    $today_allowed = $is_virtual ? false : eventosapp_is_today_valid_for_event($evento_id);
     $today         = eventosapp_get_today_in_event_tz($evento_id);
     $status_arr    = get_post_meta($tid, '_eventosapp_checkin_status', true);
     if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
@@ -981,11 +1062,19 @@ add_action('wp_ajax_eventosapp_front_get_ticket', function(){
         'preprinted'        => $pre,
         'sesiones'          => array_values(array_unique(array_filter($ses_nombres))),
         'sesiones_acceso'   => $ses_acceso,
-        'extras_schema'     => $extras_schema,
-        'extras_values'     => $extras_values,
+        'extras_schema'       => $extras_schema,
+        'extras_values'       => $extras_values,
+        'modalidad'           => $modalidad,
+        'modalidad_label'     => $modalidad_labels[$modalidad] ?? ucfirst($modalidad),
+        'modalidad_labels'    => $modalidad_labels,
+        'event_modalidad'     => $event_modalidad,
+        'allowed_modalidades' => $allowed_modalidades,
+        'modalidad_help'      => $modalidad_help,
+        'is_virtual'          => $is_virtual,
+        'virtual_url'         => $virtual_url,
 
         // Check-in (hoy)
-        'today_allowed'     => $today_allowed,
+        'today_allowed'       => $today_allowed,
         'today_status'      => $today_status,
     ]);
 
@@ -1035,13 +1124,14 @@ add_action('wp_ajax_eventosapp_front_send_ticket_email', function(){
     // recalcula la variante y refresca Wallets habilitados para evitar enlaces antiguos
     // cuando la variante cambió por edición de campos o por ajustes del evento.
     try {
-        eventosapp_front_edit_run_silent('ticket_variants_before_frontend_email', function() use ( $tid, $evento_id ) {
+        $is_virtual_ticket_for_email = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($tid);
+        eventosapp_front_edit_run_silent('ticket_variants_before_frontend_email', function() use ( $tid, $evento_id, $is_virtual_ticket_for_email ) {
             if (function_exists('eventosapp_ticket_variants_prepare_ticket_for_frontend_context')) {
                 eventosapp_ticket_variants_prepare_ticket_for_frontend_context($tid, $evento_id, 'frontend_edit_send_email', [
                     'sync_google_classes' => true,
                     'mark_assets_stale'   => false,
                     'clear_assets_stale'  => true,
-                    'refresh_wallets'     => true,
+                    'refresh_wallets'     => !$is_virtual_ticket_for_email,
                     'refresh_pdf_ics'     => false,
                     'rebuild_search_index'=> true,
                     'log'                 => true,
@@ -1056,8 +1146,9 @@ add_action('wp_ajax_eventosapp_front_send_ticket_email', function(){
     }
 
     // 6) Flags del evento: generar PDF e ICS antes de enviar si aplica
-    $pdf_on = get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
-    $ics_on = get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1';
+    $is_virtual_ticket = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($tid);
+    $pdf_on = !$is_virtual_ticket && get_post_meta($evento_id, '_eventosapp_ticket_pdf', true) === '1';
+    $ics_on = (get_post_meta($evento_id, '_eventosapp_ticket_ics', true) === '1') || $is_virtual_ticket;
 
     try {
         eventosapp_front_edit_run_silent('generate_pdf_ics_before_frontend_email', function() use ( $tid, $pdf_on, $ics_on ) {
@@ -1075,11 +1166,12 @@ add_action('wp_ajax_eventosapp_front_send_ticket_email', function(){
     }
 
     try {
-        $send_result = eventosapp_front_edit_run_silent('send_ticket_email_from_frontend_edit', function() use ( $tid, $to ) {
+        $send_result = eventosapp_front_edit_run_silent('send_ticket_email_from_frontend_edit', function() use ( $tid, $to, $is_virtual_ticket ) {
             return eventosapp_send_ticket_email_now($tid, [
-                'recipient' => $to,
-                'source'    => 'frontend_edit',
-                'force'     => true,
+                'recipient'       => $to,
+                'source'          => 'frontend_edit',
+                'force'           => true,
+                'refresh_wallets' => !$is_virtual_ticket,
             ]);
         });
     } catch (Throwable $e) {
