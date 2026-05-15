@@ -22,6 +22,7 @@ class EventosApp_QR_Manager {
         'google_wallet' => 'Google Wallet',
         'apple_wallet' => 'Apple Wallet',
         'pdf' => 'PDF Impreso',
+        'whatsapp' => 'WhatsApp',
         'badge' => 'Escarapela Impresa'
     );
 
@@ -483,7 +484,7 @@ class EventosApp_QR_Manager {
             return $this->generate_badge_qr($ticket_id);
         }
         
-        // === SISTEMA SIMPLIFICADO para Email, Google Wallet, Apple Wallet, PDF ===
+        // === SISTEMA SIMPLIFICADO para Email, Google Wallet, Apple Wallet, PDF y WhatsApp ===
         
         // 1) Obtener el ticketID único
         $unique_ticket_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
@@ -497,7 +498,8 @@ class EventosApp_QR_Manager {
             'email' => 'email',
             'google_wallet' => 'gwallet',
             'apple_wallet' => 'awallet',
-            'pdf' => 'pdf'
+            'pdf' => 'pdf',
+            'whatsapp' => 'whatsapp'
         );
         
         if (!isset($tags[$type])) {
@@ -913,7 +915,8 @@ class EventosApp_QR_Manager {
                     'email' => 'email',
                     'gwallet' => 'google_wallet',
                     'awallet' => 'apple_wallet',
-                    'pdf' => 'pdf'
+                    'pdf' => 'pdf',
+                    'whatsapp' => 'whatsapp'
                 );
                 
                 if (isset($tag_to_type[$tag])) {
@@ -1026,7 +1029,8 @@ class EventosApp_QR_Manager {
                 'email' => 'Email',
                 'google_wallet' => 'Google Wallet',
                 'apple_wallet' => 'Apple Wallet',
-                'pdf' => 'PDF Impreso'
+                'pdf' => 'PDF Impreso',
+                'whatsapp' => 'WhatsApp'
             );
             
             return array(
@@ -1143,7 +1147,7 @@ class EventosApp_QR_Manager {
             return false;
         }
 
-        // Verificar que existan los 5 tipos de QR y que el archivo físico exista.
+        // Verificar que existan todos los tipos de QR y que el archivo físico exista.
         foreach (self::QR_TYPES as $type => $label) {
             if (!isset($all_qr_codes[$type]) || !$this->qr_data_has_valid_file($all_qr_codes[$type], $type)) {
                 return false;
