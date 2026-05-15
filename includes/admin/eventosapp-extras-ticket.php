@@ -53,6 +53,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
     // NUEVO: Flag "Variantes de ticket por reglas"
     $ticket_variants_enabled = get_post_meta($post->ID, '_eventosapp_ticket_variants_enabled', true);
 
+    // NUEVO: Flag "Mensajería de WhatsApp"
+    $whatsapp_enabled = get_post_meta($post->ID, '_eventosapp_ticket_whatsapp_enabled', true);
+
     wp_nonce_field('eventosapp_extras_ticket_guardar', 'eventosapp_extras_ticket_nonce');
     ?>
     <label>
@@ -80,6 +83,17 @@ function eventosapp_render_metabox_extras_ticket($post) {
     </label>
     <br>
     <small style="color:#666">Permite usar una plantilla de correo y diseños de Wallet diferentes según localidad u otros campos del asistente.</small>
+
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_whatsapp_enabled" value="1" <?php checked($whatsapp_enabled, '1'); ?>>
+        <strong>Activar mensajería de WhatsApp para tickets</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Permite enviar el ticket por WhatsApp junto con el correo cuando la API global esté configurada.
+        Las reglas de envío se configuran en el metabox <strong>WhatsApp Tickets - Reglas de Envío</strong>.
+    </small>
     <br><br>
     <label>
         <input type="checkbox" name="eventosapp_ticket_verify_email" value="1" <?php checked($verify, '1'); ?>>
@@ -191,6 +205,7 @@ add_action('save_post_eventosapp_event', function($post_id){
     update_post_meta($post_id, '_eventosapp_ticket_wallet_android',     isset($_POST['eventosapp_ticket_wallet_android']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_wallet_apple',       isset($_POST['eventosapp_ticket_wallet_apple']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_variants_enabled',   isset($_POST['eventosapp_ticket_variants_enabled']) ? '1' : '0');
+    update_post_meta($post_id, '_eventosapp_ticket_whatsapp_enabled',   isset($_POST['eventosapp_ticket_whatsapp_enabled']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_ticket_verify_email',       isset($_POST['eventosapp_ticket_verify_email']) ? '1' : '0');
 
     // Solo para registro público
