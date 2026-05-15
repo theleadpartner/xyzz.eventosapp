@@ -685,6 +685,10 @@ require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-registrat
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-face-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'eventosapp-qr-manager.php';
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-whatsapp-ticket.php',
+    'eventosapp-whatsapp-ticket.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-generador-masivo-qr.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-edit.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-metrics.php';
