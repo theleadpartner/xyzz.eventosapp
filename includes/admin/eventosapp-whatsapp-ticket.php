@@ -27,9 +27,14 @@ function eventosapp_whatsapp_default_settings() {
         'default_country_code' => '57',
         'request_timeout'      => 20,
         'debug_log'            => '0',
-        'dry_run'              => '0',
-        'test_phone'           => '',
-        'message_intro'        => 'Hola {{nombre}}, este es tu ticket para {{evento_nombre}}.',
+        'dry_run'                => '0',
+        'test_phone'             => '',
+        'test_message_mode'      => 'template',
+        'test_template_name'     => 'hello_world',
+        'test_template_language' => 'en_US',
+        'webhook_verify_token'   => '',
+        'last_test_result'       => [],
+        'message_intro'          => 'Hola {{nombre}}, este es tu ticket para {{evento_nombre}}.',
     ];
 }
 
@@ -42,7 +47,12 @@ function eventosapp_whatsapp_get_settings() {
         $saved = [];
     }
 
-    return wp_parse_args($saved, eventosapp_whatsapp_default_settings());
+    $settings = wp_parse_args($saved, eventosapp_whatsapp_default_settings());
+    if ( empty($settings['webhook_verify_token']) ) {
+        $settings['webhook_verify_token'] = wp_generate_password(32, false, false);
+    }
+
+    return $settings;
 }
 
 /**
@@ -83,6 +93,8 @@ function eventosapp_whatsapp_render_settings_page() {
 
     $settings = eventosapp_whatsapp_get_settings();
     $token_saved = ! empty($settings['access_token']);
+    $webhook_url = admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
+    $last_test = isset($settings['last_test_result']) && is_array($settings['last_test_result']) ? $settings['last_test_result'] : [];
     ?>
     <div class="wrap eventosapp-whatsapp-settings">
         <h1>WhatsApp Tickets</h1>
@@ -107,8 +119,11 @@ function eventosapp_whatsapp_render_settings_page() {
             .evapp-wa-card h2{margin-top:0;}
             .evapp-wa-grid{display:grid;grid-template-columns:220px minmax(280px,520px);gap:12px 18px;align-items:center;}
             .evapp-wa-grid label{font-weight:600;}
-            .evapp-wa-grid input[type="text"],.evapp-wa-grid input[type="password"],.evapp-wa-grid input[type="number"],.evapp-wa-grid textarea{width:100%;}
+            .evapp-wa-grid input[type="text"],.evapp-wa-grid input[type="password"],.evapp-wa-grid input[type="number"],.evapp-wa-grid textarea,.evapp-wa-grid select{width:100%;}
             .evapp-wa-grid textarea{min-height:80px;}
+            .evapp-wa-status-table{border-collapse:collapse;width:100%;max-width:980px;background:#fff;margin-top:8px;}
+            .evapp-wa-status-table th,.evapp-wa-status-table td{border:1px solid #dcdcde;padding:8px;text-align:left;vertical-align:top;}
+            .evapp-wa-status-table th{background:#f6f7f7;width:220px;}
             .evapp-wa-help{color:#646970;font-size:12px;margin:4px 0 0;}
             .evapp-wa-code{font-family:monospace;background:#f6f7f7;padding:2px 5px;border-radius:4px;}
         </style>
@@ -177,6 +192,18 @@ function eventosapp_whatsapp_render_settings_page() {
                             Modo prueba interno: no llama a Meta, solo registra el intento como simulado
                         </label>
                     </div>
+
+                    <label for="evapp_wa_webhook_url">Webhook de estados</label>
+                    <div>
+                        <input type="text" id="evapp_wa_webhook_url" value="<?php echo esc_attr($webhook_url); ?>" readonly onclick="this.select();">
+                        <p class="evapp-wa-help">Usa esta URL en Meta para recibir estados de entrega: enviado, entregado, leído o fallido.</p>
+                    </div>
+
+                    <label for="evapp_wa_webhook_verify_token">Token de verificación webhook</label>
+                    <div>
+                        <input type="text" id="evapp_wa_webhook_verify_token" name="webhook_verify_token" value="<?php echo esc_attr($settings['webhook_verify_token']); ?>" autocomplete="off">
+                        <p class="evapp-wa-help">Copia este mismo token en Meta al configurar el webhook. Si lo dejas vacío, EventosApp generará uno al guardar.</p>
+                    </div>
                 </div>
             </div>
 
@@ -188,7 +215,44 @@ function eventosapp_whatsapp_render_settings_page() {
                         <input type="text" id="evapp_wa_test_phone" name="test_phone" value="<?php echo esc_attr($settings['test_phone']); ?>" placeholder="573001112233">
                         <p class="evapp-wa-help">Guarda este teléfono para usar el botón de prueba.</p>
                     </div>
+
+                    <label for="evapp_wa_test_message_mode">Tipo de mensaje de prueba</label>
+                    <div>
+                        <select id="evapp_wa_test_message_mode" name="test_message_mode">
+                            <option value="template" <?php selected($settings['test_message_mode'], 'template'); ?>>Plantilla aprobada por Meta</option>
+                            <option value="text" <?php selected($settings['test_message_mode'], 'text'); ?>>Texto libre</option>
+                        </select>
+                        <p class="evapp-wa-help">Para iniciar una conversación desde la empresa, usa plantilla. El texto libre solo es confiable si el usuario ya escribió al WhatsApp del negocio dentro de la ventana de atención.</p>
+                    </div>
+
+                    <label for="evapp_wa_test_template_name">Nombre de plantilla de prueba</label>
+                    <div>
+                        <input type="text" id="evapp_wa_test_template_name" name="test_template_name" value="<?php echo esc_attr($settings['test_template_name']); ?>" placeholder="hello_world">
+                        <p class="evapp-wa-help">Para la prueba inicial de Meta normalmente puedes usar <span class="evapp-wa-code">hello_world</span>.</p>
+                    </div>
+
+                    <label for="evapp_wa_test_template_language">Idioma de plantilla</label>
+                    <div>
+                        <input type="text" id="evapp_wa_test_template_language" name="test_template_language" value="<?php echo esc_attr($settings['test_template_language']); ?>" placeholder="en_US">
+                        <p class="evapp-wa-help">Debe coincidir con el idioma configurado en la plantilla. Para <span class="evapp-wa-code">hello_world</span> suele ser <span class="evapp-wa-code">en_US</span>.</p>
+                    </div>
                 </div>
+
+                <?php if ( ! empty($last_test) ) : ?>
+                    <h3>Última prueba registrada</h3>
+                    <table class="evapp-wa-status-table">
+                        <tbody>
+                            <tr><th>Fecha</th><td><?php echo esc_html($last_test['date'] ?? ''); ?></td></tr>
+                            <tr><th>Teléfono</th><td><?php echo esc_html($last_test['to'] ?? ''); ?></td></tr>
+                            <tr><th>Tipo</th><td><?php echo esc_html($last_test['type'] ?? ''); ?></td></tr>
+                            <tr><th>Resultado API</th><td><?php echo ! empty($last_test['ok']) ? 'Aceptado por Meta' : 'Error'; ?></td></tr>
+                            <tr><th>HTTP</th><td><?php echo esc_html((string)($last_test['http_code'] ?? '')); ?></td></tr>
+                            <tr><th>Message ID</th><td><?php echo esc_html($last_test['message_id'] ?? ''); ?></td></tr>
+                            <tr><th>Estado webhook</th><td><?php echo esc_html($last_test['delivery_status'] ?? 'Sin estado recibido'); ?></td></tr>
+                            <tr><th>Mensaje</th><td><?php echo esc_html($last_test['message'] ?? ''); ?></td></tr>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
             </div>
 
             <?php submit_button('Guardar configuración de WhatsApp'); ?>
@@ -228,21 +292,42 @@ add_action('admin_post_eventosapp_whatsapp_save_settings', function() {
         $api_version = 'v23.0';
     }
 
+    $test_message_mode = isset($_POST['test_message_mode']) ? sanitize_key(wp_unslash($_POST['test_message_mode'])) : 'template';
+    if ( ! in_array($test_message_mode, ['template', 'text'], true) ) {
+        $test_message_mode = 'template';
+    }
+
+    $webhook_verify_token = isset($_POST['webhook_verify_token']) ? sanitize_text_field(wp_unslash($_POST['webhook_verify_token'])) : '';
+    if ( $webhook_verify_token === '' ) {
+        $webhook_verify_token = ! empty($current['webhook_verify_token']) ? $current['webhook_verify_token'] : wp_generate_password(32, false, false);
+    }
+
     $settings = [
-        'enabled'              => isset($_POST['enabled']) ? '1' : '0',
-        'api_version'          => $api_version,
-        'phone_number_id'      => isset($_POST['phone_number_id']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['phone_number_id'])) : '',
-        'access_token'         => $access_token,
-        'default_country_code' => isset($_POST['default_country_code']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['default_country_code'])) : '57',
-        'request_timeout'      => isset($_POST['request_timeout']) ? min(60, max(5, absint($_POST['request_timeout']))) : 20,
-        'debug_log'            => isset($_POST['debug_log']) ? '1' : '0',
-        'dry_run'              => isset($_POST['dry_run']) ? '1' : '0',
-        'test_phone'           => isset($_POST['test_phone']) ? sanitize_text_field(wp_unslash($_POST['test_phone'])) : '',
-        'message_intro'        => isset($_POST['message_intro']) ? sanitize_textarea_field(wp_unslash($_POST['message_intro'])) : eventosapp_whatsapp_default_settings()['message_intro'],
+        'enabled'                => isset($_POST['enabled']) ? '1' : '0',
+        'api_version'            => $api_version,
+        'phone_number_id'        => isset($_POST['phone_number_id']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['phone_number_id'])) : '',
+        'access_token'           => $access_token,
+        'default_country_code'   => isset($_POST['default_country_code']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['default_country_code'])) : '57',
+        'request_timeout'        => isset($_POST['request_timeout']) ? min(60, max(5, absint($_POST['request_timeout']))) : 20,
+        'debug_log'              => isset($_POST['debug_log']) ? '1' : '0',
+        'dry_run'                => isset($_POST['dry_run']) ? '1' : '0',
+        'test_phone'             => isset($_POST['test_phone']) ? sanitize_text_field(wp_unslash($_POST['test_phone'])) : '',
+        'test_message_mode'      => $test_message_mode,
+        'test_template_name'     => isset($_POST['test_template_name']) ? sanitize_key(wp_unslash($_POST['test_template_name'])) : 'hello_world',
+        'test_template_language' => isset($_POST['test_template_language']) ? sanitize_text_field(wp_unslash($_POST['test_template_language'])) : 'en_US',
+        'webhook_verify_token'   => $webhook_verify_token,
+        'last_test_result'       => isset($current['last_test_result']) && is_array($current['last_test_result']) ? $current['last_test_result'] : [],
+        'message_intro'          => isset($_POST['message_intro']) ? sanitize_textarea_field(wp_unslash($_POST['message_intro'])) : eventosapp_whatsapp_default_settings()['message_intro'],
     ];
 
     if ( $settings['default_country_code'] === '' ) {
         $settings['default_country_code'] = '57';
+    }
+    if ( $settings['test_template_name'] === '' ) {
+        $settings['test_template_name'] = 'hello_world';
+    }
+    if ( $settings['test_template_language'] === '' ) {
+        $settings['test_template_language'] = 'en_US';
     }
 
     update_option(EVENTOSAPP_WHATSAPP_OPTION, $settings, false);
@@ -274,17 +359,31 @@ add_action('admin_post_eventosapp_whatsapp_send_test', function() {
         exit;
     }
 
-    $result = eventosapp_whatsapp_api_send_message($phone, [
-        'type' => 'text',
-        'text' => [
-            'preview_url' => false,
-            'body' => 'Prueba de WhatsApp Tickets desde EventosApp.',
-        ],
-    ], $settings);
+    $mode = isset($settings['test_message_mode']) && $settings['test_message_mode'] === 'text' ? 'text' : 'template';
+
+    if ( $mode === 'template' ) {
+        $result = eventosapp_whatsapp_api_send_template(
+            $phone,
+            $settings['test_template_name'] ?? 'hello_world',
+            $settings['test_template_language'] ?? 'en_US',
+            [],
+            $settings
+        );
+    } else {
+        $result = eventosapp_whatsapp_api_send_message($phone, [
+            'type' => 'text',
+            'text' => [
+                'preview_url' => false,
+                'body' => 'Prueba de WhatsApp Tickets desde EventosApp.',
+            ],
+        ], $settings);
+    }
+
+    eventosapp_whatsapp_store_last_test_result($phone, $mode, $result);
 
     wp_safe_redirect(add_query_arg([
         'evapp_whatsapp_test' => ! empty($result['ok']) ? '1' : '0',
-        'evapp_whatsapp_msg'  => rawurlencode(! empty($result['message']) ? $result['message'] : (! empty($result['ok']) ? 'Mensaje de prueba enviado.' : 'Error enviando prueba.')),
+        'evapp_whatsapp_msg'  => rawurlencode(! empty($result['message']) ? $result['message'] : (! empty($result['ok']) ? 'Mensaje aceptado por Meta.' : 'Error enviando prueba.')),
     ], admin_url('admin.php?page=eventosapp_whatsapp_tickets')));
     exit;
 });
@@ -650,6 +749,9 @@ function eventosapp_whatsapp_render_ticket_metabox($post) {
     $status = get_post_meta($post->ID, '_eventosapp_whatsapp_last_status', true);
     $last_at = get_post_meta($post->ID, '_eventosapp_whatsapp_last_sent_at', true);
     $last_error = get_post_meta($post->ID, '_eventosapp_whatsapp_last_error', true);
+    $last_message_id = get_post_meta($post->ID, '_eventosapp_whatsapp_last_message_id', true);
+    $delivery_status = get_post_meta($post->ID, '_eventosapp_whatsapp_delivery_status', true);
+    $delivery_at = get_post_meta($post->ID, '_eventosapp_whatsapp_delivery_at', true);
     $history = get_post_meta($post->ID, '_eventosapp_whatsapp_history', true);
     if ( ! is_array($history) ) {
         $history = [];
@@ -664,6 +766,8 @@ function eventosapp_whatsapp_render_ticket_metabox($post) {
     <p><strong>WhatsApp en evento:</strong> <?php echo $event_enabled === '1' ? 'Activo' : 'Inactivo'; ?></p>
     <p><strong>Último estado:</strong> <?php echo $status ? esc_html($status) : 'Sin envíos'; ?></p>
     <?php if ( $last_at ) : ?><p><strong>Último envío:</strong><br><?php echo esc_html($last_at); ?></p><?php endif; ?>
+    <?php if ( $last_message_id ) : ?><p><strong>Message ID Meta:</strong><br><small><?php echo esc_html($last_message_id); ?></small></p><?php endif; ?>
+    <?php if ( $delivery_status ) : ?><p><strong>Estado webhook:</strong><br><?php echo esc_html($delivery_status); ?><?php echo $delivery_at ? '<br><small>' . esc_html($delivery_at) . '</small>' : ''; ?></p><?php endif; ?>
     <?php if ( $last_error ) : ?><p style="color:#b32d2e;"><strong>Error:</strong><br><?php echo esc_html($last_error); ?></p><?php endif; ?>
     <p><a class="button button-secondary" href="<?php echo esc_url($send_url); ?>">Enviar / reenviar WhatsApp</a></p>
     <small>El envío manual respeta la configuración global y el celular del asistente, pero omite las reglas de filtro para permitir reenvíos administrativos.</small>
@@ -833,10 +937,13 @@ function eventosapp_whatsapp_api_send_message($to, array $message_payload, $sett
         'response' => $decoded ?: $body,
     ]);
 
+    $message_id = eventosapp_whatsapp_extract_message_id($decoded);
+
     return [
         'ok' => $ok,
-        'message' => $ok ? 'WhatsApp enviado correctamente.' : eventosapp_whatsapp_extract_api_error($decoded, $body, $code),
+        'message' => $ok ? ($message_id ? 'Mensaje aceptado por Meta. ID: ' . $message_id : 'Mensaje aceptado por Meta.') : eventosapp_whatsapp_extract_api_error($decoded, $body, $code),
         'http_code' => $code,
+        'message_id' => $message_id,
         'response' => $decoded ?: $body,
     ];
 }
@@ -849,6 +956,97 @@ function eventosapp_whatsapp_extract_api_error($decoded, $body, $code) {
         return 'Meta API HTTP ' . (int)$code . ': ' . sanitize_text_field(wp_trim_words($body, 30, '...'));
     }
     return 'Meta API HTTP ' . (int)$code;
+}
+
+function eventosapp_whatsapp_extract_message_id($decoded) {
+    if ( is_array($decoded) && ! empty($decoded['messages'][0]['id']) ) {
+        return sanitize_text_field((string) $decoded['messages'][0]['id']);
+    }
+    return '';
+}
+
+function eventosapp_whatsapp_build_template_payload($template_name, $language_code = 'en_US', $components = []) {
+    $template_name = sanitize_key((string) $template_name);
+    $language_code = sanitize_text_field((string) $language_code);
+
+    if ( $template_name === '' ) {
+        $template_name = 'hello_world';
+    }
+    if ( $language_code === '' ) {
+        $language_code = 'en_US';
+    }
+
+    $template = [
+        'name' => $template_name,
+        'language' => [
+            'code' => $language_code,
+        ],
+    ];
+
+    if ( is_array($components) && ! empty($components) ) {
+        $template['components'] = $components;
+    }
+
+    return [
+        'type' => 'template',
+        'template' => $template,
+    ];
+}
+
+function eventosapp_whatsapp_api_send_template($to, $template_name, $language_code = 'en_US', $components = [], $settings = null) {
+    return eventosapp_whatsapp_api_send_message(
+        $to,
+        eventosapp_whatsapp_build_template_payload($template_name, $language_code, $components),
+        $settings
+    );
+}
+
+function eventosapp_whatsapp_store_last_test_result($phone, $type, $result) {
+    $settings = eventosapp_whatsapp_get_settings();
+    $message_id = eventosapp_whatsapp_extract_message_id($result['response'] ?? []);
+
+    $settings['last_test_result'] = [
+        'date' => current_time('mysql'),
+        'to' => sanitize_text_field($phone),
+        'type' => sanitize_text_field($type),
+        'ok' => ! empty($result['ok']) ? 1 : 0,
+        'http_code' => isset($result['http_code']) ? (int) $result['http_code'] : 0,
+        'message_id' => $message_id,
+        'delivery_status' => '',
+        'message' => sanitize_text_field((string)($result['message'] ?? '')),
+    ];
+
+    update_option(EVENTOSAPP_WHATSAPP_OPTION, $settings, false);
+
+    if ( $message_id !== '' ) {
+        eventosapp_whatsapp_register_message_map($message_id, 0, 'quick_test', $phone);
+    }
+}
+
+function eventosapp_whatsapp_get_message_map() {
+    $map = get_option('eventosapp_whatsapp_message_map', []);
+    return is_array($map) ? $map : [];
+}
+
+function eventosapp_whatsapp_register_message_map($message_id, $ticket_id = 0, $context = '', $phone = '') {
+    $message_id = sanitize_text_field((string)$message_id);
+    if ( $message_id === '' ) {
+        return;
+    }
+
+    $map = eventosapp_whatsapp_get_message_map();
+    $map[$message_id] = [
+        'ticket_id' => absint($ticket_id),
+        'context' => sanitize_text_field((string)$context),
+        'phone' => sanitize_text_field((string)$phone),
+        'created_at' => current_time('mysql'),
+    ];
+
+    if ( count($map) > 500 ) {
+        $map = array_slice($map, -500, null, true);
+    }
+
+    update_option('eventosapp_whatsapp_message_map', $map, false);
 }
 
 /**
@@ -1255,10 +1453,15 @@ function eventosapp_whatsapp_send_ticket($ticket_id, $args = []) {
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_to', $phone);
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_error', '');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_response', $result['response'] ?? []);
+        $message_id = isset($result['message_id']) ? sanitize_text_field((string)$result['message_id']) : eventosapp_whatsapp_extract_message_id($result['response'] ?? []);
+        if ( $message_id !== '' ) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_message_id', $message_id);
+            eventosapp_whatsapp_register_message_map($message_id, $ticket_id, $args['context'] ?? 'unknown', $phone);
+        }
         if ( $source_key !== '' ) {
             update_post_meta($ticket_id, '_eventosapp_whatsapp_last_source_key', $source_key);
         }
-        eventosapp_whatsapp_add_ticket_log($ticket_id, 'enviado', $result['message'] ?? 'WhatsApp enviado.', $args, $phone, $result);
+        eventosapp_whatsapp_add_ticket_log($ticket_id, 'aceptado_meta', $result['message'] ?? 'Mensaje aceptado por Meta.', $args, $phone, $result);
     } else {
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_status', 'error');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_error', $result['message'] ?? 'Error desconocido.');
@@ -1283,6 +1486,7 @@ function eventosapp_whatsapp_add_ticket_log($ticket_id, $status, $message, $args
         'source_key' => sanitize_text_field((string)($args['source_key'] ?? '')),
         'to' => sanitize_text_field($phone),
         'http_code' => isset($result['http_code']) ? (int)$result['http_code'] : 0,
+        'message_id' => isset($result['message_id']) ? sanitize_text_field((string)$result['message_id']) : eventosapp_whatsapp_extract_message_id($result['response'] ?? []),
     ];
 
     if ( count($history) > 50 ) {
@@ -1290,6 +1494,180 @@ function eventosapp_whatsapp_add_ticket_log($ticket_id, $status, $message, $args
     }
 
     update_post_meta($ticket_id, '_eventosapp_whatsapp_history', $history);
+}
+
+/**
+ * Webhook público para verificación y estados de entrega de WhatsApp.
+ * URL en Meta: /wp-admin/admin-post.php?action=eventosapp_whatsapp_webhook
+ */
+add_action('admin_post_nopriv_eventosapp_whatsapp_webhook', 'eventosapp_whatsapp_handle_webhook_request');
+add_action('admin_post_eventosapp_whatsapp_webhook', 'eventosapp_whatsapp_handle_webhook_request');
+
+function eventosapp_whatsapp_handle_webhook_request() {
+    $settings = eventosapp_whatsapp_get_settings();
+
+    if ( isset($_GET['hub_mode']) || isset($_GET['hub.mode']) ) {
+        $mode = isset($_GET['hub_mode']) ? sanitize_text_field(wp_unslash($_GET['hub_mode'])) : sanitize_text_field(wp_unslash($_GET['hub.mode']));
+        $token = isset($_GET['hub_verify_token']) ? sanitize_text_field(wp_unslash($_GET['hub_verify_token'])) : (isset($_GET['hub.verify_token']) ? sanitize_text_field(wp_unslash($_GET['hub.verify_token'])) : '');
+        $challenge = isset($_GET['hub_challenge']) ? sanitize_text_field(wp_unslash($_GET['hub_challenge'])) : (isset($_GET['hub.challenge']) ? sanitize_text_field(wp_unslash($_GET['hub.challenge'])) : '');
+
+        if ( $mode === 'subscribe' && $challenge !== '' && ! empty($settings['webhook_verify_token']) && hash_equals((string)$settings['webhook_verify_token'], (string)$token) ) {
+            status_header(200);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo $challenge;
+            exit;
+        }
+
+        eventosapp_whatsapp_log('Webhook verificación rechazada', [
+            'mode' => $mode,
+            'token_present' => $token !== '',
+            'challenge_present' => $challenge !== '',
+        ]);
+        status_header(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'Forbidden';
+        exit;
+    }
+
+    $raw = file_get_contents('php://input');
+    $payload = json_decode((string)$raw, true);
+
+    if ( ! is_array($payload) ) {
+        eventosapp_whatsapp_log('Webhook recibido con JSON inválido', [
+            'raw' => substr((string)$raw, 0, 500),
+        ]);
+        status_header(400);
+        wp_send_json(['ok' => false, 'message' => 'JSON inválido']);
+    }
+
+    eventosapp_whatsapp_process_webhook_payload($payload);
+
+    status_header(200);
+    wp_send_json(['ok' => true]);
+}
+
+function eventosapp_whatsapp_process_webhook_payload($payload) {
+    $entries = isset($payload['entry']) && is_array($payload['entry']) ? $payload['entry'] : [];
+
+    foreach ( $entries as $entry ) {
+        $changes = isset($entry['changes']) && is_array($entry['changes']) ? $entry['changes'] : [];
+
+        foreach ( $changes as $change ) {
+            $value = isset($change['value']) && is_array($change['value']) ? $change['value'] : [];
+
+            if ( ! empty($value['statuses']) && is_array($value['statuses']) ) {
+                foreach ( $value['statuses'] as $status ) {
+                    if ( is_array($status) ) {
+                        eventosapp_whatsapp_process_webhook_status($status);
+                    }
+                }
+            }
+
+            if ( ! empty($value['messages']) && is_array($value['messages']) ) {
+                foreach ( $value['messages'] as $message ) {
+                    if ( is_array($message) ) {
+                        eventosapp_whatsapp_process_webhook_inbound_message($message);
+                    }
+                }
+            }
+        }
+    }
+}
+
+function eventosapp_whatsapp_process_webhook_status($status) {
+    $message_id = ! empty($status['id']) ? sanitize_text_field((string)$status['id']) : '';
+    $delivery_status = ! empty($status['status']) ? sanitize_text_field((string)$status['status']) : '';
+    $recipient_id = ! empty($status['recipient_id']) ? sanitize_text_field((string)$status['recipient_id']) : '';
+    $timestamp = ! empty($status['timestamp']) ? absint($status['timestamp']) : 0;
+    $delivery_at = $timestamp ? date_i18n('Y-m-d H:i:s', $timestamp) : current_time('mysql');
+
+    if ( $message_id === '' || $delivery_status === '' ) {
+        return;
+    }
+
+    $error_message = '';
+    if ( ! empty($status['errors'][0]) && is_array($status['errors'][0]) ) {
+        $error = $status['errors'][0];
+        $error_message = sanitize_text_field(trim(($error['code'] ?? '') . ' ' . ($error['title'] ?? '') . ' ' . ($error['message'] ?? '')));
+    }
+
+    $map = eventosapp_whatsapp_get_message_map();
+    $mapped = isset($map[$message_id]) && is_array($map[$message_id]) ? $map[$message_id] : [];
+    $ticket_id = ! empty($mapped['ticket_id']) ? absint($mapped['ticket_id']) : 0;
+
+    eventosapp_whatsapp_log('Webhook estado WhatsApp', [
+        'message_id' => $message_id,
+        'status' => $delivery_status,
+        'recipient_id' => $recipient_id,
+        'ticket_id' => $ticket_id,
+        'error' => $error_message,
+    ]);
+
+    if ( $ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket' ) {
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_status', $delivery_status);
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_at', $delivery_at);
+
+        if ( $delivery_status === 'failed' && $error_message !== '' ) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_status', 'fallido_webhook');
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_error', $error_message);
+        }
+
+        eventosapp_whatsapp_add_ticket_log($ticket_id, 'webhook_' . $delivery_status, $error_message ?: 'Estado recibido por webhook: ' . $delivery_status, [
+            'context' => 'webhook_status',
+            'source_key' => $message_id,
+        ], $recipient_id, [
+            'http_code' => 0,
+            'message_id' => $message_id,
+        ]);
+    } elseif ( ! empty($mapped['context']) && $mapped['context'] === 'quick_test' ) {
+        eventosapp_whatsapp_update_last_test_delivery_status($message_id, $delivery_status, $error_message);
+    }
+}
+
+function eventosapp_whatsapp_update_last_test_delivery_status($message_id, $delivery_status, $error_message = '') {
+    $settings = eventosapp_whatsapp_get_settings();
+    if ( empty($settings['last_test_result']) || ! is_array($settings['last_test_result']) ) {
+        return;
+    }
+    if ( empty($settings['last_test_result']['message_id']) || $settings['last_test_result']['message_id'] !== $message_id ) {
+        return;
+    }
+
+    $settings['last_test_result']['delivery_status'] = $delivery_status;
+    if ( $error_message !== '' ) {
+        $settings['last_test_result']['message'] = $error_message;
+    }
+    update_option(EVENTOSAPP_WHATSAPP_OPTION, $settings, false);
+}
+
+function eventosapp_whatsapp_process_webhook_inbound_message($message) {
+    $from = ! empty($message['from']) ? sanitize_text_field((string)$message['from']) : '';
+    if ( $from === '' ) {
+        return;
+    }
+
+    $inbound = get_option('eventosapp_whatsapp_last_inbound_by_phone', []);
+    if ( ! is_array($inbound) ) {
+        $inbound = [];
+    }
+
+    $inbound[$from] = [
+        'last_at' => current_time('mysql'),
+        'message_id' => ! empty($message['id']) ? sanitize_text_field((string)$message['id']) : '',
+        'type' => ! empty($message['type']) ? sanitize_text_field((string)$message['type']) : '',
+    ];
+
+    if ( count($inbound) > 500 ) {
+        $inbound = array_slice($inbound, -500, null, true);
+    }
+
+    update_option('eventosapp_whatsapp_last_inbound_by_phone', $inbound, false);
+
+    eventosapp_whatsapp_log('Webhook mensaje entrante WhatsApp', [
+        'from' => $from,
+        'message_id' => $inbound[$from]['message_id'],
+        'type' => $inbound[$from]['type'],
+    ]);
 }
 
 /**
