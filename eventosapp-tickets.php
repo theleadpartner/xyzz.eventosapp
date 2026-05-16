@@ -125,6 +125,21 @@ add_action('add_meta_boxes', function() {
         'high'
     );
 
+
+    // === Metabox: Envío de ticket por WhatsApp bajo demanda ===
+    // La función callback vive en includes/admin/eventosapp-whatsapp-ticket.php.
+    // Se registra aquí para mantener centralizada la pantalla de edición del CPT eventosapp_ticket.
+    if ( function_exists('eventosapp_whatsapp_render_ticket_metabox') ) {
+        add_meta_box(
+            'eventosapp_ticket_whatsapp',
+            'Enviar Ticket por WhatsApp',
+            'eventosapp_whatsapp_render_ticket_metabox',
+            'eventosapp_ticket',
+            'side',
+            'high'
+        );
+    }
+
     add_meta_box(
         'eventosapp_ticket_registration_status_embed',
         'Consulta externa del ticket',
