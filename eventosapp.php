@@ -689,6 +689,10 @@ eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-ticket.php',
     'eventosapp-whatsapp-ticket.php',
 ]);
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-whatsapp-templates.php',
+    'eventosapp-whatsapp-templates.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-generador-masivo-qr.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-edit.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-metrics.php';
