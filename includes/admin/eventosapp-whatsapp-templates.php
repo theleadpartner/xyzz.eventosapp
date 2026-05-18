@@ -31,27 +31,61 @@ add_action('admin_menu', function() {
 }, 21);
 
 /**
- * URL base segura para botones de plantilla.
+ * URL pública frontal para acciones de ticket usadas desde WhatsApp.
+ * No usa /wp-admin/admin-post.php para evitar que el enlace dependa de una sesión iniciada.
  */
-function eventosapp_whatsapp_templates_button_url($action) {
+function eventosapp_whatsapp_templates_public_action_url($action, $ticket_public = '{{1}}') {
     $action = sanitize_key((string) $action);
-
-    $map = [
-        'ticket_landing' => 'eventosapp_whatsapp_ticket_landing',
-        'ticket_ics'     => 'eventosapp_whatsapp_ticket_ics',
-        'virtual_access' => 'eventosapp_whatsapp_virtual_access',
-    ];
-
-    if ( ! isset($map[$action]) ) {
+    if ( ! in_array($action, ['ticket_landing', 'ticket_ics', 'virtual_access'], true) ) {
         $action = 'ticket_landing';
     }
 
+    $ticket_public = (string) $ticket_public;
     $url = add_query_arg([
-        'action' => $map[$action],
-        'ticket' => '{{1}}',
-    ], admin_url('admin-post.php'));
+        'eventosapp_whatsapp_public_action' => $action,
+        'ticket' => $ticket_public,
+    ], home_url('/'));
 
     return str_replace(['%7B%7B1%7D%7D', '%7b%7b1%7d%7d'], '{{1}}', $url);
+}
+
+/**
+ * URL pública específica para la landing de ticket.
+ */
+function eventosapp_whatsapp_templates_public_ticket_landing_url($ticket_public = '{{1}}') {
+    return eventosapp_whatsapp_templates_public_action_url('ticket_landing', $ticket_public);
+}
+
+/**
+ * URL base segura para botones de plantilla.
+ */
+function eventosapp_whatsapp_templates_button_url($action) {
+    return eventosapp_whatsapp_templates_public_action_url($action, '{{1}}');
+}
+
+/**
+ * Convierte URLs antiguas basadas en /wp-admin/admin-post.php a la ruta pública frontal.
+ */
+function eventosapp_whatsapp_templates_normalize_public_button_url($url) {
+    $url = (string) $url;
+    if ( $url === '' || strpos($url, 'admin-post.php') === false || strpos($url, 'eventosapp_whatsapp_') === false ) {
+        return $url;
+    }
+
+    $legacy_map = [
+        'eventosapp_whatsapp_ticket_landing' => 'ticket_landing',
+        'eventosapp_whatsapp_ticket_ics'     => 'ticket_ics',
+        'eventosapp_whatsapp_virtual_access' => 'virtual_access',
+    ];
+
+    foreach ( $legacy_map as $legacy_action => $public_action ) {
+        if ( strpos($url, 'action=' . $legacy_action) !== false || strpos($url, 'action=' . rawurlencode($legacy_action)) !== false ) {
+            $ticket_placeholder = strpos($url, 'ticket_demo_123') !== false ? 'ticket_demo_123' : '{{1}}';
+            return eventosapp_whatsapp_templates_public_action_url($public_action, $ticket_placeholder);
+        }
+    }
+
+    return $url;
 }
 
 /**
@@ -84,8 +118,8 @@ function eventosapp_whatsapp_templates_default_records() {
             'header_sample_file_type' => '',
             'header_sample_file_size' => '',
             'header_sample_uploaded_at' => '',
-            'body_text'             => "🎟️ Hola {{1}}, tu inscripción a *{{2}}* está confirmada.\n\n✅ Presenta este QR en el ingreso al evento.\n\n📌 *Detalles de tu inscripción:*\n\n🎫 *Evento:* {{2}}\n📅 *Fecha:* {{3}}\n🕒 *Hora:* {{4}}\n📍 *Lugar:* {{5}}\n👥 *Modalidad:* Presencial\n🏢 *Organizador:* {{6}}\n\n🔗 En el siguiente enlace podrás encontrar:\n\n🍎 Ticket para *Apple Wallet*\n💳 Ticket para *Google Wallet*\n📄 Ticket descargable en *PDF*\n📆 Recordatorio para agregar a tu agenda\n\n✨ Te esperamos.",
-            'body_examples'         => "María Pérez\nEvento Demo\n20 de mayo de 2026\n8:00 a. m.\nCentro de Convenciones\nEventosApp",
+            'body_text'             => "Hola {{1}}, tu inscripción para *{{2}}* está confirmada.\n\n🎟️ *Evento:* {{2}}\n👤 *Organizador:* {{7}}\n📅 *Fecha:* {{3}}\n⏰ *Hora:* {{4}}\n📍 *Lugar:* {{5}}\n🎫 *Modalidad:* Presencial\n\nEl QR de ingreso se muestra en este mensaje. Para ver Wallet, PDF, calendario y más detalles, usa el botón Ver mi ticket.",
+            'body_examples'         => "María Pérez\nEvento Demo\n20 de mayo de 2026\n8:00 a. m.\nCentro de Convenciones\nhttps://demo.eventosapp.com/ticket_demo_123\nEventosApp",
             'footer_text'           => 'EventosApp',
             'button_1_text'         => 'Ver mi ticket',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('ticket_landing'),
@@ -120,8 +154,8 @@ function eventosapp_whatsapp_templates_default_records() {
             'header_sample_file_type' => '',
             'header_sample_file_size' => '',
             'header_sample_uploaded_at' => '',
-            'body_text'             => "Hola {{1}}, tu inscripción para *{{2}}* está confirmada.\n\n🎟️ *Evento:* {{2}}\n👤 *Organizador:* {{6}}\n📅 *Fecha:* {{3}}\n⏰ *Hora:* {{4}}\n💻 *Plataforma:* {{5}}\n🎫 *Modalidad:* Virtual\n\nUsa el botón Ingresar al evento para acceder a la sesión virtual. El enlace estará disponible según la configuración del evento.",
-            'body_examples'         => "María Pérez\nEvento Demo Virtual\n20 de mayo de 2026\n8:00 a. m.\nZoom\nEventosApp",
+            'body_text'             => "Hola {{1}}, tu inscripción para *{{2}}* está confirmada.\n\n🎟️ *Evento:* {{2}}\n👤 *Organizador:* {{7}}\n📅 *Fecha:* {{3}}\n⏰ *Hora:* {{4}}\n💻 *Plataforma:* {{5}}\n🎫 *Modalidad:* Virtual\n\nUsa el botón Ingresar al evento para acceder a la sesión virtual. El enlace estará disponible según la configuración del evento.",
+            'body_examples'         => "María Pérez\nEvento Demo Virtual\n20 de mayo de 2026\n8:00 a. m.\nZoom\nhttps://demo.eventosapp.com/acceso_virtual\nEventosApp",
             'footer_text'           => 'EventosApp',
             'button_1_text'         => 'Ingresar al evento',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('virtual_access'),
@@ -190,6 +224,31 @@ function eventosapp_whatsapp_templates_get_settings() {
                 foreach ( ['body_text', 'body_examples', 'header_format', 'footer_text', 'button_1_text', 'button_1_url', 'button_1_example', 'button_2_text', 'button_2_url', 'button_2_example'] as $migrated_field ) {
                     $settings['templates'][$default_id][$migrated_field] = $default_template[$migrated_field];
                 }
+                $changed = true;
+            }
+        }
+    }
+
+    foreach ( $settings['templates'] as $template_id => $template ) {
+        if ( ! is_array($template) ) {
+            continue;
+        }
+
+        foreach ( [1, 2] as $button_number ) {
+            $url_key = 'button_' . $button_number . '_url';
+            $example_key = 'button_' . $button_number . '_example';
+
+            $current_url = (string)($template[$url_key] ?? '');
+            $normalized_url = eventosapp_whatsapp_templates_normalize_public_button_url($current_url);
+            if ( $normalized_url !== $current_url ) {
+                $settings['templates'][$template_id][$url_key] = $normalized_url;
+                $changed = true;
+            }
+
+            $current_example = (string)($template[$example_key] ?? '');
+            $normalized_example = eventosapp_whatsapp_templates_normalize_public_button_url($current_example);
+            if ( $normalized_example !== $current_example ) {
+                $settings['templates'][$template_id][$example_key] = $normalized_example;
                 $changed = true;
             }
         }
@@ -298,9 +357,6 @@ function eventosapp_whatsapp_templates_body_examples_to_array($body_text, $examp
         '20 de mayo de 2026',
         '8:00 a. m.',
         'Centro de Convenciones',
-        'EventosApp',
-        'EventosApp',
-        'Presencial',
         'https://example.com/demo',
     ];
 
@@ -1147,7 +1203,7 @@ function eventosapp_whatsapp_templates_render_page() {
                     <label for="evapp_wa_tpl_default_qr_header_image">Imagen por defecto para cabezote QR WhatsApp</label>
                     <div>
                         <input type="text" id="evapp_wa_tpl_default_qr_header_image" class="evapp-wa-tpl-media-url" name="default_qr_header_image" value="<?php echo esc_attr($settings['default_qr_header_image'] ?? ''); ?>" placeholder="https://.../cabezote-whatsapp.jpg">
-                        <p class="evapp-wa-tpl-help">Se usará encima del QR enviado por WhatsApp cuando el ticket no tenga un cabezote personalizado.</p>
+                        <p class="evapp-wa-tpl-help">Se usará encima del QR enviado por WhatsApp cuando el evento no tenga un cabezote personalizado. Medida exacta recomendada: 1000 x 160 px, en JPG o PNG. Esta imagen no reemplaza el QR.</p>
                         <p><button type="button" class="button evapp-wa-tpl-media-button" data-target="#evapp_wa_tpl_default_qr_header_image">Seleccionar imagen</button> <button type="button" class="button evapp-wa-tpl-media-clear" data-target="#evapp_wa_tpl_default_qr_header_image">Quitar</button></p>
                         <?php if ( ! empty($settings['default_qr_header_image']) ) : ?>
                             <div class="evapp-wa-tpl-image-preview"><img src="<?php echo esc_url($settings['default_qr_header_image']); ?>" alt="Cabezote QR"><span>Imagen activa para cabezote de QR WhatsApp.</span></div>
@@ -1464,7 +1520,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 <label for="evapp_tpl_body">Cuerpo</label>
                 <div>
                     <textarea id="evapp_tpl_body" name="template[body_text]" required><?php echo esc_textarea($template['body_text'] ?? ''); ?></textarea>
-                    <p class="evapp-wa-tpl-help">Variables aprobadas por Meta: <span class="evapp-wa-tpl-code">{{1}}</span> nombre del asistente, <span class="evapp-wa-tpl-code">{{2}}</span> evento, <span class="evapp-wa-tpl-code">{{3}}</span> fecha, <span class="evapp-wa-tpl-code">{{4}}</span> hora, <span class="evapp-wa-tpl-code">{{5}}</span> lugar o plataforma, <span class="evapp-wa-tpl-code">{{6}}</span> organizador.</p>
+                    <p class="evapp-wa-tpl-help">Variables aprobadas por Meta: <span class="evapp-wa-tpl-code">{{1}}</span> nombre del asistente, <span class="evapp-wa-tpl-code">{{2}}</span> evento, <span class="evapp-wa-tpl-code">{{3}}</span> fecha, <span class="evapp-wa-tpl-code">{{4}}</span> hora, <span class="evapp-wa-tpl-code">{{5}}</span> lugar o plataforma.</p>
                 </div>
 
                 <label for="evapp_tpl_body_examples">Ejemplos del cuerpo</label>
@@ -1816,7 +1872,11 @@ function eventosapp_whatsapp_templates_get_ticket_assets($ticket_id) {
     $platform_url = function_exists('eventosapp_get_ticket_virtual_platform_url') ? eventosapp_get_ticket_virtual_platform_url($ticket_id) : ($event_id ? get_post_meta($event_id, '_eventosapp_virtual_url', true) : '');
 
     $landing_header = function_exists('eventosapp_whatsapp_get_landing_header_image') ? eventosapp_whatsapp_get_landing_header_image($ticket_id, $event_id) : '';
-    $message_image  = function_exists('eventosapp_whatsapp_prepare_message_image_url') ? eventosapp_whatsapp_prepare_message_image_url($ticket_id, $qr_url) : $qr_url;
+
+    // En la landing pública solo se debe mostrar el QR limpio. La composición
+    // cabezote + QR se reserva exclusivamente para el encabezado multimedia del
+    // mensaje de WhatsApp presencial.
+    $message_image  = $qr_url;
 
     return [
         'qr' => esc_url_raw($qr_url),
@@ -1836,6 +1896,37 @@ function eventosapp_whatsapp_templates_get_ticket_assets($ticket_id) {
  */
 add_action('admin_post_nopriv_eventosapp_whatsapp_ticket_landing', 'eventosapp_whatsapp_templates_render_public_ticket_landing');
 add_action('admin_post_eventosapp_whatsapp_ticket_landing', 'eventosapp_whatsapp_templates_render_public_ticket_landing');
+add_action('template_redirect', 'eventosapp_whatsapp_templates_public_action_router', 0);
+
+/**
+ * Router público frontal para los enlaces de WhatsApp.
+ * Permite abrir la landing, el ICS y el acceso virtual sin pasar por /wp-admin/.
+ */
+function eventosapp_whatsapp_templates_public_action_router() {
+    if ( is_admin() ) {
+        return;
+    }
+
+    $action = isset($_GET['eventosapp_whatsapp_public_action']) ? sanitize_key(wp_unslash($_GET['eventosapp_whatsapp_public_action'])) : '';
+    if ( $action === '' ) {
+        return;
+    }
+
+    if ( $action === 'ticket_landing' ) {
+        eventosapp_whatsapp_templates_render_public_ticket_landing();
+    }
+
+    if ( $action === 'ticket_ics' ) {
+        eventosapp_whatsapp_templates_redirect_ticket_ics();
+    }
+
+    if ( $action === 'virtual_access' ) {
+        eventosapp_whatsapp_templates_redirect_virtual_access();
+    }
+
+    status_header(404);
+    wp_die('Acción pública de WhatsApp no encontrada.');
+}
 
 function eventosapp_whatsapp_templates_render_public_ticket_landing() {
     $ticket_id = eventosapp_whatsapp_templates_resolve_ticket_from_request();
@@ -1850,6 +1941,15 @@ function eventosapp_whatsapp_templates_render_public_ticket_landing() {
     $ticket_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
     $modalidad = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
     $is_virtual = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id);
+
+    // Para tickets virtuales, cualquier botón genérico "Ver mi ticket" debe llevar
+    // a la landing virtual pública ya configurada para el evento, no a la ficha
+    // de ticket presencial/mixta ni al enlace técnico del admin.
+    if ( $is_virtual && ! empty($assets['virtual_landing']) ) {
+        wp_safe_redirect($assets['virtual_landing']);
+        exit;
+    }
+
     $fecha = function_exists('eventosapp_whatsapp_get_event_date_label') ? eventosapp_whatsapp_get_event_date_label($event_id) : '';
     $hora_inicio = $event_id ? get_post_meta($event_id, '_eventosapp_hora_inicio', true) : '';
     $hora_cierre = $event_id ? get_post_meta($event_id, '_eventosapp_hora_cierre', true) : '';
@@ -1910,11 +2010,7 @@ function eventosapp_whatsapp_templates_render_public_ticket_landing() {
                     <h1 class="evapp-ticket-title"><?php echo esc_html($event_title); ?></h1>
                     <p class="evapp-ticket-subtitle">Tu inscripción está confirmada. Conserva esta página para consultar los enlaces principales del ticket.</p>
 
-                    <?php if ( ! empty($assets['message_image']) && ! $is_virtual ) : ?>
-                        <div class="evapp-ticket-media">
-                            <img src="<?php echo esc_url($assets['message_image']); ?>" alt="QR de ingreso">
-                        </div>
-                    <?php elseif ( ! empty($assets['qr']) && ! $is_virtual ) : ?>
+                    <?php if ( ! empty($assets['qr']) && ! $is_virtual ) : ?>
                         <div class="evapp-ticket-media">
                             <img src="<?php echo esc_url($assets['qr']); ?>" alt="QR de ingreso">
                         </div>
