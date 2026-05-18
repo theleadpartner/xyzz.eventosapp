@@ -80,6 +80,10 @@ function eventosapp_whatsapp_templates_default_records() {
             'header_format'         => 'IMAGE',
             'header_text'           => '',
             'header_sample_handle'  => '',
+            'header_sample_file_name' => '',
+            'header_sample_file_type' => '',
+            'header_sample_file_size' => '',
+            'header_sample_uploaded_at' => '',
             'body_text'             => "Hola {{1}}, tu inscripción para {{2}} está confirmada.\n\nFecha: {{3}}\nHora: {{4}}\nLugar: {{5}}\nModalidad: Presencial\n\nEl QR de ingreso se muestra en este mensaje. Para ver Wallet, PDF, calendario y más detalles, usa el botón Ver mi ticket.",
             'body_examples'         => "María Pérez\nEvento Demo\n20 de mayo de 2026\n8:00 a. m.\nCentro de Convenciones",
             'footer_text'           => 'EventosApp',
@@ -112,6 +116,10 @@ function eventosapp_whatsapp_templates_default_records() {
             'header_format'         => 'NONE',
             'header_text'           => '',
             'header_sample_handle'  => '',
+            'header_sample_file_name' => '',
+            'header_sample_file_type' => '',
+            'header_sample_file_size' => '',
+            'header_sample_uploaded_at' => '',
             'body_text'             => "Hola {{1}}, tu inscripción para {{2}} está confirmada.\n\nFecha: {{3}}\nHora: {{4}}\nPlataforma: {{5}}\nModalidad: Virtual\n\nUsa el botón Ingresar al evento para acceder a la sesión virtual. El enlace estará disponible según la configuración del evento.",
             'body_examples'         => "María Pérez\nEvento Demo Virtual\n20 de mayo de 2026\n8:00 a. m.\nZoom",
             'footer_text'           => 'EventosApp',
@@ -141,6 +149,7 @@ function eventosapp_whatsapp_templates_default_records() {
 function eventosapp_whatsapp_templates_default_settings() {
     return [
         'waba_id'      => '',
+        'app_id'       => '',
         'templates'    => eventosapp_whatsapp_templates_default_records(),
         'last_sync_at' => '',
         'last_message' => '',
@@ -224,6 +233,26 @@ function eventosapp_whatsapp_templates_sanitize_url_template($url) {
     $url = str_replace($placeholder, '{{1}}', $url);
 
     return $url;
+}
+
+/**
+ * Sanitiza el Header Sample Handle generado por Meta.
+ *
+ * Este valor no es una URL pública. Meta lo devuelve después de subir
+ * una imagen de muestra con Resumable Upload API y suele venir como una
+ * cadena larga con prefijos internos, por ejemplo "4::...".
+ */
+function eventosapp_whatsapp_templates_sanitize_header_handle($handle) {
+    $handle = trim((string) $handle);
+    if ( $handle === '' ) {
+        return '';
+    }
+
+    $handle = wp_strip_all_tags($handle);
+    $handle = preg_replace('/[\r\n\t]+/', '', $handle);
+    $handle = trim($handle);
+
+    return $handle;
 }
 
 /**
@@ -312,7 +341,11 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'title'                => sanitize_text_field($raw['title'] ?? ($existing['title'] ?? '')),
         'header_format'        => $header_format,
         'header_text'          => sanitize_text_field($raw['header_text'] ?? ($existing['header_text'] ?? '')),
-        'header_sample_handle' => sanitize_text_field($raw['header_sample_handle'] ?? ($existing['header_sample_handle'] ?? '')),
+        'header_sample_handle' => eventosapp_whatsapp_templates_sanitize_header_handle($raw['header_sample_handle'] ?? ($existing['header_sample_handle'] ?? '')),
+        'header_sample_file_name' => sanitize_file_name($existing['header_sample_file_name'] ?? ''),
+        'header_sample_file_type' => sanitize_mime_type($existing['header_sample_file_type'] ?? ''),
+        'header_sample_file_size' => absint($existing['header_sample_file_size'] ?? 0),
+        'header_sample_uploaded_at' => sanitize_text_field($existing['header_sample_uploaded_at'] ?? ''),
         'body_text'            => sanitize_textarea_field($raw['body_text'] ?? ($existing['body_text'] ?? '')),
         'body_examples'        => sanitize_textarea_field($raw['body_examples'] ?? ($existing['body_examples'] ?? '')),
         'footer_text'          => sanitize_text_field($raw['footer_text'] ?? ($existing['footer_text'] ?? '')),
@@ -366,8 +399,12 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
         $errors[] = 'Falta el cuerpo de la plantilla.';
     }
 
-    if ( ! empty($template['header_format']) && $template['header_format'] === 'IMAGE' && empty($template['header_sample_handle']) ) {
-        $errors[] = 'La plantilla usa encabezado de imagen. Para enviarla a Meta debes pegar un Header Sample Handle válido.';
+    if ( ! empty($template['header_format']) && $template['header_format'] === 'IMAGE' ) {
+        if ( empty($template['header_sample_handle']) ) {
+            $errors[] = 'La plantilla usa encabezado de imagen. Para enviarla a Meta debes subir una imagen de muestra para generar el Header Sample Handle, o pegar un handle válido generado por Meta.';
+        } elseif ( preg_match('/^https?:\/\//i', (string) $template['header_sample_handle']) ) {
+            $errors[] = 'El Header Sample Handle no puede ser una URL pública. Debe ser el handle que Meta devuelve después de subir la imagen de muestra con Resumable Upload API.';
+        }
     }
 
     $buttons = 0;
@@ -566,6 +603,253 @@ function eventosapp_whatsapp_templates_extract_api_error($decoded, $raw_body, $c
         return 'Meta API: ' . sanitize_text_field($decoded['error']['message']);
     }
     return 'Meta API HTTP ' . (int) $code;
+}
+
+/**
+ * Indica si el formulario recibió un archivo de muestra para encabezado.
+ */
+function eventosapp_whatsapp_templates_has_header_sample_upload() {
+    return ! empty($_FILES['header_sample_file'])
+        && is_array($_FILES['header_sample_file'])
+        && isset($_FILES['header_sample_file']['error'])
+        && (int) $_FILES['header_sample_file']['error'] !== UPLOAD_ERR_NO_FILE;
+}
+
+/**
+ * Valida el archivo local antes de subirlo a Meta como muestra de encabezado.
+ */
+function eventosapp_whatsapp_templates_validate_header_sample_file($file) {
+    if ( empty($file) || ! is_array($file) ) {
+        return new WP_Error('evapp_wa_header_file_missing', 'No se recibió el archivo de muestra.');
+    }
+
+    $error = isset($file['error']) ? (int) $file['error'] : UPLOAD_ERR_NO_FILE;
+    if ( $error === UPLOAD_ERR_NO_FILE ) {
+        return new WP_Error('evapp_wa_header_file_missing', 'No se seleccionó ningún archivo de muestra.');
+    }
+
+    if ( $error !== UPLOAD_ERR_OK ) {
+        return new WP_Error('evapp_wa_header_file_upload_error', 'WordPress no pudo recibir el archivo de muestra. Código de carga: ' . $error . '.');
+    }
+
+    $tmp_name = isset($file['tmp_name']) ? (string) $file['tmp_name'] : '';
+    if ( $tmp_name === '' || ! is_uploaded_file($tmp_name) || ! file_exists($tmp_name) || ! is_readable($tmp_name) ) {
+        return new WP_Error('evapp_wa_header_file_invalid_tmp', 'El archivo temporal de la muestra no está disponible o no se puede leer.');
+    }
+
+    $size = isset($file['size']) ? absint($file['size']) : filesize($tmp_name);
+    if ( $size <= 0 ) {
+        return new WP_Error('evapp_wa_header_file_empty', 'La imagen de muestra está vacía.');
+    }
+
+    $max_size = 5 * 1024 * 1024;
+    if ( $size > $max_size ) {
+        return new WP_Error('evapp_wa_header_file_too_large', 'La imagen de muestra supera el máximo recomendado de 5 MB para encabezados de imagen de WhatsApp.');
+    }
+
+    $original_name = isset($file['name']) ? sanitize_file_name((string) $file['name']) : 'eventosapp-header-sample.png';
+    if ( $original_name === '' ) {
+        $original_name = 'eventosapp-header-sample.png';
+    }
+
+    $allowed_mimes = [
+        'jpg'  => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png'  => 'image/png',
+    ];
+
+    $check = wp_check_filetype_and_ext($tmp_name, $original_name, $allowed_mimes);
+    $mime = ! empty($check['type']) ? $check['type'] : '';
+
+    if ( $mime === '' && function_exists('finfo_open') ) {
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        if ( $finfo ) {
+            $mime = (string) finfo_file($finfo, $tmp_name);
+            finfo_close($finfo);
+        }
+    }
+
+    if ( ! in_array($mime, ['image/jpeg', 'image/png'], true) ) {
+        return new WP_Error('evapp_wa_header_file_type', 'La muestra para encabezado de imagen debe ser JPG/JPEG o PNG. Meta no acepta una URL pública ni otro tipo de archivo para este campo.');
+    }
+
+    if ( ! preg_match('/\.(jpe?g|png)$/i', $original_name) ) {
+        $original_name .= $mime === 'image/png' ? '.png' : '.jpg';
+    }
+
+    return [
+        'tmp_name' => $tmp_name,
+        'name'     => $original_name,
+        'type'     => $mime,
+        'size'     => $size,
+    ];
+}
+
+/**
+ * Sube una imagen de muestra a Meta y devuelve el Header Sample Handle.
+ */
+function eventosapp_whatsapp_templates_upload_header_sample_to_meta($file) {
+    $settings = eventosapp_whatsapp_templates_get_settings();
+    $wa_settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
+
+    $app_id = preg_replace('/\D+/', '', (string)($settings['app_id'] ?? ''));
+    $access_token = trim((string)($wa_settings['access_token'] ?? ''));
+    $api_version  = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($wa_settings['api_version'] ?? 'v23.0'));
+    $timeout      = min(60, max(5, absint($wa_settings['request_timeout'] ?? 20)));
+
+    if ( $api_version === '' ) {
+        $api_version = 'v23.0';
+    }
+
+    if ( $app_id === '' ) {
+        return [
+            'ok' => false,
+            'message' => 'Falta configurar el Meta App ID en la conexión de plantillas. Este ID se necesita para crear la sesión de Resumable Upload y generar el Header Sample Handle.',
+        ];
+    }
+
+    if ( $access_token === '' ) {
+        return [
+            'ok' => false,
+            'message' => 'Falta Access Token en WhatsApp Tickets. El mismo token se usa para subir la muestra y crear la plantilla.',
+        ];
+    }
+
+    $validated = eventosapp_whatsapp_templates_validate_header_sample_file($file);
+    if ( is_wp_error($validated) ) {
+        return [
+            'ok' => false,
+            'message' => $validated->get_error_message(),
+        ];
+    }
+
+    if ( ! empty($wa_settings['dry_run']) && $wa_settings['dry_run'] === '1' ) {
+        return [
+            'ok' => true,
+            'message' => 'Modo prueba interno: muestra simulada. No se subió archivo a Meta.',
+            'handle' => 'dry_run_header_handle_' . substr(md5($validated['name'] . $validated['size']), 0, 16),
+            'file' => $validated,
+            'response' => [
+                'dry_run' => true,
+            ],
+        ];
+    }
+
+    $session_endpoint = sprintf('https://graph.facebook.com/%s/%s/uploads', rawurlencode($api_version), rawurlencode($app_id));
+    $session_endpoint = add_query_arg([
+        'file_name'   => $validated['name'],
+        'file_length' => $validated['size'],
+        'file_type'   => $validated['type'],
+        'access_token' => $access_token,
+    ], $session_endpoint);
+
+    $session_response = wp_remote_post($session_endpoint, [
+        'timeout' => $timeout,
+        'headers' => [
+            'Content-Type' => 'application/json',
+        ],
+    ]);
+
+    if ( is_wp_error($session_response) ) {
+        return [
+            'ok' => false,
+            'message' => 'No se pudo crear la sesión de carga en Meta: ' . $session_response->get_error_message(),
+        ];
+    }
+
+    $session_code = (int) wp_remote_retrieve_response_code($session_response);
+    $session_body = (string) wp_remote_retrieve_body($session_response);
+    $session_decoded = json_decode($session_body, true);
+    $session_ok = $session_code >= 200 && $session_code < 300 && is_array($session_decoded) && ! empty($session_decoded['id']);
+
+    if ( function_exists('eventosapp_whatsapp_log') ) {
+        eventosapp_whatsapp_log($session_ok ? 'Header Sample: sesión de carga creada' : 'Header Sample: error creando sesión', [
+            'http_code' => $session_code,
+            'file_name' => $validated['name'],
+            'file_type' => $validated['type'],
+            'file_size' => $validated['size'],
+            'response' => $session_decoded ?: $session_body,
+        ]);
+    }
+
+    if ( ! $session_ok ) {
+        return [
+            'ok' => false,
+            'message' => eventosapp_whatsapp_templates_extract_api_error($session_decoded, $session_body, $session_code),
+            'response' => $session_decoded ?: $session_body,
+        ];
+    }
+
+    $upload_session_id = (string) $session_decoded['id'];
+    $binary = file_get_contents($validated['tmp_name']);
+    if ( $binary === false || $binary === '' ) {
+        return [
+            'ok' => false,
+            'message' => 'No se pudo leer el archivo de muestra para enviarlo a Meta.',
+        ];
+    }
+
+    $upload_endpoint = sprintf('https://graph.facebook.com/%s/%s', rawurlencode($api_version), $upload_session_id);
+    $upload_response = wp_remote_request($upload_endpoint, [
+        'method' => 'POST',
+        'timeout' => $timeout,
+        'headers' => [
+            'Authorization' => 'OAuth ' . $access_token,
+            'file_offset'   => '0',
+            'Content-Type'  => $validated['type'],
+            'Content-Length' => (string) strlen($binary),
+        ],
+        'body' => $binary,
+    ]);
+
+    if ( is_wp_error($upload_response) ) {
+        return [
+            'ok' => false,
+            'message' => 'No se pudo subir la muestra a Meta: ' . $upload_response->get_error_message(),
+        ];
+    }
+
+    $upload_code = (int) wp_remote_retrieve_response_code($upload_response);
+    $upload_body = (string) wp_remote_retrieve_body($upload_response);
+    $upload_decoded = json_decode($upload_body, true);
+    $handle = '';
+
+    if ( is_array($upload_decoded) ) {
+        if ( ! empty($upload_decoded['h']) ) {
+            $handle = eventosapp_whatsapp_templates_sanitize_header_handle($upload_decoded['h']);
+        } elseif ( ! empty($upload_decoded['handle']) ) {
+            $handle = eventosapp_whatsapp_templates_sanitize_header_handle($upload_decoded['handle']);
+        }
+    }
+
+    $upload_ok = $upload_code >= 200 && $upload_code < 300 && $handle !== '';
+
+    if ( function_exists('eventosapp_whatsapp_log') ) {
+        eventosapp_whatsapp_log($upload_ok ? 'Header Sample: archivo subido a Meta' : 'Header Sample: error subiendo archivo', [
+            'http_code' => $upload_code,
+            'file_name' => $validated['name'],
+            'file_type' => $validated['type'],
+            'file_size' => $validated['size'],
+            'has_handle' => $handle !== '',
+            'response' => $upload_decoded ?: $upload_body,
+        ]);
+    }
+
+    if ( ! $upload_ok ) {
+        return [
+            'ok' => false,
+            'message' => $handle === '' ? 'Meta respondió la carga, pero no devolvió un Header Sample Handle utilizable.' : eventosapp_whatsapp_templates_extract_api_error($upload_decoded, $upload_body, $upload_code),
+            'response' => $upload_decoded ?: $upload_body,
+        ];
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Imagen de muestra subida a Meta. Header Sample Handle generado correctamente.',
+        'handle' => $handle,
+        'file' => $validated,
+        'response' => $upload_decoded,
+    ];
 }
 
 /**
@@ -816,6 +1100,8 @@ function eventosapp_whatsapp_templates_render_page() {
             .evapp-wa-tpl-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
             .evapp-wa-tpl-preview{white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:10px;line-height:1.45;}
             .evapp-wa-tpl-warning{background:#fff8e5;border-left:4px solid #dba617;padding:10px 12px;margin:12px 0;max-width:1180px;}
+            .evapp-wa-tpl-info{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin:10px 0;line-height:1.5;}
+            .evapp-wa-tpl-file-meta{background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:8px;margin-top:8px;}
         </style>
 
         <div class="evapp-wa-tpl-card">
@@ -828,6 +1114,12 @@ function eventosapp_whatsapp_templates_render_page() {
                     <div>
                         <input type="text" id="evapp_wa_tpl_waba_id" name="waba_id" value="<?php echo esc_attr($settings['waba_id'] ?? ''); ?>" placeholder="Ej: 123456789012345">
                         <p class="evapp-wa-tpl-help">Es el ID de la cuenta de WhatsApp Business, diferente al Phone Number ID. Se usa para crear y consultar plantillas en Meta.</p>
+                    </div>
+
+                    <label for="evapp_wa_tpl_app_id">Meta App ID</label>
+                    <div>
+                        <input type="text" id="evapp_wa_tpl_app_id" name="app_id" value="<?php echo esc_attr($settings['app_id'] ?? ''); ?>" placeholder="Ej: 123456789012345">
+                        <p class="evapp-wa-tpl-help">Es el ID numérico de la app de Meta Developers. Se necesita para subir la imagen de muestra con Resumable Upload API y generar el <span class="evapp-wa-tpl-code">Header Sample Handle</span>.</p>
                     </div>
 
                     <label>Credenciales reutilizadas</label>
@@ -844,7 +1136,7 @@ function eventosapp_whatsapp_templates_render_page() {
         </div>
 
         <div class="evapp-wa-tpl-warning">
-            <strong>Importante:</strong> la plantilla presencial usa encabezado de imagen para poder enviar el QR como imagen dinámica cuando se use en el envío final. Para enviar esa plantilla a Meta por API debes agregar un <span class="evapp-wa-tpl-code">Header Sample Handle</span> válido de Meta. Sin ese handle, Meta rechazará la creación por API.
+            <strong>Importante:</strong> la plantilla presencial usa encabezado de imagen para poder enviar el QR como imagen dinámica cuando se use en el envío final. El <span class="evapp-wa-tpl-code">Header Sample Handle</span> no es una URL pública: se genera subiendo una imagen JPG/PNG de muestra a Meta desde el formulario de edición. Sin ese handle, Meta rechazará la creación por API.
         </div>
 
         <?php
@@ -1021,7 +1313,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
     ?>
     <div class="evapp-wa-tpl-card">
         <h2><?php echo $is_new ? 'Crear plantilla WhatsApp' : 'Editar plantilla WhatsApp'; ?></h2>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">
             <?php wp_nonce_field('eventosapp_whatsapp_templates_save_template', 'eventosapp_whatsapp_templates_save_nonce'); ?>
             <input type="hidden" name="action" value="eventosapp_whatsapp_templates_save_template">
             <input type="hidden" name="template[id]" value="<?php echo esc_attr($template['id'] ?? ''); ?>">
@@ -1079,8 +1371,24 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
 
                 <label for="evapp_tpl_header_handle">Header Sample Handle</label>
                 <div>
-                    <input type="text" id="evapp_tpl_header_handle" name="template[header_sample_handle]" value="<?php echo esc_attr($template['header_sample_handle'] ?? ''); ?>">
-                    <p class="evapp-wa-tpl-help">Obligatorio para enviar a Meta una plantilla con encabezado de imagen. Debe ser el handle de muestra de Meta, no una URL pública.</p>
+                    <input type="text" id="evapp_tpl_header_handle" name="template[header_sample_handle]" value="<?php echo esc_attr($template['header_sample_handle'] ?? ''); ?>" placeholder="Se genera al subir una imagen de muestra a Meta">
+                    <p class="evapp-wa-tpl-help">Obligatorio si el encabezado es Imagen dinámica. No pegues una URL pública aquí; debe ser el handle que devuelve Meta después de subir la muestra.</p>
+                    <?php if ( ! empty($template['header_sample_handle']) ) : ?>
+                        <div class="evapp-wa-tpl-file-meta">
+                            <strong>Handle guardado:</strong> <span class="evapp-wa-tpl-code"><?php echo esc_html($template['header_sample_handle']); ?></span>
+                            <?php if ( ! empty($template['header_sample_uploaded_at']) ) : ?><br><small>Última muestra subida: <?php echo esc_html($template['header_sample_uploaded_at']); ?></small><?php endif; ?>
+                            <?php if ( ! empty($template['header_sample_file_name']) ) : ?><br><small>Archivo: <?php echo esc_html($template['header_sample_file_name']); ?> · <?php echo esc_html($template['header_sample_file_type'] ?? ''); ?> · <?php echo esc_html(size_format(absint($template['header_sample_file_size'] ?? 0))); ?></small><?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <label for="evapp_tpl_header_sample_file">Imagen de muestra para Meta</label>
+                <div>
+                    <input type="file" id="evapp_tpl_header_sample_file" name="header_sample_file" accept="image/png,image/jpeg">
+                    <div class="evapp-wa-tpl-info">
+                        <strong>Qué debes subir:</strong> una imagen JPG/JPEG o PNG de ejemplo, máximo 5 MB. Para esta plantilla presencial puedes usar una imagen de muestra del QR o una imagen neutra del ticket. EventosApp la sube a Meta con Resumable Upload API y guarda automáticamente el <span class="evapp-wa-tpl-code">Header Sample Handle</span> que Meta exige para aprobar plantillas con encabezado de imagen.
+                    </div>
+                    <p class="evapp-wa-tpl-help">Requisitos previos: tener guardados el WhatsApp Business Account ID, el Meta App ID y el Access Token en WhatsApp Tickets. El archivo solo se usa como muestra de aprobación; al enviar tickets reales, el QR individual se enviará dinámicamente.</p>
                 </div>
 
                 <label for="evapp_tpl_body">Cuerpo</label>
@@ -1158,6 +1466,7 @@ add_action('admin_post_eventosapp_whatsapp_templates_save_settings', function() 
 
     $settings = eventosapp_whatsapp_templates_get_settings();
     $settings['waba_id'] = isset($_POST['waba_id']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['waba_id'])) : '';
+    $settings['app_id'] = isset($_POST['app_id']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['app_id'])) : '';
     eventosapp_whatsapp_templates_update_settings($settings);
 
     eventosapp_whatsapp_templates_redirect(true, 'Conexión de plantillas guardada.');
@@ -1184,8 +1493,43 @@ add_action('admin_post_eventosapp_whatsapp_templates_save_template', function() 
         unset($settings['templates'][$existing_id]);
     }
 
+    $upload_message = '';
+    $upload_ok = true;
+
+    if ( eventosapp_whatsapp_templates_has_header_sample_upload() ) {
+        if ( ($template['header_format'] ?? '') !== 'IMAGE' ) {
+            $upload_ok = false;
+            $upload_message = 'Seleccionaste un archivo de muestra, pero el encabezado de la plantilla no está configurado como Imagen dinámica.';
+        } else {
+            $upload_result = eventosapp_whatsapp_templates_upload_header_sample_to_meta($_FILES['header_sample_file']);
+            if ( ! empty($upload_result['ok']) ) {
+                $file_meta = is_array($upload_result['file'] ?? null) ? $upload_result['file'] : [];
+                $template['header_sample_handle'] = eventosapp_whatsapp_templates_sanitize_header_handle($upload_result['handle'] ?? '');
+                $template['header_sample_file_name'] = sanitize_file_name($file_meta['name'] ?? '');
+                $template['header_sample_file_type'] = sanitize_mime_type($file_meta['type'] ?? '');
+                $template['header_sample_file_size'] = absint($file_meta['size'] ?? 0);
+                $template['header_sample_uploaded_at'] = current_time('mysql');
+                $template['last_api_message'] = sanitize_text_field((string)($upload_result['message'] ?? 'Imagen de muestra subida a Meta.'));
+                $template['last_api_response'] = is_array($upload_result['response'] ?? null) ? $upload_result['response'] : [];
+                $upload_message = $upload_result['message'] ?? 'Imagen de muestra subida a Meta y handle guardado.';
+            } else {
+                $upload_ok = false;
+                $template['last_api_message'] = sanitize_text_field((string)($upload_result['message'] ?? 'No se pudo subir la imagen de muestra a Meta.'));
+                $template['last_api_response'] = is_array($upload_result['response'] ?? null) ? $upload_result['response'] : [];
+                $upload_message = $template['last_api_message'];
+            }
+        }
+    }
+
     $settings['templates'][$template['id']] = $template;
     eventosapp_whatsapp_templates_update_settings($settings);
+
+    if ( $upload_message !== '' ) {
+        eventosapp_whatsapp_templates_redirect($upload_ok, ($upload_ok ? 'Plantilla local guardada. ' : 'Plantilla local guardada, pero ') . $upload_message, [
+            'view' => 'edit',
+            'template_id' => $template['id'],
+        ]);
+    }
 
     eventosapp_whatsapp_templates_redirect(true, 'Plantilla local guardada.', [
         'view' => 'edit',
