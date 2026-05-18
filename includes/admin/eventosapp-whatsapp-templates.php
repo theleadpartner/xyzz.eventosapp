@@ -134,8 +134,8 @@ function eventosapp_whatsapp_templates_default_records() {
             'header_sample_file_type' => '',
             'header_sample_file_size' => '',
             'header_sample_uploaded_at' => '',
-            'body_text'             => "Hola {{1}}, tu inscripción para *{{2}}* está confirmada.\n\n🎟️ *Evento:* {{2}}\n👤 *Organizador:* {{7}}\n📅 *Fecha:* {{3}}\n⏰ *Hora:* {{4}}\n📍 *Lugar:* {{5}}\n🎫 *Modalidad:* Presencial\n\nEl QR de ingreso se muestra en este mensaje. Para ver Wallet, PDF, calendario y más detalles, usa el botón Ver mi ticket.",
-            'body_examples'         => "María Pérez\nEvento Demo\n20 de mayo de 2026\n8:00 a. m.\nCentro de Convenciones\nhttps://demo.eventosapp.com/ticket_demo_123\nEventosApp",
+            'body_text'             => "🎟️ Hola {{1}}, tu inscripción a *{{2}}* está confirmada.\n\n✅ Presenta este QR en el ingreso al evento.\n\n📌 *Detalles de tu inscripción:*\n\n🎫 *Evento:* {{2}}\n📅 *Fecha:* {{3}}\n🕒 *Hora:* {{4}}\n📍 *Lugar:* {{5}}\n👥 *Modalidad:* {{8}}\n🏢 *Organizador:* {{7}}\n\n🔗 Ingresa a tu 'Ticket' para ver:\n\n🍎 Ticket para *Apple Wallet*\n💳 Ticket para *Google Wallet*\n📄 Ticket descargable en *PDF*\n📆 Recordatorio para agregar a tu agenda\n\n✨ Te esperamos.",
+            'body_examples'         => "María Pérez\nEvento Demo\n20 de mayo de 2026\n8:00 a. m.\nCentro de Convenciones\nhttps://demo.eventosapp.com/ticket_demo_123\nEventosApp\nPresencial",
             'footer_text'           => 'EventosApp',
             'button_1_text'         => 'Ver mi ticket',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('ticket_landing'),
@@ -170,8 +170,8 @@ function eventosapp_whatsapp_templates_default_records() {
             'header_sample_file_type' => '',
             'header_sample_file_size' => '',
             'header_sample_uploaded_at' => '',
-            'body_text'             => "Hola {{1}}, tu inscripción para *{{2}}* está confirmada.\n\n🎟️ *Evento:* {{2}}\n👤 *Organizador:* {{7}}\n📅 *Fecha:* {{3}}\n⏰ *Hora:* {{4}}\n💻 *Plataforma:* {{5}}\n🎫 *Modalidad:* Virtual\n\nUsa el botón Ingresar al evento para acceder a la sesión virtual. El enlace estará disponible según la configuración del evento.",
-            'body_examples'         => "María Pérez\nEvento Demo Virtual\n20 de mayo de 2026\n8:00 a. m.\nZoom\nhttps://demo.eventosapp.com/acceso_virtual\nEventosApp",
+            'body_text'             => "🎟️ Hola {{1}}, tu inscripción a *{{2}}* está confirmada.\n\n✅ Conserva este mensaje para consultar tu acceso al evento.\n\n📌 *Detalles de tu inscripción:*\n\n🎫 *Evento:* {{2}}\n📅 *Fecha:* {{3}}\n🕒 *Hora:* {{4}}\n💻 *Plataforma:* {{5}}\n👥 *Modalidad:* {{8}}\n🏢 *Organizador:* {{7}}\n\n🔗 Ingresa a tu 'Ticket' para ver:\n\n🍎 Ticket para *Apple Wallet*\n💳 Ticket para *Google Wallet*\n📄 Ticket descargable en *PDF*\n📆 Recordatorio para agregar a tu agenda\n\n✨ Te esperamos.",
+            'body_examples'         => "María Pérez\nEvento Demo Virtual\n20 de mayo de 2026\n8:00 a. m.\nZoom\nhttps://demo.eventosapp.com/acceso_virtual\nEventosApp\nVirtual",
             'footer_text'           => 'EventosApp',
             'button_1_text'         => 'Ingresar al evento',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('virtual_access'),
@@ -344,45 +344,153 @@ function eventosapp_whatsapp_templates_sanitize_header_handle($handle) {
 }
 
 /**
+ * Extrae las variables numéricas del cuerpo en el orden real en que aparecen.
+ * Si una variable se repite, conserva una sola entrada para que el valor se
+ * reutilice correctamente en Meta y en el envío runtime.
+ */
+function eventosapp_whatsapp_templates_extract_body_variable_numbers($body_text) {
+    $numbers = [];
+
+    if ( preg_match_all('/\{\{\s*(\d+)\s*\}\}/', (string) $body_text, $matches) ) {
+        foreach ( (array) $matches[1] as $number ) {
+            $number = absint($number);
+            if ( $number < 1 ) {
+                continue;
+            }
+            if ( ! in_array($number, $numbers, true) ) {
+                $numbers[] = $number;
+            }
+        }
+    }
+
+    return $numbers;
+}
+
+/**
+ * Convierte el textarea de ejemplos en un arreglo indexado por número de variable.
+ * La línea 1 corresponde a {{1}}, la línea 2 a {{2}}, etc. Esto permite que el
+ * usuario elimine {{6}} del cuerpo y siga usando {{7}} / {{8}} sin romper el
+ * ejemplo que Meta exige para el componente BODY.
+ */
+function eventosapp_whatsapp_templates_parse_body_examples_by_number($examples_text) {
+    $lines = preg_split('/\r\n|\r|\n/', (string) $examples_text);
+    $examples = [];
+    $index = 1;
+
+    foreach ( (array) $lines as $line ) {
+        $line = sanitize_text_field($line);
+        if ( $line !== '' ) {
+            $examples[$index] = $line;
+        }
+        $index++;
+    }
+
+    return $examples;
+}
+
+/**
+ * Valor de muestra seguro para cada variable estándar de EventosApp.
+ */
+function eventosapp_whatsapp_templates_body_example_fallback($variable_number) {
+    $fallback = [
+        1 => 'María Pérez',
+        2 => 'Evento Demo',
+        3 => '20 de mayo de 2026',
+        4 => '8:00 a. m.',
+        5 => 'Centro de Convenciones',
+        6 => eventosapp_whatsapp_templates_button_example_url('ticket_landing'),
+        7 => 'EventosApp',
+        8 => 'Presencial',
+    ];
+
+    $variable_number = absint($variable_number);
+    return $fallback[$variable_number] ?? ('Ejemplo ' . $variable_number);
+}
+
+/**
+ * Prepara el cuerpo para Meta.
+ *
+ * Meta es muy sensible al ejemplo del BODY cuando existen variables. Para evitar
+ * rechazos cuando el usuario edita el texto, elimina {{6}} o reordena variables,
+ * EventosApp envía a Meta una versión normalizada con variables consecutivas
+ * {{1}}, {{2}}, {{3}}..., pero conserva un mapa entre esas posiciones y las
+ * variables reales de EventosApp.
+ */
+function eventosapp_whatsapp_templates_prepare_body_for_meta($body_text, $examples_text = '') {
+    $body_text = (string) $body_text;
+    $variable_numbers = eventosapp_whatsapp_templates_extract_body_variable_numbers($body_text);
+    $examples_by_number = eventosapp_whatsapp_templates_parse_body_examples_by_number($examples_text);
+
+    if ( empty($variable_numbers) ) {
+        return [
+            'text' => $body_text,
+            'variable_numbers' => [],
+            'example_values' => [],
+            'signature' => md5($body_text),
+        ];
+    }
+
+    $local_to_meta = [];
+    foreach ( $variable_numbers as $index => $local_number ) {
+        $local_to_meta[$local_number] = $index + 1;
+    }
+
+    $normalized_text = preg_replace_callback('/\{\{\s*(\d+)\s*\}\}/', function($match) use ($local_to_meta) {
+        $local_number = absint($match[1] ?? 0);
+        if ( ! isset($local_to_meta[$local_number]) ) {
+            return $match[0];
+        }
+        return '{{' . $local_to_meta[$local_number] . '}}';
+    }, $body_text);
+
+    $example_values = [];
+    foreach ( $variable_numbers as $local_number ) {
+        $example = $examples_by_number[$local_number] ?? '';
+        if ( $example === '' ) {
+            $example = eventosapp_whatsapp_templates_body_example_fallback($local_number);
+        }
+        $example_values[] = sanitize_text_field($example);
+    }
+
+    return [
+        'text' => (string) $normalized_text,
+        'variable_numbers' => array_values(array_map('absint', $variable_numbers)),
+        'example_values' => $example_values,
+        'signature' => md5($body_text),
+    ];
+}
+
+/**
+ * Sanitiza y normaliza un mapa de variables guardado en la plantilla.
+ */
+function eventosapp_whatsapp_templates_sanitize_body_variable_map($map) {
+    $normalized = [];
+
+    if ( is_string($map) ) {
+        $decoded = json_decode($map, true);
+        if ( is_array($decoded) ) {
+            $map = $decoded;
+        }
+    }
+
+    if ( is_array($map) ) {
+        foreach ( $map as $number ) {
+            $number = absint($number);
+            if ( $number > 0 && ! in_array($number, $normalized, true) ) {
+                $normalized[] = $number;
+            }
+        }
+    }
+
+    return $normalized;
+}
+
+/**
  * Normaliza ejemplos del body a una fila compatible con Meta.
  */
 function eventosapp_whatsapp_templates_body_examples_to_array($body_text, $examples_text) {
-    $max_var = 0;
-    if ( preg_match_all('/\{\{\s*(\d+)\s*\}\}/', (string) $body_text, $matches) ) {
-        foreach ( $matches[1] as $number ) {
-            $max_var = max($max_var, absint($number));
-        }
-    }
-
-    if ( $max_var < 1 ) {
-        return [];
-    }
-
-    $lines = preg_split('/\r\n|\r|\n/', (string) $examples_text);
-    $examples = [];
-    foreach ( $lines as $line ) {
-        $line = sanitize_text_field($line);
-        if ( $line !== '' ) {
-            $examples[] = $line;
-        }
-    }
-
-    $fallback = [
-        'María Pérez',
-        'Evento Demo',
-        '20 de mayo de 2026',
-        '8:00 a. m.',
-        'Centro de Convenciones',
-        'https://example.com/demo',
-    ];
-
-    for ( $i = 0; $i < $max_var; $i++ ) {
-        if ( ! isset($examples[$i]) || $examples[$i] === '' ) {
-            $examples[$i] = $fallback[$i] ?? ('Ejemplo ' . ($i + 1));
-        }
-    }
-
-    return array_slice($examples, 0, $max_var);
+    $prepared = eventosapp_whatsapp_templates_prepare_body_for_meta($body_text, $examples_text);
+    return $prepared['example_values'] ?? [];
 }
 
 /**
@@ -436,6 +544,9 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'header_sample_uploaded_at' => sanitize_text_field($existing['header_sample_uploaded_at'] ?? ''),
         'body_text'            => sanitize_textarea_field($raw['body_text'] ?? ($existing['body_text'] ?? '')),
         'body_examples'        => sanitize_textarea_field($raw['body_examples'] ?? ($existing['body_examples'] ?? '')),
+        'body_text_meta'       => sanitize_textarea_field($existing['body_text_meta'] ?? ''),
+        'body_variable_map'    => eventosapp_whatsapp_templates_sanitize_body_variable_map($existing['body_variable_map'] ?? []),
+        'body_variable_signature' => sanitize_text_field($existing['body_variable_signature'] ?? ''),
         'footer_text'          => sanitize_text_field($raw['footer_text'] ?? ($existing['footer_text'] ?? '')),
         'button_1_text'        => sanitize_text_field($raw['button_1_text'] ?? ($existing['button_1_text'] ?? '')),
         'button_1_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_1_url'] ?? ($existing['button_1_url'] ?? '')),
@@ -470,6 +581,11 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         $template['button_2_example'] = esc_url_raw(str_replace('{{1}}', 'ticket_demo_123', $template['button_2_url']));
     }
 
+    $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'], $template['body_examples']);
+    $template['body_text_meta'] = sanitize_textarea_field($prepared_body['text'] ?? $template['body_text']);
+    $template['body_variable_map'] = eventosapp_whatsapp_templates_sanitize_body_variable_map($prepared_body['variable_numbers'] ?? []);
+    $template['body_variable_signature'] = sanitize_text_field($prepared_body['signature'] ?? md5((string)$template['body_text']));
+
     return $template;
 }
 
@@ -485,6 +601,11 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
 
     if ( empty($template['body_text']) ) {
         $errors[] = 'Falta el cuerpo de la plantilla.';
+    } else {
+        $body_variables = eventosapp_whatsapp_templates_extract_body_variable_numbers($template['body_text']);
+        if ( count($body_variables) > 20 ) {
+            $errors[] = 'El cuerpo de la plantilla tiene demasiadas variables. Usa máximo 20 variables para mantener compatibilidad con Meta.';
+        }
     }
 
     if ( ! empty($template['header_format']) && $template['header_format'] === 'IMAGE' ) {
@@ -542,12 +663,13 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
         ];
     }
 
+    $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'] ?? '', $template['body_examples'] ?? '');
     $body_component = [
         'type' => 'BODY',
-        'text' => $template['body_text'],
+        'text' => $prepared_body['text'] ?? ($template['body_text'] ?? ''),
     ];
 
-    $body_examples = eventosapp_whatsapp_templates_body_examples_to_array($template['body_text'], $template['body_examples']);
+    $body_examples = $prepared_body['example_values'] ?? [];
     if ( ! empty($body_examples) ) {
         $body_component['example'] = [
             'body_text' => [ $body_examples ],
@@ -666,6 +788,7 @@ function eventosapp_whatsapp_templates_api_request($method, $path, $body = null)
             'method' => $method,
             'path' => $path,
             'http_code' => $code,
+            'request_body' => is_array($body) ? $body : null,
             'response' => $decoded ?: $raw_body,
         ]);
     }
@@ -957,6 +1080,13 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
     }
 
     $template = $settings['templates'][$template_id];
+    $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'] ?? '', $template['body_examples'] ?? '');
+    $template['body_text_meta'] = sanitize_textarea_field($prepared_body['text'] ?? ($template['body_text'] ?? ''));
+    $template['body_variable_map'] = eventosapp_whatsapp_templates_sanitize_body_variable_map($prepared_body['variable_numbers'] ?? []);
+    $template['body_variable_signature'] = sanitize_text_field($prepared_body['signature'] ?? md5((string)($template['body_text'] ?? '')));
+    $settings['templates'][$template_id] = $template;
+    eventosapp_whatsapp_templates_update_settings($settings);
+
     $errors = eventosapp_whatsapp_templates_validate_for_meta($template);
     if ( ! empty($errors) ) {
         return ['ok' => false, 'message' => implode(' ', $errors)];
@@ -1536,13 +1666,14 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 <label for="evapp_tpl_body">Cuerpo</label>
                 <div>
                     <textarea id="evapp_tpl_body" name="template[body_text]" required><?php echo esc_textarea($template['body_text'] ?? ''); ?></textarea>
-                    <p class="evapp-wa-tpl-help">Variables aprobadas por Meta: <span class="evapp-wa-tpl-code">{{1}}</span> nombre del asistente, <span class="evapp-wa-tpl-code">{{2}}</span> evento, <span class="evapp-wa-tpl-code">{{3}}</span> fecha, <span class="evapp-wa-tpl-code">{{4}}</span> hora, <span class="evapp-wa-tpl-code">{{5}}</span> lugar o plataforma.</p>
+                    <p class="evapp-wa-tpl-help">Variables disponibles: <span class="evapp-wa-tpl-code">{{1}}</span> nombre del asistente, <span class="evapp-wa-tpl-code">{{2}}</span> evento, <span class="evapp-wa-tpl-code">{{3}}</span> fecha, <span class="evapp-wa-tpl-code">{{4}}</span> hora, <span class="evapp-wa-tpl-code">{{5}}</span> lugar o plataforma, <span class="evapp-wa-tpl-code">{{6}}</span> enlace público del ticket, <span class="evapp-wa-tpl-code">{{7}}</span> organizador, <span class="evapp-wa-tpl-code">{{8}}</span> modalidad.</p>
+                    <p class="evapp-wa-tpl-help">Puedes quitar o reordenar variables. Antes de enviarla a Meta, EventosApp normaliza internamente el cuerpo para que el componente BODY siempre incluya el campo <span class="evapp-wa-tpl-code">example</span> requerido.</p>
                 </div>
 
                 <label for="evapp_tpl_body_examples">Ejemplos del cuerpo</label>
                 <div>
                     <textarea id="evapp_tpl_body_examples" name="template[body_examples]" required><?php echo esc_textarea($template['body_examples'] ?? ''); ?></textarea>
-                    <p class="evapp-wa-tpl-help">Un ejemplo por línea, en el mismo orden de las variables numéricas del cuerpo.</p>
+                    <p class="evapp-wa-tpl-help">Un ejemplo por línea usando el número de la variable: línea 1 para <span class="evapp-wa-tpl-code">{{1}}</span>, línea 2 para <span class="evapp-wa-tpl-code">{{2}}</span>, línea 7 para <span class="evapp-wa-tpl-code">{{7}}</span> y línea 8 para <span class="evapp-wa-tpl-code">{{8}}</span>. Si falta una línea, EventosApp agrega un ejemplo seguro antes de enviar a Meta.</p>
                 </div>
 
                 <label for="evapp_tpl_footer">Footer</label>
