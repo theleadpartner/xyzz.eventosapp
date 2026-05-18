@@ -161,6 +161,29 @@ function eventosapp_whatsapp_system_default_header_image() {
 }
 
 /**
+ * Medidas oficiales para la imagen compuesta que se envía por WhatsApp en tickets presenciales.
+ * El cabezote del QR debe prepararse exactamente en 1000 x 160 px para que no se recorte.
+ */
+if ( ! defined('EVENTOSAPP_WHATSAPP_QR_CANVAS_WIDTH') ) {
+    define('EVENTOSAPP_WHATSAPP_QR_CANVAS_WIDTH', 1000);
+}
+if ( ! defined('EVENTOSAPP_WHATSAPP_QR_CANVAS_HEIGHT') ) {
+    define('EVENTOSAPP_WHATSAPP_QR_CANVAS_HEIGHT', 1000);
+}
+if ( ! defined('EVENTOSAPP_WHATSAPP_QR_HEADER_WIDTH') ) {
+    define('EVENTOSAPP_WHATSAPP_QR_HEADER_WIDTH', 1000);
+}
+if ( ! defined('EVENTOSAPP_WHATSAPP_QR_HEADER_HEIGHT') ) {
+    define('EVENTOSAPP_WHATSAPP_QR_HEADER_HEIGHT', 160);
+}
+if ( ! defined('EVENTOSAPP_WHATSAPP_QR_IMAGE_SIZE') ) {
+    define('EVENTOSAPP_WHATSAPP_QR_IMAGE_SIZE', 760);
+}
+if ( ! defined('EVENTOSAPP_WHATSAPP_QR_LAYOUT_VERSION') ) {
+    define('EVENTOSAPP_WHATSAPP_QR_LAYOUT_VERSION', 'v3-1000x1000-header-1000x160-contain');
+}
+
+/**
  * Lee una imagen por defecto guardada en el módulo Plantillas WhatsApp, si el archivo está cargado.
  */
 function eventosapp_whatsapp_get_template_default_image($key) {
@@ -373,6 +396,27 @@ function eventosapp_whatsapp_image_cover_copy($dst, $src, $dst_x, $dst_y, $dst_w
 }
 
 /**
+ * Copia una imagen completa dentro del rectángulo de destino sin recortarla.
+ * Se usa para el cabezote del QR de WhatsApp, porque el logo o textos del extremo
+ * derecho no deben cortarse si la imagen subida no coincide exactamente con la proporción esperada.
+ */
+function eventosapp_whatsapp_image_contain_copy($dst, $src, $dst_x, $dst_y, $dst_w, $dst_h) {
+    $src_w = imagesx($src);
+    $src_h = imagesy($src);
+    if ( ! $src_w || ! $src_h || ! $dst_w || ! $dst_h ) {
+        return false;
+    }
+
+    $scale = min($dst_w / $src_w, $dst_h / $src_h);
+    $copy_w = max(1, (int) floor($src_w * $scale));
+    $copy_h = max(1, (int) floor($src_h * $scale));
+    $copy_x = $dst_x + (int) floor(($dst_w - $copy_w) / 2);
+    $copy_y = $dst_y + (int) floor(($dst_h - $copy_h) / 2);
+
+    return imagecopyresampled($dst, $src, $copy_x, $copy_y, 0, 0, $copy_w, $copy_h, $src_w, $src_h);
+}
+
+/**
  * Genera una imagen pública compuesta con cabezote + QR para WhatsApp.
  * Si no se puede generar, devuelve el QR original para no bloquear el envío.
  */
@@ -395,7 +439,7 @@ function eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url) {
 
     $event_id    = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
     $header_url  = eventosapp_whatsapp_get_qr_header_image($ticket_id, $event_id);
-    $cache_key   = md5($ticket_id . '|' . $qr_url . '|' . $header_url);
+    $cache_key   = md5($ticket_id . '|' . $qr_url . '|' . $header_url . '|' . EVENTOSAPP_WHATSAPP_QR_LAYOUT_VERSION);
     $upload      = wp_upload_dir();
 
     if ( ! is_array($upload) || ! empty($upload['error']) || empty($upload['basedir']) || empty($upload['baseurl']) ) {
@@ -439,12 +483,13 @@ function eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url) {
 
     $header_image = $header_url ? eventosapp_whatsapp_image_resource_from_url($header_url) : false;
 
-    $canvas_w = 1000;
-    $header_h = $header_image ? 165 : 0;
-    $top_padding = $header_image ? 70 : 90;
-    $qr_size = 760;
-    $bottom_padding = 100;
-    $canvas_h = $header_h + $top_padding + $qr_size + $bottom_padding;
+    $canvas_w = (int) EVENTOSAPP_WHATSAPP_QR_CANVAS_WIDTH;
+    $canvas_h = (int) EVENTOSAPP_WHATSAPP_QR_CANVAS_HEIGHT;
+    $header_h = $header_image ? (int) EVENTOSAPP_WHATSAPP_QR_HEADER_HEIGHT : 0;
+    $qr_size = (int) EVENTOSAPP_WHATSAPP_QR_IMAGE_SIZE;
+    $available_after_header = max(0, $canvas_h - $header_h - $qr_size);
+    $top_padding = $header_image ? (int) floor($available_after_header / 2) : (int) floor(($canvas_h - $qr_size) / 2);
+    $bottom_padding = $canvas_h - $header_h - $top_padding - $qr_size;
 
     $canvas = imagecreatetruecolor($canvas_w, $canvas_h);
     if ( ! $canvas ) {
@@ -463,7 +508,7 @@ function eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url) {
     imagefilledrectangle($canvas, 0, 0, $canvas_w, $canvas_h, $white);
 
     if ( $header_image ) {
-        eventosapp_whatsapp_image_cover_copy($canvas, $header_image, 0, 0, $canvas_w, $header_h);
+        eventosapp_whatsapp_image_contain_copy($canvas, $header_image, 0, 0, $canvas_w, $header_h);
     }
 
     // Fondo blanco dedicado para el QR. Esto evita que la lectura se afecte si
@@ -497,6 +542,11 @@ function eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url) {
         'qr_url'          => $qr_url,
         'header_url'      => $header_url,
         'composite_url'   => esc_url_raw($public_url),
+        'canvas_width'    => $canvas_w,
+        'canvas_height'   => $canvas_h,
+        'header_width'    => (int) EVENTOSAPP_WHATSAPP_QR_HEADER_WIDTH,
+        'header_height'   => $header_h,
+        'qr_size'         => $qr_size,
         'qr_local_path'   => eventosapp_whatsapp_url_to_local_path($qr_url),
         'header_local_path' => $header_url ? eventosapp_whatsapp_url_to_local_path($header_url) : '',
     ]);
@@ -1733,7 +1783,7 @@ function eventosapp_whatsapp_render_event_visuals_metabox($post) {
         'eventosapp_whatsapp_qr_header_img' => [
             'meta'        => '_eventosapp_whatsapp_qr_header_img',
             'label'       => 'Imagen por defecto para cabezote QR WhatsApp',
-            'description' => 'Esta imagen NO reemplaza el QR. EventosApp toma el QR real del ticket presencial y genera una composición con este cabezote encima del QR, como la pieza visual del ejemplo.',
+            'description' => 'Esta imagen NO reemplaza el QR. EventosApp toma el QR real del ticket presencial y genera una composición con este cabezote encima del QR. Medida exacta recomendada: 1000 x 160 px, en JPG o PNG. Si subes otra proporción, el sistema la centrará completa para evitar cortes, pero puede dejar franjas blancas.',
             'effective'   => $visuals['qr_header'],
         ],
         'eventosapp_whatsapp_virtual_message_img' => [
@@ -2508,7 +2558,14 @@ function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_i
     }
 
     $ticket_public = eventosapp_whatsapp_get_ticket_public_code($ticket_id);
-    $landing_url = admin_url('admin-post.php?action=eventosapp_whatsapp_ticket_landing&ticket=' . rawurlencode($ticket_public));
+    if ( function_exists('eventosapp_whatsapp_templates_public_ticket_landing_url') ) {
+        $landing_url = eventosapp_whatsapp_templates_public_ticket_landing_url($ticket_public);
+    } else {
+        $landing_url = add_query_arg([
+            'eventosapp_whatsapp_public_action' => 'ticket_landing',
+            'ticket' => $ticket_public,
+        ], home_url('/'));
+    }
     if ( $modality === 'virtual' && function_exists('eventosapp_get_virtual_landing_url') ) {
         $virtual_landing = eventosapp_get_virtual_landing_url($ticket_id);
         if ( $virtual_landing ) {
