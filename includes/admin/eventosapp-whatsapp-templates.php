@@ -35,18 +35,34 @@ add_action('admin_menu', function() {
  * No usa /wp-admin/admin-post.php para evitar que el enlace dependa de una sesión iniciada.
  */
 function eventosapp_whatsapp_templates_public_action_url($action, $ticket_public = '{{1}}') {
+    if ( function_exists('eventosapp_whatsapp_public_action_url') ) {
+        return eventosapp_whatsapp_public_action_url($action, $ticket_public);
+    }
+
     $action = sanitize_key((string) $action);
     if ( ! in_array($action, ['ticket_landing', 'ticket_ics', 'virtual_access'], true) ) {
         $action = 'ticket_landing';
     }
 
     $ticket_public = (string) $ticket_public;
-    $url = add_query_arg([
-        'eventosapp_whatsapp_public_action' => $action,
-        'ticket' => $ticket_public,
-    ], home_url('/'));
+    $slug = sanitize_title((string) apply_filters('eventosapp_whatsapp_public_ticket_page_slug', 'ticket'));
+    $slug = $slug !== '' ? $slug : 'ticket';
+    $base_url = trailingslashit(home_url('/' . $slug));
 
-    return str_replace(['%7B%7B1%7D%7D', '%7b%7b1%7d%7d'], '{{1}}', $url);
+    $args = [
+        'ticket' => $ticket_public,
+    ];
+
+    if ( $action !== 'ticket_landing' ) {
+        $args = [
+            'eventosapp_whatsapp_public_action' => $action,
+            'ticket' => $ticket_public,
+        ];
+    }
+
+    $url = add_query_arg($args, $base_url);
+
+    return str_replace(['%7B%7B1%7D%7D', '%7b%7b1%7d%7d', rawurlencode('{{1}}')], '{{1}}', $url);
 }
 
 /**
