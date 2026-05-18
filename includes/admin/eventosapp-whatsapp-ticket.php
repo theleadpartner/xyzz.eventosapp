@@ -3076,6 +3076,80 @@ function eventosapp_whatsapp_get_template_body_variable_count($body_text) {
 }
 
 /**
+ * Extrae variables únicas del cuerpo en orden de aparición.
+ */
+function eventosapp_whatsapp_extract_template_body_variable_numbers($body_text) {
+    $numbers = [];
+
+    if ( preg_match_all('/\{\{\s*(\d+)\s*\}\}/', (string)$body_text, $matches) ) {
+        foreach ( (array) $matches[1] as $number ) {
+            $number = absint($number);
+            if ( $number < 1 ) {
+                continue;
+            }
+            if ( ! in_array($number, $numbers, true) ) {
+                $numbers[] = $number;
+            }
+        }
+    }
+
+    return $numbers;
+}
+
+/**
+ * Sanitiza el mapa guardado al enviar la plantilla a Meta.
+ */
+function eventosapp_whatsapp_sanitize_template_body_variable_map($map) {
+    $normalized = [];
+
+    if ( is_string($map) ) {
+        $decoded = json_decode($map, true);
+        if ( is_array($decoded) ) {
+            $map = $decoded;
+        }
+    }
+
+    if ( is_array($map) ) {
+        foreach ( $map as $number ) {
+            $number = absint($number);
+            if ( $number > 0 && ! in_array($number, $normalized, true) ) {
+                $normalized[] = $number;
+            }
+        }
+    }
+
+    return $normalized;
+}
+
+/**
+ * Devuelve el orden real de parámetros BODY que debe enviarse a Meta.
+ *
+ * Compatibilidad:
+ * - Plantillas nuevas enviadas con el módulo de plantillas guardan
+ *   body_variable_map y usan exactamente ese orden.
+ * - Plantillas antiguas sin mapa conservan el comportamiento anterior: envían
+ *   parámetros desde {{1}} hasta el número máximo detectado.
+ */
+function eventosapp_whatsapp_get_runtime_body_variable_numbers($template) {
+    $template = is_array($template) ? $template : [];
+    $body_text = (string)($template['body_text'] ?? '');
+    $saved_map = eventosapp_whatsapp_sanitize_template_body_variable_map($template['body_variable_map'] ?? []);
+    $saved_signature = sanitize_text_field((string)($template['body_variable_signature'] ?? ''));
+    $current_signature = md5($body_text);
+
+    if ( ! empty($saved_map) && $saved_signature !== '' && hash_equals($saved_signature, $current_signature) ) {
+        return $saved_map;
+    }
+
+    $max_count = eventosapp_whatsapp_get_template_body_variable_count($body_text);
+    if ( $max_count < 1 ) {
+        return [];
+    }
+
+    return range(1, $max_count);
+}
+
+/**
  * Valores dinámicos estándar para plantillas WhatsApp de ticket.
  */
 function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_id = 0) {
@@ -3170,15 +3244,19 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
     }
 
     $values = eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_id);
-    $body_count = eventosapp_whatsapp_get_template_body_variable_count($template['body_text'] ?? '');
+    $body_variable_numbers = eventosapp_whatsapp_get_runtime_body_variable_numbers($template);
+    $body_count = count($body_variable_numbers);
     $debug['body_variable_count'] = $body_count;
+    $debug['body_variable_numbers'] = $body_variable_numbers;
+    $debug['body_variable_map_source'] = ! empty($template['body_variable_map']) ? 'stored_meta_map' : 'legacy_max_range';
 
     if ( $body_count > 0 ) {
         $params = [];
-        for ( $i = 1; $i <= $body_count; $i++ ) {
+        foreach ( $body_variable_numbers as $variable_number ) {
+            $variable_number = absint($variable_number);
             $params[] = [
                 'type' => 'text',
-                'text' => sanitize_text_field((string)($values[$i] ?? '-')),
+                'text' => sanitize_text_field((string)($values[$variable_number] ?? '-')),
             ];
         }
         $components[] = [
