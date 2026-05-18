@@ -1847,6 +1847,15 @@ function eventosapp_whatsapp_templates_render_public_ticket_landing() {
     $ticket_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
     $modalidad = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
     $is_virtual = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id);
+
+    // Para tickets virtuales, cualquier botón genérico "Ver mi ticket" debe llevar
+    // a la landing virtual pública ya configurada para el evento, no a la ficha
+    // de ticket presencial/mixta ni al enlace técnico del admin.
+    if ( $is_virtual && ! empty($assets['virtual_landing']) ) {
+        wp_safe_redirect($assets['virtual_landing']);
+        exit;
+    }
+
     $fecha = function_exists('eventosapp_whatsapp_get_event_date_label') ? eventosapp_whatsapp_get_event_date_label($event_id) : '';
     $hora_inicio = $event_id ? get_post_meta($event_id, '_eventosapp_hora_inicio', true) : '';
     $hora_cierre = $event_id ? get_post_meta($event_id, '_eventosapp_hora_cierre', true) : '';
