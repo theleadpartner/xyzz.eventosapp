@@ -161,29 +161,6 @@ function eventosapp_whatsapp_system_default_header_image() {
 }
 
 /**
- * Medidas oficiales para la imagen compuesta que se envía por WhatsApp en tickets presenciales.
- * El cabezote del QR debe prepararse exactamente en 1000 x 160 px para que no se recorte.
- */
-if ( ! defined('EVENTOSAPP_WHATSAPP_QR_CANVAS_WIDTH') ) {
-    define('EVENTOSAPP_WHATSAPP_QR_CANVAS_WIDTH', 1000);
-}
-if ( ! defined('EVENTOSAPP_WHATSAPP_QR_CANVAS_HEIGHT') ) {
-    define('EVENTOSAPP_WHATSAPP_QR_CANVAS_HEIGHT', 1000);
-}
-if ( ! defined('EVENTOSAPP_WHATSAPP_QR_HEADER_WIDTH') ) {
-    define('EVENTOSAPP_WHATSAPP_QR_HEADER_WIDTH', 1000);
-}
-if ( ! defined('EVENTOSAPP_WHATSAPP_QR_HEADER_HEIGHT') ) {
-    define('EVENTOSAPP_WHATSAPP_QR_HEADER_HEIGHT', 160);
-}
-if ( ! defined('EVENTOSAPP_WHATSAPP_QR_IMAGE_SIZE') ) {
-    define('EVENTOSAPP_WHATSAPP_QR_IMAGE_SIZE', 760);
-}
-if ( ! defined('EVENTOSAPP_WHATSAPP_QR_LAYOUT_VERSION') ) {
-    define('EVENTOSAPP_WHATSAPP_QR_LAYOUT_VERSION', 'v3-1000x1000-header-1000x160-contain');
-}
-
-/**
  * Lee una imagen por defecto guardada en el módulo Plantillas WhatsApp, si el archivo está cargado.
  */
 function eventosapp_whatsapp_get_template_default_image($key) {
@@ -202,49 +179,39 @@ function eventosapp_whatsapp_get_template_default_image($key) {
 
 /**
  * Resuelve las imágenes efectivas para la landing, el cabezote del QR y los mensajes virtuales.
- * Orden landing: evento > respaldo legacy del ticket > cabezote de email del evento > valor por defecto > sistema.
- * Orden QR WhatsApp: evento > respaldo legacy del ticket > valor por defecto > cabezote de email > sistema.
- * Orden virtual: evento > respaldo legacy del ticket > valor por defecto > landing resuelta > sistema.
+ * Orden landing: ticket > cabezote de email del evento > valor por defecto de plantillas > sistema.
+ * Orden WhatsApp QR: ticket > valor por defecto de plantillas > cabezote de email del evento > sistema.
+ * Orden virtual: ticket > valor por defecto de plantillas > landing resuelta > sistema.
  */
 function eventosapp_whatsapp_resolve_ticket_visual_images($ticket_id, $event_id = 0) {
     $ticket_id = absint($ticket_id);
-    $event_id  = absint($event_id ?: ( $ticket_id ? get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true) : 0 ));
+    $event_id  = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
 
     $system_default = eventosapp_whatsapp_system_default_header_image();
     $email_header   = $event_id ? esc_url_raw((string) get_post_meta($event_id, '_eventosapp_email_header_img', true)) : '';
 
-    // Configuración correcta: estas imágenes pertenecen al evento, no al ticket.
-    $event_landing_header = $event_id ? esc_url_raw((string) get_post_meta($event_id, '_eventosapp_whatsapp_landing_header_img', true)) : '';
-    $event_qr_header      = $event_id ? esc_url_raw((string) get_post_meta($event_id, '_eventosapp_whatsapp_qr_header_img', true)) : '';
-    $event_virtual_image  = $event_id ? esc_url_raw((string) get_post_meta($event_id, '_eventosapp_whatsapp_virtual_message_img', true)) : '';
-
-    // Compatibilidad hacia atrás: si ya existían valores guardados en tickets antiguos,
-    // se usan únicamente como respaldo cuando el evento todavía no tiene configuración.
-    $legacy_ticket_landing_header = $ticket_id ? esc_url_raw((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_landing_header_img', true)) : '';
-    $legacy_ticket_qr_header      = $ticket_id ? esc_url_raw((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_qr_header_img', true)) : '';
-    $legacy_ticket_virtual_image  = $ticket_id ? esc_url_raw((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_virtual_message_img', true)) : '';
+    $ticket_landing_header = esc_url_raw((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_landing_header_img', true));
+    $ticket_qr_header      = esc_url_raw((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_qr_header_img', true));
+    $ticket_virtual_image  = esc_url_raw((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_virtual_message_img', true));
 
     $default_qr_header     = eventosapp_whatsapp_get_template_default_image('default_qr_header_image');
     $default_virtual_image = eventosapp_whatsapp_get_template_default_image('default_virtual_message_image');
 
-    $landing_header = $event_landing_header ?: $legacy_ticket_landing_header ?: $email_header ?: $default_qr_header ?: $system_default;
-    $qr_header      = $event_qr_header ?: $legacy_ticket_qr_header ?: $default_qr_header ?: $email_header ?: $system_default;
-    $virtual_image  = $event_virtual_image ?: $legacy_ticket_virtual_image ?: $default_virtual_image ?: $landing_header ?: $system_default;
+    $landing_header = $ticket_landing_header ?: $email_header ?: $default_qr_header ?: $system_default;
+    $qr_header      = $ticket_qr_header ?: $default_qr_header ?: $email_header ?: $system_default;
+    $virtual_image  = $ticket_virtual_image ?: $default_virtual_image ?: $landing_header ?: $system_default;
 
     return [
-        'landing_header'             => esc_url_raw($landing_header),
-        'qr_header'                  => esc_url_raw($qr_header),
-        'virtual_message_image'      => esc_url_raw($virtual_image),
-        'event_landing_override'     => $event_landing_header,
-        'event_qr_override'          => $event_qr_header,
-        'event_virtual_override'     => $event_virtual_image,
-        'ticket_landing_override'    => $legacy_ticket_landing_header,
-        'ticket_qr_override'         => $legacy_ticket_qr_header,
-        'ticket_virtual_override'    => $legacy_ticket_virtual_image,
-        'event_email_header'         => $email_header,
-        'default_qr_header'          => $default_qr_header,
-        'default_virtual_image'      => $default_virtual_image,
-        'system_default'             => $system_default,
+        'landing_header'          => esc_url_raw($landing_header),
+        'qr_header'               => esc_url_raw($qr_header),
+        'virtual_message_image'   => esc_url_raw($virtual_image),
+        'ticket_landing_override' => $ticket_landing_header,
+        'ticket_qr_override'      => $ticket_qr_header,
+        'ticket_virtual_override' => $ticket_virtual_image,
+        'event_email_header'      => $email_header,
+        'default_qr_header'       => $default_qr_header,
+        'default_virtual_image'   => $default_virtual_image,
+        'system_default'          => $system_default,
     ];
 }
 
@@ -272,60 +239,17 @@ function eventosapp_whatsapp_url_to_local_path($url) {
         return '';
     }
 
-    // Importante: varias imágenes de EventosApp llevan ?v=timestamp.
-    // Ese query string es válido en navegador, pero rompe file_exists() si se
-    // intenta convertir la URL directamente a path. Por eso primero trabajamos
-    // con la URL limpia y con el path decodificado.
-    $clean_url = strtok($url, '?');
-    if ( ! is_string($clean_url) || $clean_url === '' ) {
-        $clean_url = $url;
-    }
-
     if ( function_exists('eventosapp_url_to_path') ) {
-        $path = eventosapp_url_to_path($clean_url);
+        $path = eventosapp_url_to_path($url);
         if ( $path && file_exists($path) && is_readable($path) ) {
             return $path;
         }
     }
 
     $upload = wp_upload_dir();
-    if ( ! is_array($upload) || ! empty($upload['error']) || empty($upload['basedir']) || empty($upload['baseurl']) ) {
-        return '';
-    }
-
-    $candidates = [];
-
-    // Caso directo: misma base URL de uploads.
-    $upload_baseurl = untrailingslashit((string) $upload['baseurl']);
-    if ( strpos($clean_url, $upload_baseurl . '/') === 0 ) {
-        $relative = ltrim(substr($clean_url, strlen($upload_baseurl)), '/');
-        $candidates[] = trailingslashit($upload['basedir']) . rawurldecode($relative);
-    }
-
-    // Caso robusto: compara solo el path para soportar http/https, CDN simple
-    // o dominios equivalentes apuntando al mismo wp-content/uploads.
-    $url_path    = wp_parse_url($clean_url, PHP_URL_PATH);
-    $upload_path = wp_parse_url($upload_baseurl, PHP_URL_PATH);
-    if ( is_string($url_path) && $url_path !== '' ) {
-        $url_path = '/' . ltrim($url_path, '/');
-        $upload_path = is_string($upload_path) && $upload_path !== '' ? '/' . trim($upload_path, '/') : '';
-
-        if ( $upload_path !== '' && strpos($url_path, $upload_path . '/') === 0 ) {
-            $relative = ltrim(substr($url_path, strlen($upload_path)), '/');
-            $candidates[] = trailingslashit($upload['basedir']) . rawurldecode($relative);
-        }
-
-        // Respaldo para instalaciones donde baseurl no coincide exactamente,
-        // pero la URL contiene /wp-content/uploads/.
-        $marker = '/wp-content/uploads/';
-        $pos = strpos($url_path, $marker);
-        if ( $pos !== false ) {
-            $relative = substr($url_path, $pos + strlen($marker));
-            $candidates[] = trailingslashit($upload['basedir']) . rawurldecode(ltrim($relative, '/'));
-        }
-    }
-
-    foreach ( array_unique(array_filter($candidates)) as $path ) {
+    if ( ! empty($upload['baseurl']) && strpos($url, $upload['baseurl']) === 0 ) {
+        $relative = ltrim(substr($url, strlen($upload['baseurl'])), '/');
+        $path = trailingslashit($upload['basedir']) . $relative;
         if ( file_exists($path) && is_readable($path) ) {
             return $path;
         }
@@ -396,27 +320,6 @@ function eventosapp_whatsapp_image_cover_copy($dst, $src, $dst_x, $dst_y, $dst_w
 }
 
 /**
- * Copia una imagen completa dentro del rectángulo de destino sin recortarla.
- * Se usa para el cabezote del QR de WhatsApp, porque el logo o textos del extremo
- * derecho no deben cortarse si la imagen subida no coincide exactamente con la proporción esperada.
- */
-function eventosapp_whatsapp_image_contain_copy($dst, $src, $dst_x, $dst_y, $dst_w, $dst_h) {
-    $src_w = imagesx($src);
-    $src_h = imagesy($src);
-    if ( ! $src_w || ! $src_h || ! $dst_w || ! $dst_h ) {
-        return false;
-    }
-
-    $scale = min($dst_w / $src_w, $dst_h / $src_h);
-    $copy_w = max(1, (int) floor($src_w * $scale));
-    $copy_h = max(1, (int) floor($src_h * $scale));
-    $copy_x = $dst_x + (int) floor(($dst_w - $copy_w) / 2);
-    $copy_y = $dst_y + (int) floor(($dst_h - $copy_h) / 2);
-
-    return imagecopyresampled($dst, $src, $copy_x, $copy_y, 0, 0, $copy_w, $copy_h, $src_w, $src_h);
-}
-
-/**
  * Genera una imagen pública compuesta con cabezote + QR para WhatsApp.
  * Si no se puede generar, devuelve el QR original para no bloquear el envío.
  */
@@ -424,33 +327,14 @@ function eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url) {
     $ticket_id = absint($ticket_id);
     $qr_url    = esc_url_raw((string) $qr_url);
 
-    if ( ! $ticket_id || $qr_url === '' ) {
-        return $qr_url;
-    }
-
-    if ( ! function_exists('imagecreatetruecolor') || ! function_exists('imagejpeg') || ! function_exists('imagecopyresampled') ) {
-        eventosapp_whatsapp_add_activity_log('qr_compuesto_no_generado_gd_no_disponible', [
-            'ticket_id' => $ticket_id,
-            'qr_url'    => $qr_url,
-            'reason'    => 'La extensión GD de PHP no está disponible. Se enviará el QR original.',
-        ]);
+    if ( ! $ticket_id || $qr_url === '' || ! function_exists('imagecreatetruecolor') || ! function_exists('imagejpeg') ) {
         return $qr_url;
     }
 
     $event_id    = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
     $header_url  = eventosapp_whatsapp_get_qr_header_image($ticket_id, $event_id);
-    $cache_key   = md5($ticket_id . '|' . $qr_url . '|' . $header_url . '|' . EVENTOSAPP_WHATSAPP_QR_LAYOUT_VERSION);
+    $cache_key   = md5($ticket_id . '|' . $qr_url . '|' . $header_url);
     $upload      = wp_upload_dir();
-
-    if ( ! is_array($upload) || ! empty($upload['error']) || empty($upload['basedir']) || empty($upload['baseurl']) ) {
-        eventosapp_whatsapp_add_activity_log('qr_compuesto_no_generado_uploads_no_disponible', [
-            'ticket_id' => $ticket_id,
-            'qr_url'    => $qr_url,
-            'error'     => is_array($upload) ? ($upload['error'] ?? '') : 'wp_upload_dir no retornó arreglo.',
-        ]);
-        return $qr_url;
-    }
-
     $dir         = trailingslashit($upload['basedir']) . 'eventosapp-whatsapp/';
     $base_url    = trailingslashit($upload['baseurl']) . 'eventosapp-whatsapp/';
     $file        = 'whatsapp-ticket-' . $ticket_id . '-' . $cache_key . '.jpg';
@@ -462,45 +346,27 @@ function eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url) {
     }
 
     if ( ! wp_mkdir_p($dir) ) {
-        eventosapp_whatsapp_add_activity_log('qr_compuesto_no_generado_directorio', [
-            'ticket_id' => $ticket_id,
-            'dir'       => $dir,
-            'reason'    => 'No se pudo crear el directorio eventosapp-whatsapp en uploads.',
-        ]);
         return $qr_url;
     }
 
     $qr_image = eventosapp_whatsapp_image_resource_from_url($qr_url);
     if ( ! $qr_image ) {
-        eventosapp_whatsapp_add_activity_log('qr_compuesto_no_generado_qr_invalido', [
-            'ticket_id'       => $ticket_id,
-            'qr_url'          => $qr_url,
-            'qr_local_path'   => eventosapp_whatsapp_url_to_local_path($qr_url),
-            'reason'          => 'No se pudo leer la imagen real del QR. Se enviará el QR original.',
-        ]);
         return $qr_url;
     }
 
     $header_image = $header_url ? eventosapp_whatsapp_image_resource_from_url($header_url) : false;
 
-    $canvas_w = (int) EVENTOSAPP_WHATSAPP_QR_CANVAS_WIDTH;
-    $canvas_h = (int) EVENTOSAPP_WHATSAPP_QR_CANVAS_HEIGHT;
-    $header_h = $header_image ? (int) EVENTOSAPP_WHATSAPP_QR_HEADER_HEIGHT : 0;
-    $qr_size = (int) EVENTOSAPP_WHATSAPP_QR_IMAGE_SIZE;
-    $available_after_header = max(0, $canvas_h - $header_h - $qr_size);
-    $top_padding = $header_image ? (int) floor($available_after_header / 2) : (int) floor(($canvas_h - $qr_size) / 2);
-    $bottom_padding = $canvas_h - $header_h - $top_padding - $qr_size;
+    $canvas_w = 1000;
+    $header_h = $header_image ? 165 : 0;
+    $top_padding = $header_image ? 70 : 90;
+    $qr_size = 760;
+    $bottom_padding = 100;
+    $canvas_h = $header_h + $top_padding + $qr_size + $bottom_padding;
 
     $canvas = imagecreatetruecolor($canvas_w, $canvas_h);
     if ( ! $canvas ) {
         imagedestroy($qr_image);
-        if ( $header_image ) {
-            imagedestroy($header_image);
-        }
-        eventosapp_whatsapp_add_activity_log('qr_compuesto_no_generado_canvas', [
-            'ticket_id' => $ticket_id,
-            'reason'    => 'No se pudo crear el lienzo GD para combinar cabezote y QR.',
-        ]);
+        if ( $header_image ) imagedestroy($header_image);
         return $qr_url;
     }
 
@@ -508,48 +374,22 @@ function eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url) {
     imagefilledrectangle($canvas, 0, 0, $canvas_w, $canvas_h, $white);
 
     if ( $header_image ) {
-        eventosapp_whatsapp_image_contain_copy($canvas, $header_image, 0, 0, $canvas_w, $header_h);
+        eventosapp_whatsapp_image_cover_copy($canvas, $header_image, 0, 0, $canvas_w, $header_h);
     }
 
-    // Fondo blanco dedicado para el QR. Esto evita que la lectura se afecte si
-    // el PNG original trae transparencia o bordes muy justos.
     $qr_x = (int) floor(($canvas_w - $qr_size) / 2);
     $qr_y = $header_h + $top_padding;
-    $quiet_zone = 28;
-    imagefilledrectangle($canvas, $qr_x - $quiet_zone, $qr_y - $quiet_zone, $qr_x + $qr_size + $quiet_zone, $qr_y + $qr_size + $quiet_zone, $white);
     imagecopyresampled($canvas, $qr_image, $qr_x, $qr_y, 0, 0, $qr_size, $qr_size, imagesx($qr_image), imagesy($qr_image));
 
     $ok = imagejpeg($canvas, $path, 92);
 
     imagedestroy($canvas);
     imagedestroy($qr_image);
-    if ( $header_image ) {
-        imagedestroy($header_image);
-    }
+    if ( $header_image ) imagedestroy($header_image);
 
-    if ( ! $ok || ! file_exists($path) || filesize($path) <= 0 ) {
-        eventosapp_whatsapp_add_activity_log('qr_compuesto_no_generado_escritura', [
-            'ticket_id' => $ticket_id,
-            'path'      => $path,
-            'reason'    => 'No se pudo escribir la imagen compuesta en uploads.',
-        ]);
+    if ( ! $ok || ! file_exists($path) ) {
         return $qr_url;
     }
-
-    eventosapp_whatsapp_add_activity_log('qr_compuesto_generado', [
-        'ticket_id'       => $ticket_id,
-        'event_id'        => $event_id,
-        'qr_url'          => $qr_url,
-        'header_url'      => $header_url,
-        'composite_url'   => esc_url_raw($public_url),
-        'canvas_width'    => $canvas_w,
-        'canvas_height'   => $canvas_h,
-        'header_width'    => (int) EVENTOSAPP_WHATSAPP_QR_HEADER_WIDTH,
-        'header_height'   => $header_h,
-        'qr_size'         => $qr_size,
-        'qr_local_path'   => eventosapp_whatsapp_url_to_local_path($qr_url),
-        'header_local_path' => $header_url ? eventosapp_whatsapp_url_to_local_path($header_url) : '',
-    ]);
 
     return esc_url_raw($public_url);
 }
@@ -563,35 +403,15 @@ function eventosapp_whatsapp_prepare_message_image_url($ticket_id, $qr_url = '')
     $is_virtual = function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id);
 
     if ( $is_virtual ) {
-        $virtual_image = eventosapp_whatsapp_get_virtual_message_image($ticket_id, $event_id);
-        eventosapp_whatsapp_add_activity_log('imagen_whatsapp_virtual_resuelta', [
-            'ticket_id' => $ticket_id,
-            'event_id'  => $event_id,
-            'image_url' => $virtual_image,
-        ]);
-        return $virtual_image;
+        return eventosapp_whatsapp_get_virtual_message_image($ticket_id, $event_id);
     }
 
     $qr_url = esc_url_raw((string) $qr_url);
     if ( $qr_url === '' ) {
-        eventosapp_whatsapp_add_activity_log('imagen_whatsapp_presencial_sin_qr', [
-            'ticket_id' => $ticket_id,
-            'event_id'  => $event_id,
-            'reason'    => 'No se encontró/generó URL del QR real del ticket para hacer la composición.',
-        ]);
         return '';
     }
 
-    $composite_url = eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url);
-    eventosapp_whatsapp_add_activity_log('imagen_whatsapp_presencial_resuelta', [
-        'ticket_id'     => $ticket_id,
-        'event_id'      => $event_id,
-        'qr_url'        => $qr_url,
-        'composite_url' => $composite_url,
-        'is_composite'  => $composite_url !== '' && $composite_url !== $qr_url ? 1 : 0,
-    ]);
-
-    return $composite_url;
+    return eventosapp_whatsapp_build_qr_message_image($ticket_id, $qr_url);
 }
 
 /**
@@ -1542,285 +1362,67 @@ function eventosapp_whatsapp_render_ticket_metabox($post) {
 
 
 /**
- * Metabox adicional para personalizar el diseño de WhatsApp y la landing del evento.
- *
- * Importante: esta configuración pertenece al CPT del evento. Los valores antiguos
- * que pudieron quedar guardados en tickets se conservan únicamente como respaldo
- * para no romper tickets ya creados.
+ * Metabox adicional para personalizar el diseño de WhatsApp y la landing del ticket.
+ * Se registra desde este mismo archivo para no cargar archivos adicionales.
  */
-if ( ! function_exists('eventosapp_whatsapp_event_post_types') ) {
-    function eventosapp_whatsapp_event_post_types() {
-        $post_types = [ 'eventosapp_event', 'eventosapp_events' ];
-        $post_types = array_values(array_unique(array_filter($post_types, static function($post_type) {
-            return is_string($post_type) && $post_type !== '';
-        })));
-
-        return apply_filters('eventosapp_whatsapp_event_post_types', $post_types);
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_active_event_post_types') ) {
-    function eventosapp_whatsapp_active_event_post_types() {
-        $active = [];
-        foreach ( eventosapp_whatsapp_event_post_types() as $post_type ) {
-            if ( post_type_exists($post_type) ) {
-                $active[] = $post_type;
-            }
-        }
-        return $active ?: [ 'eventosapp_event' ];
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_is_event_post_type') ) {
-    function eventosapp_whatsapp_is_event_post_type($post_type) {
-        return in_array((string) $post_type, eventosapp_whatsapp_event_post_types(), true);
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_get_event_modalidad_for_admin') ) {
-    function eventosapp_whatsapp_get_event_modalidad_for_admin($event_id) {
-        $event_id = absint($event_id);
-        $modalidad = '';
-
-        if ( $event_id && function_exists('eventosapp_get_event_modalidad') ) {
-            $modalidad = eventosapp_get_event_modalidad($event_id);
-        }
-        if ( $modalidad === '' && $event_id ) {
-            $modalidad = get_post_meta($event_id, '_eventosapp_event_modalidad', true);
-        }
-        if ( $modalidad === '' && $event_id ) {
-            $modalidad = get_post_meta($event_id, '_eventosapp_modalidad_evento', true);
-        }
-
-        if ( function_exists('eventosapp_normalize_event_modalidad') ) {
-            return eventosapp_normalize_event_modalidad($modalidad ?: 'presencial');
-        }
-
-        $modalidad = sanitize_key((string) $modalidad);
-        return in_array($modalidad, [ 'presencial', 'virtual', 'presencial_virtual' ], true) ? $modalidad : 'presencial';
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_event_template_modalities') ) {
-    function eventosapp_whatsapp_event_template_modalities($event_id) {
-        $mode = eventosapp_whatsapp_get_event_modalidad_for_admin($event_id);
-        if ( $mode === 'virtual' ) {
-            return [ 'virtual' ];
-        }
-        if ( $mode === 'presencial_virtual' ) {
-            return [ 'presencial', 'virtual' ];
-        }
-        return [ 'presencial' ];
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_template_matches_modality') ) {
-    function eventosapp_whatsapp_template_matches_modality($template, $modality, $include_custom = true) {
-        if ( ! is_array($template) ) {
-            return false;
-        }
-
-        $modality = sanitize_key((string) $modality);
-        $template_modality = sanitize_key((string)($template['modality'] ?? 'custom'));
-        $base_key = sanitize_key((string)($template['base_key'] ?? ''));
-
-        if ( $template_modality === $modality || $base_key === $modality ) {
-            return true;
-        }
-
-        return $include_custom && $template_modality === 'custom';
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_get_event_selected_template_id') ) {
-    function eventosapp_whatsapp_get_event_selected_template_id($event_id, $modality) {
-        $event_id = absint($event_id);
-        $modality = sanitize_key((string) $modality);
-        if ( ! $event_id || ! in_array($modality, [ 'presencial', 'virtual' ], true) ) {
-            return '';
-        }
-
-        $template_id = get_post_meta($event_id, '_eventosapp_whatsapp_template_' . $modality . '_id', true);
-        if ( $template_id === '' ) {
-            $template_id = get_post_meta($event_id, '_eventosapp_whatsapp_' . $modality . '_template_id', true);
-        }
-
-        return sanitize_key((string) $template_id);
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_get_templates_for_select') ) {
-    function eventosapp_whatsapp_get_templates_for_select($modality) {
-        $modality = sanitize_key((string) $modality);
-        if ( ! function_exists('eventosapp_whatsapp_templates_get_settings') ) {
-            return [];
-        }
-
-        $settings = eventosapp_whatsapp_templates_get_settings();
-        $templates = isset($settings['templates']) && is_array($settings['templates']) ? $settings['templates'] : [];
-        $options = [];
-
-        foreach ( $templates as $template_id => $template ) {
-            if ( ! is_array($template) ) {
-                continue;
-            }
-            $template['id'] = sanitize_key((string)($template['id'] ?? $template_id));
-            if ( $template['id'] === '' || ! eventosapp_whatsapp_template_matches_modality($template, $modality, true) ) {
-                continue;
-            }
-            $options[$template['id']] = $template;
-        }
-
-        uasort($options, static function($a, $b) use ($modality) {
-            $a_exact = eventosapp_whatsapp_template_matches_modality($a, $modality, false) ? 0 : 1;
-            $b_exact = eventosapp_whatsapp_template_matches_modality($b, $modality, false) ? 0 : 1;
-            if ( $a_exact !== $b_exact ) {
-                return $a_exact <=> $b_exact;
-            }
-
-            $a_approved = function_exists('eventosapp_whatsapp_is_template_approved') && eventosapp_whatsapp_is_template_approved($a) ? 0 : 1;
-            $b_approved = function_exists('eventosapp_whatsapp_is_template_approved') && eventosapp_whatsapp_is_template_approved($b) ? 0 : 1;
-            if ( $a_approved !== $b_approved ) {
-                return $a_approved <=> $b_approved;
-            }
-
-            return strcasecmp((string)($a['title'] ?? $a['name'] ?? ''), (string)($b['title'] ?? $b['name'] ?? ''));
-        });
-
-        return $options;
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_template_status_label') ) {
-    function eventosapp_whatsapp_template_status_label($template) {
-        $status = strtoupper((string)($template['meta_status'] ?? 'LOCAL'));
-        $labels = [
-            'APPROVED'      => 'Aprobada',
-            'ACTIVE'        => 'Aprobada',
-            'PENDING'       => 'Pendiente',
-            'IN_APPEAL'     => 'En apelación',
-            'REJECTED'      => 'Rechazada',
-            'PAUSED'        => 'Pausada',
-            'DISABLED'      => 'Deshabilitada',
-            'LOCAL'         => 'Local sin aprobar',
-            ''              => 'Local sin aprobar',
-        ];
-        return $labels[$status] ?? $status;
-    }
-}
-
-if ( ! function_exists('eventosapp_whatsapp_render_event_template_select') ) {
-    function eventosapp_whatsapp_render_event_template_select($event_id, $modality) {
-        $event_id = absint($event_id);
-        $modality = sanitize_key((string) $modality);
-        $label = $modality === 'virtual' ? 'Plantilla WhatsApp para modalidad virtual' : 'Plantilla WhatsApp para modalidad presencial';
-        $field_name = 'eventosapp_whatsapp_template_' . $modality . '_id';
-        $field_id = 'evapp_' . $field_name;
-        $current = eventosapp_whatsapp_get_event_selected_template_id($event_id, $modality);
-        $templates = eventosapp_whatsapp_get_templates_for_select($modality);
-        $templates_page = admin_url('admin.php?page=eventosapp_whatsapp_templates');
-        ?>
-        <label for="<?php echo esc_attr($field_id); ?>"><?php echo esc_html($label); ?></label>
-        <div class="evapp-wa-visual-field">
-            <?php if ( empty($templates) ) : ?>
-                <p class="evapp-wa-visual-help" style="margin-top:0;">
-                    No hay plantillas locales para esta modalidad. Crea o sincroniza plantillas desde
-                    <a href="<?php echo esc_url($templates_page); ?>">Plantillas WhatsApp</a>.
-                </p>
-            <?php else : ?>
-                <select id="<?php echo esc_attr($field_id); ?>" name="<?php echo esc_attr($field_name); ?>" class="evapp-wa-template-select">
-                    <option value=""><?php echo esc_html($modality === 'virtual' ? 'Automática: primera plantilla virtual aprobada' : 'Automática: primera plantilla presencial aprobada'); ?></option>
-                    <?php foreach ( $templates as $template_id => $template ) :
-                        $status_label = eventosapp_whatsapp_template_status_label($template);
-                        $title = trim((string)($template['title'] ?? ''));
-                        $name = trim((string)($template['name'] ?? ''));
-                        $option_label = ($title !== '' ? $title : $name) . ($name !== '' ? ' — ' . $name : '') . ' [' . $status_label . ']';
-                    ?>
-                        <option value="<?php echo esc_attr($template_id); ?>" <?php selected($current, $template_id); ?>><?php echo esc_html($option_label); ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <p class="evapp-wa-visual-help">
-                    Si eliges una plantilla no aprobada, EventosApp la mostrará en la configuración, pero al enviar usará una plantilla aprobada compatible como respaldo. Para envíos reales Meta exige estado aprobado.
-                </p>
-            <?php endif; ?>
-        </div>
-        <?php
-    }
-}
-
 add_action('add_meta_boxes', function() {
-    foreach ( eventosapp_whatsapp_active_event_post_types() as $screen ) {
-        add_meta_box(
-            'eventosapp_event_whatsapp_visuals',
-            'Diseño WhatsApp y Landing',
-            'eventosapp_whatsapp_render_event_visuals_metabox',
-            $screen,
-            'normal',
-            'default'
-        );
-    }
-}, 30);
+    add_meta_box(
+        'eventosapp_ticket_whatsapp_visuals',
+        'Diseño WhatsApp y Landing',
+        'eventosapp_whatsapp_render_ticket_visuals_metabox',
+        'eventosapp_ticket',
+        'normal',
+        'default'
+    );
+});
 
-function eventosapp_whatsapp_render_event_visuals_metabox($post) {
-    $event_id = absint($post->ID);
-    $visuals  = eventosapp_whatsapp_resolve_ticket_visual_images(0, $event_id);
-    $modalidad_evento = eventosapp_whatsapp_get_event_modalidad_for_admin($event_id);
-    $template_modalities = eventosapp_whatsapp_event_template_modalities($event_id);
-
-    $modalidad_labels = [
-        'presencial'         => 'Presencial',
-        'virtual'            => 'Virtual',
-        'presencial_virtual' => 'Presencial y Virtual',
-    ];
+function eventosapp_whatsapp_render_ticket_visuals_metabox($post) {
+    $event_id = absint(get_post_meta($post->ID, '_eventosapp_ticket_evento_id', true));
+    $visuals  = eventosapp_whatsapp_resolve_ticket_visual_images($post->ID, $event_id);
 
     $fields = [
         'eventosapp_whatsapp_landing_header_img' => [
             'meta'        => '_eventosapp_whatsapp_landing_header_img',
             'label'       => 'Cabezote personalizado para la landing del ticket',
-            'description' => 'Imagen superior que se usará en la landing pública del ticket cuando aplique. Si se deja vacía, se usará el cabezote del email del evento o el valor por defecto.',
+            'description' => 'Si lo dejas vacío, la landing usará el cabezote configurado en el email del evento. Si tampoco existe, tomará la imagen por defecto del sistema.',
             'effective'   => $visuals['landing_header'],
         ],
         'eventosapp_whatsapp_qr_header_img' => [
             'meta'        => '_eventosapp_whatsapp_qr_header_img',
-            'label'       => 'Imagen por defecto para cabezote QR WhatsApp',
-            'description' => 'Esta imagen NO reemplaza el QR. EventosApp toma el QR real del ticket presencial y genera una composición con este cabezote encima del QR. Medida exacta recomendada: 1000 x 160 px, en JPG o PNG. Si subes otra proporción, el sistema la centrará completa para evitar cortes, pero puede dejar franjas blancas.',
+            'label'       => 'Cabezote para imagen QR enviada por WhatsApp',
+            'description' => 'Esta imagen se monta encima del QR para que el mensaje llegue como pieza gráfica con cabezote, similar al ejemplo adjunto.',
             'effective'   => $visuals['qr_header'],
         ],
         'eventosapp_whatsapp_virtual_message_img' => [
             'meta'        => '_eventosapp_whatsapp_virtual_message_img',
             'label'       => 'Imagen para mensajes WhatsApp de modalidad virtual',
-            'description' => 'Se usará como imagen del mensaje para tickets virtuales. El botón o enlace del ticket virtual dirigirá a la landing virtual existente del evento.',
+            'description' => 'Se usará como imagen del mensaje para tickets virtuales, donde no se envía QR de ingreso presencial.',
             'effective'   => $visuals['virtual_message_image'],
         ],
     ];
 
     wp_enqueue_media();
-    wp_nonce_field('eventosapp_whatsapp_event_visuals_save', 'eventosapp_whatsapp_event_visuals_nonce');
+    wp_nonce_field('eventosapp_whatsapp_ticket_visuals_save', 'eventosapp_whatsapp_ticket_visuals_nonce');
     ?>
     <style>
-        .evapp-wa-visual-grid{display:grid;grid-template-columns:260px minmax(280px,1fr);gap:14px 18px;align-items:start;max-width:1040px;}
+        .evapp-wa-visual-grid{display:grid;grid-template-columns:240px minmax(280px,1fr);gap:14px 18px;align-items:start;max-width:980px;}
         .evapp-wa-visual-grid label{font-weight:700;padding-top:7px;}
-        .evapp-wa-visual-field input[type="text"],.evapp-wa-visual-field select{width:100%;max-width:720px;}
+        .evapp-wa-visual-field input[type="text"]{width:100%;max-width:680px;}
         .evapp-wa-visual-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px;}
         .evapp-wa-visual-help{font-size:12px;color:#646970;margin:5px 0 0;line-height:1.45;}
-        .evapp-wa-visual-preview{display:flex;align-items:center;gap:12px;margin-top:9px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:10px;max-width:720px;}
+        .evapp-wa-visual-preview{display:flex;align-items:center;gap:12px;margin-top:9px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:10px;max-width:680px;}
         .evapp-wa-visual-preview img{max-width:180px;max-height:86px;width:auto;height:auto;background:#fff;border:1px solid #dcdcde;border-radius:6px;object-fit:cover;}
         .evapp-wa-visual-preview code{word-break:break-all;white-space:normal;}
-        .evapp-wa-visual-note{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin:0 0 14px;line-height:1.45;max-width:1040px;}
-        .evapp-wa-visual-section-title{grid-column:1 / -1;margin:8px 0 0;padding:10px 12px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;font-weight:700;}
-        @media (max-width: 900px){.evapp-wa-visual-grid{grid-template-columns:1fr;}.evapp-wa-visual-grid label{padding-top:0;}}
+        .evapp-wa-visual-note{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin:0 0 14px;line-height:1.45;}
     </style>
 
     <div class="evapp-wa-visual-note">
-        <strong>Ubicación correcta de esta configuración:</strong> ahora este metabox pertenece al evento.
-        La modalidad actual del evento es <strong><?php echo esc_html($modalidad_labels[$modalidad_evento] ?? 'Presencial'); ?></strong>.
-        Por eso se mostrarán únicamente los campos de plantilla que corresponden: presencial, virtual o ambos.
+        <strong>Jerarquía de imágenes:</strong> la landing toma primero este ticket, luego el cabezote del email del evento y finalmente el valor por defecto. El QR de WhatsApp toma primero este ticket, luego la imagen por defecto de Plantillas WhatsApp y finalmente el cabezote del email/sistema.
     </div>
 
     <div class="evapp-wa-visual-grid">
-        <div class="evapp-wa-visual-section-title">Imágenes del evento para WhatsApp y landing</div>
         <?php foreach ( $fields as $field_name => $field ) :
-            $current = esc_url_raw((string) get_post_meta($event_id, $field['meta'], true));
+            $current = esc_url_raw((string) get_post_meta($post->ID, $field['meta'], true));
             $effective = esc_url_raw((string) $field['effective']);
             $input_id = 'evapp_' . sanitize_key($field_name);
         ?>
@@ -1843,17 +1445,12 @@ function eventosapp_whatsapp_render_event_visuals_metabox($post) {
                 <?php endif; ?>
             </div>
         <?php endforeach; ?>
-
-        <div class="evapp-wa-visual-section-title">Plantillas WhatsApp por modalidad</div>
-        <?php foreach ( $template_modalities as $template_modality ) : ?>
-            <?php eventosapp_whatsapp_render_event_template_select($event_id, $template_modality); ?>
-        <?php endforeach; ?>
     </div>
 
     <script>
     jQuery(function($){
         var evappWaVisualFrame = null;
-        $('.evapp-wa-visual-select').off('click.evappWaVisual').on('click.evappWaVisual', function(e){
+        $('.evapp-wa-visual-select').on('click', function(e){
             e.preventDefault();
             var targetSelector = $(this).data('target');
             if (!targetSelector) return;
@@ -1871,7 +1468,7 @@ function eventosapp_whatsapp_render_event_visuals_metabox($post) {
             });
             evappWaVisualFrame.open();
         });
-        $('.evapp-wa-visual-clear').off('click.evappWaVisual').on('click.evappWaVisual', function(e){
+        $('.evapp-wa-visual-clear').on('click', function(e){
             e.preventDefault();
             var targetSelector = $(this).data('target');
             if (targetSelector) $(targetSelector).val('').trigger('change');
@@ -1881,32 +1478,27 @@ function eventosapp_whatsapp_render_event_visuals_metabox($post) {
     <?php
 }
 
-function eventosapp_whatsapp_save_event_visuals_metabox($post_id, $post = null, $update = false) {
+add_action('save_post_eventosapp_ticket', function($post_id, $post, $update) {
     if ( defined('DOING_AUTOSAVE') && DOING_AUTOSAVE ) {
         return;
     }
     if ( wp_is_post_revision($post_id) ) {
         return;
     }
-    if ( ! isset($_POST['eventosapp_whatsapp_event_visuals_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_event_visuals_nonce'], 'eventosapp_whatsapp_event_visuals_save') ) {
+    if ( ! isset($_POST['eventosapp_whatsapp_ticket_visuals_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_ticket_visuals_nonce'], 'eventosapp_whatsapp_ticket_visuals_save') ) {
         return;
     }
     if ( ! current_user_can('edit_post', $post_id) ) {
         return;
     }
 
-    $post_type = get_post_type($post_id);
-    if ( ! eventosapp_whatsapp_is_event_post_type($post_type) ) {
-        return;
-    }
-
-    $image_fields = [
+    $fields = [
         'eventosapp_whatsapp_landing_header_img' => '_eventosapp_whatsapp_landing_header_img',
         'eventosapp_whatsapp_qr_header_img' => '_eventosapp_whatsapp_qr_header_img',
         'eventosapp_whatsapp_virtual_message_img' => '_eventosapp_whatsapp_virtual_message_img',
     ];
 
-    foreach ( $image_fields as $request_key => $meta_key ) {
+    foreach ( $fields as $request_key => $meta_key ) {
         $value = isset($_POST[$request_key]) ? esc_url_raw(trim((string) wp_unslash($_POST[$request_key]))) : '';
         if ( $value !== '' ) {
             update_post_meta($post_id, $meta_key, $value);
@@ -1914,22 +1506,7 @@ function eventosapp_whatsapp_save_event_visuals_metabox($post_id, $post = null, 
             delete_post_meta($post_id, $meta_key);
         }
     }
-
-    foreach ( [ 'presencial', 'virtual' ] as $modality ) {
-        $request_key = 'eventosapp_whatsapp_template_' . $modality . '_id';
-        if ( ! array_key_exists($request_key, $_POST) ) {
-            continue;
-        }
-        $template_id = sanitize_key((string) wp_unslash($_POST[$request_key]));
-        if ( $template_id !== '' ) {
-            update_post_meta($post_id, '_eventosapp_whatsapp_template_' . $modality . '_id', $template_id);
-        } else {
-            delete_post_meta($post_id, '_eventosapp_whatsapp_template_' . $modality . '_id');
-        }
-    }
-}
-add_action('save_post_eventosapp_event', 'eventosapp_whatsapp_save_event_visuals_metabox', 30, 3);
-add_action('save_post_eventosapp_events', 'eventosapp_whatsapp_save_event_visuals_metabox', 30, 3);
+}, 20, 3);
 
 function eventosapp_whatsapp_render_ticket_diagnostics_metabox($post) {
     $history = get_post_meta($post->ID, '_eventosapp_whatsapp_history', true);
@@ -2281,81 +1858,6 @@ function eventosapp_whatsapp_is_template_approved($template) {
 }
 
 /**
- * Normaliza identificadores locales/remotos de plantilla para comparación.
- */
-function eventosapp_whatsapp_template_lookup_key($value) {
-    $value = trim((string) $value);
-    if ( $value === '' ) {
-        return '';
-    }
-    return sanitize_key($value);
-}
-
-/**
- * Prepara una plantilla local para uso runtime sin depender de si el option está
- * indexado por ID local, nombre de Meta o algún ID heredado.
- */
-function eventosapp_whatsapp_prepare_runtime_template($template, $fallback_id = '') {
-    if ( ! is_array($template) ) {
-        return [];
-    }
-
-    $fallback_id = eventosapp_whatsapp_template_lookup_key($fallback_id);
-    $template['id'] = eventosapp_whatsapp_template_lookup_key($template['id'] ?? $fallback_id);
-    if ( $template['id'] === '' ) {
-        $template['id'] = $fallback_id;
-    }
-
-    $template['name'] = sanitize_key((string)($template['name'] ?? ''));
-    $template['language'] = sanitize_text_field((string)($template['language'] ?? 'es'));
-    $template['modality'] = sanitize_key((string)($template['modality'] ?? 'custom'));
-    $template['base_key'] = sanitize_key((string)($template['base_key'] ?? $template['modality']));
-    $template['meta_status'] = strtoupper(sanitize_text_field((string)($template['meta_status'] ?? 'LOCAL')));
-    $template['meta_template_id'] = sanitize_text_field((string)($template['meta_template_id'] ?? ''));
-
-    return $template;
-}
-
-/**
- * Busca una plantilla en el arreglo local por cualquiera de sus identificadores.
- * Soluciona el caso en que el select guarda template['id'], pero el option quedó
- * indexado por otra clave local después de editar/sincronizar/duplicar.
- */
-function eventosapp_whatsapp_find_template_by_identifier($templates, $identifier) {
-    if ( ! is_array($templates) ) {
-        return null;
-    }
-
-    $needle = eventosapp_whatsapp_template_lookup_key($identifier);
-    if ( $needle === '' ) {
-        return null;
-    }
-
-    foreach ( $templates as $template_key => $template ) {
-        if ( ! is_array($template) ) {
-            continue;
-        }
-
-        $runtime_template = eventosapp_whatsapp_prepare_runtime_template($template, $template_key);
-        $lookup_values = [
-            $template_key,
-            $runtime_template['id'] ?? '',
-            $runtime_template['name'] ?? '',
-            $runtime_template['meta_template_id'] ?? '',
-        ];
-
-        foreach ( $lookup_values as $lookup_value ) {
-            if ( eventosapp_whatsapp_template_lookup_key($lookup_value) === $needle ) {
-                $runtime_template['_storage_key'] = sanitize_key((string)$template_key);
-                return $runtime_template;
-            }
-        }
-    }
-
-    return null;
-}
-
-/**
  * Determina si para este ticket se debe preferir plantilla virtual o presencial.
  */
 function eventosapp_whatsapp_get_ticket_template_modality($ticket_id, $event_id = 0) {
@@ -2409,8 +1911,6 @@ function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $even
         return null;
     }
 
-    $ticket_id = absint($ticket_id);
-    $event_id = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
     $settings = eventosapp_whatsapp_templates_get_settings();
     $templates = isset($settings['templates']) && is_array($settings['templates']) ? $settings['templates'] : [];
     if ( empty($templates) ) {
@@ -2418,95 +1918,23 @@ function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $even
     }
 
     $preferred_modality = eventosapp_whatsapp_get_ticket_template_modality($ticket_id, $event_id);
-
-    // 1) Prioridad absoluta: plantilla escogida en el metabox del evento para
-    // la modalidad real del ticket. Se busca por ID local, storage key, nombre
-    // de Meta o meta_template_id para evitar que caiga a la plantilla antigua.
-    if ( $event_id && function_exists('eventosapp_whatsapp_get_event_selected_template_id') ) {
-        $selected_template_id = eventosapp_whatsapp_get_event_selected_template_id($event_id, $preferred_modality);
-        if ( $selected_template_id !== '' ) {
-            $selected_template = eventosapp_whatsapp_find_template_by_identifier($templates, $selected_template_id);
-
-            if ( $selected_template && eventosapp_whatsapp_is_template_approved($selected_template) ) {
-                $selected_template['_selection_source'] = 'event_metabox_' . $preferred_modality;
-                eventosapp_whatsapp_add_activity_log('plantilla_evento_seleccionada_runtime', [
-                    'ticket_id'            => $ticket_id,
-                    'event_id'             => $event_id,
-                    'preferred_modality'   => $preferred_modality,
-                    'selected_template_id' => $selected_template_id,
-                    'runtime_template_id'  => $selected_template['id'] ?? '',
-                    'storage_key'          => $selected_template['_storage_key'] ?? '',
-                    'template_name'        => $selected_template['name'] ?? '',
-                    'language'             => $selected_template['language'] ?? '',
-                    'meta_status'          => $selected_template['meta_status'] ?? '',
-                    'meta_template_id'     => $selected_template['meta_template_id'] ?? '',
-                ]);
-                return $selected_template;
-            }
-
-            eventosapp_whatsapp_add_activity_log($selected_template ? 'plantilla_evento_no_aprobada' : 'plantilla_evento_no_encontrada', [
-                'ticket_id'            => $ticket_id,
-                'event_id'             => $event_id,
-                'preferred_modality'   => $preferred_modality,
-                'selected_template_id' => $selected_template_id,
-                'template_found'       => $selected_template ? 1 : 0,
-                'selected_template_name' => $selected_template['name'] ?? '',
-                'selected_template_status' => $selected_template['meta_status'] ?? '',
-                'reason'               => $selected_template
-                    ? 'La plantilla seleccionada en el evento existe, pero no está aprobada/activa en Meta. Se buscará un respaldo aprobado.'
-                    : 'La plantilla seleccionada en el evento no se encontró en el option local de plantillas. Se buscará un respaldo aprobado.',
-            ]);
-        }
-    }
-
-    // 2) Respaldo: primera plantilla aprobada que coincida exactamente con la
-    // modalidad. Se mantiene para no bloquear envíos si el evento no tiene
-    // selección o si la selección todavía no está aprobada.
     $fallback = null;
 
-    foreach ( $templates as $template_id => $template ) {
-        if ( ! is_array($template) ) {
+    foreach ( $templates as $template ) {
+        if ( ! eventosapp_whatsapp_is_template_approved($template) ) {
             continue;
-        }
-
-        $template = eventosapp_whatsapp_prepare_runtime_template($template, $template_id);
-        if ( empty($template) || ! eventosapp_whatsapp_is_template_approved($template) ) {
-            continue;
-        }
-
-        $matches_modality = function_exists('eventosapp_whatsapp_template_matches_modality')
-            ? eventosapp_whatsapp_template_matches_modality($template, $preferred_modality, false)
-            : false;
-
-        if ( $matches_modality ) {
-            $template['_selection_source'] = 'approved_modality_fallback';
-            eventosapp_whatsapp_add_activity_log('plantilla_respaldo_modalidad_runtime', [
-                'ticket_id'          => $ticket_id,
-                'event_id'           => $event_id,
-                'preferred_modality' => $preferred_modality,
-                'template_id'        => $template['id'] ?? '',
-                'template_name'      => $template['name'] ?? '',
-                'meta_status'        => $template['meta_status'] ?? '',
-            ]);
-            return $template;
         }
 
         $template_modality = sanitize_key((string)($template['modality'] ?? 'custom'));
+        $base_key = sanitize_key((string)($template['base_key'] ?? ''));
+
+        if ( $template_modality === $preferred_modality || $base_key === $preferred_modality ) {
+            return $template;
+        }
+
         if ( $fallback === null && in_array($template_modality, ['custom', 'presencial', 'virtual'], true) ) {
             $fallback = $template;
         }
-    }
-
-    if ( $fallback ) {
-        $fallback['_selection_source'] = 'approved_general_fallback';
-        eventosapp_whatsapp_add_activity_log('plantilla_respaldo_general_runtime', [
-            'ticket_id'          => $ticket_id,
-            'event_id'           => $event_id,
-            'preferred_modality' => $preferred_modality,
-            'template_id'        => $fallback['id'] ?? '',
-            'template_name'      => $fallback['name'] ?? '',
-            'meta_status'        => $fallback['meta_status'] ?? '',
-        ]);
     }
 
     return $fallback;
@@ -2558,14 +1986,7 @@ function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_i
     }
 
     $ticket_public = eventosapp_whatsapp_get_ticket_public_code($ticket_id);
-    if ( function_exists('eventosapp_whatsapp_templates_public_ticket_landing_url') ) {
-        $landing_url = eventosapp_whatsapp_templates_public_ticket_landing_url($ticket_public);
-    } else {
-        $landing_url = add_query_arg([
-            'eventosapp_whatsapp_public_action' => 'ticket_landing',
-            'ticket' => $ticket_public,
-        ], home_url('/'));
-    }
+    $landing_url = admin_url('admin-post.php?action=eventosapp_whatsapp_ticket_landing&ticket=' . rawurlencode($ticket_public));
     if ( $modality === 'virtual' && function_exists('eventosapp_get_virtual_landing_url') ) {
         $virtual_landing = eventosapp_get_virtual_landing_url($ticket_id);
         if ( $virtual_landing ) {
@@ -2584,9 +2005,16 @@ function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_i
         3 => $fecha ?: 'Fecha del evento',
         4 => $hora ?: 'Hora del evento',
         5 => $place_or_platform,
-        6 => $landing_url,
+        6 => $organizador,
+
+        // Compatibilidad: las plantillas anteriores de EventosApp usaban {{7}}
+        // para el organizador. La plantilla nueva usa {{6}}. Dejamos ambos
+        // valores con el mismo dato para no romper plantillas aprobadas previas.
         7 => $organizador,
+
+        // Variables adicionales para plantillas personalizadas futuras.
         8 => $modality === 'virtual' ? 'Virtual' : 'Presencial',
+        9 => $landing_url,
     ];
 }
 
@@ -2628,6 +2056,17 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
     $values = eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_id);
     $body_count = eventosapp_whatsapp_get_template_body_variable_count($template['body_text'] ?? '');
     $debug['body_variable_count'] = $body_count;
+    $debug['body_variable_schema'] = [
+        '1' => 'nombre_asistente',
+        '2' => 'evento',
+        '3' => 'fecha',
+        '4' => 'hora',
+        '5' => 'lugar_o_plataforma',
+        '6' => 'organizador',
+        '7' => 'organizador_compatibilidad',
+        '8' => 'modalidad',
+        '9' => 'landing_ticket',
+    ];
 
     if ( $body_count > 0 ) {
         $params = [];
@@ -2819,41 +2258,11 @@ function eventosapp_whatsapp_ensure_qr_url($ticket_id) {
         return '';
     }
 
-    $candidates = [];
-
-    $add_candidate = static function($url, $source = '') use (&$candidates) {
-        $url = esc_url_raw((string) $url);
-        if ( $url === '' ) {
-            return;
-        }
-        $candidates[] = [
-            'url'    => $url,
-            'source' => sanitize_text_field((string) $source),
-        ];
-    };
-
     $all_qrs = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
-    if ( is_array($all_qrs) ) {
-        // Primero el QR específico de WhatsApp, luego los QR ya existentes del
-        // ticket. Todos representan el código real del ticket y sirven para la
-        // composición visual con cabezote.
-        foreach ( [ 'whatsapp', 'pdf', 'email', 'ticket', 'checkin', 'counter', 'wallet', 'default' ] as $key ) {
-            if ( ! empty($all_qrs[$key]['url']) ) {
-                $add_candidate($all_qrs[$key]['url'], '_eventosapp_qr_codes.' . $key);
-            }
-        }
-        foreach ( $all_qrs as $key => $qr_data ) {
-            if ( is_array($qr_data) && ! empty($qr_data['url']) ) {
-                $add_candidate($qr_data['url'], '_eventosapp_qr_codes.' . sanitize_key((string)$key));
-            }
-        }
+    if ( is_array($all_qrs) && ! empty($all_qrs['whatsapp']['url']) ) {
+        return esc_url_raw($all_qrs['whatsapp']['url']);
     }
 
-    foreach ( [ '_eventosapp_ticket_qr_url', '_eventosapp_wallet_android_qr_url', '_eventosapp_qr_url' ] as $meta_key ) {
-        $add_candidate(get_post_meta($ticket_id, $meta_key, true), $meta_key);
-    }
-
-    // Intenta crear el QR específico para WhatsApp con el QR Manager si está disponible.
     $manager = null;
     if ( isset($GLOBALS['eventosapp_qr_manager_instance']) && $GLOBALS['eventosapp_qr_manager_instance'] instanceof EventosApp_QR_Manager ) {
         $manager = $GLOBALS['eventosapp_qr_manager_instance'];
@@ -2864,53 +2273,9 @@ function eventosapp_whatsapp_ensure_qr_url($ticket_id) {
     if ( $manager && method_exists($manager, 'generate_qr_code') ) {
         $qr = $manager->generate_qr_code($ticket_id, 'whatsapp');
         if ( is_array($qr) && ! empty($qr['url']) ) {
-            $add_candidate($qr['url'], 'qr_manager.whatsapp');
+            return esc_url_raw($qr['url']);
         }
     }
-
-    // Respaldo del sistema histórico de EventosApp: genera el PNG físico del
-    // ticket en /uploads/eventosapp-qr/{ticketID}.png cuando todavía no existe.
-    $ticket_code = eventosapp_whatsapp_get_ticket_public_code($ticket_id);
-    if ( $ticket_code !== '' && function_exists('eventosapp_get_ticket_qr_url') ) {
-        $add_candidate(eventosapp_get_ticket_qr_url($ticket_code), 'eventosapp_get_ticket_qr_url');
-    }
-
-    $candidates = apply_filters('eventosapp_whatsapp_qr_url_candidates', $candidates, $ticket_id);
-    if ( ! is_array($candidates) ) {
-        $candidates = [];
-    }
-
-    $seen = [];
-    foreach ( $candidates as $candidate ) {
-        $url = is_array($candidate) ? esc_url_raw((string)($candidate['url'] ?? '')) : esc_url_raw((string)$candidate);
-        if ( $url === '' || isset($seen[$url]) ) {
-            continue;
-        }
-        $seen[$url] = true;
-
-        // Si es local, validamos que exista. Si no se puede resolver a path,
-        // igual se permite porque puede ser CDN o una URL remota pública.
-        $local_path = eventosapp_whatsapp_url_to_local_path($url);
-        if ( $local_path !== '' && ( ! file_exists($local_path) || ! is_readable($local_path) ) ) {
-            continue;
-        }
-
-        eventosapp_whatsapp_add_activity_log('qr_whatsapp_resuelto', [
-            'ticket_id' => $ticket_id,
-            'source'    => is_array($candidate) ? ($candidate['source'] ?? '') : 'candidate',
-            'qr_url'    => $url,
-            'local_path'=> $local_path,
-        ]);
-
-        return $url;
-    }
-
-    eventosapp_whatsapp_add_activity_log('qr_whatsapp_no_resuelto', [
-        'ticket_id' => $ticket_id,
-        'sources_checked' => array_values(array_filter(array_map(static function($candidate) {
-            return is_array($candidate) ? ($candidate['source'] ?? '') : 'candidate';
-        }, $candidates))),
-    ]);
 
     return '';
 }
