@@ -372,6 +372,20 @@ function eventosapp_evauto_submit(){
         eventosapp_ticket_variants_apply_to_ticket($post_id, $eid, true);
     }
 
+    // Botones Wallet
+    $wa_on = (get_post_meta($eid, '_eventosapp_ticket_wallet_android', true) === '1');
+    $wi_on = (get_post_meta($eid, '_eventosapp_ticket_wallet_apple', true)   === '1');
+    if ( $wa_on && function_exists('eventosapp_generar_enlace_wallet_android') ) {
+        eventosapp_generar_enlace_wallet_android($post_id, false);
+    }
+    if ( $wi_on ) {
+        if ( function_exists('eventosapp_apple_generate_pass') ) {
+            eventosapp_apple_generate_pass($post_id, false);
+        } elseif ( function_exists('eventosapp_generar_enlace_wallet_apple') ) {
+            eventosapp_generar_enlace_wallet_apple($post_id);
+        }
+    }
+
     // Envío opcional desde este frontend (idempotente)
     if ( defined('EVENTOSAPP_FRONTEND_SENDS_EMAIL') && EVENTOSAPP_FRONTEND_SENDS_EMAIL && function_exists('eventosapp_send_ticket_email_now') ) {
         $sent_key = '_eventosapp_ticket_email_sent';
@@ -391,19 +405,9 @@ function eventosapp_evauto_submit(){
         }
     }
 
-    // Botones Wallet
-    $wa_on = (get_post_meta($eid, '_eventosapp_ticket_wallet_android', true) === '1');
-    $wi_on = (get_post_meta($eid, '_eventosapp_ticket_wallet_apple', true)   === '1');
-    if ( $wa_on && function_exists('eventosapp_generar_enlace_wallet_android') ) {
-        eventosapp_generar_enlace_wallet_android($post_id, false);
-    }
-    if ( $wi_on ) {
-        if ( function_exists('eventosapp_apple_generate_pass') ) {
-            eventosapp_apple_generate_pass($post_id, false);
-        } elseif ( function_exists('eventosapp_generar_enlace_wallet_apple') ) {
-            eventosapp_generar_enlace_wallet_apple($post_id);
-        }
-    }
+    // WhatsApp: prepara landing/QR/anexos y envía si está activo para el evento.
+    // Si el correo ya disparó WhatsApp en esta misma solicitud, el anti-duplicado interno evita doble envío.
+    do_action('eventosapp_frontend_ticket_created', $post_id, $eid, $variant_context);
 
     $ticket_code = get_post_meta($post_id, 'eventosapp_ticketID', true);
     $qr_url      = $ticket_code && function_exists('eventosapp_get_ticket_qr_url')
