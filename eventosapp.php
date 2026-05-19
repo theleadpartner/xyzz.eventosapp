@@ -693,6 +693,11 @@ eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-templates.php',
     'eventosapp-whatsapp-templates.php',
 ]);
+eventosapp_require_first_existing_file([
+    'includes/functions/eventosapp-whatsapp-masivo.php',
+    'includes/admin/eventosapp-whatsapp-masivo.php',
+    'eventosapp-whatsapp-masivo.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-generador-masivo-qr.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-edit.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-metrics.php';
