@@ -9,7 +9,7 @@
  * Este archivo no modifica el flujo actual de envíos manuales/automáticos.
  * Usa los helpers existentes de WhatsApp, plantillas, QR, variantes y assets
  * para mantener compatibilidad con ticket landing, QR WhatsApp, Wallet, PDF,
- * ICS, modalidad y variantes.
+ * ICS, modalidad, variantes y campos adicionales del evento.
  *
  * Ruta recomendada dentro del plugin:
  * includes/functions/eventosapp-whatsapp-masivo.php
@@ -586,7 +586,9 @@ function eventosapp_whatsapp_masivo_render_step1() {
         .evapp-wa-extra-field-row{display:grid;grid-template-columns:200px 1fr;gap:10px;margin-bottom:10px;align-items:center;}
         .evapp-wa-info-box{background:#e7f7f3;border-left:4px solid #128c7e;padding:12px;margin:15px 0;}
         .evapp-wa-warning-box{background:#fff8e5;border-left:4px solid #dba617;padding:12px;margin:15px 0;}
-        .evapp-wa-template-map-row{display:none;}
+        .evapp-wa-template-map-stack{display:flex;flex-direction:column;gap:14px;margin-bottom:15px;}
+        .evapp-wa-template-map-row{display:none;width:100%;box-sizing:border-box;}
+        .evapp-wa-template-map-row select{width:100%;}
         .evapp-wa-event-summary{background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;padding:12px;border-radius:6px;margin:12px 0;}
         .evapp-wa-template-required{color:#b91c1c;font-weight:700;}
         @media (max-width:782px){.evapp-wa-filter-row,.evapp-wa-extra-field-row{grid-template-columns:1fr;}}
@@ -634,7 +636,7 @@ function eventosapp_whatsapp_masivo_render_step1() {
             <div class="evapp-wa-warning-box">
                 <strong>Importante:</strong> solo se pedirán las plantillas necesarias para la modalidad del evento seleccionado. Si el evento es presencial y virtual, ambos campos serán obligatorios para no dejar por fuera a ningún asistente.
             </div>
-            <div class="evapp-wa-filter-row">
+            <div class="evapp-wa-template-map-stack">
                 <div class="evapp-wa-filter-field evapp-wa-template-map-row" data-mode="presencial" id="templateRowPresencial">
                     <label for="template_map_presencial">Plantilla para tickets presenciales <span class="evapp-wa-template-required">*</span></label>
                     <select name="template_map[presencial]" id="template_map_presencial" disabled <?php disabled(empty($templates)); ?>>
@@ -832,8 +834,8 @@ function eventosapp_whatsapp_masivo_render_step1() {
                 url: ajaxurl,
                 type: 'POST',
                 data: {
-                    action: 'eventosapp_get_event_extra_fields',
-                    evento_id: eventoId,
+                    action: 'eventosapp_whatsapp_masivo_get_event_extra_fields',
+                    event_id: eventoId,
                     _wpnonce: '<?php echo esc_js(wp_create_nonce('eventosapp_get_extra_fields')); ?>'
                 },
                 success: function(response) {
@@ -1323,6 +1325,128 @@ function eventosapp_whatsapp_masivo_render_step3($segment_id) {
     </script>
     <?php
 }
+
+/**
+ * Obtiene y normaliza los campos adicionales de un evento para el módulo masivo de WhatsApp.
+ * Usa la función oficial del módulo de campos adicionales cuando está disponible y deja un
+ * respaldo por meta para que la pantalla no dependa del handler AJAX del envío masivo de email.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_get_event_extra_fields_schema') ) {
+    function eventosapp_whatsapp_masivo_get_event_extra_fields_schema($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return [];
+        }
+
+        if ( function_exists('eventosapp_get_event_extra_fields') ) {
+            $raw_fields = eventosapp_get_event_extra_fields($event_id);
+        } else {
+            $raw_fields = get_post_meta($event_id, '_eventosapp_extra_fields', true);
+        }
+
+        if ( ! is_array($raw_fields) ) {
+            $raw_fields = [];
+        }
+
+        $fields = [];
+        $used_keys = [];
+
+        foreach ( $raw_fields as $field ) {
+            if ( ! is_array($field) ) {
+                continue;
+            }
+
+            $label = isset($field['label']) ? trim(wp_strip_all_tags((string) $field['label'])) : '';
+            if ( $label === '' ) {
+                continue;
+            }
+
+            $key = isset($field['key']) ? sanitize_key((string) $field['key']) : '';
+            if ( $key === '' ) {
+                $key = sanitize_key(remove_accents(strtolower(preg_replace('/\\W+/', '_', $label))));
+            }
+            if ( $key === '' ) {
+                continue;
+            }
+
+            if ( isset($used_keys[$key]) ) {
+                $base_key = $key;
+                $i = 1;
+                while ( isset($used_keys[$base_key . '_' . $i]) ) {
+                    $i++;
+                }
+                $key = $base_key . '_' . $i;
+            }
+            $used_keys[$key] = true;
+
+            $type = isset($field['type']) ? sanitize_key((string) $field['type']) : 'text';
+            if ( ! in_array($type, ['text', 'number', 'select'], true) ) {
+                $type = 'text';
+            }
+
+            $options = [];
+            if ( $type === 'select' ) {
+                $raw_options = $field['options'] ?? [];
+                if ( is_string($raw_options) ) {
+                    $raw_options = preg_split("/\r\n|\n|\r/", $raw_options);
+                }
+                if ( is_array($raw_options) ) {
+                    foreach ( $raw_options as $option ) {
+                        $option = trim(wp_strip_all_tags((string) $option));
+                        if ( $option !== '' ) {
+                            $options[] = $option;
+                        }
+                    }
+                }
+            }
+
+            $fields[] = [
+                'key'      => $key,
+                'label'    => $label,
+                'type'     => $type,
+                'required' => ! empty($field['required']) ? 1 : 0,
+                'options'  => array_values(array_unique($options)),
+            ];
+        }
+
+        return $fields;
+    }
+}
+
+/**
+ * Handler AJAX propio del módulo masivo de WhatsApp para no depender del handler del envío masivo de email.
+ */
+add_action('wp_ajax_eventosapp_whatsapp_masivo_get_event_extra_fields', function() {
+    check_ajax_referer('eventosapp_get_extra_fields');
+
+    if ( ! current_user_can('manage_options') ) {
+        wp_send_json_error(['message' => 'No autorizado.']);
+    }
+
+    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
+    if ( ! $event_id && isset($_POST['evento_id']) ) {
+        $event_id = absint($_POST['evento_id']);
+    }
+
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+        wp_send_json_error(['message' => 'ID de evento inválido.']);
+    }
+
+    $fields = eventosapp_whatsapp_masivo_get_event_extra_fields_schema($event_id);
+
+    eventosapp_whatsapp_masivo_activity_log('whatsapp_masivo_campos_adicionales_consultados', [
+        'event_id'     => $event_id,
+        'event_title'  => get_the_title($event_id),
+        'fields_count' => count($fields),
+        'fields_keys'  => array_values(array_filter(array_map(static function($field) {
+            return isset($field['key']) ? (string) $field['key'] : '';
+        }, $fields))),
+    ]);
+
+    wp_send_json_success([
+        'fields' => $fields,
+    ]);
+});
 
 /**
  * Handler: crea el segmento.
