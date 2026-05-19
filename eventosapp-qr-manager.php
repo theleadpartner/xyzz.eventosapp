@@ -859,89 +859,173 @@ class EventosApp_QR_Manager {
         }
     }
 
-/**
-     * Decodifica el contenido de un código QR
-     * SIMPLIFICADO: Maneja formato ticketID-tag y URLs de badge
+    /**
+     * Etiquetas legibles para los tipos de QR.
+     * Incluye WhatsApp para que check-in, networking, métricas y exports usen el mismo nombre.
+     */
+    public static function get_qr_type_labels() {
+        return array(
+            'email'         => 'Email',
+            'google_wallet' => 'Google Wallet',
+            'apple_wallet'  => 'Apple Wallet',
+            'pdf'           => 'PDF Impreso',
+            'whatsapp'      => 'WhatsApp',
+            'badge'         => 'Escarapela Impresa',
+            'legacy'        => 'QR Legacy',
+            'preprinted'    => 'QR Preimpreso',
+        );
+    }
+
+    /**
+     * Devuelve la etiqueta legible de un tipo de QR.
+     */
+    public static function get_qr_type_label($type) {
+        $type = sanitize_key((string) $type);
+        $labels = self::get_qr_type_labels();
+        return isset($labels[$type]) ? $labels[$type] : $type;
+    }
+
+    /**
+     * Busca un ticket por su ID público eventosapp_ticketID.
+     */
+    private static function find_ticket_by_public_code($unique_ticket_id) {
+        global $wpdb;
+
+        $unique_ticket_id = trim((string) $unique_ticket_id);
+        if ($unique_ticket_id === '') {
+            return 0;
+        }
+
+        $ticket_post_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta}
+             WHERE meta_key = 'eventosapp_ticketID'
+             AND meta_value = %s
+             LIMIT 1",
+            $unique_ticket_id
+        ));
+
+        return ($ticket_post_id && get_post_type($ticket_post_id) === 'eventosapp_ticket') ? (int) $ticket_post_id : 0;
+    }
+
+    /**
+     * Decodifica el parámetro event usado por la escarapela/networking.
+     * Soporta ticketID con guiones, por ejemplo: 14564-ticketid=TKT-ABC-123-5389.
+     */
+    private static function decode_badge_event_param($event_param) {
+        $event_param = trim((string) $event_param);
+        if ($event_param === '') {
+            return false;
+        }
+
+        if (strpos($event_param, 'event=') !== false) {
+            $event_param = preg_replace('/^.*(?:\?|&)event=/', '', $event_param);
+        }
+        $event_param = rawurldecode($event_param);
+
+        if (!preg_match('/^(\d+)-ticketid=(.+)-([^-]+)$/', $event_param, $matches)) {
+            return false;
+        }
+
+        $event_id         = absint($matches[1]);
+        $unique_ticket_id = sanitize_text_field($matches[2]);
+        $security_code    = sanitize_text_field($matches[3]);
+
+        if (!$event_id || $unique_ticket_id === '' || $security_code === '') {
+            return false;
+        }
+
+        return array(
+            'unique_ticket_id' => $unique_ticket_id,
+            'event_id'         => $event_id,
+            'security_code'    => $security_code,
+            'type'             => 'badge',
+            'tag'              => 'badge',
+            'format'           => 'url',
+        );
+    }
+
+    /**
+     * Decodifica QR simples ticketID-tag.
+     * Soporta ticketID con guiones, por ejemplo: TKT-ABC-123-whatsapp.
+     */
+    private static function decode_simple_qr_content($qr_content) {
+        $qr_content = trim((string) $qr_content);
+        if ($qr_content === '') {
+            return false;
+        }
+
+        $tag_to_type = array(
+            'email'    => 'email',
+            'gwallet'  => 'google_wallet',
+            'awallet'  => 'apple_wallet',
+            'pdf'      => 'pdf',
+            'whatsapp' => 'whatsapp',
+        );
+
+        if (!preg_match('/^(.+)-([A-Za-z0-9_]+)$/', $qr_content, $matches)) {
+            return false;
+        }
+
+        $unique_ticket_id = sanitize_text_field($matches[1]);
+        $tag              = sanitize_key($matches[2]);
+
+        if (!isset($tag_to_type[$tag])) {
+            return false;
+        }
+
+        $ticket_post_id = self::find_ticket_by_public_code($unique_ticket_id);
+        if (!$ticket_post_id) {
+            return false;
+        }
+
+        return array(
+            'unique_ticket_id' => $unique_ticket_id,
+            'ticket_id'        => (int) $ticket_post_id,
+            'type'             => $tag_to_type[$tag],
+            'tag'              => $tag,
+            'format'           => 'simple',
+        );
+    }
+
+    /**
+     * Decodifica el contenido de un código QR.
+     * Soporta:
+     * - QR simples ticketID-tag, incluido WhatsApp.
+     * - URLs de badge/networking con ticketID que contiene guiones.
      */
     public static function decode_qr_content($qr_content) {
-        global $wpdb;
-        
-        // === CASO 1: QR de Badge (URL) ===
-        if (strpos($qr_content, 'http') === 0) {
+        $qr_content = trim((string) $qr_content);
+        if ($qr_content === '') {
+            return false;
+        }
+
+        // === CASO 1: QR de Badge / Networking (URL o parámetro event directo) ===
+        if (strpos($qr_content, 'http://') === 0 || strpos($qr_content, 'https://') === 0) {
             $url_parts = parse_url($qr_content);
             if (isset($url_parts['query'])) {
                 parse_str($url_parts['query'], $params);
-                
-                if (isset($params['event'])) {
-                    // Formato: event=123-ticketid=ABC123-7890
-                    $parts = explode('-', $params['event']);
-                    
-                    if (count($parts) >= 3) {
-                        $event_id = intval($parts[0]);
-                        
-                        $ticket_part = isset($parts[1]) ? $parts[1] : '';
-                        $unique_ticket_id = '';
-                        if (strpos($ticket_part, 'ticketid=') === 0) {
-                            $unique_ticket_id = str_replace('ticketid=', '', $ticket_part);
-                        }
-                        
-                        $security_code = isset($parts[2]) ? $parts[2] : '';
-                        
-                        return array(
-                            'unique_ticket_id' => $unique_ticket_id,
-                            'event_id' => $event_id,
-                            'security_code' => $security_code,
-                            'type' => 'badge',
-                            'format' => 'url'
-                        );
-                    }
-                }
-            }
-            
-            return false;
-        }
-        
-        // === CASO 2: Formato simplificado ticketID-tag ===
-        if (strpos($qr_content, '-') !== false) {
-            $parts = explode('-', $qr_content);
-            
-            // Debe tener exactamente 2 partes: ticketID y tag
-            if (count($parts) === 2) {
-                $unique_ticket_id = $parts[0];
-                $tag = $parts[1];
-                
-                // Mapear tags a tipos
-                $tag_to_type = array(
-                    'email' => 'email',
-                    'gwallet' => 'google_wallet',
-                    'awallet' => 'apple_wallet',
-                    'pdf' => 'pdf',
-                    'whatsapp' => 'whatsapp'
-                );
-                
-                if (isset($tag_to_type[$tag])) {
-                    // Buscar el ticket ID (post ID) usando el ticketID único
-                    $ticket_post_id = $wpdb->get_var($wpdb->prepare(
-                        "SELECT post_id FROM {$wpdb->postmeta} 
-                        WHERE meta_key = 'eventosapp_ticketID' 
-                        AND meta_value = %s 
-                        LIMIT 1",
-                        $unique_ticket_id
-                    ));
-                    
-                    if ($ticket_post_id && get_post_type($ticket_post_id) === 'eventosapp_ticket') {
-                        return array(
-                            'unique_ticket_id' => $unique_ticket_id,
-                            'ticket_id' => (int) $ticket_post_id,
-                            'type' => $tag_to_type[$tag],
-                            'tag' => $tag,
-                            'format' => 'simple'
-                        );
+                if (!empty($params['event'])) {
+                    $decoded_badge = self::decode_badge_event_param($params['event']);
+                    if ($decoded_badge) {
+                        return $decoded_badge;
                     }
                 }
             }
         }
-        
+
+        if (strpos($qr_content, 'ticketid=') !== false) {
+            $decoded_badge = self::decode_badge_event_param($qr_content);
+            if ($decoded_badge) {
+                return $decoded_badge;
+            }
+        }
+
+        // === CASO 2: Formato simple ticketID-tag ===
+        $decoded_simple = self::decode_simple_qr_content($qr_content);
+        if ($decoded_simple) {
+            return $decoded_simple;
+        }
+
         return false;
     }
 
@@ -1024,22 +1108,13 @@ class EventosApp_QR_Manager {
                 );
             }
             
-            // Labels para tipos
-            $type_labels = array(
-                'email' => 'Email',
-                'google_wallet' => 'Google Wallet',
-                'apple_wallet' => 'Apple Wallet',
-                'pdf' => 'PDF Impreso',
-                'whatsapp' => 'WhatsApp'
-            );
-            
             return array(
                 'valid' => true,
                 'ticket_id' => $ticket_id,
                 'type' => $type,
                 'tag' => $data['tag'],
                 'format' => 'simple',
-                'type_label' => isset($type_labels[$type]) ? $type_labels[$type] : $type
+                'type_label' => self::get_qr_type_label($type)
             );
         }
         
