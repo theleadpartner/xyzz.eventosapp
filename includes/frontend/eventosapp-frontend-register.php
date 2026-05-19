@@ -218,6 +218,8 @@ function eventosapp_evreg_submit(){
         }
     }
 
+    update_post_meta($post_id, '_eventosapp_creation_channel', 'frontend');
+
     // Compatibilidad Variantes de Tickets: asegurar que el ticket creado o actualizado
     // desde esta herramienta frontend tenga calculada la variante efectiva antes de responder.
     $variant_context = $existing_ticket_id ? 'frontend_register_update' : 'frontend_register_create';
@@ -234,6 +236,10 @@ function eventosapp_evreg_submit(){
     } elseif (function_exists('eventosapp_ticket_variants_apply_to_ticket')) {
         eventosapp_ticket_variants_apply_to_ticket($post_id, $eid, true);
     }
+
+    // WhatsApp: prepara landing/QR/anexos y envía si el canal está activo para el evento.
+    // Se usa un hook para mantener este módulo desacoplado del archivo de WhatsApp.
+    do_action('eventosapp_frontend_ticket_created', $post_id, $eid, $variant_context);
 
     // ID público
     $ticket_pub = get_post_meta($post_id, 'eventosapp_ticketID', true);
