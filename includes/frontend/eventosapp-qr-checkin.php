@@ -957,6 +957,7 @@ if (!function_exists('eventosapp_update_qr_usage_stats')) {
                 'google_wallet' => 0,
                 'apple_wallet' => 0,
                 'pdf' => 0,
+                'whatsapp' => 0,
                 'badge' => 0,
                 'legacy' => 0,
                 'total' => 0
