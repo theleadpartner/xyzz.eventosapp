@@ -50,7 +50,7 @@ function eventosapp_batch_refresh_available_assets() {
     return array(
         'qrs' => array(
             'label'       => 'Todos los QR',
-            'description' => 'Regenera QR de Email, Google Wallet, Apple Wallet, PDF, Escarapela y QR legacy manteniendo la URL si ya existía.',
+            'description' => 'Regenera QR de Email, Google Wallet, Apple Wallet, PDF, WhatsApp, Escarapela y QR legacy manteniendo la URL si ya existía.',
         ),
         'pdf' => array(
             'label'       => 'PDF',
@@ -67,6 +67,10 @@ function eventosapp_batch_refresh_available_assets() {
         'apple_wallet' => array(
             'label'       => 'Apple Wallet',
             'description' => 'Regenera o crea el archivo/enlace PKPASS manteniendo el mismo enlace si ya existía.',
+        ),
+        'whatsapp_assets' => array(
+            'label'       => 'Piezas WhatsApp',
+            'description' => 'Prepara landing pública, QR WhatsApp e imagen del mensaje usados en los envíos de WhatsApp.',
         ),
         'search_blob' => array(
             'label'       => 'Índice de búsqueda',
@@ -87,6 +91,10 @@ function eventosapp_batch_refresh_available_assets() {
         'qr_pdf' => array(
             'label'       => 'QR PDF',
             'description' => 'Regenera únicamente el QR usado dentro del PDF.',
+        ),
+        'qr_whatsapp' => array(
+            'label'       => 'QR WhatsApp',
+            'description' => 'Regenera únicamente el QR usado por la landing y los mensajes de WhatsApp.',
         ),
         'qr_badge' => array(
             'label'       => 'QR Escarapela',
@@ -119,11 +127,17 @@ function eventosapp_batch_refresh_asset_aliases() {
         'ical'               => 'ics',
         'search'             => 'search_blob',
         'search_index'       => 'search_blob',
+        'whatsapp_assets'    => 'whatsapp_assets',
+        'wapp_assets'        => 'whatsapp_assets',
+        'whatsapp_ticket'    => 'whatsapp_assets',
         'email_qr'           => 'qr_email',
         'google_wallet_qr'   => 'qr_google_wallet',
         'android_wallet_qr'  => 'qr_google_wallet',
         'apple_wallet_qr'    => 'qr_apple_wallet',
         'pdf_qr'             => 'qr_pdf',
+        'whatsapp_qr'        => 'qr_whatsapp',
+        'wapp_qr'            => 'qr_whatsapp',
+        'qr_wapp'            => 'qr_whatsapp',
         'badge_qr'           => 'qr_badge',
         'legacy_qr'          => 'qr_legacy',
     );
@@ -272,8 +286,9 @@ function eventosapp_batch_refresh_event_asset_enabled($evento_id, $asset) {
     $meta_by_asset = array(
         'pdf'            => '_eventosapp_ticket_pdf',
         'ics'            => '_eventosapp_ticket_ics',
-        'android_wallet' => '_eventosapp_ticket_wallet_android',
-        'apple_wallet'   => '_eventosapp_ticket_wallet_apple',
+        'android_wallet'   => '_eventosapp_ticket_wallet_android',
+        'apple_wallet'     => '_eventosapp_ticket_wallet_apple',
+        'whatsapp_assets'  => '_eventosapp_ticket_whatsapp_enabled',
     );
 
     if (!isset($meta_by_asset[$asset])) {
@@ -558,6 +573,10 @@ function eventosapp_batch_refresh_cleanup_asset($ticket_id, $asset, &$stats) {
             delete_post_meta($ticket_id, '_eventosapp_ticket_pkpass_path');
             eventosapp_batch_refresh_add_detail($stats, $asset, 'deleted', 'Apple Wallet desactivado en el evento; metadatos limpiados.');
             return true;
+
+        case 'whatsapp_assets':
+            eventosapp_batch_refresh_add_detail($stats, $asset, 'skipped', 'WhatsApp desactivado en el evento; no se eliminan piezas históricas para no romper enlaces ya enviados.');
+            return true;
     }
 
     return false;
@@ -746,6 +765,7 @@ function eventosapp_batch_refresh_process_qrs($ticket_id, $asset, &$stats, $miss
         'qr_google_wallet'  => 'google_wallet',
         'qr_apple_wallet'   => 'apple_wallet',
         'qr_pdf'            => 'pdf',
+        'qr_whatsapp'       => 'whatsapp',
         'qr_badge'          => 'badge',
     );
 
@@ -881,6 +901,45 @@ function eventosapp_batch_refresh_process_apple_wallet($ticket_id, &$stats) {
 }
 
 /**
+ * Procesa piezas WhatsApp del ticket.
+ * Prepara la landing pública, QR WhatsApp e imagen del mensaje sin enviar el WhatsApp.
+ */
+function eventosapp_batch_refresh_process_whatsapp_assets($ticket_id, &$stats) {
+    if (!function_exists('eventosapp_whatsapp_prepare_ticket_assets')) {
+        eventosapp_batch_refresh_add_detail($stats, 'whatsapp_assets', 'skipped', 'Función eventosapp_whatsapp_prepare_ticket_assets no disponible.');
+        return false;
+    }
+
+    try {
+        $result = eventosapp_whatsapp_prepare_ticket_assets($ticket_id, array(
+            'ensure_qr'              => true,
+            'ensure_landing'         => true,
+            'ensure_message_image'   => true,
+            'refresh_enabled_assets' => false,
+            'apply_variant'          => true,
+            'rebuild_search_index'   => true,
+            'source'                 => 'batch_refresh_whatsapp_assets',
+        ));
+
+        if (is_array($result) && !empty($result['ok'])) {
+            eventosapp_batch_refresh_add_detail($stats, 'whatsapp_assets', 'generated', 'Piezas WhatsApp preparadas correctamente.');
+            return true;
+        }
+
+        $message = 'No se pudieron preparar todas las piezas WhatsApp.';
+        if (is_array($result) && !empty($result['errors']) && is_array($result['errors'])) {
+            $message .= ' ' . implode(' | ', array_map('sanitize_text_field', $result['errors']));
+        }
+        eventosapp_batch_refresh_add_detail($stats, 'whatsapp_assets', 'failed', $message);
+        return false;
+    } catch (\Throwable $e) {
+        eventosapp_batch_refresh_add_detail($stats, 'whatsapp_assets', 'failed', $e->getMessage());
+        error_log("EventosApp Batch Refresh: Error preparando piezas WhatsApp para ticket {$ticket_id}: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
  * Procesa índice de búsqueda.
  */
 function eventosapp_batch_refresh_process_search_blob($ticket_id, &$stats) {
@@ -1005,6 +1064,10 @@ function eventosapp_refresh_ticket_full($ticket_id, $mode = 'complete', $options
 
             case 'apple_wallet':
                 eventosapp_batch_refresh_process_apple_wallet($ticket_id, $stats);
+                break;
+
+            case 'whatsapp_assets':
+                eventosapp_batch_refresh_process_whatsapp_assets($ticket_id, $stats);
                 break;
 
             case 'search_blob':
