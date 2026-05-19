@@ -439,6 +439,7 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
           html += row('Nombre', ticket.nombre);
           html += row('Email', ticket.email);
           html += row('Ticket ID', ticket.ticket_id);
+          if (ticket.qr_type_label) html += row('Medio QR', ticket.qr_type_label);
           html += row('Localidad', ticket.localidad);
           html += row('Check-in realizado', ticket.checkin_date);
           html += '</div>';
@@ -464,6 +465,7 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
     html += row('Nombre', ticket.nombre);
     html += row('Email', ticket.email);
     html += row('Ticket ID', ticket.ticket_id);
+    if (ticket.qr_type_label) html += row('Medio QR', ticket.qr_type_label);
     html += row('Localidad', ticket.localidad);
     html += '</div>';
     
@@ -506,7 +508,7 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
         alert('Por favor ingresa un código de 5 dígitos');
         return;
       }
-      verifyAndCheckin(ticket.id, code);
+      verifyAndCheckin(ticket.id, code, ticket.qr_type || '', ticket.qr_type_label || '');
     });
     
     // Botón Cancelar
@@ -517,7 +519,7 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
     });
   }
 
-  function verifyAndCheckin(ticketId, code){
+  function verifyAndCheckin(ticketId, code, qrType, qrTypeLabel){
     setOutput('<div class="evapp-qr-help">Verificando código...</div>');
     smoothScrollTo(out);
     
@@ -527,6 +529,8 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
     fd.append('event_id', String(eventID));
     fd.append('ticket_id', String(ticketId));
     fd.append('auth_code', code);
+    fd.append('qr_type', qrType || '');
+    fd.append('qr_type_label', qrTypeLabel || '');
 
     fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
       .then(r=>r.json())
@@ -547,6 +551,7 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
         
         let html = statusHtml + '<div class="evapp-qr-grid">';
         html += row('Mensaje', d.message);
+        if (d.qr_type_label) html += row('Medio QR', d.qr_type_label);
         html += row('Fecha del check-in', d.checkin_date_label || d.checkin_date);
         html += '</div>';
         setOutput(html);
@@ -600,6 +605,8 @@ if ( ! $qr_code || ! $event_id ) {
     }
     
     $ticket_id = 0;
+    $qr_type = 'legacy';
+    $qr_type_label = 'QR Legacy';
     
     // === PASO 1: Intentar con el NUEVO sistema simplificado (EventosApp_QR_Manager) ===
     if ( class_exists( 'EventosApp_QR_Manager' ) ) {
@@ -612,6 +619,8 @@ if ( ! $qr_code || ! $event_id ) {
             $ticket_event = (int) get_post_meta( $candidate_id, '_eventosapp_ticket_evento_id', true );
             if ( $ticket_event === (int) $event_id ) {
                 $ticket_id = $candidate_id;
+                $qr_type = isset( $validation['type'] ) ? sanitize_key( $validation['type'] ) : 'unknown';
+                $qr_type_label = isset( $validation['type_label'] ) ? sanitize_text_field( $validation['type_label'] ) : $qr_type;
             }
         }
     }
@@ -621,6 +630,8 @@ if ( ! $qr_code || ! $event_id ) {
         // Verificar si el evento usa QR preimpreso
         $use_preprinted = get_post_meta( $event_id, '_eventosapp_ticket_use_preprinted_qr', true ) === '1';
         $meta_key = $use_preprinted ? 'eventosapp_ticket_preprintedID' : 'eventosapp_ticketID';
+        $qr_type = $use_preprinted ? 'preprinted' : 'legacy';
+        $qr_type_label = $use_preprinted ? 'QR Preimpreso' : 'QR Legacy';
         
         // Normalizar valor según el tipo
         if ( $use_preprinted ) {
@@ -703,6 +714,8 @@ if ( ! $qr_code || ! $event_id ) {
             'email'        => $email,
             'ticket_id'    => $ticket_public_id,
             'localidad'    => $localidad,
+            'qr_type'      => $qr_type,
+            'qr_type_label'=> $qr_type_label,
             'checked_in'   => $checked_in,
             'checkin_date' => $checkin_date,
         ],
@@ -722,6 +735,19 @@ function eventosapp_ajax_verify_and_checkin() {
     $ticket_id = isset( $_POST['ticket_id'] ) ? absint( $_POST['ticket_id'] ) : 0;
     $auth_code = isset( $_POST['auth_code'] ) ? sanitize_text_field( $_POST['auth_code'] ) : '';
     $event_id  = isset( $_POST['event_id'] ) ? absint( $_POST['event_id'] ) : 0;
+    $qr_type = isset( $_POST['qr_type'] ) ? sanitize_key( $_POST['qr_type'] ) : 'legacy';
+    $qr_type_label = isset( $_POST['qr_type_label'] ) ? sanitize_text_field( $_POST['qr_type_label'] ) : '';
+    if ( $qr_type_label === '' ) {
+        if ( class_exists( 'EventosApp_QR_Manager' ) && method_exists( 'EventosApp_QR_Manager', 'get_qr_type_label' ) ) {
+            $qr_type_label = EventosApp_QR_Manager::get_qr_type_label( $qr_type );
+        } elseif ( $qr_type === 'whatsapp' ) {
+            $qr_type_label = 'WhatsApp';
+        } elseif ( $qr_type === 'preprinted' ) {
+            $qr_type_label = 'QR Preimpreso';
+        } else {
+            $qr_type_label = 'QR Legacy';
+        }
+    }
     
     if ( ! $ticket_id || ! $auth_code || ! $event_id ) {
         wp_send_json_error( 'Datos incompletos' );
@@ -804,9 +830,15 @@ function eventosapp_ajax_verify_and_checkin() {
             'dia'     => $today,
             'status'  => 'checked_in',
             'origen'  => 'QR Doble Autenticación',
+            'qr_type' => $qr_type,
+            'qr_type_label' => $qr_type_label,
             'usuario' => $user && $user->exists() ? ( $user->display_name . ' (' . $user->user_email . ')' ) : 'Sistema'
         ];
         update_post_meta( $ticket_id, '_eventosapp_checkin_log', $log );
+
+        if ( function_exists( 'eventosapp_update_qr_usage_stats' ) ) {
+            eventosapp_update_qr_usage_stats( $event_id, $qr_type );
+        }
     }
     
     // 7) Obtener datos del asistente para respuesta
@@ -824,5 +856,7 @@ function eventosapp_ajax_verify_and_checkin() {
         'already_checked'    => $already_checked,
         'checkin_date'       => $today,
         'checkin_date_label' => date_i18n( 'D, d M Y', strtotime( $today ) ),
+        'qr_type'            => $qr_type,
+        'qr_type_label'      => $qr_type_label,
     ]);
 }
