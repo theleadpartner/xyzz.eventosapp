@@ -404,6 +404,19 @@ function evapp_import_generate_assets_now($ticket_id, $event_id){
     }
 
     if ($is_virtual_ticket) {
+        if (function_exists('eventosapp_whatsapp_prepare_ticket_assets')) {
+            eventosapp_whatsapp_prepare_ticket_assets($ticket_id, [
+                'event_id'               => $event_id,
+                'context'                => 'import_generate_assets_virtual',
+                'apply_variant'          => false,
+                'refresh_enabled_assets' => false,
+                'ensure_qr'              => false,
+                'ensure_landing'         => true,
+                'ensure_message_image'   => true,
+                'rebuild_search_index'   => false,
+                'log'                    => true,
+            ]);
+        }
         return true;
     }
 
@@ -429,6 +442,20 @@ function evapp_import_generate_assets_now($ticket_id, $event_id){
 
     if (function_exists('eventosapp_ticket_generar_pdf')) {
         eventosapp_ticket_generar_pdf($ticket_id);
+    }
+
+    if (function_exists('eventosapp_whatsapp_prepare_ticket_assets')) {
+        eventosapp_whatsapp_prepare_ticket_assets($ticket_id, [
+            'event_id'               => $event_id,
+            'context'                => 'import_generate_assets_presencial',
+            'apply_variant'          => false,
+            'refresh_enabled_assets' => false,
+            'ensure_qr'              => true,
+            'ensure_landing'         => true,
+            'ensure_message_image'   => true,
+            'rebuild_search_index'   => false,
+            'log'                    => true,
+        ]);
     }
 
     return true;
