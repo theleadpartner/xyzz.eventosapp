@@ -2422,10 +2422,11 @@ add_action('admin_notices', function() {
 if (!function_exists('eventosapp_creation_channel_labels')) {
     function eventosapp_creation_channel_labels($key = null) {
         $map = [
-            'manual'  => 'Manual',
-            'webhook' => 'Integración',
-            'import'  => 'Importación',
-            'public'  => 'Inscripción Usuario',
+            'manual'   => 'Manual',
+            'frontend' => 'Registro frontend',
+            'webhook'  => 'Integración',
+            'import'   => 'Importación',
+            'public'   => 'Auto-registro público',
         ];
         return is_null($key) ? $map : ($map[$key] ?? $key);
     }
