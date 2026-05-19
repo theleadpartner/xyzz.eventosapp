@@ -693,6 +693,12 @@ eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-templates.php',
     'eventosapp-whatsapp-templates.php',
 ]);
+
+// Recordatorios programados de ticket por evento.
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-ticket-reminders.php',
+    'eventosapp-ticket-reminders.php',
+]);
 eventosapp_require_first_existing_file([
     'includes/functions/eventosapp-whatsapp-masivo.php',
     'includes/admin/eventosapp-whatsapp-masivo.php',
