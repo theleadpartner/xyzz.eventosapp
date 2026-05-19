@@ -40,6 +40,41 @@ if ( ! function_exists('eventosapp_user_can_view_metrics') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_metrics_qr_label_from_log_entry') ) {
+    function eventosapp_metrics_qr_label_from_log_entry($entry, $fallback = 'Sin clasificar') {
+        if (is_array($entry) && isset($entry['qr_type_label']) && $entry['qr_type_label'] !== '') {
+            return (string) $entry['qr_type_label'];
+        }
+
+        $type = is_array($entry) && isset($entry['qr_type']) ? sanitize_key((string) $entry['qr_type']) : '';
+        if ($type !== '') {
+            if (class_exists('EventosApp_QR_Manager') && method_exists('EventosApp_QR_Manager', 'get_qr_type_label')) {
+                $label = EventosApp_QR_Manager::get_qr_type_label($type);
+                if ($label !== '') {
+                    return $label;
+                }
+            }
+
+            $labels = [
+                'email'         => 'Email',
+                'google_wallet' => 'Google Wallet',
+                'apple_wallet'  => 'Apple Wallet',
+                'pdf'           => 'PDF Impreso',
+                'whatsapp'      => 'WhatsApp',
+                'badge'         => 'Escarapela Impresa',
+                'legacy'        => 'QR Legacy',
+                'preprinted'    => 'QR Preimpreso',
+            ];
+
+            if (isset($labels[$type])) {
+                return $labels[$type];
+            }
+        }
+
+        return $fallback;
+    }
+}
+
 // === Shortcode ===
 add_shortcode('eventosapp_front_metrics', function(){
     if ( function_exists('eventosapp_require_feature') ) eventosapp_require_feature('metrics');
@@ -554,6 +589,7 @@ $js = <<<'JS'
                 'Google Wallet': '#34a853',
                 'Apple Wallet': '#E5E5EA',
                 'PDF Impreso': '#f59e0b',
+                'WhatsApp': '#25D366',
                 'Escarapela Impresa': '#8b5cf6',
                 'QR Legacy': '#94a3b8',
                 'QR Preimpreso': '#64748b',
@@ -1047,6 +1083,7 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         'Google Wallet'      => 0,
         'Apple Wallet'       => 0,
         'PDF Impreso'        => 0,
+        'WhatsApp'          => 0,
         'Escarapela Impresa' => 0,
         'Acceso virtual'     => 0,
         'QR Legacy'          => 0,
@@ -1147,13 +1184,13 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             // Mezcla de medios: contar una vez por ticket y por tipo de check-in.
             if ($entry_is_valid_event_day && $is_presencial_log && !$qr_presencial_contado && $type_is_enabled('presencial')) {
                 $qr_presencial_contado = true;
-                $qr_label = isset($row['qr_type_label']) && $row['qr_type_label'] !== '' ? (string)$row['qr_type_label'] : 'Sin clasificar';
+                $qr_label = eventosapp_metrics_qr_label_from_log_entry($row, 'Sin clasificar');
                 $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
             }
 
             if ($entry_is_valid_event_day && $is_virtual_log && !$qr_virtual_contado && $type_is_enabled('virtual')) {
                 $qr_virtual_contado = true;
-                $qr_label = isset($row['qr_type_label']) && $row['qr_type_label'] !== '' ? (string)$row['qr_type_label'] : 'Acceso virtual';
+                $qr_label = eventosapp_metrics_qr_label_from_log_entry($row, 'Acceso virtual');
                 $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
             }
         }
@@ -1728,7 +1765,7 @@ $headers[] = 'Fecha creación';
             if (in_array($entry_day, $event_days, true) && ($st === 'checked_in' || $st === 'checked-in') && $checkin_log_type !== 'virtual') {
                 $main_time_by_day[$entry_day] = $min_time($main_time_by_day[$entry_day], $h);
 
-                $label = isset($entry['qr_type_label']) && $entry['qr_type_label'] !== '' ? (string)$entry['qr_type_label'] : 'Sin clasificar';
+                $label = eventosapp_metrics_qr_label_from_log_entry($entry, 'Sin clasificar');
                 $checkin_media_labels[$label] = true;
                 if ($qr_type_checkin === '') {
                     $qr_type_checkin = $label;
@@ -1738,7 +1775,7 @@ $headers[] = 'Fecha creación';
             // virtual por día: tomar la PRIMERA hora del día
             if (in_array($entry_day, $event_days, true) && ($st === 'virtual_checked_in' || $checkin_log_type === 'virtual')) {
                 $virtual_time_by_day[$entry_day] = $min_time($virtual_time_by_day[$entry_day], $h);
-                $label = isset($entry['qr_type_label']) && $entry['qr_type_label'] !== '' ? (string)$entry['qr_type_label'] : 'Acceso virtual';
+                $label = eventosapp_metrics_qr_label_from_log_entry($entry, 'Acceso virtual');
                 $checkin_media_labels[$label] = true;
             }
 
