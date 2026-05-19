@@ -3,11 +3,12 @@
 if ( ! defined('ABSPATH') ) exit;
 
 /**
- * EventosApp - Recordatorios programados de ticket.
+ * EventosApp - Recordatorios programados de ticket por WhatsApp.
  *
- * Este módulo agrega un metabox por evento para programar recordatorios de ticket
- * por fecha/hora exacta o por anticipación respecto a la hora de inicio del evento.
- * Incluye filtros con varios criterios para decidir a qué asistentes se envía o no.
+ * Este módulo agrega un metabox en eventosapp_event para programar recordatorios
+ * de ticket únicamente por WhatsApp. Permite programar por fecha/hora exacta
+ * o por anticipación frente a la hora inicial del evento, respetando la zona
+ * horaria configurada en el evento.
  */
 
 if ( ! defined('EVENTOSAPP_TICKET_REMINDERS_META_ENABLED') ) {
@@ -22,6 +23,9 @@ if ( ! defined('EVENTOSAPP_TICKET_REMINDERS_META_RULES') ) {
 if ( ! defined('EVENTOSAPP_TICKET_REMINDERS_META_SCHEDULED_KEYS') ) {
     define('EVENTOSAPP_TICKET_REMINDERS_META_SCHEDULED_KEYS', '_eventosapp_ticket_reminders_scheduled_keys');
 }
+if ( ! defined('EVENTOSAPP_TICKET_REMINDERS_META_EXECUTED') ) {
+    define('EVENTOSAPP_TICKET_REMINDERS_META_EXECUTED', '_eventosapp_ticket_reminders_executed');
+}
 if ( ! defined('EVENTOSAPP_TICKET_REMINDERS_META_LAST_RUN') ) {
     define('EVENTOSAPP_TICKET_REMINDERS_META_LAST_RUN', '_eventosapp_ticket_reminders_last_run');
 }
@@ -32,15 +36,59 @@ if ( ! defined('EVENTOSAPP_TICKET_REMINDERS_CRON_HOOK') ) {
     define('EVENTOSAPP_TICKET_REMINDERS_CRON_HOOK', 'eventosapp_ticket_reminder_cron');
 }
 
+function eventosapp_ticket_reminders_sanitize_log_context($value, $depth = 0) {
+    if ( $depth > 4 ) {
+        return '[max_depth]';
+    }
+
+    if ( is_array($value) ) {
+        $clean = [];
+        $count = 0;
+        foreach ( $value as $key => $item ) {
+            $count++;
+            if ( $count > 80 ) {
+                $clean['__truncated__'] = 'Se omitieron elementos adicionales del log.';
+                break;
+            }
+            $safe_key = is_int($key) ? $key : sanitize_key((string)$key);
+            if ( $safe_key === '' && ! is_int($key) ) {
+                $safe_key = 'key_' . $count;
+            }
+            $clean[$safe_key] = eventosapp_ticket_reminders_sanitize_log_context($item, $depth + 1);
+        }
+        return $clean;
+    }
+
+    if ( is_bool($value) || is_int($value) || is_float($value) || $value === null ) {
+        return $value;
+    }
+
+    if ( is_scalar($value) ) {
+        $value = wp_strip_all_tags((string)$value);
+        if ( strlen($value) > 800 ) {
+            $value = substr($value, 0, 800) . '...';
+        }
+        return sanitize_text_field($value);
+    }
+
+    return sanitize_text_field(wp_strip_all_tags(print_r($value, true)));
+}
+
 /**
- * Log liviano para depuración y metabox.
+ * Log detallado para revisar cada actividad del módulo.
  */
-function eventosapp_ticket_reminders_log($event_id, $message, $context = []) {
+function eventosapp_ticket_reminders_log($event_id, $message, $context = [], $level = 'info') {
     $event_id = absint($event_id);
+    $level = sanitize_key((string)$level);
+    if ( ! in_array($level, ['info', 'success', 'warning', 'error', 'debug'], true) ) {
+        $level = 'info';
+    }
+
     $entry = [
         'date'    => current_time('mysql'),
-        'message' => sanitize_text_field((string) $message),
-        'context' => is_array($context) ? $context : [],
+        'level'   => $level,
+        'message' => sanitize_text_field((string)$message),
+        'context' => eventosapp_ticket_reminders_sanitize_log_context(is_array($context) ? $context : []),
     ];
 
     if ( $event_id ) {
@@ -49,27 +97,24 @@ function eventosapp_ticket_reminders_log($event_id, $message, $context = []) {
             $log = [];
         }
         $log[] = $entry;
-        if ( count($log) > 80 ) {
-            $log = array_slice($log, -80);
+        if ( count($log) > 500 ) {
+            $log = array_slice($log, -500);
         }
         update_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_LOG, $log);
     }
 
     if ( defined('WP_DEBUG') && WP_DEBUG ) {
-        error_log('EVENTOSAPP TICKET REMINDERS | ' . $entry['message'] . ' | ' . wp_json_encode($entry['context']));
+        error_log('EVENTOSAPP TICKET REMINDERS | ' . strtoupper($level) . ' | ' . $entry['message'] . ' | ' . wp_json_encode($entry['context']));
     }
 }
 
-/**
- * Campos disponibles para filtros de recordatorios.
- */
 function eventosapp_ticket_reminders_get_filter_fields($event_id = 0) {
     $fields = [
         'nombre'           => 'Nombre',
         'apellido'         => 'Apellido',
         'cedula'           => 'Cédula',
         'email'            => 'Correo electrónico',
-        'telefono'         => 'Celular',
+        'telefono'         => 'Celular / WhatsApp',
         'empresa'          => 'Empresa',
         'nit'              => 'NIT',
         'cargo'            => 'Cargo',
@@ -102,12 +147,11 @@ function eventosapp_ticket_reminders_get_filter_fields($event_id = 0) {
         }
     }
 
-    // Respaldo: si el esquema de campos adicionales no está cargado, detectar metakeys reales en tickets del evento.
     if ( $event_id ) {
         $sample_tickets = get_posts([
             'post_type'      => 'eventosapp_ticket',
             'post_status'    => ['publish', 'pending', 'draft', 'private'],
-            'posts_per_page' => 30,
+            'posts_per_page' => 50,
             'fields'         => 'ids',
             'meta_query'     => [[
                 'key'     => '_eventosapp_ticket_evento_id',
@@ -115,6 +159,7 @@ function eventosapp_ticket_reminders_get_filter_fields($event_id = 0) {
                 'compare' => '=',
             ]],
         ]);
+
         foreach ( $sample_tickets as $ticket_id ) {
             $all_meta = get_post_meta($ticket_id);
             foreach ( $all_meta as $meta_key => $unused ) {
@@ -149,19 +194,8 @@ function eventosapp_ticket_reminders_get_filter_operators() {
     ];
 }
 
-function eventosapp_ticket_reminders_normalize_channels($channels) {
-    $channels = is_array($channels) ? $channels : [];
-    $clean = [];
-    if ( ! empty($channels['email']) ) {
-        $clean['email'] = '1';
-    }
-    if ( ! empty($channels['whatsapp']) ) {
-        $clean['whatsapp'] = '1';
-    }
-    if ( empty($clean) ) {
-        $clean['email'] = '1';
-    }
-    return $clean;
+function eventosapp_ticket_reminders_normalize_channels($channels = []) {
+    return ['whatsapp' => '1'];
 }
 
 function eventosapp_ticket_reminders_normalize_items($items) {
@@ -200,7 +234,7 @@ function eventosapp_ticket_reminders_normalize_items($items) {
             'id'               => $id,
             'enabled'          => isset($item['enabled']) ? '1' : '0',
             'name'             => isset($item['name']) ? sanitize_text_field(wp_unslash($item['name'])) : '',
-            'channels'         => eventosapp_ticket_reminders_normalize_channels($item['channels'] ?? []),
+            'channels'         => ['whatsapp' => '1'],
             'schedule_type'    => $schedule_type,
             'exact_datetime'   => $exact_datetime,
             'relative_days'    => $days,
@@ -275,7 +309,7 @@ function eventosapp_ticket_reminders_normalize_rules($rules) {
 add_action('add_meta_boxes', function() {
     add_meta_box(
         'eventosapp_ticket_reminders',
-        'Recordatorios de Ticket',
+        'Recordatorios de Ticket por WhatsApp',
         'eventosapp_ticket_reminders_render_metabox',
         'eventosapp_event',
         'normal',
@@ -292,6 +326,7 @@ function eventosapp_ticket_reminders_render_metabox($post) {
     $last_run  = get_post_meta($post->ID, EVENTOSAPP_TICKET_REMINDERS_META_LAST_RUN, true);
     $log       = get_post_meta($post->ID, EVENTOSAPP_TICKET_REMINDERS_META_LOG, true);
     $event_start = eventosapp_ticket_reminders_get_event_start_info($post->ID);
+    $whatsapp_enabled = get_post_meta($post->ID, '_eventosapp_ticket_whatsapp_enabled', true) === '1';
 
     if ( ! is_array($log) ) {
         $log = [];
@@ -303,23 +338,32 @@ function eventosapp_ticket_reminders_render_metabox($post) {
         .evapp-reminders-box{border:1px solid #dcdcde;background:#fff;border-radius:10px;padding:14px;margin:10px 0;}
         .evapp-reminders-help{font-size:12px;color:#646970;margin:6px 0 0;line-height:1.45;}
         .evapp-reminders-empty{padding:12px;background:#f6f7f7;border:1px dashed #c3c4c7;border-radius:8px;color:#50575e;}
-        .evapp-reminder-row{border:1px solid #ccd0d4;border-left:4px solid #2271b1;background:#fafafa;border-radius:10px;padding:14px;margin:14px 0;}
+        .evapp-reminders-warning{padding:10px 12px;background:#fff8e5;border:1px solid #f0c36d;border-left:4px solid #d63638;border-radius:8px;margin:10px 0;color:#3c434a;}
+        .evapp-reminder-row{border:1px solid #ccd0d4;border-left:4px solid #22c55e;background:#fafafa;border-radius:10px;padding:14px;margin:14px 0;}
         .evapp-reminder-grid{display:grid;grid-template-columns:minmax(160px,1fr) minmax(190px,1fr);gap:12px;align-items:start;}
         .evapp-reminder-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;}
         .evapp-reminder-field input[type="text"],.evapp-reminder-field input[type="datetime-local"],.evapp-reminder-field input[type="number"],.evapp-reminder-field select{width:100%;max-width:100%;}
         .evapp-reminder-checks{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:4px;}
+        .evapp-reminder-channel-badge{display:inline-flex;align-items:center;gap:6px;background:#ecfdf5;border:1px solid #86efac;color:#166534;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;}
         .evapp-relative-grid{display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:8px;}
         .evapp-reminder-actions{display:flex;justify-content:flex-end;margin-top:6px;}
         .evapp-reminder-rules .evapp-reminder-rule{border:1px solid #ccd0d4;border-left:4px solid #f59e0b;border-radius:10px;background:#fff;margin:14px 0;padding:14px;}
-        .evapp-reminder-rule-head{display:grid;grid-template-columns:90px minmax(160px,1fr) 160px 170px auto;gap:10px;align-items:end;margin-bottom:12px;}
+        .evapp-reminder-rule-head{display:grid;grid-template-columns:90px minmax(160px,1fr) 160px 180px auto;gap:10px;align-items:end;margin-bottom:12px;}
         .evapp-reminder-rule-head input[type="text"],.evapp-reminder-rule-head select{width:100%;}
         .evapp-reminder-conditions-table{width:100%;border-collapse:collapse;background:#fff;}
         .evapp-reminder-conditions-table th,.evapp-reminder-conditions-table td{padding:8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top;}
         .evapp-reminder-conditions-table select,.evapp-reminder-conditions-table input{width:100%;max-width:100%;}
         .evapp-reminder-status{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:10px;margin:10px 0;}
-        .evapp-reminder-status-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:12px;color:#475569;}
-        .evapp-reminder-log{max-height:180px;overflow:auto;background:#111827;color:#e5e7eb;border-radius:8px;padding:10px;font-size:12px;line-height:1.35;}
-        .evapp-reminder-log div{border-bottom:1px solid rgba(255,255,255,.08);padding:5px 0;}
+        .evapp-reminder-status-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:12px;color:#475569;line-height:1.45;}
+        .evapp-reminder-log-wrap{max-height:360px;overflow:auto;background:#111827;border-radius:8px;padding:0;border:1px solid #111827;}
+        .evapp-reminder-log-table{width:100%;border-collapse:collapse;color:#e5e7eb;font-size:12px;line-height:1.35;}
+        .evapp-reminder-log-table th{position:sticky;top:0;background:#0f172a;color:#cbd5e1;text-align:left;padding:8px;border-bottom:1px solid rgba(255,255,255,.12);}
+        .evapp-reminder-log-table td{vertical-align:top;padding:8px;border-bottom:1px solid rgba(255,255,255,.08);}
+        .evapp-reminder-log-table code{color:#bfdbfe;background:transparent;padding:0;white-space:normal;word-break:break-word;}
+        .evapp-reminder-level-success{color:#86efac;font-weight:700;}
+        .evapp-reminder-level-error{color:#fca5a5;font-weight:700;}
+        .evapp-reminder-level-warning{color:#fde68a;font-weight:700;}
+        .evapp-reminder-level-info,.evapp-reminder-level-debug{color:#bfdbfe;font-weight:700;}
         @media (max-width: 980px){
             .evapp-reminder-grid,.evapp-reminder-rule-head,.evapp-reminder-status{grid-template-columns:1fr;}
             .evapp-relative-grid{grid-template-columns:1fr;}
@@ -333,18 +377,26 @@ function eventosapp_ticket_reminders_render_metabox($post) {
     <div class="evapp-reminders-box">
         <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
             <input type="checkbox" name="eventosapp_ticket_reminders_enabled" value="1" <?php checked($enabled, '1'); ?>>
-            <strong>Activar recordatorios programados para este evento</strong>
+            <strong>Activar recordatorios programados por WhatsApp para este evento</strong>
         </label>
         <p class="evapp-reminders-help">
-            Puedes programar recordatorios por una fecha/hora exacta o por anticipación frente a la hora de inicio del evento. Para eventos de varias fechas se toma como referencia la primera fecha del evento.
+            Este metabox envía solamente recordatorios por WhatsApp. La programación se calcula con la zona horaria configurada en el evento, no con la hora UTC del servidor.
         </p>
+
+        <?php if ( ! $whatsapp_enabled ) : ?>
+            <div class="evapp-reminders-warning">
+                <strong>WhatsApp no está activo en este evento.</strong><br>
+                Activa “Mensajería de WhatsApp para tickets” en el metabox “Funciones Extra del Ticket”; de lo contrario los recordatorios quedarán omitidos.
+            </div>
+        <?php endif; ?>
 
         <div class="evapp-reminder-status">
             <div class="evapp-reminder-status-card">
                 <strong>Referencia del evento</strong><br>
                 <?php if ( ! empty($event_start['local_label']) ) : ?>
-                    <?php echo esc_html($event_start['local_label']); ?><br>
-                    Zona horaria: <?php echo esc_html($event_start['timezone']); ?>
+                    Hora del evento: <?php echo esc_html($event_start['local_label']); ?><br>
+                    Zona horaria del evento: <?php echo esc_html($event_start['timezone']); ?><br>
+                    UTC equivalente: <?php echo esc_html($event_start['utc_label']); ?>
                 <?php else : ?>
                     Falta configurar fecha y hora de inicio del evento.
                 <?php endif; ?>
@@ -353,7 +405,7 @@ function eventosapp_ticket_reminders_render_metabox($post) {
                 <strong>Última ejecución</strong><br>
                 <?php if ( is_array($last_run) && ! empty($last_run['date']) ) : ?>
                     <?php echo esc_html($last_run['date']); ?><br>
-                    Enviados: <?php echo esc_html($last_run['sent_total'] ?? 0); ?> · Omitidos: <?php echo esc_html($last_run['skipped_total'] ?? 0); ?> · Errores: <?php echo esc_html($last_run['error_total'] ?? 0); ?>
+                    WhatsApp enviados: <?php echo esc_html($last_run['whatsapp_sent'] ?? 0); ?> · Omitidos: <?php echo esc_html($last_run['skipped_total'] ?? 0); ?> · Errores: <?php echo esc_html($last_run['error_total'] ?? 0); ?>
                 <?php else : ?>
                     Sin ejecuciones registradas.
                 <?php endif; ?>
@@ -375,7 +427,7 @@ function eventosapp_ticket_reminders_render_metabox($post) {
         <hr>
         <h4>Filtros de destinatarios</h4>
         <p class="evapp-reminders-help">
-            Las reglas <strong>No enviar</strong> tienen prioridad sobre las reglas <strong>Enviar</strong>. Si no creas reglas, el recordatorio se enviará a todos los tickets del evento que tengan el dato requerido por el canal seleccionado.
+            Las reglas <strong>No enviar</strong> tienen prioridad sobre las reglas <strong>Enviar</strong>. Si no creas reglas, el recordatorio se enviará a todos los tickets del evento que tengan un celular válido para WhatsApp.
             Para modalidad usa <code>presencial</code> o <code>virtual</code>. Para canal de creación usa <code>manual</code>, <code>frontend</code>, <code>public</code>, <code>webhook</code> o <code>import</code>.
         </p>
 
@@ -390,20 +442,10 @@ function eventosapp_ticket_reminders_render_metabox($post) {
         </div>
         <p><button type="button" class="button button-secondary" id="evapp-ticket-reminder-add-rule">+ Agregar filtro</button></p>
 
-        <?php if ( ! empty($log) ) : ?>
-            <hr>
-            <h4>Registro reciente</h4>
-            <div class="evapp-reminder-log">
-                <?php foreach ( array_reverse(array_slice($log, -20)) as $entry ) : ?>
-                    <div>
-                        <strong><?php echo esc_html($entry['date'] ?? ''); ?></strong> — <?php echo esc_html($entry['message'] ?? ''); ?>
-                        <?php if ( ! empty($entry['context']) && is_array($entry['context']) ) : ?>
-                            <br><code style="color:#bfdbfe;background:transparent;padding:0;"><?php echo esc_html(wp_json_encode($entry['context'])); ?></code>
-                        <?php endif; ?>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-        <?php endif; ?>
+        <hr>
+        <h4>Log detallado de actividad</h4>
+        <p class="evapp-reminders-help">Aquí puedes consultar la programación, inicio de ejecución, tickets omitidos, errores y envíos aceptados por Meta.</p>
+        <?php eventosapp_ticket_reminders_render_log_table($log); ?>
     </div>
 
     <script type="text/html" id="tmpl-evapp-ticket-reminder-item">
@@ -411,7 +453,7 @@ function eventosapp_ticket_reminders_render_metabox($post) {
             'id'               => '',
             'enabled'          => '1',
             'name'             => '',
-            'channels'         => ['email' => '1'],
+            'channels'         => ['whatsapp' => '1'],
             'schedule_type'    => 'relative',
             'exact_datetime'   => '',
             'relative_days'    => 1,
@@ -422,37 +464,47 @@ function eventosapp_ticket_reminders_render_metabox($post) {
 
     <script type="text/html" id="tmpl-evapp-ticket-reminder-rule">
         <?php eventosapp_ticket_reminders_render_rule_row('__RULE_INDEX__', [
-            'enabled' => '1',
-            'name' => '',
-            'action' => 'allow',
-            'match' => 'all',
-            'conditions' => [],
+            'enabled'    => '1',
+            'name'       => '',
+            'action'     => 'allow',
+            'match'      => 'all',
+            'conditions' => [[
+                'field'    => 'localidad',
+                'operator' => 'equals',
+                'value'    => '',
+            ]],
         ], $fields, $operators); ?>
     </script>
 
     <script type="text/html" id="tmpl-evapp-ticket-reminder-condition">
-        <?php eventosapp_ticket_reminders_render_condition_row('__RULE_INDEX__', '__COND_INDEX__', [], $fields, $operators); ?>
+        <?php eventosapp_ticket_reminders_render_condition_row('__RULE_INDEX__', '__COND_INDEX__', [
+            'field'    => 'localidad',
+            'operator' => 'equals',
+            'value'    => '',
+        ], $fields, $operators); ?>
     </script>
 
     <script>
     jQuery(function($){
-        var reminderIndex = $('#evapp-ticket-reminders-list .evapp-reminder-row').length;
-        var ruleIndex = $('#evapp-ticket-reminder-rules-list .evapp-reminder-rule').length;
+        var reminderIndex = <?php echo (int) max(1, count($items)); ?>;
+        var ruleIndex = <?php echo (int) max(1, count($rules)); ?>;
 
-        function replaceTokens(html, tokens) {
-            $.each(tokens, function(token, value){
-                html = html.replace(new RegExp(token, 'g'), value);
+        function replaceTokens(html, map){
+            Object.keys(map).forEach(function(key){
+                html = html.split(key).join(map[key]);
             });
             return html;
         }
 
-        function toggleScheduleBlocks($row) {
-            var mode = $row.find('.evapp-reminder-schedule-type').val();
-            $row.find('.evapp-reminder-exact-block').toggle(mode === 'exact');
-            $row.find('.evapp-reminder-relative-block').toggle(mode !== 'exact');
+        function toggleScheduleBlocks($row){
+            var type = $row.find('.evapp-reminder-schedule-type').val();
+            $row.find('.evapp-reminder-exact-block').toggle(type === 'exact');
+            $row.find('.evapp-reminder-relative-block').toggle(type !== 'exact');
         }
 
-        $('#evapp-ticket-reminders-list .evapp-reminder-row').each(function(){ toggleScheduleBlocks($(this)); });
+        $('#evapp-ticket-reminders-list .evapp-reminder-row').each(function(){
+            toggleScheduleBlocks($(this));
+        });
 
         $('#evapp-ticket-reminders-add').on('click', function(){
             $('#evapp-ticket-reminders-empty').remove();
@@ -506,12 +558,50 @@ function eventosapp_ticket_reminders_render_metabox($post) {
     <?php
 }
 
+function eventosapp_ticket_reminders_render_log_table($log) {
+    if ( ! is_array($log) || empty($log) ) {
+        echo '<p class="evapp-reminders-empty">Todavía no hay actividades registradas.</p>';
+        return;
+    }
+
+    $rows = array_reverse(array_slice($log, -120));
+    ?>
+    <div class="evapp-reminder-log-wrap">
+        <table class="evapp-reminder-log-table">
+            <thead>
+                <tr>
+                    <th style="width:140px;">Fecha</th>
+                    <th style="width:90px;">Nivel</th>
+                    <th>Actividad</th>
+                    <th>Detalle</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ( $rows as $entry ) : ?>
+                    <?php
+                    $level = sanitize_key($entry['level'] ?? 'info');
+                    $context = isset($entry['context']) && is_array($entry['context']) ? $entry['context'] : [];
+                    ?>
+                    <tr>
+                        <td><?php echo esc_html($entry['date'] ?? ''); ?></td>
+                        <td><span class="evapp-reminder-level-<?php echo esc_attr($level); ?>"><?php echo esc_html(strtoupper($level)); ?></span></td>
+                        <td><?php echo esc_html($entry['message'] ?? ''); ?></td>
+                        <td><?php echo ! empty($context) ? '<code>' . esc_html(wp_json_encode($context)) . '</code>' : ''; ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php
+}
+
 function eventosapp_ticket_reminders_render_item_row($index, $item, $event_id) {
     $id = ! empty($item['id']) ? sanitize_key($item['id']) : '';
     $scheduled_label = $id ? eventosapp_ticket_reminders_get_scheduled_label($event_id, $id) : '';
     ?>
     <div class="evapp-reminder-row" data-reminder-index="<?php echo esc_attr($index); ?>">
         <input type="hidden" name="eventosapp_ticket_reminders[<?php echo esc_attr($index); ?>][id]" value="<?php echo esc_attr($id); ?>">
+        <input type="hidden" name="eventosapp_ticket_reminders[<?php echo esc_attr($index); ?>][channels][whatsapp]" value="1">
         <div class="evapp-reminder-grid">
             <div>
                 <label class="evapp-reminder-field">
@@ -520,8 +610,7 @@ function eventosapp_ticket_reminders_render_item_row($index, $item, $event_id) {
                 </label>
                 <div class="evapp-reminder-checks">
                     <label><input type="checkbox" name="eventosapp_ticket_reminders[<?php echo esc_attr($index); ?>][enabled]" value="1" <?php checked(($item['enabled'] ?? '0'), '1'); ?>> Activo</label>
-                    <label><input type="checkbox" name="eventosapp_ticket_reminders[<?php echo esc_attr($index); ?>][channels][email]" value="1" <?php checked(! empty($item['channels']['email'])); ?>> Correo</label>
-                    <label><input type="checkbox" name="eventosapp_ticket_reminders[<?php echo esc_attr($index); ?>][channels][whatsapp]" value="1" <?php checked(! empty($item['channels']['whatsapp'])); ?>> WhatsApp</label>
+                    <span class="evapp-reminder-channel-badge">Canal: WhatsApp</span>
                 </div>
                 <?php if ( $scheduled_label ) : ?>
                     <p class="evapp-reminders-help"><strong>Próxima ejecución:</strong> <?php echo esc_html($scheduled_label); ?></p>
@@ -540,6 +629,7 @@ function eventosapp_ticket_reminders_render_item_row($index, $item, $event_id) {
                         <span><strong>Fecha y hora exacta</strong></span>
                         <input type="datetime-local" name="eventosapp_ticket_reminders[<?php echo esc_attr($index); ?>][exact_datetime]" value="<?php echo esc_attr($item['exact_datetime'] ?? ''); ?>">
                     </label>
+                    <p class="evapp-reminders-help">La fecha exacta se interpreta en la zona horaria del evento.</p>
                 </div>
                 <div class="evapp-reminder-relative-block">
                     <div class="evapp-relative-grid">
@@ -677,16 +767,92 @@ function eventosapp_ticket_reminders_get_event_timezone($event_id) {
     }
 }
 
+function eventosapp_ticket_reminders_normalize_date_value($date) {
+    $date = trim((string)$date);
+    if ( $date === '' ) {
+        return '';
+    }
+
+    if ( preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ) {
+        return $date;
+    }
+
+    if ( preg_match('/^(\d{2})\/(\d{2})\/(\d{4})$/', $date, $m) ) {
+        return $m[3] . '-' . $m[2] . '-' . $m[1];
+    }
+
+    $timestamp = strtotime($date);
+    if ( $timestamp ) {
+        return gmdate('Y-m-d', $timestamp);
+    }
+
+    return '';
+}
+
+function eventosapp_ticket_reminders_parse_time_value($time) {
+    $time = trim((string)$time);
+    if ( $time === '' ) {
+        return '00:00';
+    }
+
+    $time = str_replace(['.', '  '], ['', ' '], $time);
+    $time = trim($time);
+
+    if ( preg_match('/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i', $time, $m) ) {
+        $hour = (int)$m[1];
+        $minute = (int)$m[2];
+        $ampm = isset($m[3]) ? strtoupper($m[3]) : '';
+
+        if ( $minute < 0 || $minute > 59 ) {
+            return '00:00';
+        }
+
+        if ( $ampm === 'PM' && $hour >= 1 && $hour <= 11 ) {
+            $hour += 12;
+        } elseif ( $ampm === 'AM' && $hour === 12 ) {
+            $hour = 0;
+        }
+
+        if ( $hour < 0 || $hour > 23 ) {
+            return '00:00';
+        }
+
+        return sprintf('%02d:%02d', $hour, $minute);
+    }
+
+    if ( preg_match('/^(\d{1,2})\s*(AM|PM)$/i', $time, $m) ) {
+        $hour = (int)$m[1];
+        $ampm = strtoupper($m[2]);
+        if ( $ampm === 'PM' && $hour >= 1 && $hour <= 11 ) {
+            $hour += 12;
+        } elseif ( $ampm === 'AM' && $hour === 12 ) {
+            $hour = 0;
+        }
+        if ( $hour >= 0 && $hour <= 23 ) {
+            return sprintf('%02d:00', $hour);
+        }
+    }
+
+    return '00:00';
+}
+
 function eventosapp_ticket_reminders_get_event_days($event_id) {
     $event_id = absint($event_id);
     if ( function_exists('eventosapp_get_event_days') ) {
         $days = eventosapp_get_event_days($event_id);
         if ( is_array($days) && ! empty($days) ) {
-            $days = array_values(array_filter($days, function($day) {
-                return is_string($day) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $day);
-            }));
-            sort($days);
-            return $days;
+            $normalized = [];
+            foreach ( $days as $day ) {
+                $date = eventosapp_ticket_reminders_normalize_date_value($day);
+                if ( $date !== '' ) {
+                    $normalized[] = $date;
+                }
+            }
+            $normalized = array_values(array_unique($normalized));
+            sort($normalized);
+            if ( ! empty($normalized) ) {
+                return $normalized;
+            }
         }
     }
 
@@ -694,24 +860,24 @@ function eventosapp_ticket_reminders_get_event_days($event_id) {
     $days = [];
 
     if ( $tipo === 'unica' ) {
-        $date = get_post_meta($event_id, '_eventosapp_fecha_unica', true);
-        if ( preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$date) ) {
+        $date = eventosapp_ticket_reminders_normalize_date_value(get_post_meta($event_id, '_eventosapp_fecha_unica', true));
+        if ( $date !== '' ) {
             $days[] = $date;
         }
     } elseif ( $tipo === 'consecutiva' ) {
-        $start = get_post_meta($event_id, '_eventosapp_fecha_inicio', true);
-        $end   = get_post_meta($event_id, '_eventosapp_fecha_fin', true);
-        if ( preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$start) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$end) ) {
+        $start = eventosapp_ticket_reminders_normalize_date_value(get_post_meta($event_id, '_eventosapp_fecha_inicio', true));
+        if ( $start !== '' ) {
             $days[] = $start;
         }
     } else {
         $dates = get_post_meta($event_id, '_eventosapp_fechas_noco', true);
         if ( is_string($dates) ) {
-            $dates = array_filter(array_map('trim', explode(',', $dates)));
+            $dates = preg_split('/[\r\n,]+/', $dates);
         }
         if ( is_array($dates) ) {
             foreach ( $dates as $date ) {
-                if ( preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$date) ) {
+                $date = eventosapp_ticket_reminders_normalize_date_value($date);
+                if ( $date !== '' ) {
                     $days[] = $date;
                 }
             }
@@ -723,39 +889,60 @@ function eventosapp_ticket_reminders_get_event_days($event_id) {
     return $days;
 }
 
-function eventosapp_ticket_reminders_get_event_start_info($event_id) {
-    $event_id = absint($event_id);
-    $days = eventosapp_ticket_reminders_get_event_days($event_id);
-    if ( empty($days) ) {
-        return [
-            'timestamp'   => 0,
-            'local_label' => '',
-            'timezone'    => '',
-        ];
-    }
-
-    $time = get_post_meta($event_id, '_eventosapp_hora_inicio', true);
-    if ( ! is_string($time) || ! preg_match('/^\d{2}:\d{2}/', $time) ) {
-        $time = '00:00';
-    } else {
-        $time = substr($time, 0, 5);
+function eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $timestamp) {
+    $timestamp = (int)$timestamp;
+    if ( $timestamp <= 0 ) {
+        return '';
     }
 
     $tz = eventosapp_ticket_reminders_get_event_timezone($event_id);
     try {
-        $dt = new DateTime($days[0] . ' ' . $time . ':00', $tz);
+        $dt = new DateTimeImmutable('@' . $timestamp);
+        $dt = $dt->setTimezone($tz);
+        return $dt->format('d/m/Y H:i') . ' (' . $tz->getName() . ')';
+    } catch ( Exception $e ) {
+        return date_i18n('d/m/Y H:i', $timestamp);
+    }
+}
+
+function eventosapp_ticket_reminders_get_event_start_info($event_id) {
+    $event_id = absint($event_id);
+    $days = eventosapp_ticket_reminders_get_event_days($event_id);
+    $tz = eventosapp_ticket_reminders_get_event_timezone($event_id);
+
+    if ( empty($days) ) {
+        return [
+            'timestamp'   => 0,
+            'local_label' => '',
+            'utc_label'   => '',
+            'timezone'    => $tz->getName(),
+            'raw_time'    => '',
+        ];
+    }
+
+    $raw_time = get_post_meta($event_id, '_eventosapp_hora_inicio', true);
+    $time = eventosapp_ticket_reminders_parse_time_value($raw_time);
+
+    try {
+        $dt = new DateTimeImmutable($days[0] . ' ' . $time . ':00', $tz);
     } catch ( Exception $e ) {
         return [
             'timestamp'   => 0,
             'local_label' => '',
+            'utc_label'   => '',
             'timezone'    => $tz->getName(),
+            'raw_time'    => (string)$raw_time,
         ];
     }
 
     return [
         'timestamp'   => $dt->getTimestamp(),
-        'local_label' => date_i18n('d/m/Y H:i', $dt->getTimestamp()),
+        'local_label' => $dt->format('d/m/Y H:i'),
+        'utc_label'   => gmdate('Y-m-d H:i:s', $dt->getTimestamp()),
         'timezone'    => $tz->getName(),
+        'raw_date'    => $days[0],
+        'raw_time'    => (string)$raw_time,
+        'parsed_time' => $time,
     ];
 }
 
@@ -770,7 +957,7 @@ function eventosapp_ticket_reminders_calculate_run_timestamp($event_id, $item) {
             return 0;
         }
         try {
-            $dt = new DateTime(str_replace('T', ' ', $exact) . ':00', $tz);
+            $dt = new DateTimeImmutable(str_replace('T', ' ', $exact) . ':00', $tz);
             return $dt->getTimestamp();
         } catch ( Exception $e ) {
             return 0;
@@ -801,7 +988,7 @@ function eventosapp_ticket_reminders_get_scheduled_label($event_id, $reminder_id
         return '';
     }
 
-    return date_i18n('d/m/Y H:i', $timestamp);
+    return eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $timestamp) . ' · UTC: ' . gmdate('Y-m-d H:i:s', $timestamp);
 }
 
 function eventosapp_ticket_reminders_clear_schedules($event_id) {
@@ -830,6 +1017,48 @@ function eventosapp_ticket_reminders_clear_schedules($event_id) {
     delete_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_SCHEDULED_KEYS);
 }
 
+
+function eventosapp_ticket_reminders_item_signature($event_id, $item) {
+    $run_at = eventosapp_ticket_reminders_calculate_run_timestamp($event_id, $item);
+    $data = [
+        'run_at' => (int)$run_at,
+        'schedule_type' => sanitize_key((string)($item['schedule_type'] ?? 'relative')),
+        'exact_datetime' => sanitize_text_field((string)($item['exact_datetime'] ?? '')),
+        'relative_days' => absint($item['relative_days'] ?? 0),
+        'relative_hours' => absint($item['relative_hours'] ?? 0),
+        'relative_minutes' => absint($item['relative_minutes'] ?? 0),
+        'channels' => ['whatsapp' => '1'],
+    ];
+    return md5(wp_json_encode($data));
+}
+
+function eventosapp_ticket_reminders_get_executed_map($event_id) {
+    $executed = get_post_meta(absint($event_id), EVENTOSAPP_TICKET_REMINDERS_META_EXECUTED, true);
+    return is_array($executed) ? $executed : [];
+}
+
+function eventosapp_ticket_reminders_mark_executed($event_id, $reminder_id, $summary = []) {
+    $event_id = absint($event_id);
+    $reminder_id = sanitize_key($reminder_id);
+    if ( ! $event_id || $reminder_id === '' ) {
+        return;
+    }
+
+    $item = eventosapp_ticket_reminders_find_item($event_id, $reminder_id);
+    $run_at = ! empty($item) ? eventosapp_ticket_reminders_calculate_run_timestamp($event_id, $item) : 0;
+    $signature = ! empty($item) ? eventosapp_ticket_reminders_item_signature($event_id, $item) : '';
+
+    $executed = eventosapp_ticket_reminders_get_executed_map($event_id);
+    $executed[$reminder_id] = [
+        'date' => current_time('mysql'),
+        'timestamp' => time(),
+        'run_at' => (int)$run_at,
+        'signature' => $signature,
+        'summary' => eventosapp_ticket_reminders_sanitize_log_context($summary),
+    ];
+    update_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_EXECUTED, $executed);
+}
+
 function eventosapp_ticket_reminders_sync_event($event_id, $reason = 'sync') {
     $event_id = absint($event_id);
     if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
@@ -842,16 +1071,18 @@ function eventosapp_ticket_reminders_sync_event($event_id, $reason = 'sync') {
     $items = eventosapp_ticket_reminders_normalize_items(get_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_ITEMS, true));
 
     if ( ! $enabled || empty($items) ) {
-        eventosapp_ticket_reminders_log($event_id, 'Recordatorios sin programación activa.', [
+        eventosapp_ticket_reminders_log($event_id, 'Recordatorios WhatsApp sin programación activa.', [
             'reason' => $reason,
             'enabled' => $enabled ? '1' : '0',
             'items' => count($items),
-        ]);
+        ], 'info');
         return;
     }
 
     $scheduled_keys = [];
     $now = time();
+    $grace_seconds = (int) apply_filters('eventosapp_ticket_reminders_due_grace_seconds', 3 * DAY_IN_SECONDS, $event_id);
+    $executed = eventosapp_ticket_reminders_get_executed_map($event_id);
 
     foreach ( $items as $item ) {
         $reminder_id = sanitize_key($item['id'] ?? '');
@@ -865,32 +1096,72 @@ function eventosapp_ticket_reminders_sync_event($event_id, $reason = 'sync') {
                 'reason' => $reason,
                 'reminder_id' => $reminder_id,
                 'name' => $item['name'] ?? '',
-            ]);
+                'event_start' => eventosapp_ticket_reminders_get_event_start_info($event_id),
+            ], 'error');
             continue;
         }
 
-        if ( $run_at <= ($now - 60) ) {
-            eventosapp_ticket_reminders_log($event_id, 'Recordatorio omitido porque su fecha ya pasó.', [
+        $current_signature = eventosapp_ticket_reminders_item_signature($event_id, $item);
+        $already_executed_same_schedule = isset($executed[$reminder_id])
+            && is_array($executed[$reminder_id])
+            && ! empty($executed[$reminder_id]['signature'])
+            && hash_equals((string)$executed[$reminder_id]['signature'], (string)$current_signature);
+
+        if ( $run_at <= $now && $already_executed_same_schedule ) {
+            eventosapp_ticket_reminders_log($event_id, 'Recordatorio no reprogramado porque ya fue ejecutado con esta misma programación.', [
                 'reason' => $reason,
                 'reminder_id' => $reminder_id,
                 'name' => $item['name'] ?? '',
-                'run_at' => date_i18n('Y-m-d H:i:s', $run_at),
-            ]);
+                'run_at_event_timezone' => eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $run_at),
+                'run_at_utc' => gmdate('Y-m-d H:i:s', $run_at),
+                'signature' => $current_signature,
+            ], 'info');
             continue;
         }
 
-        if ( $run_at <= $now ) {
-            $run_at = $now + 60;
+        if ( $run_at < ($now - $grace_seconds) ) {
+            eventosapp_ticket_reminders_log($event_id, 'Recordatorio omitido porque su fecha ya pasó fuera de la ventana de recuperación.', [
+                'reason' => $reason,
+                'reminder_id' => $reminder_id,
+                'name' => $item['name'] ?? '',
+                'run_at_event_timezone' => eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $run_at),
+                'run_at_utc' => gmdate('Y-m-d H:i:s', $run_at),
+                'now_utc' => gmdate('Y-m-d H:i:s', $now),
+                'grace_seconds' => $grace_seconds,
+            ], 'warning');
+            continue;
         }
 
-        wp_schedule_single_event($run_at, EVENTOSAPP_TICKET_REMINDERS_CRON_HOOK, [$event_id, $reminder_id]);
+        $schedule_at = $run_at;
+        $recovered = false;
+        if ( $schedule_at <= $now ) {
+            $schedule_at = $now + 30;
+            $recovered = true;
+        }
+
+        $scheduled = wp_schedule_single_event($schedule_at, EVENTOSAPP_TICKET_REMINDERS_CRON_HOOK, [$event_id, $reminder_id]);
+        if ( $scheduled === false ) {
+            eventosapp_ticket_reminders_log($event_id, 'No se pudo registrar el evento WP-Cron del recordatorio.', [
+                'reason' => $reason,
+                'reminder_id' => $reminder_id,
+                'name' => $item['name'] ?? '',
+                'schedule_at_event_timezone' => eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $schedule_at),
+                'schedule_at_utc' => gmdate('Y-m-d H:i:s', $schedule_at),
+            ], 'error');
+            continue;
+        }
+
         $scheduled_keys[] = $reminder_id;
-        eventosapp_ticket_reminders_log($event_id, 'Recordatorio programado.', [
+        eventosapp_ticket_reminders_log($event_id, $recovered ? 'Recordatorio vencido recuperado y programado para ejecución inmediata.' : 'Recordatorio programado.', [
             'reason' => $reason,
             'reminder_id' => $reminder_id,
             'name' => $item['name'] ?? '',
-            'run_at' => date_i18n('Y-m-d H:i:s', $run_at),
-        ]);
+            'run_at_event_timezone' => eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $run_at),
+            'run_at_utc' => gmdate('Y-m-d H:i:s', $run_at),
+            'scheduled_for_event_timezone' => eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $schedule_at),
+            'scheduled_for_utc' => gmdate('Y-m-d H:i:s', $schedule_at),
+            'event_start' => eventosapp_ticket_reminders_get_event_start_info($event_id),
+        ], 'success');
     }
 
     update_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_SCHEDULED_KEYS, array_values(array_unique($scheduled_keys)));
@@ -917,18 +1188,17 @@ function eventosapp_ticket_reminders_run($event_id, $reminder_id) {
     }
 
     if ( get_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_ENABLED, true) !== '1' ) {
-        eventosapp_ticket_reminders_log($event_id, 'Ejecución cancelada: recordatorios desactivados.', ['reminder_id' => $reminder_id]);
+        eventosapp_ticket_reminders_log($event_id, 'Ejecución cancelada: recordatorios desactivados.', ['reminder_id' => $reminder_id], 'warning');
         return;
     }
 
     $item = eventosapp_ticket_reminders_find_item($event_id, $reminder_id);
     if ( empty($item) || ($item['enabled'] ?? '0') !== '1' ) {
-        eventosapp_ticket_reminders_log($event_id, 'Ejecución cancelada: recordatorio no encontrado o inactivo.', ['reminder_id' => $reminder_id]);
+        eventosapp_ticket_reminders_log($event_id, 'Ejecución cancelada: recordatorio no encontrado o inactivo.', ['reminder_id' => $reminder_id], 'warning');
         return;
     }
 
     $rules = eventosapp_ticket_reminders_normalize_rules(get_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_RULES, true));
-    $channels = eventosapp_ticket_reminders_normalize_channels($item['channels'] ?? []);
 
     $summary = [
         'date'          => current_time('mysql'),
@@ -938,17 +1208,18 @@ function eventosapp_ticket_reminders_run($event_id, $reminder_id) {
         'sent_total'    => 0,
         'skipped_total' => 0,
         'error_total'   => 0,
-        'email_sent'    => 0,
         'whatsapp_sent' => 0,
         'details'       => [],
     ];
 
-    eventosapp_ticket_reminders_log($event_id, 'Inicio de envío de recordatorio.', [
+    eventosapp_ticket_reminders_log($event_id, 'Inicio de envío de recordatorio WhatsApp.', [
         'reminder_id' => $reminder_id,
-        'channels' => array_keys($channels),
-    ]);
+        'name' => $item['name'] ?? '',
+        'event_start' => eventosapp_ticket_reminders_get_event_start_info($event_id),
+    ], 'info');
 
     $paged = 1;
+    $total_tickets = 0;
     do {
         $query = new WP_Query([
             'post_type'      => 'eventosapp_ticket',
@@ -967,73 +1238,93 @@ function eventosapp_ticket_reminders_run($event_id, $reminder_id) {
 
         foreach ( $query->posts as $ticket_id ) {
             $ticket_id = absint($ticket_id);
+            $total_tickets++;
+            $phone_info = eventosapp_ticket_reminders_get_ticket_phone_info($ticket_id);
+
             $passes = eventosapp_ticket_reminders_ticket_passes_rules($ticket_id, $event_id, $rules);
             if ( empty($passes['allowed']) ) {
                 $summary['skipped_total']++;
-                $summary['details'][] = ['ticket_id' => $ticket_id, 'status' => 'skipped_rules', 'message' => $passes['reason'] ?? 'No cumple filtros.'];
-                eventosapp_ticket_reminders_add_ticket_history($ticket_id, $event_id, $item, 'general', 'skipped', $passes['reason'] ?? 'No cumple filtros.');
+                $message = $passes['reason'] ?? 'No cumple filtros.';
+                $summary['details'][] = ['ticket_id' => $ticket_id, 'channel' => 'whatsapp', 'status' => 'skipped_rules', 'message' => $message];
+                eventosapp_ticket_reminders_add_ticket_history($ticket_id, $event_id, $item, 'whatsapp', 'skipped', $message);
+                eventosapp_ticket_reminders_log($event_id, 'Ticket omitido por filtros del recordatorio.', [
+                    'ticket_id' => $ticket_id,
+                    'reminder_id' => $reminder_id,
+                    'reason' => $message,
+                    'phone_raw' => $phone_info['raw'],
+                    'phone_normalized' => $phone_info['normalized'],
+                ], 'warning');
                 continue;
             }
 
-            foreach ( $channels as $channel => $enabled ) {
-                if ( ! $enabled ) {
-                    continue;
-                }
-
-                if ( eventosapp_ticket_reminders_ticket_already_sent($ticket_id, $reminder_id, $channel) ) {
-                    $summary['skipped_total']++;
-                    $summary['details'][] = ['ticket_id' => $ticket_id, 'channel' => $channel, 'status' => 'skipped_duplicate', 'message' => 'Ya enviado previamente.'];
-                    continue;
-                }
-
-                if ( $channel === 'email' ) {
-                    $result = eventosapp_ticket_reminders_send_email($ticket_id, $event_id, $item);
-                } elseif ( $channel === 'whatsapp' ) {
-                    $result = eventosapp_ticket_reminders_send_whatsapp($ticket_id, $event_id, $item);
-                } else {
-                    $result = ['ok' => false, 'message' => 'Canal no soportado.'];
-                }
-
-                $status = ! empty($result['ok']) ? 'sent' : 'error';
-                if ( ! empty($result['skipped']) ) {
-                    $status = 'skipped';
-                }
-
-                eventosapp_ticket_reminders_add_ticket_history($ticket_id, $event_id, $item, $channel, $status, $result['message'] ?? '');
-
-                if ( $status === 'sent' ) {
-                    $summary['sent_total']++;
-                    if ( $channel === 'email' ) $summary['email_sent']++;
-                    if ( $channel === 'whatsapp' ) $summary['whatsapp_sent']++;
-                } elseif ( $status === 'skipped' ) {
-                    $summary['skipped_total']++;
-                } else {
-                    $summary['error_total']++;
-                }
-
-                $summary['details'][] = [
+            if ( eventosapp_ticket_reminders_ticket_already_sent($ticket_id, $reminder_id, 'whatsapp') ) {
+                $summary['skipped_total']++;
+                $message = 'Ya enviado previamente por WhatsApp para este recordatorio.';
+                $summary['details'][] = ['ticket_id' => $ticket_id, 'channel' => 'whatsapp', 'status' => 'skipped_duplicate', 'message' => $message];
+                eventosapp_ticket_reminders_log($event_id, 'Ticket omitido por duplicado.', [
                     'ticket_id' => $ticket_id,
-                    'channel'   => $channel,
-                    'status'    => $status,
-                    'message'   => $result['message'] ?? '',
-                ];
+                    'reminder_id' => $reminder_id,
+                    'phone_raw' => $phone_info['raw'],
+                    'phone_normalized' => $phone_info['normalized'],
+                ], 'info');
+                continue;
             }
+
+            $result = eventosapp_ticket_reminders_send_whatsapp($ticket_id, $event_id, $item);
+            $status = ! empty($result['ok']) ? 'sent' : 'error';
+            if ( ! empty($result['skipped']) ) {
+                $status = 'skipped';
+            }
+
+            eventosapp_ticket_reminders_add_ticket_history($ticket_id, $event_id, $item, 'whatsapp', $status, $result['message'] ?? '');
+
+            if ( $status === 'sent' ) {
+                $summary['sent_total']++;
+                $summary['whatsapp_sent']++;
+            } elseif ( $status === 'skipped' ) {
+                $summary['skipped_total']++;
+            } else {
+                $summary['error_total']++;
+            }
+
+            $detail = [
+                'ticket_id' => $ticket_id,
+                'channel'   => 'whatsapp',
+                'status'    => $status,
+                'message'   => $result['message'] ?? '',
+                'to'        => $result['to'] ?? $phone_info['normalized'],
+                'http_code' => isset($result['http_code']) ? (int)$result['http_code'] : 0,
+                'message_id'=> $result['message_id'] ?? '',
+                'transport' => $result['transport'] ?? '',
+                'template'  => $result['template_name'] ?? '',
+            ];
+            $summary['details'][] = $detail;
+
+            eventosapp_ticket_reminders_log($event_id, $status === 'sent' ? 'WhatsApp de recordatorio enviado/aceptado por Meta.' : ($status === 'skipped' ? 'WhatsApp de recordatorio omitido.' : 'Error enviando WhatsApp de recordatorio.'), array_merge([
+                'reminder_id' => $reminder_id,
+                'phone_raw' => $phone_info['raw'],
+                'phone_normalized' => $phone_info['normalized'],
+            ], $detail), $status === 'sent' ? 'success' : ($status === 'skipped' ? 'warning' : 'error'));
         }
 
         $paged++;
     } while ( $query->max_num_pages >= $paged );
 
-    if ( count($summary['details']) > 100 ) {
-        $summary['details'] = array_slice($summary['details'], -100);
+    if ( count($summary['details']) > 150 ) {
+        $summary['details'] = array_slice($summary['details'], -150);
     }
 
+    $summary['total_tickets'] = $total_tickets;
     update_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_LAST_RUN, $summary);
-    eventosapp_ticket_reminders_log($event_id, 'Recordatorio ejecutado.', [
+    eventosapp_ticket_reminders_mark_executed($event_id, $reminder_id, $summary);
+
+    eventosapp_ticket_reminders_log($event_id, 'Recordatorio WhatsApp ejecutado.', [
         'reminder_id' => $reminder_id,
+        'total_tickets' => $total_tickets,
         'sent_total' => $summary['sent_total'],
         'skipped_total' => $summary['skipped_total'],
         'error_total' => $summary['error_total'],
-    ]);
+    ], $summary['error_total'] > 0 ? 'warning' : 'success');
 }
 
 function eventosapp_ticket_reminders_ticket_already_sent($ticket_id, $reminder_id, $channel) {
@@ -1066,13 +1357,13 @@ function eventosapp_ticket_reminders_add_ticket_history($ticket_id, $event_id, $
         'event_id'      => absint($event_id),
         'reminder_id'   => sanitize_key($item['id'] ?? ''),
         'reminder_name' => sanitize_text_field((string)($item['name'] ?? '')),
-        'channel'       => sanitize_key($channel),
+        'channel'       => 'whatsapp',
         'status'        => sanitize_key($status),
         'message'       => sanitize_text_field((string)$message),
     ];
 
-    if ( count($history) > 80 ) {
-        $history = array_slice($history, -80);
+    if ( count($history) > 120 ) {
+        $history = array_slice($history, -120);
     }
 
     update_post_meta($ticket_id, '_eventosapp_ticket_reminder_history', $history);
@@ -1110,6 +1401,9 @@ function eventosapp_ticket_reminders_get_rule_field_value($ticket_id, $field) {
     }
 
     if ( $field === 'checkin' ) {
+        if ( function_exists('eventosapp_ticket_has_checkin_type') ) {
+            return eventosapp_ticket_has_checkin_type($ticket_id, 'presencial') ? 'checked_in' : 'not_checked_in';
+        }
         $status = get_post_meta($ticket_id, '_eventosapp_checkin_status', true);
         if ( is_array($status) ) {
             return in_array('checked_in', $status, true) ? 'checked_in' : 'not_checked_in';
@@ -1118,6 +1412,9 @@ function eventosapp_ticket_reminders_get_rule_field_value($ticket_id, $field) {
     }
 
     if ( $field === 'checkin_virtual' ) {
+        if ( function_exists('eventosapp_ticket_has_checkin_type') ) {
+            return eventosapp_ticket_has_checkin_type($ticket_id, 'virtual') ? 'checked_in' : 'not_checked_in';
+        }
         $status = get_post_meta($ticket_id, '_eventosapp_virtual_checkin_status', true);
         if ( is_array($status) ) {
             return in_array('checked_in', $status, true) ? 'checked_in' : 'not_checked_in';
@@ -1234,232 +1531,44 @@ function eventosapp_ticket_reminders_ticket_passes_rules($ticket_id, $event_id, 
     return ['allowed' => true, 'reason' => $matched_allow ? 'Cumple filtro de envío.' : 'Sin filtro restrictivo aplicable.'];
 }
 
-function eventosapp_ticket_reminders_prepare_assets($ticket_id, $event_id) {
+function eventosapp_ticket_reminders_get_ticket_phone_info($ticket_id) {
     $ticket_id = absint($ticket_id);
-    $event_id = absint($event_id);
+    $raw = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
+    $normalized = '';
 
-    if ( function_exists('eventosapp_ticket_generar_ics') ) {
-        eventosapp_ticket_generar_ics($ticket_id);
+    if ( function_exists('eventosapp_whatsapp_get_settings') && function_exists('eventosapp_whatsapp_normalize_phone') ) {
+        $settings = eventosapp_whatsapp_get_settings();
+        $normalized = eventosapp_whatsapp_normalize_phone($raw, $settings['default_country_code'] ?? '');
+    } else {
+        $normalized = preg_replace('/\D+/', '', (string)$raw);
     }
-
-    global $eventosapp_qr_manager_instance;
-    if ( is_object($eventosapp_qr_manager_instance) && method_exists($eventosapp_qr_manager_instance, 'generate_missing_qr_codes') ) {
-        $eventosapp_qr_manager_instance->generate_missing_qr_codes($ticket_id);
-    }
-
-    if ( function_exists('eventosapp_ticket_generar_pdf') && !(function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id)) ) {
-        eventosapp_ticket_generar_pdf($ticket_id);
-    }
-
-    do_action('eventosapp_ticket_reminders_prepare_assets', $ticket_id, $event_id);
-}
-
-function eventosapp_ticket_reminders_url_to_path($url) {
-    $url = esc_url_raw((string)$url);
-    if ( $url === '' ) {
-        return '';
-    }
-
-    $uploads = wp_upload_dir();
-    $baseurl = $uploads['baseurl'] ?? '';
-    $basedir = $uploads['basedir'] ?? '';
-
-    $url_no_query = strtok($url, '?');
-    if ( $baseurl && $basedir && strpos($url_no_query, $baseurl) === 0 ) {
-        $path = $basedir . substr($url_no_query, strlen($baseurl));
-        return file_exists($path) ? $path : '';
-    }
-
-    return '';
-}
-
-function eventosapp_ticket_reminders_get_ticket_public_code($ticket_id) {
-    if ( function_exists('eventosapp_whatsapp_get_ticket_public_code') ) {
-        return eventosapp_whatsapp_get_ticket_public_code($ticket_id);
-    }
-    $public = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
-    if ( ! $public ) {
-        $public = get_post_meta($ticket_id, '_eventosapp_ticket_public_id', true);
-    }
-    return $public ?: (string)$ticket_id;
-}
-
-function eventosapp_ticket_reminders_get_ticket_links($ticket_id) {
-    $ticket_id = absint($ticket_id);
-    $public_code = eventosapp_ticket_reminders_get_ticket_public_code($ticket_id);
-
-    $qr_url = '';
-    $qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
-    if ( is_array($qr_codes) && ! empty($qr_codes['email']['url']) ) {
-        $qr_url = esc_url_raw($qr_codes['email']['url']);
-    }
-    if ( ! $qr_url && function_exists('eventosapp_get_ticket_qr_url') ) {
-        $legacy_id = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
-        if ( $legacy_id ) {
-            $qr_url = eventosapp_get_ticket_qr_url($legacy_id);
-        }
-    }
-
-    $landing_url = '';
-    if ( function_exists('eventosapp_whatsapp_public_ticket_landing_url') ) {
-        $landing_url = eventosapp_whatsapp_public_ticket_landing_url($public_code);
-    } elseif ( function_exists('eventosapp_whatsapp_templates_public_ticket_landing_url') ) {
-        $landing_url = eventosapp_whatsapp_templates_public_ticket_landing_url($public_code);
-    }
-
-    $apple = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple', true);
-    if ( ! $apple ) $apple = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url', true);
-    if ( ! $apple ) $apple = get_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url', true);
 
     return [
-        'ticket_code'    => $public_code,
-        'landing_url'    => esc_url_raw($landing_url),
-        'qr_url'         => esc_url_raw($qr_url),
-        'pdf_url'        => esc_url_raw(get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true)),
-        'ics_url'        => esc_url_raw(get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true)),
-        'google_wallet'  => esc_url_raw(get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', true)),
-        'apple_wallet'   => esc_url_raw($apple),
+        'raw' => sanitize_text_field((string)$raw),
+        'normalized' => sanitize_text_field((string)$normalized),
     ];
-}
-
-function eventosapp_ticket_reminders_get_event_date_label($event_id) {
-    if ( function_exists('eventosapp_whatsapp_get_event_date_label') ) {
-        return eventosapp_whatsapp_get_event_date_label($event_id);
-    }
-
-    $days = eventosapp_ticket_reminders_get_event_days($event_id);
-    if ( empty($days) ) {
-        return '';
-    }
-    if ( count($days) === 1 ) {
-        return date_i18n('d/m/Y', strtotime($days[0]));
-    }
-    return date_i18n('d/m/Y', strtotime($days[0])) . ' - ' . date_i18n('d/m/Y', strtotime(end($days)));
-}
-
-function eventosapp_ticket_reminders_build_email_html($ticket_id, $event_id, $item, $links) {
-    $event_name = get_the_title($event_id);
-    $first_name = trim((string)get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true));
-    $last_name = trim((string)get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true));
-    $full_name = trim($first_name . ' ' . $last_name);
-    if ( $full_name === '' ) {
-        $full_name = 'Asistente';
-    }
-
-    $fecha = eventosapp_ticket_reminders_get_event_date_label($event_id);
-    $hora_inicio = get_post_meta($event_id, '_eventosapp_hora_inicio', true);
-    $hora_cierre = get_post_meta($event_id, '_eventosapp_hora_cierre', true);
-    $hora = trim($hora_inicio . ($hora_cierre ? ' - ' . $hora_cierre : ''));
-    $modalidad = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : '';
-    $lugar = get_post_meta($event_id, '_eventosapp_direccion', true);
-    if ( function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id) ) {
-        $platform = get_post_meta($event_id, '_eventosapp_virtual_platform', true);
-        $lugar = $platform ? ('Plataforma: ' . $platform) : 'Evento virtual';
-    }
-
-    $header_image = get_post_meta($ticket_id, '_eventosapp_ticket_email_header_image_url', true);
-    if ( ! $header_image ) {
-        $header_image = get_post_meta($event_id, '_eventosapp_email_header_img', true);
-    }
-
-    $button = function($url, $label) {
-        if ( ! $url ) return '';
-        return '<p style="margin:10px 0;"><a href="' . esc_url($url) . '" target="_blank" rel="noopener" style="display:inline-block;background:#2271b1;color:#fff;text-decoration:none;padding:10px 14px;border-radius:6px;font-weight:600;">' . esc_html($label) . '</a></p>';
-    };
-
-    ob_start();
-    ?>
-    <div style="font-family:Arial,Helvetica,sans-serif;background:#f3f4f6;padding:24px;color:#111827;">
-        <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e7eb;">
-            <?php if ( $header_image ) : ?>
-                <img src="<?php echo esc_url($header_image); ?>" alt="<?php echo esc_attr($event_name); ?>" style="width:100%;display:block;height:auto;">
-            <?php endif; ?>
-            <div style="padding:24px;">
-                <h1 style="margin:0 0 10px;font-size:24px;color:#111827;">Recordatorio de tu ticket</h1>
-                <p style="font-size:16px;line-height:1.55;margin:0 0 18px;">Hola <?php echo esc_html($full_name); ?>, te recordamos tu inscripción a <strong><?php echo esc_html($event_name); ?></strong>.</p>
-
-                <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
-                    <tr><td style="padding:10px;border-bottom:1px solid #e5e7eb;width:150px;"><strong>Evento</strong></td><td style="padding:10px;border-bottom:1px solid #e5e7eb;"><?php echo esc_html($event_name); ?></td></tr>
-                    <?php if ( $fecha ) : ?><tr><td style="padding:10px;border-bottom:1px solid #e5e7eb;"><strong>Fecha</strong></td><td style="padding:10px;border-bottom:1px solid #e5e7eb;"><?php echo esc_html($fecha); ?></td></tr><?php endif; ?>
-                    <?php if ( $hora ) : ?><tr><td style="padding:10px;border-bottom:1px solid #e5e7eb;"><strong>Hora</strong></td><td style="padding:10px;border-bottom:1px solid #e5e7eb;"><?php echo esc_html($hora); ?></td></tr><?php endif; ?>
-                    <?php if ( $lugar ) : ?><tr><td style="padding:10px;border-bottom:1px solid #e5e7eb;"><strong>Lugar / plataforma</strong></td><td style="padding:10px;border-bottom:1px solid #e5e7eb;"><?php echo esc_html($lugar); ?></td></tr><?php endif; ?>
-                    <?php if ( $modalidad ) : ?><tr><td style="padding:10px;"><strong>Modalidad</strong></td><td style="padding:10px;"><?php echo esc_html($modalidad); ?></td></tr><?php endif; ?>
-                </table>
-
-                <?php if ( ! empty($links['landing_url']) ) : ?>
-                    <?php echo $button($links['landing_url'], 'Ver mi ticket'); ?>
-                <?php endif; ?>
-
-                <?php if ( ! empty($links['qr_url']) ) : ?>
-                    <p style="margin:18px 0 8px;"><strong>QR de ingreso</strong></p>
-                    <p style="margin:0 0 14px;"><img src="<?php echo esc_url($links['qr_url']); ?>" alt="QR del ticket" style="max-width:180px;height:auto;border:1px solid #e5e7eb;border-radius:8px;padding:8px;background:#fff;"></p>
-                <?php endif; ?>
-
-                <div style="margin-top:18px;">
-                    <?php echo $button($links['pdf_url'] ?? '', 'Descargar PDF'); ?>
-                    <?php echo $button($links['ics_url'] ?? '', 'Agregar a calendario'); ?>
-                    <?php echo $button($links['google_wallet'] ?? '', 'Agregar a Google Wallet'); ?>
-                    <?php echo $button($links['apple_wallet'] ?? '', 'Agregar a Apple Wallet'); ?>
-                </div>
-
-                <p style="font-size:12px;color:#6b7280;margin-top:22px;">Ticket: <?php echo esc_html($links['ticket_code'] ?? $ticket_id); ?></p>
-            </div>
-        </div>
-    </div>
-    <?php
-    return ob_get_clean();
-}
-
-function eventosapp_ticket_reminders_send_email($ticket_id, $event_id, $item) {
-    $ticket_id = absint($ticket_id);
-    $event_id = absint($event_id);
-
-    $email = sanitize_email(get_post_meta($ticket_id, '_eventosapp_asistente_email', true));
-    if ( ! $email || ! is_email($email) ) {
-        return ['ok' => false, 'message' => 'El asistente no tiene correo válido.'];
-    }
-
-    eventosapp_ticket_reminders_prepare_assets($ticket_id, $event_id);
-    $links = eventosapp_ticket_reminders_get_ticket_links($ticket_id);
-
-    $subject = sprintf('Recordatorio: %s', get_the_title($event_id));
-    $subject = apply_filters('eventosapp_ticket_reminders_email_subject', $subject, $ticket_id, $event_id, $item);
-    $body = eventosapp_ticket_reminders_build_email_html($ticket_id, $event_id, $item, $links);
-    $body = apply_filters('eventosapp_ticket_reminders_email_body', $body, $ticket_id, $event_id, $item, $links);
-
-    $headers = ['Content-Type: text/html; charset=UTF-8'];
-    $attachments = [];
-
-    foreach ( ['pdf_url', 'ics_url'] as $link_key ) {
-        if ( ! empty($links[$link_key]) ) {
-            $path = eventosapp_ticket_reminders_url_to_path($links[$link_key]);
-            if ( $path ) {
-                $attachments[] = $path;
-            }
-        }
-    }
-
-    $sent = wp_mail($email, $subject, $body, $headers, $attachments);
-
-    if ( $sent ) {
-        update_post_meta($ticket_id, '_eventosapp_ticket_reminder_email_last_sent_at', current_time('mysql'));
-        update_post_meta($ticket_id, '_eventosapp_ticket_reminder_email_last_to', $email);
-        return ['ok' => true, 'message' => 'Correo de recordatorio enviado.'];
-    }
-
-    return ['ok' => false, 'message' => 'wp_mail no confirmó el envío del recordatorio.'];
 }
 
 function eventosapp_ticket_reminders_send_whatsapp($ticket_id, $event_id, $item) {
     $ticket_id = absint($ticket_id);
     $event_id = absint($event_id);
+    $phone_info = eventosapp_ticket_reminders_get_ticket_phone_info($ticket_id);
 
     if ( ! function_exists('eventosapp_whatsapp_send_ticket') ) {
-        return ['ok' => false, 'message' => 'El módulo WhatsApp no está disponible.'];
+        return [
+            'ok' => false,
+            'message' => 'El módulo WhatsApp no está disponible.',
+            'to' => $phone_info['normalized'],
+        ];
     }
 
     if ( get_post_meta($event_id, '_eventosapp_ticket_whatsapp_enabled', true) !== '1' ) {
-        return ['ok' => true, 'skipped' => true, 'message' => 'WhatsApp no está activo para este evento.'];
+        return [
+            'ok' => true,
+            'skipped' => true,
+            'message' => 'WhatsApp no está activo para este evento.',
+            'to' => $phone_info['normalized'],
+        ];
     }
 
     $source_key = 'ticket_reminder:' . $event_id . ':' . sanitize_key($item['id'] ?? '') . ':' . $ticket_id;
@@ -1471,23 +1580,39 @@ function eventosapp_ticket_reminders_send_whatsapp($ticket_id, $event_id, $item)
     ]);
 
     if ( ! is_array($result) ) {
-        return ['ok' => false, 'message' => 'Respuesta inválida del módulo WhatsApp.'];
+        return [
+            'ok' => false,
+            'message' => 'Respuesta inválida del módulo WhatsApp.',
+            'to' => $phone_info['normalized'],
+        ];
     }
 
+    $result['to'] = $phone_info['normalized'];
+    $result['http_code'] = isset($result['http_code']) ? (int)$result['http_code'] : (int)get_post_meta($ticket_id, '_eventosapp_whatsapp_last_http_code', true);
+    $result['message_id'] = isset($result['message_id']) ? sanitize_text_field((string)$result['message_id']) : sanitize_text_field((string)get_post_meta($ticket_id, '_eventosapp_whatsapp_last_message_id', true));
+    $result['transport'] = isset($result['transport']) ? sanitize_text_field((string)$result['transport']) : sanitize_text_field((string)get_post_meta($ticket_id, '_eventosapp_whatsapp_last_transport', true));
+    $result['template_name'] = isset($result['template_name']) ? sanitize_text_field((string)$result['template_name']) : sanitize_text_field((string)get_post_meta($ticket_id, '_eventosapp_whatsapp_last_template_name', true));
+
     if ( ! empty($result['ok']) && empty($result['skipped_duplicate']) && empty($result['skipped_rules']) ) {
-        return ['ok' => true, 'message' => $result['message'] ?? 'WhatsApp de recordatorio enviado.'];
+        $result['message'] = $result['message'] ?? 'WhatsApp de recordatorio enviado.';
+        return $result;
     }
 
     if ( ! empty($result['skipped_duplicate']) || ! empty($result['skipped_rules']) ) {
-        return ['ok' => true, 'skipped' => true, 'message' => $result['message'] ?? 'WhatsApp omitido.'];
+        $result['ok'] = true;
+        $result['skipped'] = true;
+        $result['message'] = $result['message'] ?? 'WhatsApp omitido.';
+        return $result;
     }
 
-    return ['ok' => false, 'message' => $result['message'] ?? 'No se pudo enviar WhatsApp.'];
+    $result['ok'] = false;
+    $result['message'] = $result['message'] ?? 'No se pudo enviar WhatsApp.';
+    return $result;
 }
 
 /**
- * Re-sincronización liviana para recuperar recordatorios si el archivo se instala
- * después de que los eventos ya estaban creados o si WP-Cron perdió un evento.
+ * Re-sincronización liviana para recuperar recordatorios si WP-Cron se retrasa
+ * o si el archivo se instala después de configurar eventos.
  */
 add_action('init', function() {
     if ( wp_doing_ajax() || (defined('DOING_CRON') && DOING_CRON) ) {
@@ -1497,7 +1622,7 @@ add_action('init', function() {
     if ( get_transient('eventosapp_ticket_reminders_periodic_sync_lock') ) {
         return;
     }
-    set_transient('eventosapp_ticket_reminders_periodic_sync_lock', 1, 6 * HOUR_IN_SECONDS);
+    set_transient('eventosapp_ticket_reminders_periodic_sync_lock', 1, 15 * MINUTE_IN_SECONDS);
 
     $events = get_posts([
         'post_type'      => 'eventosapp_event',
