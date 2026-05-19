@@ -668,3 +668,1020 @@ if ( ! function_exists('evapp_notif_modalidad_admin_segment_fallback') ) {
         <?php
     }
 }
+
+/**
+ * Integración: recordatorio de ticket por WhatsApp sincronizado con el recordatorio de correo.
+ *
+ * Esta capa es intencionalmente defensiva: el motor del recordatorio de correo puede vivir
+ * en otro archivo. Por eso detecta el horario guardado en metas conocidas, expone una UI propia
+ * y también permite que el módulo de WhatsApp delegue aquí los envíos que provengan de recordatorios.
+ */
+if ( ! function_exists('evapp_whatsapp_reminder_is_enabled_for_event') ) {
+    function evapp_whatsapp_reminder_is_enabled_for_event($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return false;
+        }
+
+        return get_post_meta($event_id, '_eventosapp_whatsapp_reminder_enabled', true) === '1';
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_email_reminder_is_enabled_for_ticket') ) {
+    function evapp_whatsapp_email_reminder_is_enabled_for_ticket($ticket_id) {
+        $ticket_id = absint($ticket_id);
+        if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
+            return false;
+        }
+
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        return evapp_whatsapp_reminder_is_enabled_for_event($event_id);
+    }
+}
+
+add_action('add_meta_boxes', function() {
+    add_meta_box(
+        'eventosapp_whatsapp_email_reminder_bridge',
+        'WhatsApp para Recordatorio de Ticket',
+        'evapp_render_whatsapp_email_reminder_metabox',
+        'eventosapp_event',
+        'normal',
+        'default'
+    );
+}, 45);
+
+if ( ! function_exists('evapp_whatsapp_reminder_get_rule_fields') ) {
+    function evapp_whatsapp_reminder_get_rule_fields($event_id = 0) {
+        if ( function_exists('eventosapp_whatsapp_get_rule_fields') ) {
+            $fields = eventosapp_whatsapp_get_rule_fields($event_id);
+            return is_array($fields) ? $fields : [];
+        }
+
+        return [
+            'nombre'           => 'Nombre',
+            'apellido'         => 'Apellido',
+            'cedula'           => 'Cédula',
+            'email'            => 'Correo electrónico',
+            'telefono'         => 'Celular',
+            'empresa'          => 'Empresa',
+            'nit'              => 'NIT',
+            'cargo'            => 'Cargo',
+            'ciudad'           => 'Ciudad',
+            'pais'             => 'País',
+            'localidad'        => 'Localidad',
+            'modalidad'        => 'Modalidad del ticket',
+            'creation_channel' => 'Canal de creación del ticket',
+            'estado_pago'      => 'Estado de pago',
+        ];
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_get_rule_operators') ) {
+    function evapp_whatsapp_reminder_get_rule_operators() {
+        if ( function_exists('eventosapp_whatsapp_get_rule_operators') ) {
+            $operators = eventosapp_whatsapp_get_rule_operators();
+            return is_array($operators) ? $operators : [];
+        }
+
+        return [
+            'equals'       => 'Es igual a',
+            'not_equals'   => 'No es igual a',
+            'contains'     => 'Contiene',
+            'not_contains' => 'No contiene',
+            'starts_with'  => 'Empieza por',
+            'ends_with'    => 'Termina en',
+            'empty'        => 'Está vacío',
+            'not_empty'    => 'No está vacío',
+        ];
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_normalize_rules') ) {
+    function evapp_whatsapp_reminder_normalize_rules($rules) {
+        if ( function_exists('eventosapp_whatsapp_normalize_rules') ) {
+            return eventosapp_whatsapp_normalize_rules($rules);
+        }
+
+        if ( ! is_array($rules) ) {
+            return [];
+        }
+
+        $operators = evapp_whatsapp_reminder_get_rule_operators();
+        $clean = [];
+
+        foreach ( $rules as $rule ) {
+            if ( ! is_array($rule) ) {
+                continue;
+            }
+
+            $conditions = [];
+            if ( ! empty($rule['conditions']) && is_array($rule['conditions']) ) {
+                foreach ( $rule['conditions'] as $condition ) {
+                    if ( ! is_array($condition) ) {
+                        continue;
+                    }
+
+                    $field = isset($condition['field']) ? sanitize_text_field(wp_unslash($condition['field'])) : '';
+                    $operator = isset($condition['operator']) ? sanitize_key(wp_unslash($condition['operator'])) : 'equals';
+                    $value = isset($condition['value']) ? sanitize_text_field(wp_unslash($condition['value'])) : '';
+
+                    if ( $field === '' ) {
+                        continue;
+                    }
+
+                    if ( ! array_key_exists($operator, $operators) ) {
+                        $operator = 'equals';
+                    }
+
+                    $conditions[] = [
+                        'field'    => $field,
+                        'operator' => $operator,
+                        'value'    => $value,
+                    ];
+                }
+            }
+
+            $action = isset($rule['action']) ? sanitize_key(wp_unslash($rule['action'])) : 'allow';
+            if ( ! in_array($action, ['allow', 'deny'], true) ) {
+                $action = 'allow';
+            }
+
+            $match = isset($rule['match']) ? sanitize_key(wp_unslash($rule['match'])) : 'all';
+            if ( ! in_array($match, ['all', 'any'], true) ) {
+                $match = 'all';
+            }
+
+            $clean[] = [
+                'enabled'    => isset($rule['enabled']) ? '1' : '0',
+                'name'       => isset($rule['name']) ? sanitize_text_field(wp_unslash($rule['name'])) : '',
+                'action'     => $action,
+                'match'      => $match,
+                'conditions' => $conditions,
+            ];
+        }
+
+        return $clean;
+    }
+}
+
+if ( ! function_exists('evapp_render_whatsapp_email_reminder_metabox') ) {
+    function evapp_render_whatsapp_email_reminder_metabox($post) {
+        $enabled = get_post_meta($post->ID, '_eventosapp_whatsapp_reminder_enabled', true) === '1';
+        $respect_rules = get_post_meta($post->ID, '_eventosapp_whatsapp_reminder_respect_rules', true);
+        $respect_rules = $respect_rules === '' ? '1' : ($respect_rules === '0' ? '0' : '1');
+        $rules = evapp_whatsapp_reminder_normalize_rules(get_post_meta($post->ID, '_eventosapp_whatsapp_reminder_rules', true));
+        $fields = evapp_whatsapp_reminder_get_rule_fields($post->ID);
+        $operators = evapp_whatsapp_reminder_get_rule_operators();
+        $email_schedule = evapp_whatsapp_reminder_get_email_schedule($post->ID);
+        $scheduled_at = absint(get_post_meta($post->ID, '_eventosapp_whatsapp_reminder_scheduled_at', true));
+        $scheduled_source = get_post_meta($post->ID, '_eventosapp_whatsapp_reminder_schedule_source', true);
+        $schedule_status = get_post_meta($post->ID, '_eventosapp_whatsapp_reminder_schedule_status', true);
+        $next_cron = wp_next_scheduled('eventosapp_whatsapp_email_reminder_send', [$post->ID]);
+        $whatsapp_event_enabled = get_post_meta($post->ID, '_eventosapp_ticket_whatsapp_enabled', true) === '1';
+        $log = get_post_meta($post->ID, '_eventosapp_whatsapp_reminder_log', true);
+        $log = is_array($log) ? array_slice(array_reverse($log), 0, 5) : [];
+
+        wp_nonce_field('evapp_whatsapp_email_reminder_save', 'evapp_whatsapp_email_reminder_nonce');
+        ?>
+        <style>
+            .evapp-wa-reminder-box{border:1px solid #dcdcde;background:#fff;border-radius:8px;padding:14px;margin:10px 0;}
+            .evapp-wa-reminder-alert{padding:10px 12px;border-radius:6px;margin:10px 0;font-size:13px;line-height:1.45;}
+            .evapp-wa-reminder-alert.warn{background:#fff8e5;border:1px solid #f0c36d;color:#665200;}
+            .evapp-wa-reminder-alert.ok{background:#edfaef;border:1px solid #8bd18f;color:#145a20;}
+            .evapp-wa-reminder-alert.info{background:#f0f6fc;border:1px solid #9ec5fe;color:#084298;}
+            .evapp-wa-reminder-grid{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:12px;align-items:start;}
+            .evapp-wa-reminder-card{background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:12px;}
+            .evapp-wa-reminder-card h4{margin:0 0 8px;}
+            .evapp-wa-reminder-small{font-size:12px;color:#646970;line-height:1.45;}
+            .evapp-wa-reminder-rule{border:1px solid #ccd0d4;border-left:4px solid #25D366;border-radius:8px;background:#fafafa;margin:14px 0;padding:14px;}
+            .evapp-wa-reminder-rule-head{display:grid;grid-template-columns:90px 1fr 150px 150px auto;gap:10px;align-items:center;margin-bottom:12px;}
+            .evapp-wa-reminder-rule-head input[type="text"],.evapp-wa-reminder-rule-head select{width:100%;}
+            .evapp-wa-reminder-conditions table{width:100%;border-collapse:collapse;background:#fff;}
+            .evapp-wa-reminder-conditions th,.evapp-wa-reminder-conditions td{padding:8px;border-bottom:1px solid #eee;text-align:left;vertical-align:middle;}
+            .evapp-wa-reminder-conditions select,.evapp-wa-reminder-conditions input{width:100%;}
+            .evapp-wa-reminder-empty{padding:12px;background:#f6f7f7;border:1px dashed #c3c4c7;border-radius:6px;}
+            .evapp-wa-reminder-log{margin:8px 0 0;padding-left:18px;}
+            @media (max-width: 900px){.evapp-wa-reminder-grid{grid-template-columns:1fr}.evapp-wa-reminder-rule-head{grid-template-columns:1fr;}}
+        </style>
+
+        <div class="evapp-wa-reminder-box">
+            <?php if ( ! $whatsapp_event_enabled ) : ?>
+                <div class="evapp-wa-reminder-alert warn">
+                    WhatsApp todavía no está activo para este evento. Actívalo en <strong>Funciones Extra del Ticket</strong> para que el recordatorio pueda enviarse.
+                </div>
+            <?php endif; ?>
+
+            <div class="evapp-wa-reminder-grid">
+                <div class="evapp-wa-reminder-card">
+                    <h4>Activación</h4>
+                    <label style="display:block;margin:8px 0;">
+                        <input type="checkbox" name="eventosapp_whatsapp_reminder_enabled" value="1" <?php checked($enabled); ?>>
+                        <strong>Enviar recordatorio del ticket por WhatsApp junto con el recordatorio de correo</strong>
+                    </label>
+                    <p class="evapp-wa-reminder-small">
+                        Usa la misma configuración del ticket por WhatsApp: API global, plantilla seleccionada en <strong>Diseño WhatsApp y Landing</strong>, QR, landing pública, Wallet, PDF e ICS cuando aplique.
+                    </p>
+
+                    <label style="display:block;margin:12px 0 4px;">
+                        <input type="checkbox" name="eventosapp_whatsapp_reminder_respect_rules" value="1" <?php checked($respect_rules, '1'); ?>>
+                        <strong>Respetar reglas generales de envío de WhatsApp</strong>
+                    </label>
+                    <p class="evapp-wa-reminder-small">
+                        Si lo desmarcas, el recordatorio ignora las reglas del metabox <strong>WhatsApp Tickets - Reglas de Envío</strong>, pero siempre respeta el filtro específico de recordatorio definido abajo.
+                    </p>
+                </div>
+
+                <div class="evapp-wa-reminder-card">
+                    <h4>Horario tomado del correo</h4>
+                    <?php if ( ! empty($email_schedule['timestamp']) ) : ?>
+                        <div class="evapp-wa-reminder-alert ok">
+                            Horario detectado: <strong><?php echo esc_html(date_i18n('d/m/Y H:i', (int) $email_schedule['timestamp'])); ?></strong><br>
+                            Fuente: <code><?php echo esc_html($email_schedule['source']); ?></code>
+                        </div>
+                    <?php else : ?>
+                        <div class="evapp-wa-reminder-alert info">
+                            Aún no se detecta un horario guardado para el recordatorio de correo. Cuando guardes el evento con el horario del correo, este módulo intentará programar WhatsApp en ese mismo momento.
+                        </div>
+                    <?php endif; ?>
+
+                    <p class="evapp-wa-reminder-small">
+                        Estado WhatsApp: <strong><?php echo esc_html($schedule_status ?: 'sin estado'); ?></strong>
+                    </p>
+                    <?php if ( $scheduled_at ) : ?>
+                        <p class="evapp-wa-reminder-small">
+                            Último horario WhatsApp guardado: <strong><?php echo esc_html(date_i18n('d/m/Y H:i', $scheduled_at)); ?></strong><br>
+                            Fuente guardada: <code><?php echo esc_html($scheduled_source ?: '-'); ?></code>
+                        </p>
+                    <?php endif; ?>
+                    <?php if ( $next_cron ) : ?>
+                        <p class="evapp-wa-reminder-small">
+                            Próximo cron WhatsApp: <strong><?php echo esc_html(date_i18n('d/m/Y H:i', $next_cron)); ?></strong>
+                        </p>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <hr>
+            <h4>Filtro específico para el recordatorio por WhatsApp</h4>
+            <p class="evapp-wa-reminder-small">
+                Este filtro funciona igual que el filtro de WhatsApp: las reglas <strong>No enviar</strong> tienen prioridad sobre las reglas <strong>Enviar</strong>. Si no agregas reglas, el recordatorio de WhatsApp aplica a todos los tickets con celular válido, sujeto a las reglas generales si las dejaste activas.
+            </p>
+
+            <div id="evapp-wa-reminder-rules-list">
+                <?php if ( empty($rules) ) : ?>
+                    <p class="evapp-wa-reminder-empty" id="evapp-wa-reminder-no-rules">No hay filtros específicos para el recordatorio. Se usará el alcance general.</p>
+                <?php else : ?>
+                    <?php foreach ( $rules as $rule_index => $rule ) : ?>
+                        <?php evapp_whatsapp_reminder_render_rule_row($rule_index, $rule, $fields, $operators); ?>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+
+            <p>
+                <button type="button" class="button button-secondary" id="evapp-wa-reminder-add-rule">+ Agregar filtro de recordatorio WhatsApp</button>
+            </p>
+
+            <?php if ( ! empty($log) ) : ?>
+                <hr>
+                <h4>Últimos envíos de recordatorio WhatsApp</h4>
+                <ul class="evapp-wa-reminder-log evapp-wa-reminder-small">
+                    <?php foreach ( $log as $entry ) : ?>
+                        <li>
+                            <strong><?php echo esc_html($entry['date'] ?? '-'); ?></strong> —
+                            <?php echo esc_html($entry['message'] ?? 'Registro'); ?>
+                            <?php if ( isset($entry['total']) ) : ?>
+                                · Total: <?php echo absint($entry['total']); ?>,
+                                enviados: <?php echo absint($entry['sent'] ?? 0); ?>,
+                                omitidos: <?php echo absint($entry['skipped'] ?? 0); ?>,
+                                errores: <?php echo absint($entry['errors'] ?? 0); ?>
+                            <?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+        </div>
+
+        <script type="text/html" id="tmpl-evapp-wa-reminder-rule">
+            <?php evapp_whatsapp_reminder_render_rule_row('__RULE_INDEX__', [
+                'enabled' => '1',
+                'name' => '',
+                'action' => 'allow',
+                'match' => 'all',
+                'conditions' => [],
+            ], $fields, $operators); ?>
+        </script>
+
+        <script type="text/html" id="tmpl-evapp-wa-reminder-condition">
+            <?php evapp_whatsapp_reminder_render_condition_row('__RULE_INDEX__', '__COND_INDEX__', [], $fields, $operators); ?>
+        </script>
+
+        <script>
+        jQuery(function($){
+            var ruleIndex = $('#evapp-wa-reminder-rules-list .evapp-wa-reminder-rule').length;
+
+            function replaceAllIndexes(html, ruleIdx, condIdx) {
+                html = html.replace(/__RULE_INDEX__/g, ruleIdx);
+                if (typeof condIdx !== 'undefined') {
+                    html = html.replace(/__COND_INDEX__/g, condIdx);
+                }
+                return html;
+            }
+
+            $('#evapp-wa-reminder-add-rule').on('click', function(){
+                $('#evapp-wa-reminder-no-rules').remove();
+                var html = $('#tmpl-evapp-wa-reminder-rule').html();
+                $('#evapp-wa-reminder-rules-list').append(replaceAllIndexes(html, ruleIndex));
+                ruleIndex++;
+            });
+
+            $(document).on('click', '.evapp-wa-reminder-remove-rule', function(){
+                $(this).closest('.evapp-wa-reminder-rule').remove();
+                if ($('#evapp-wa-reminder-rules-list .evapp-wa-reminder-rule').length === 0) {
+                    $('#evapp-wa-reminder-rules-list').append('<p class="evapp-wa-reminder-empty" id="evapp-wa-reminder-no-rules">No hay filtros específicos para el recordatorio. Se usará el alcance general.</p>');
+                }
+            });
+
+            $(document).on('click', '.evapp-wa-reminder-add-condition', function(){
+                var $rule = $(this).closest('.evapp-wa-reminder-rule');
+                var rIdx = $rule.data('rule-index');
+                var cIdx = $rule.find('tbody tr').length;
+                var html = $('#tmpl-evapp-wa-reminder-condition').html();
+                $rule.find('tbody').append(replaceAllIndexes(html, rIdx, cIdx));
+            });
+
+            $(document).on('click', '.evapp-wa-reminder-remove-condition', function(){
+                $(this).closest('tr').remove();
+            });
+        });
+        </script>
+        <?php
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_render_rule_row') ) {
+    function evapp_whatsapp_reminder_render_rule_row($rule_index, $rule, $fields, $operators) {
+        $rule = wp_parse_args($rule, [
+            'enabled' => '1',
+            'name' => '',
+            'action' => 'allow',
+            'match' => 'all',
+            'conditions' => [],
+        ]);
+        ?>
+        <div class="evapp-wa-reminder-rule" data-rule-index="<?php echo esc_attr($rule_index); ?>">
+            <div class="evapp-wa-reminder-rule-head">
+                <label>
+                    <input type="checkbox" name="eventosapp_whatsapp_reminder_rules[<?php echo esc_attr($rule_index); ?>][enabled]" value="1" <?php checked($rule['enabled'], '1'); ?>> Activa
+                </label>
+                <input type="text" name="eventosapp_whatsapp_reminder_rules[<?php echo esc_attr($rule_index); ?>][name]" value="<?php echo esc_attr($rule['name']); ?>" placeholder="Nombre del filtro">
+                <select name="eventosapp_whatsapp_reminder_rules[<?php echo esc_attr($rule_index); ?>][action]">
+                    <option value="allow" <?php selected($rule['action'], 'allow'); ?>>Enviar</option>
+                    <option value="deny" <?php selected($rule['action'], 'deny'); ?>>No enviar</option>
+                </select>
+                <select name="eventosapp_whatsapp_reminder_rules[<?php echo esc_attr($rule_index); ?>][match]">
+                    <option value="all" <?php selected($rule['match'], 'all'); ?>>Cumple todas</option>
+                    <option value="any" <?php selected($rule['match'], 'any'); ?>>Cumple cualquiera</option>
+                </select>
+                <button type="button" class="button-link-delete evapp-wa-reminder-remove-rule">Eliminar</button>
+            </div>
+            <div class="evapp-wa-reminder-conditions">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Campo</th>
+                            <th>Operador</th>
+                            <th>Valor</th>
+                            <th style="width:70px;">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if ( ! empty($rule['conditions']) ) : ?>
+                            <?php foreach ( $rule['conditions'] as $condition_index => $condition ) : ?>
+                                <?php evapp_whatsapp_reminder_render_condition_row($rule_index, $condition_index, $condition, $fields, $operators); ?>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+                <p>
+                    <button type="button" class="button evapp-wa-reminder-add-condition">+ Agregar condición</button>
+                </p>
+            </div>
+        </div>
+        <?php
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_render_condition_row') ) {
+    function evapp_whatsapp_reminder_render_condition_row($rule_index, $condition_index, $condition, $fields, $operators) {
+        $condition = wp_parse_args($condition, [
+            'field' => 'localidad',
+            'operator' => 'equals',
+            'value' => '',
+        ]);
+        ?>
+        <tr>
+            <td>
+                <select name="eventosapp_whatsapp_reminder_rules[<?php echo esc_attr($rule_index); ?>][conditions][<?php echo esc_attr($condition_index); ?>][field]">
+                    <?php foreach ( $fields as $field_key => $field_label ) : ?>
+                        <option value="<?php echo esc_attr($field_key); ?>" <?php selected($condition['field'], $field_key); ?>><?php echo esc_html($field_label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+            <td>
+                <select name="eventosapp_whatsapp_reminder_rules[<?php echo esc_attr($rule_index); ?>][conditions][<?php echo esc_attr($condition_index); ?>][operator]">
+                    <?php foreach ( $operators as $operator_key => $operator_label ) : ?>
+                        <option value="<?php echo esc_attr($operator_key); ?>" <?php selected($condition['operator'], $operator_key); ?>><?php echo esc_html($operator_label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+            <td>
+                <input type="text" name="eventosapp_whatsapp_reminder_rules[<?php echo esc_attr($rule_index); ?>][conditions][<?php echo esc_attr($condition_index); ?>][value]" value="<?php echo esc_attr($condition['value']); ?>" placeholder="Valor a comparar">
+            </td>
+            <td>
+                <button type="button" class="button-link-delete evapp-wa-reminder-remove-condition">Quitar</button>
+            </td>
+        </tr>
+        <?php
+    }
+}
+
+add_action('save_post_eventosapp_event', function($post_id) {
+    if ( defined('DOING_AUTOSAVE') && DOING_AUTOSAVE ) return;
+    if ( wp_is_post_revision($post_id) ) return;
+    if ( ! current_user_can('edit_post', $post_id) ) return;
+    if ( ! isset($_POST['evapp_whatsapp_email_reminder_nonce']) || ! wp_verify_nonce($_POST['evapp_whatsapp_email_reminder_nonce'], 'evapp_whatsapp_email_reminder_save') ) return;
+
+    update_post_meta($post_id, '_eventosapp_whatsapp_reminder_enabled', isset($_POST['eventosapp_whatsapp_reminder_enabled']) ? '1' : '0');
+    update_post_meta($post_id, '_eventosapp_whatsapp_reminder_respect_rules', isset($_POST['eventosapp_whatsapp_reminder_respect_rules']) ? '1' : '0');
+
+    $raw_rules = isset($_POST['eventosapp_whatsapp_reminder_rules']) && is_array($_POST['eventosapp_whatsapp_reminder_rules']) ? $_POST['eventosapp_whatsapp_reminder_rules'] : [];
+    $rules = evapp_whatsapp_reminder_normalize_rules($raw_rules);
+    update_post_meta($post_id, '_eventosapp_whatsapp_reminder_rules', $rules);
+}, 980);
+
+add_action('save_post_eventosapp_event', function($post_id) {
+    if ( defined('DOING_AUTOSAVE') && DOING_AUTOSAVE ) return;
+    if ( wp_is_post_revision($post_id) ) return;
+    if ( ! current_user_can('edit_post', $post_id) ) return;
+
+    evapp_whatsapp_reminder_schedule_from_email($post_id);
+}, 999);
+
+if ( ! function_exists('evapp_whatsapp_reminder_parse_timestamp') ) {
+    function evapp_whatsapp_reminder_parse_timestamp($raw, $source = '') {
+        if ( is_array($raw) || is_object($raw) ) {
+            return 0;
+        }
+
+        $raw = trim((string) $raw);
+        if ( $raw === '' ) {
+            return 0;
+        }
+
+        if ( is_numeric($raw) ) {
+            $timestamp = (int) $raw;
+            return $timestamp > 1000000000 ? $timestamp : 0;
+        }
+
+        if ( preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw) ) {
+            return 0;
+        }
+
+        $normalized = str_replace('T', ' ', $raw);
+
+        try {
+            $dt = new DateTime($normalized, wp_timezone());
+            $timestamp = $dt->getTimestamp();
+            return $timestamp > 1000000000 ? $timestamp : 0;
+        } catch (Exception $e) {
+            return 0;
+        }
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_get_email_schedule') ) {
+    function evapp_whatsapp_reminder_get_email_schedule($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id ) {
+            return [];
+        }
+
+        $timestamp_keys = [
+            '_eventosapp_email_reminder_timestamp',
+            '_eventosapp_ticket_reminder_timestamp',
+            '_eventosapp_recordatorio_ticket_timestamp',
+            '_eventosapp_recordatorio_correo_timestamp',
+            '_eventosapp_notificacion_correo_timestamp',
+            '_eventosapp_email_notification_timestamp',
+            '_eventosapp_notification_timestamp',
+            '_eventosapp_reminder_timestamp',
+            '_eventosapp_email_scheduled_timestamp',
+            '_eventosapp_ticket_email_scheduled_timestamp',
+            '_eventosapp_mass_email_scheduled_timestamp',
+            '_eventosapp_notificacion_ticket_timestamp',
+        ];
+
+        foreach ( $timestamp_keys as $key ) {
+            $timestamp = evapp_whatsapp_reminder_parse_timestamp(get_post_meta($event_id, $key, true), $key);
+            if ( $timestamp ) {
+                return [
+                    'timestamp' => $timestamp,
+                    'source'    => $key,
+                ];
+            }
+        }
+
+        $datetime_keys = [
+            '_eventosapp_email_reminder_datetime',
+            '_eventosapp_ticket_reminder_datetime',
+            '_eventosapp_recordatorio_ticket_datetime',
+            '_eventosapp_recordatorio_correo_datetime',
+            '_eventosapp_notificacion_correo_datetime',
+            '_eventosapp_email_notification_datetime',
+            '_eventosapp_notification_datetime',
+            '_eventosapp_reminder_datetime',
+            '_eventosapp_email_scheduled_datetime',
+            '_eventosapp_ticket_email_scheduled_datetime',
+            '_eventosapp_mass_email_scheduled_datetime',
+            '_eventosapp_notificacion_ticket_datetime',
+        ];
+
+        foreach ( $datetime_keys as $key ) {
+            $timestamp = evapp_whatsapp_reminder_parse_timestamp(get_post_meta($event_id, $key, true), $key);
+            if ( $timestamp ) {
+                return [
+                    'timestamp' => $timestamp,
+                    'source'    => $key,
+                ];
+            }
+        }
+
+        $pairs = [
+            ['_eventosapp_email_reminder_date', '_eventosapp_email_reminder_time'],
+            ['_eventosapp_ticket_reminder_date', '_eventosapp_ticket_reminder_time'],
+            ['_eventosapp_recordatorio_fecha', '_eventosapp_recordatorio_hora'],
+            ['_eventosapp_recordatorio_correo_fecha', '_eventosapp_recordatorio_correo_hora'],
+            ['_eventosapp_notificacion_fecha', '_eventosapp_notificacion_hora'],
+            ['_eventosapp_notificacion_correo_fecha', '_eventosapp_notificacion_correo_hora'],
+            ['_eventosapp_email_scheduled_date', '_eventosapp_email_scheduled_time'],
+            ['_eventosapp_mass_email_date', '_eventosapp_mass_email_time'],
+        ];
+
+        foreach ( $pairs as $pair ) {
+            $date = trim((string) get_post_meta($event_id, $pair[0], true));
+            $time = trim((string) get_post_meta($event_id, $pair[1], true));
+            if ( $date !== '' && $time !== '' ) {
+                $timestamp = evapp_whatsapp_reminder_parse_timestamp($date . ' ' . $time, $pair[0] . '+' . $pair[1]);
+                if ( $timestamp ) {
+                    return [
+                        'timestamp' => $timestamp,
+                        'source'    => $pair[0] . ' + ' . $pair[1],
+                    ];
+                }
+            }
+        }
+
+        $all_meta = get_post_meta($event_id);
+        foreach ( $all_meta as $key => $values ) {
+            $key_l = strtolower((string) $key);
+            if ( strpos($key_l, 'whatsapp') !== false ) {
+                continue;
+            }
+
+            $looks_email = (strpos($key_l, 'email') !== false || strpos($key_l, 'correo') !== false || strpos($key_l, 'mail') !== false);
+            $looks_schedule = (strpos($key_l, 'reminder') !== false || strpos($key_l, 'recordatorio') !== false || strpos($key_l, 'notificacion') !== false || strpos($key_l, 'notification') !== false || strpos($key_l, 'schedule') !== false || strpos($key_l, 'program') !== false);
+
+            if ( ! $looks_email || ! $looks_schedule ) {
+                continue;
+            }
+
+            foreach ( (array) $values as $value ) {
+                $timestamp = evapp_whatsapp_reminder_parse_timestamp($value, $key);
+                if ( $timestamp ) {
+                    return [
+                        'timestamp' => $timestamp,
+                        'source'    => $key,
+                    ];
+                }
+            }
+        }
+
+        return [];
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_schedule_from_email') ) {
+    function evapp_whatsapp_reminder_schedule_from_email($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return false;
+        }
+
+        wp_clear_scheduled_hook('eventosapp_whatsapp_email_reminder_send', [$event_id]);
+
+        if ( ! evapp_whatsapp_reminder_is_enabled_for_event($event_id) ) {
+            update_post_meta($event_id, '_eventosapp_whatsapp_reminder_schedule_status', 'desactivado');
+            delete_post_meta($event_id, '_eventosapp_whatsapp_reminder_scheduled_at');
+            delete_post_meta($event_id, '_eventosapp_whatsapp_reminder_schedule_source');
+            return false;
+        }
+
+        $schedule = evapp_whatsapp_reminder_get_email_schedule($event_id);
+        if ( empty($schedule['timestamp']) ) {
+            update_post_meta($event_id, '_eventosapp_whatsapp_reminder_schedule_status', 'esperando_horario_correo');
+            return false;
+        }
+
+        $timestamp = (int) $schedule['timestamp'];
+        update_post_meta($event_id, '_eventosapp_whatsapp_reminder_scheduled_at', $timestamp);
+        update_post_meta($event_id, '_eventosapp_whatsapp_reminder_schedule_source', sanitize_text_field((string) $schedule['source']));
+
+        if ( $timestamp <= (time() + 30) ) {
+            update_post_meta($event_id, '_eventosapp_whatsapp_reminder_schedule_status', 'horario_pasado_o_muy_cercano');
+            return false;
+        }
+
+        $scheduled = wp_schedule_single_event($timestamp, 'eventosapp_whatsapp_email_reminder_send', [$event_id]);
+        update_post_meta($event_id, '_eventosapp_whatsapp_reminder_schedule_status', $scheduled ? 'programado' : 'error_programando');
+
+        return (bool) $scheduled;
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_get_event_ticket_ids') ) {
+    function evapp_whatsapp_reminder_get_event_ticket_ids($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id ) {
+            return [];
+        }
+
+        $query = new WP_Query([
+            'post_type'              => 'eventosapp_ticket',
+            'post_status'            => 'any',
+            'fields'                 => 'ids',
+            'posts_per_page'         => -1,
+            'no_found_rows'          => true,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
+            'meta_query'             => [
+                [
+                    'key'     => '_eventosapp_ticket_evento_id',
+                    'value'   => $event_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        return array_map('absint', $query->posts);
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_ticket_passes_filters') ) {
+    function evapp_whatsapp_reminder_ticket_passes_filters($ticket_id, $event_id = 0) {
+        $ticket_id = absint($ticket_id);
+        $event_id = $event_id ? absint($event_id) : absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+
+        $rules = evapp_whatsapp_reminder_normalize_rules(get_post_meta($event_id, '_eventosapp_whatsapp_reminder_rules', true));
+        if ( empty($rules) ) {
+            return [
+                'allowed' => true,
+                'reason'  => 'Sin filtros específicos de recordatorio WhatsApp.',
+            ];
+        }
+
+        $has_allow_rules = false;
+        $matched_allow = false;
+
+        foreach ( $rules as $rule_index => $rule ) {
+            if ( empty($rule['enabled']) || $rule['enabled'] !== '1' ) {
+                continue;
+            }
+
+            if ( $rule['action'] === 'allow' ) {
+                $has_allow_rules = true;
+            }
+
+            if ( function_exists('eventosapp_whatsapp_rule_matches_ticket') ) {
+                $matches = eventosapp_whatsapp_rule_matches_ticket($ticket_id, $rule);
+            } else {
+                $matches = evapp_whatsapp_reminder_rule_matches_ticket($ticket_id, $rule);
+            }
+
+            if ( ! $matches ) {
+                continue;
+            }
+
+            if ( $rule['action'] === 'deny' ) {
+                return [
+                    'allowed' => false,
+                    'reason'  => 'Bloqueado por filtro de recordatorio: ' . ($rule['name'] ?: ('Filtro #' . ((int) $rule_index + 1))),
+                ];
+            }
+
+            if ( $rule['action'] === 'allow' ) {
+                $matched_allow = true;
+            }
+        }
+
+        if ( $has_allow_rules && ! $matched_allow ) {
+            return [
+                'allowed' => false,
+                'reason'  => 'No cumple ningún filtro de recordatorio permitido.',
+            ];
+        }
+
+        return [
+            'allowed' => true,
+            'reason'  => $matched_allow ? 'Cumple filtro de recordatorio WhatsApp.' : 'Sin filtro restrictivo específico.',
+        ];
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_rule_matches_ticket') ) {
+    function evapp_whatsapp_reminder_rule_matches_ticket($ticket_id, $rule) {
+        $conditions = isset($rule['conditions']) && is_array($rule['conditions']) ? $rule['conditions'] : [];
+        if ( empty($conditions) ) {
+            return true;
+        }
+
+        $match = isset($rule['match']) && $rule['match'] === 'any' ? 'any' : 'all';
+        $results = [];
+
+        foreach ( $conditions as $condition ) {
+            $field = isset($condition['field']) ? (string) $condition['field'] : '';
+            $operator = isset($condition['operator']) ? (string) $condition['operator'] : 'equals';
+            $expected = isset($condition['value']) ? (string) $condition['value'] : '';
+
+            if ( function_exists('eventosapp_whatsapp_get_rule_field_value') ) {
+                $actual = eventosapp_whatsapp_get_rule_field_value($ticket_id, $field);
+            } else {
+                $actual = get_post_meta($ticket_id, '_' . ltrim($field, '_'), true);
+            }
+
+            if ( function_exists('eventosapp_whatsapp_compare_values') ) {
+                $results[] = eventosapp_whatsapp_compare_values($actual, $operator, $expected);
+            } else {
+                $actual_norm = strtolower(trim(remove_accents((string) $actual)));
+                $expected_norm = strtolower(trim(remove_accents((string) $expected)));
+                $results[] = $operator === 'not_equals' ? ($actual_norm !== $expected_norm) : ($actual_norm === $expected_norm);
+            }
+        }
+
+        return $match === 'any' ? in_array(true, $results, true) : ! in_array(false, $results, true);
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_context_is_reminder') ) {
+    function evapp_whatsapp_reminder_context_is_reminder($meta_key = '', $email_entry = [], $ticket_id = 0) {
+        $haystack = strtolower((string) $meta_key . ' ' . wp_json_encode($email_entry));
+        $needles = [
+            'recordatorio',
+            'reminder',
+            'ticket_reminder',
+            'email_reminder',
+            'scheduled_reminder',
+            'programado',
+            'programada',
+            'cron_reminder',
+            'notificacion_programada',
+            'notification_reminder',
+        ];
+
+        $is_reminder = false;
+        foreach ( $needles as $needle ) {
+            if ( strpos($haystack, $needle) !== false ) {
+                $is_reminder = true;
+                break;
+            }
+        }
+
+        if ( ! $is_reminder && function_exists('wp_doing_cron') && wp_doing_cron() && $meta_key === '_eventosapp_ticket_email_sent_status' ) {
+            $is_reminder = true;
+        }
+
+        return (bool) apply_filters('evapp_whatsapp_reminder_context_is_reminder', $is_reminder, $meta_key, $email_entry, $ticket_id);
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_source_key') ) {
+    function evapp_whatsapp_reminder_source_key($event_id, $fallback = '') {
+        $event_id = absint($event_id);
+        $scheduled_at = absint(get_post_meta($event_id, '_eventosapp_whatsapp_reminder_scheduled_at', true));
+        if ( ! $scheduled_at ) {
+            $schedule = evapp_whatsapp_reminder_get_email_schedule($event_id);
+            $scheduled_at = ! empty($schedule['timestamp']) ? (int) $schedule['timestamp'] : 0;
+        }
+
+        if ( $scheduled_at ) {
+            return 'email_reminder:' . $event_id . ':' . $scheduled_at;
+        }
+
+        return $fallback !== '' ? sanitize_text_field($fallback) : ('email_reminder:' . $event_id . ':' . current_time('YmdHi'));
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_send_email_reminder_for_ticket') ) {
+    function evapp_whatsapp_send_email_reminder_for_ticket($ticket_id, $context = 'email_reminder', $source_key = '', $email_entry = []) {
+        $ticket_id = absint($ticket_id);
+        if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
+            return ['ok' => false, 'message' => 'Ticket inválido para recordatorio WhatsApp.'];
+        }
+
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return ['ok' => false, 'message' => 'El ticket no tiene evento válido para recordatorio WhatsApp.'];
+        }
+
+        if ( ! evapp_whatsapp_reminder_is_enabled_for_event($event_id) ) {
+            evapp_whatsapp_reminder_add_event_log($event_id, [
+                'message'   => 'Recordatorio WhatsApp omitido: integración desactivada.',
+                'ticket_id' => $ticket_id,
+                'status'    => 'skipped_disabled',
+            ]);
+            return ['ok' => true, 'message' => 'Recordatorio WhatsApp desactivado para este evento.', 'skipped_disabled' => true];
+        }
+
+        $filter_result = evapp_whatsapp_reminder_ticket_passes_filters($ticket_id, $event_id);
+        if ( empty($filter_result['allowed']) ) {
+            if ( function_exists('eventosapp_whatsapp_add_ticket_log') ) {
+                eventosapp_whatsapp_add_ticket_log($ticket_id, 'skipped', $filter_result['reason'], [
+                    'context' => 'email_reminder_whatsapp',
+                    'source_key' => $source_key,
+                ]);
+            }
+            return ['ok' => true, 'message' => $filter_result['reason'], 'skipped_reminder_filter' => true];
+        }
+
+        if ( ! function_exists('eventosapp_whatsapp_send_ticket') ) {
+            return ['ok' => false, 'message' => 'La función de envío WhatsApp no está disponible.'];
+        }
+
+        $respect_rules = get_post_meta($event_id, '_eventosapp_whatsapp_reminder_respect_rules', true);
+        $respect_rules = $respect_rules === '' ? '1' : ($respect_rules === '0' ? '0' : '1');
+        $source_key = evapp_whatsapp_reminder_source_key($event_id, $source_key);
+
+        return eventosapp_whatsapp_send_ticket($ticket_id, [
+            'context'    => sanitize_key('email_reminder_whatsapp_' . $context),
+            'force'      => false,
+            'skip_rules' => ($respect_rules !== '1'),
+            'source_key' => $source_key,
+        ]);
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_handle_email_meta_ticket_send') ) {
+    function evapp_whatsapp_handle_email_meta_ticket_send($ticket_id, $source_key = '', $email_entry = [], $meta_key = '') {
+        $ticket_id = absint($ticket_id);
+        if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
+            return ['handled' => false];
+        }
+
+        if ( ! evapp_whatsapp_reminder_context_is_reminder($meta_key, $email_entry, $ticket_id) ) {
+            return ['handled' => false];
+        }
+
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if ( ! $event_id ) {
+            return ['handled' => true, 'result' => ['ok' => false, 'message' => 'Ticket sin evento para recordatorio WhatsApp.']];
+        }
+
+        $result = evapp_whatsapp_send_email_reminder_for_ticket($ticket_id, 'email_meta', $source_key, $email_entry);
+
+        if ( function_exists('eventosapp_whatsapp_add_activity_log') ) {
+            eventosapp_whatsapp_add_activity_log('recordatorio_email_meta_whatsapp_' . (! empty($result['ok']) ? 'procesado' : 'error'), [
+                'ticket_id' => $ticket_id,
+                'event_id'  => $event_id,
+                'meta_key'  => $meta_key,
+                'source_key'=> $source_key,
+                'result'    => $result,
+            ]);
+        }
+
+        return ['handled' => true, 'result' => $result];
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_add_event_log') ) {
+    function evapp_whatsapp_reminder_add_event_log($event_id, $entry) {
+        $event_id = absint($event_id);
+        if ( ! $event_id ) {
+            return;
+        }
+
+        $log = get_post_meta($event_id, '_eventosapp_whatsapp_reminder_log', true);
+        $log = is_array($log) ? $log : [];
+        $entry = is_array($entry) ? $entry : ['message' => (string) $entry];
+        $entry = array_merge([
+            'date' => current_time('mysql'),
+        ], $entry);
+
+        $log[] = $entry;
+        if ( count($log) > 30 ) {
+            $log = array_slice($log, -30);
+        }
+
+        update_post_meta($event_id, '_eventosapp_whatsapp_reminder_log', $log);
+    }
+}
+
+add_action('eventosapp_whatsapp_email_reminder_send', 'evapp_whatsapp_send_email_reminder_for_event', 10, 1);
+
+if ( ! function_exists('evapp_whatsapp_send_email_reminder_for_event') ) {
+    function evapp_whatsapp_send_email_reminder_for_event($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return;
+        }
+
+        if ( ! evapp_whatsapp_reminder_is_enabled_for_event($event_id) ) {
+            evapp_whatsapp_reminder_add_event_log($event_id, [
+                'message' => 'Cron de recordatorio WhatsApp omitido: integración desactivada.',
+                'status'  => 'skipped_disabled',
+            ]);
+            return;
+        }
+
+        $ticket_ids = evapp_whatsapp_reminder_get_event_ticket_ids($event_id);
+        $stats = [
+            'total'   => count($ticket_ids),
+            'sent'    => 0,
+            'skipped' => 0,
+            'errors'  => 0,
+        ];
+        $source_key = evapp_whatsapp_reminder_source_key($event_id);
+
+        foreach ( $ticket_ids as $ticket_id ) {
+            $result = evapp_whatsapp_send_email_reminder_for_ticket($ticket_id, 'cron', $source_key);
+
+            if ( ! empty($result['skipped_rules']) || ! empty($result['skipped_duplicate']) || ! empty($result['skipped_disabled']) || ! empty($result['skipped_reminder_filter']) ) {
+                $stats['skipped']++;
+            } elseif ( ! empty($result['ok']) ) {
+                $stats['sent']++;
+            } else {
+                $stats['errors']++;
+            }
+        }
+
+        update_post_meta($event_id, '_eventosapp_whatsapp_reminder_last_run_at', current_time('mysql'));
+        update_post_meta($event_id, '_eventosapp_whatsapp_reminder_last_stats', $stats);
+        update_post_meta($event_id, '_eventosapp_whatsapp_reminder_schedule_status', 'ejecutado');
+
+        evapp_whatsapp_reminder_add_event_log($event_id, array_merge($stats, [
+            'message' => 'Recordatorio WhatsApp ejecutado.',
+            'status'  => 'completed',
+        ]));
+    }
+}
+
+if ( ! function_exists('evapp_whatsapp_reminder_from_email_hook') ) {
+    function evapp_whatsapp_reminder_from_email_hook($arg1 = null, $arg2 = null, $arg3 = null, $arg4 = null) {
+        $args = [$arg1, $arg2, $arg3, $arg4];
+        $ticket_id = 0;
+        $event_id = 0;
+
+        foreach ( $args as $arg ) {
+            if ( is_numeric($arg) ) {
+                $maybe_id = absint($arg);
+                if ( $maybe_id && get_post_type($maybe_id) === 'eventosapp_ticket' ) {
+                    $ticket_id = $maybe_id;
+                    break;
+                }
+                if ( $maybe_id && get_post_type($maybe_id) === 'eventosapp_event' ) {
+                    $event_id = $maybe_id;
+                }
+            } elseif ( is_array($arg) ) {
+                foreach ( ['ticket_id', 'post_id', 'id'] as $key ) {
+                    if ( ! empty($arg[$key]) && get_post_type(absint($arg[$key])) === 'eventosapp_ticket' ) {
+                        $ticket_id = absint($arg[$key]);
+                        break 2;
+                    }
+                }
+                foreach ( ['event_id', 'evento_id'] as $key ) {
+                    if ( ! empty($arg[$key]) && get_post_type(absint($arg[$key])) === 'eventosapp_event' ) {
+                        $event_id = absint($arg[$key]);
+                    }
+                }
+            }
+        }
+
+        if ( $ticket_id ) {
+            evapp_whatsapp_send_email_reminder_for_ticket($ticket_id, 'email_hook', '');
+            return;
+        }
+
+        if ( $event_id ) {
+            evapp_whatsapp_send_email_reminder_for_event($event_id);
+        }
+    }
+}
+
+foreach ( [
+    'eventosapp_email_reminder_sent',
+    'eventosapp_ticket_reminder_sent',
+    'eventosapp_after_email_reminder_sent',
+    'eventosapp_after_ticket_reminder_sent',
+    'eventosapp_mass_email_reminder_sent',
+    'eventosapp_scheduled_ticket_email_sent',
+] as $evapp_wa_reminder_hook ) {
+    add_action($evapp_wa_reminder_hook, 'evapp_whatsapp_reminder_from_email_hook', 20, 4);
+}
