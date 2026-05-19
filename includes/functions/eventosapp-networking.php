@@ -109,16 +109,29 @@ function eventosapp_net2_get_ticket_by_cc_last_event($event_id, $cc, $last){
  * Normaliza string leído del QR (como en otros módulos)
  */
 function eventosapp_net2_normalize_scanned($raw){
-    $s = trim( (string)$raw );
-    if (strpos($s, '/') !== false) {
-        $parts = explode('/', $s);
-        $s = end($parts);
+        $s = trim((string)$raw);
+        if ($s === '') return '';
+
+        if (strpos($s, 'http://') === 0 || strpos($s, 'https://') === 0) {
+            $parts = wp_parse_url($s);
+            if (!empty($parts['query'])) {
+                parse_str($parts['query'], $params);
+                if (!empty($params['event'])) {
+                    return sanitize_text_field($params['event']);
+                }
+            }
+            if (!empty($parts['path'])) {
+                $s = basename($parts['path']);
+            }
+        } elseif (strpos($s, '/') !== false) {
+            $s = basename($s);
+        }
+
+        $s = preg_replace('/\.(png|jpg|jpeg|pdf)$/i','', $s);
+        $s = preg_replace('/-tn$/i','', $s);
+        $s = ltrim($s, '#');
+        return sanitize_text_field($s);
     }
-    $s = preg_replace('/\.(png|jpg|jpeg|pdf)$/i','', $s);
-    $s = preg_replace('/-tn$/i','', $s);
-    $s = ltrim($s, '#');
-    return $s;
-}
 
 /**
  * Dado $event_id y $scanned (string del QR), devuelve post_id del ticket leído
@@ -126,44 +139,69 @@ function eventosapp_net2_normalize_scanned($raw){
  * - Si no, y si el evento permite preimpreso para networking, busca por eventosapp_ticket_preprintedID (numérico)
  */
 function eventosapp_net2_find_ticket_by_scanned($event_id, $scanned){
-    global $wpdb;
-    $scanned = eventosapp_net2_normalize_scanned($scanned);
-    if (!$scanned || !$event_id) return 0;
+        global $wpdb;
+        $event_id = (int) $event_id;
+        $raw = trim((string) $scanned);
+        $normalized = eventosapp_net2_normalize_scanned($raw);
+        if ((!$raw && !$normalized) || !$event_id) return 0;
 
-    // 1) ID público
-    $ids = $wpdb->get_col( $wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
-        'eventosapp_ticketID', $scanned
-    ) );
-    if ($ids) {
-        foreach ($ids as $cand){
-            if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id){
-                return (int)$cand;
-            }
-        }
-    }
+        $candidates = array_values(array_unique(array_filter(array($raw, $normalized))));
 
-    // 2) Preimpreso si el evento lo permite para networking
-    $allow_preprinted = ( get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr_networking', true) === '1' );
-    if ($allow_preprinted) {
-        $num = preg_replace('/\D+/', '', $scanned);
-        if ($num !== '') {
-            $ids2 = $wpdb->get_col( $wpdb->prepare(
-                "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
-                'eventosapp_ticket_preprintedID', $num
-            ) );
-            if ($ids2) {
-                foreach ($ids2 as $cand){
-                    if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === (int) $event_id){
-                        return (int)$cand;
+        if (class_exists('EventosApp_QR_Manager')) {
+            foreach ($candidates as $candidate_raw) {
+                $validation = EventosApp_QR_Manager::validate_qr($candidate_raw);
+                if (!empty($validation['valid']) && !empty($validation['ticket_id'])) {
+                    $candidate_id = (int) $validation['ticket_id'];
+                    if ((int) get_post_meta($candidate_id, '_eventosapp_ticket_evento_id', true) === $event_id) {
+                        return $candidate_id;
                     }
                 }
             }
         }
-    }
 
-    return 0;
-}
+        $lookup_values = $candidates;
+        foreach ($candidates as $candidate_raw) {
+            if (preg_match('/^(.+)-(email|gwallet|awallet|pdf|whatsapp)$/i', $candidate_raw, $m)) {
+                $lookup_values[] = sanitize_text_field($m[1]);
+            }
+            if (preg_match('/^(\d+)-ticketid=(.+)-([^-]+)$/', $candidate_raw, $m)) {
+                $lookup_values[] = sanitize_text_field($m[2]);
+            }
+        }
+        $lookup_values = array_values(array_unique(array_filter($lookup_values)));
+
+        foreach ($lookup_values as $lookup) {
+            $ids = $wpdb->get_col( $wpdb->prepare(
+                "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
+                'eventosapp_ticketID', $lookup
+            ) );
+            if ($ids) {
+                foreach ($ids as $cand){
+                    if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === $event_id)
+                        return (int)$cand;
+                }
+            }
+        }
+
+        // QR preimpresos
+        $allow_preprinted = ( get_post_meta($event_id, '_eventosapp_ticket_use_preprinted_qr_networking', true) === '1' );
+        if ($allow_preprinted) {
+            $num = preg_replace('/\D+/', '', $normalized ?: $raw);
+            if ($num !== '') {
+                $ids2 = $wpdb->get_col( $wpdb->prepare(
+                    "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s",
+                    'eventosapp_ticket_preprintedID', $num
+                ) );
+                if ($ids2) {
+                    foreach ($ids2 as $cand){
+                        if ((int) get_post_meta($cand, '_eventosapp_ticket_evento_id', true) === $event_id)
+                            return (int)$cand;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
 
 /**
  * Datos de contacto del ticket
