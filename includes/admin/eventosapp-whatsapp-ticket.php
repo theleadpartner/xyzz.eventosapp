@@ -4577,30 +4577,6 @@ function eventosapp_whatsapp_process_webhook_inbound_message($message) {
 }
 
 /**
- * Permite que el módulo de recordatorios WhatsApp tome control cuando el correo enviado
- * corresponde a un recordatorio programado. Si no es recordatorio, se conserva el flujo
- * anterior de envío automático de WhatsApp después del correo.
- */
-function eventosapp_whatsapp_maybe_delegate_email_meta_to_reminder($ticket_id, $source_key = '', $email_entry = [], $meta_key = '') {
-    $ticket_id = absint($ticket_id);
-    if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
-        return false;
-    }
-
-    if ( function_exists('evapp_whatsapp_handle_email_meta_ticket_send') ) {
-        $handled = evapp_whatsapp_handle_email_meta_ticket_send($ticket_id, $source_key, $email_entry, $meta_key);
-        if ( $handled === true ) {
-            return true;
-        }
-        if ( is_array($handled) && ! empty($handled['handled']) ) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/**
  * Disparo cuando el correo queda registrado como enviado.
  */
 function eventosapp_whatsapp_trigger_from_email_meta($meta_id, $object_id, $meta_key, $_meta_value) {
@@ -4614,11 +4590,6 @@ function eventosapp_whatsapp_trigger_from_email_meta($meta_id, $object_id, $meta
         $count = is_array($history) ? count($history) : 0;
         $last = ($count > 0 && is_array($history[$count - 1])) ? $history[$count - 1] : [];
         $source_key = 'email_history:' . $count . ':' . md5(wp_json_encode($last));
-
-        if ( eventosapp_whatsapp_maybe_delegate_email_meta_to_reminder($ticket_id, $source_key, $last, $meta_key) ) {
-            return;
-        }
-
         eventosapp_whatsapp_send_ticket($ticket_id, [
             'context' => 'email_history',
             'source_key' => $source_key,
@@ -4630,20 +4601,7 @@ function eventosapp_whatsapp_trigger_from_email_meta($meta_id, $object_id, $meta
         $status = get_post_meta($ticket_id, '_eventosapp_ticket_email_sent_status', true);
         if ( $status === 'enviado' ) {
             $last_email_at = get_post_meta($ticket_id, '_eventosapp_ticket_last_email_at', true);
-            $history = get_post_meta($ticket_id, '_eventosapp_ticket_email_history', true);
-            $count = is_array($history) ? count($history) : 0;
-            $last = ($count > 0 && is_array($history[$count - 1])) ? $history[$count - 1] : [];
-            $email_context = array_merge([
-                'status' => $status,
-                'last_email_at' => $last_email_at,
-                'meta_key' => $meta_key,
-            ], is_array($last) ? $last : []);
             $source_key = 'email_status:' . md5((string)$last_email_at . ':' . (string)$status);
-
-            if ( eventosapp_whatsapp_maybe_delegate_email_meta_to_reminder($ticket_id, $source_key, $email_context, $meta_key) ) {
-                return;
-            }
-
             eventosapp_whatsapp_send_ticket($ticket_id, [
                 'context' => 'email_status',
                 'source_key' => $source_key,
