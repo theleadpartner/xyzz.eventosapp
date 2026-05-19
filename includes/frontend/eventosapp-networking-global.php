@@ -26,52 +26,48 @@ add_shortcode('eventosapp_networking_global', function($atts){
     $scanned_ticket_post_id = 0;
     $has_qr_params = false;
     
-    // Si hay parámetros, procesarlos
+    // Si hay parámetros, procesarlos.
+    // Compatibilidad: escarapela/networking, QR simples por medio y QR WhatsApp.
     if (!empty($url_params)) {
-        // Parsear parámetros: event=123-ticketid=ABC123-7890
-        $parts = explode('-', $url_params);
-        
-        if (count($parts) >= 3) {
-            // Extraer datos
-            $event_id = intval($parts[0]);
-            
-            // El segundo elemento tiene formato "ticketid=ABC123"
-            $ticket_part = isset($parts[1]) ? $parts[1] : '';
-            $unique_ticket_id = '';
-            if (strpos($ticket_part, 'ticketid=') === 0) {
-                $unique_ticket_id = str_replace('ticketid=', '', $ticket_part);
-            }
-            
-            $security_code = isset($parts[2]) ? $parts[2] : '';
-            
-            // Buscar el Post ID usando el eventosapp_ticketID
+        $validation = false;
+
+        if (class_exists('EventosApp_QR_Manager')) {
+            $validation = EventosApp_QR_Manager::validate_qr($url_params);
+        }
+
+        if (!empty($validation['valid']) && !empty($validation['ticket_id'])) {
+            $scanned_ticket_post_id = (int) $validation['ticket_id'];
+            $event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
+            $has_qr_params = true;
+        } elseif (preg_match('/^(\d+)-ticketid=(.+)-([^-]+)$/', $url_params, $matches)) {
+            // Fallback para URLs antiguas de badge cuando QR Manager no pueda validar.
+            $event_id         = absint($matches[1]);
+            $unique_ticket_id = sanitize_text_field($matches[2]);
+            $security_code    = sanitize_text_field($matches[3]);
+
             $scanned_ticket_post_id = $wpdb->get_var($wpdb->prepare(
-                "SELECT post_id FROM {$wpdb->postmeta} 
-                WHERE meta_key = 'eventosapp_ticketID' 
-                AND meta_value = %s 
-                LIMIT 1",
+                "SELECT post_id FROM {$wpdb->postmeta}
+                 WHERE meta_key = 'eventosapp_ticketID'
+                 AND meta_value = %s
+                 LIMIT 1",
                 $unique_ticket_id
             ));
-            
-            // Validar que el ticket existe
+
             if (!$scanned_ticket_post_id || get_post_type($scanned_ticket_post_id) !== 'eventosapp_ticket') {
                 return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
                     <h3 style="color:#dc2626;margin:0 0 1rem;">⚠️ Ticket no encontrado</h3>
                     <p style="color:#991b1b;margin:0;">El ticket escaneado no existe en el sistema. (ID: ' . esc_html($unique_ticket_id) . ')</p>
                 </div>';
             }
-            
-            // Validar código de seguridad
+
             $stored_security_code = get_post_meta($scanned_ticket_post_id, '_eventosapp_badge_security_code', true);
-            
             if (empty($stored_security_code) || $stored_security_code !== $security_code) {
                 return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
                     <h3 style="color:#dc2626;margin:0 0 1rem;">🔒 Código de seguridad inválido</h3>
                     <p style="color:#991b1b;margin:0;">El código de seguridad no coincide. Este QR puede estar revocado.</p>
                 </div>';
             }
-            
-            // Validar que el ticket pertenece al evento
+
             $ticket_event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
             if ($ticket_event_id !== $event_id) {
                 return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
@@ -80,8 +76,28 @@ add_shortcode('eventosapp_networking_global', function($atts){
                     <p style="color:#991b1b;margin-top:0.5rem;font-size:0.9rem;">Ticket evento: ' . esc_html($ticket_event_id) . ' | URL evento: ' . esc_html($event_id) . '</p>
                 </div>';
             }
-            
+
             $has_qr_params = true;
+        } elseif (preg_match('/^(.+)-(email|gwallet|awallet|pdf|whatsapp)$/i', $url_params, $matches)) {
+            // Fallback para QR simples cuando el metadato del QR todavía no existe o fue migrado.
+            $unique_ticket_id = sanitize_text_field($matches[1]);
+            $scanned_ticket_post_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT post_id FROM {$wpdb->postmeta}
+                 WHERE meta_key = 'eventosapp_ticketID'
+                 AND meta_value = %s
+                 LIMIT 1",
+                $unique_ticket_id
+            ));
+
+            if ($scanned_ticket_post_id && get_post_type($scanned_ticket_post_id) === 'eventosapp_ticket') {
+                $event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
+                $has_qr_params = true;
+            } else {
+                return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
+                    <h3 style="color:#dc2626;margin:0 0 1rem;">⚠️ Ticket no encontrado</h3>
+                    <p style="color:#991b1b;margin:0;">El ticket escaneado no existe en el sistema. (ID: ' . esc_html($unique_ticket_id) . ')</p>
+                </div>';
+            }
         }
     }
     
@@ -1146,74 +1162,103 @@ function eventosapp_netglobal_decode_qr_handler(){
 
     error_log('EventosApp Networking Global - Decodificando QR: ' . $qr_content);
 
-    // Parsear el contenido del QR: "14564-ticketid=ABC123-5389"
-    $parts = explode('-', $qr_content);
-    
-    if (count($parts) < 3) {
-        error_log('EventosApp Networking Global - Formato QR inválido, partes: ' . count($parts));
-        wp_send_json_error(['message' => 'Formato de QR inválido']);
+    if (class_exists('EventosApp_QR_Manager')) {
+        $validation = EventosApp_QR_Manager::validate_qr($qr_content);
+        if (!empty($validation['valid']) && !empty($validation['ticket_id'])) {
+            $ticket_id = (int) $validation['ticket_id'];
+            $event_id  = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+
+            error_log('EventosApp Networking Global - QR validado con QR Manager. Ticket ID: ' . $ticket_id . ', tipo: ' . ($validation['type'] ?? ''));
+
+            wp_send_json_success([
+                'ticket_id' => $ticket_id,
+                'event_id'  => $event_id,
+                'qr_type'   => isset($validation['type']) ? sanitize_key($validation['type']) : '',
+                'qr_type_label' => isset($validation['type_label']) ? sanitize_text_field($validation['type_label']) : '',
+                'message'   => 'QR validado exitosamente'
+            ]);
+        }
     }
 
-    $event_id = intval($parts[0]);
-    
-    // El segundo elemento tiene formato "ticketid=ABC123"
-    $ticket_part = isset($parts[1]) ? $parts[1] : '';
-    $unique_ticket_id = '';
-    if (strpos($ticket_part, 'ticketid=') === 0) {
-        $unique_ticket_id = str_replace('ticketid=', '', $ticket_part);
-    }
-    
-    $security_code = isset($parts[2]) ? $parts[2] : '';
+    // Fallback 1: formato badge/networking: 14564-ticketid=TKT-ABC-123-5389
+    if (preg_match('/^(\d+)-ticketid=(.+)-([^-]+)$/', $qr_content, $matches)) {
+        $event_id         = absint($matches[1]);
+        $unique_ticket_id = sanitize_text_field($matches[2]);
+        $security_code    = sanitize_text_field($matches[3]);
 
-    error_log('EventosApp Networking Global - Datos extraídos: event=' . $event_id . ', ticket=' . $unique_ticket_id . ', security=' . $security_code);
+        error_log('EventosApp Networking Global - Fallback badge: event=' . $event_id . ', ticket=' . $unique_ticket_id . ', security=' . $security_code);
 
-    if (empty($unique_ticket_id)) {
-        error_log('EventosApp Networking Global - Ticket ID vacío');
-        wp_send_json_error(['message' => 'Ticket ID no encontrado en QR']);
-    }
+        if (empty($unique_ticket_id)) {
+            wp_send_json_error(['message' => 'Ticket ID no encontrado en QR']);
+        }
 
-    // Buscar el Post ID usando el eventosapp_ticketID
-    $scanned_ticket_post_id = $wpdb->get_var($wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} 
-        WHERE meta_key = 'eventosapp_ticketID' 
-        AND meta_value = %s 
-        LIMIT 1",
-        $unique_ticket_id
-    ));
+        $scanned_ticket_post_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta}
+             WHERE meta_key = 'eventosapp_ticketID'
+             AND meta_value = %s
+             LIMIT 1",
+            $unique_ticket_id
+        ));
 
-    error_log('EventosApp Networking Global - Post ID encontrado: ' . ($scanned_ticket_post_id ?: 'ninguno'));
+        if (!$scanned_ticket_post_id || get_post_type($scanned_ticket_post_id) !== 'eventosapp_ticket') {
+            wp_send_json_error(['message' => 'Ticket no encontrado']);
+        }
 
-    // Validar que el ticket existe
-    if (!$scanned_ticket_post_id || get_post_type($scanned_ticket_post_id) !== 'eventosapp_ticket') {
-        error_log('EventosApp Networking Global - Ticket no encontrado o tipo incorrecto');
-        wp_send_json_error(['message' => 'Ticket no encontrado']);
-    }
+        $stored_security_code = get_post_meta($scanned_ticket_post_id, '_eventosapp_badge_security_code', true);
+        if (empty($stored_security_code) || $stored_security_code !== $security_code) {
+            wp_send_json_error(['message' => 'Código de seguridad inválido']);
+        }
 
-    // Validar código de seguridad
-    $stored_security_code = get_post_meta($scanned_ticket_post_id, '_eventosapp_badge_security_code', true);
-    
-    error_log('EventosApp Networking Global - Security code almacenado: ' . $stored_security_code . ', recibido: ' . $security_code);
-    
-    if (empty($stored_security_code) || $stored_security_code !== $security_code) {
-        error_log('EventosApp Networking Global - Código de seguridad inválido');
-        wp_send_json_error(['message' => 'Código de seguridad inválido']);
+        $ticket_event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
+        if ($ticket_event_id !== $event_id) {
+            wp_send_json_error(['message' => 'Este ticket no pertenece al evento indicado']);
+        }
+
+        wp_send_json_success([
+            'ticket_id' => (int) $scanned_ticket_post_id,
+            'event_id'  => $event_id,
+            'qr_type'   => 'badge',
+            'qr_type_label' => 'Escarapela Impresa',
+            'message'   => 'QR validado exitosamente'
+        ]);
     }
 
-    // Validar que el ticket pertenece al evento
-    $ticket_event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
-    
-    error_log('EventosApp Networking Global - Evento del ticket: ' . $ticket_event_id . ', evento esperado: ' . $event_id);
-    
-    if ($ticket_event_id !== $event_id) {
-        error_log('EventosApp Networking Global - Evento no coincide');
-        wp_send_json_error(['message' => 'Este ticket no pertenece al evento indicado']);
+    // Fallback 2: QR simple por medio, incluido WhatsApp.
+    if (preg_match('/^(.+)-(email|gwallet|awallet|pdf|whatsapp)$/i', $qr_content, $matches)) {
+        $unique_ticket_id = sanitize_text_field($matches[1]);
+        $tag = strtolower($matches[2]);
+        $type_labels = [
+            'email'    => ['type' => 'email', 'label' => 'Email'],
+            'gwallet'  => ['type' => 'google_wallet', 'label' => 'Google Wallet'],
+            'awallet'  => ['type' => 'apple_wallet', 'label' => 'Apple Wallet'],
+            'pdf'      => ['type' => 'pdf', 'label' => 'PDF Impreso'],
+            'whatsapp' => ['type' => 'whatsapp', 'label' => 'WhatsApp'],
+        ];
+
+        $scanned_ticket_post_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta}
+             WHERE meta_key = 'eventosapp_ticketID'
+             AND meta_value = %s
+             LIMIT 1",
+            $unique_ticket_id
+        ));
+
+        if (!$scanned_ticket_post_id || get_post_type($scanned_ticket_post_id) !== 'eventosapp_ticket') {
+            wp_send_json_error(['message' => 'Ticket no encontrado']);
+        }
+
+        $event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
+        $type_info = $type_labels[$tag] ?? ['type' => $tag, 'label' => $tag];
+
+        wp_send_json_success([
+            'ticket_id' => (int) $scanned_ticket_post_id,
+            'event_id'  => $event_id,
+            'qr_type'   => $type_info['type'],
+            'qr_type_label' => $type_info['label'],
+            'message'   => 'QR validado exitosamente'
+        ]);
     }
 
-    error_log('EventosApp Networking Global - QR validado exitosamente, ticket ID: ' . $scanned_ticket_post_id);
-
-    wp_send_json_success([
-        'ticket_id' => $scanned_ticket_post_id,
-        'event_id' => $event_id,
-        'message' => 'QR validado exitosamente'
-    ]);
+    error_log('EventosApp Networking Global - Formato QR inválido');
+    wp_send_json_error(['message' => 'Formato de QR inválido']);
 }
