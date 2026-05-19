@@ -106,10 +106,12 @@ class EventosApp_Batch_Processor {
                 'ics'            => ['label' => 'ICS', 'description' => 'Regenera el archivo calendario ICS.'],
                 'android_wallet' => ['label' => 'Android Wallet / Google Wallet', 'description' => 'Regenera el enlace de Google Wallet.'],
                 'apple_wallet'   => ['label' => 'Apple Wallet', 'description' => 'Regenera el archivo PKPASS de Apple Wallet.'],
+                'whatsapp_assets'=> ['label' => 'Piezas WhatsApp', 'description' => 'Prepara landing, QR WhatsApp e imagen del mensaje.'],
+                'qr_whatsapp'    => ['label' => 'QR WhatsApp', 'description' => 'Regenera únicamente el QR usado por WhatsApp.'],
                 'search_blob'    => ['label' => 'Índice de búsqueda', 'description' => 'Reconstruye el índice interno de búsqueda.'],
             ];
 
-        $custom_asset_keys = ['qrs', 'pdf', 'ics', 'android_wallet', 'apple_wallet', 'search_blob'];
+        $custom_asset_keys = ['qrs', 'pdf', 'ics', 'android_wallet', 'apple_wallet', 'whatsapp_assets', 'qr_whatsapp', 'search_blob'];
         
         // Crear nonce
         $nonce = wp_create_nonce('eventosapp_batch_processor');
@@ -176,7 +178,7 @@ class EventosApp_Batch_Processor {
                                             <input type="radio" name="batch_mode" id="mode-complete" value="complete" checked>
                                             <strong>Regeneración Completa</strong>
                                             <p class="description" style="margin-left: 25px;">
-                                                Regenera TODO lo activo para el evento: Wallets (Google + Apple), PDF, ICS, QR codes e índice de búsqueda. Si ya existe un enlace, se conserva.
+                                                Regenera TODO lo activo para el evento: Wallets (Google + Apple), PDF, ICS, QR codes, piezas WhatsApp e índice de búsqueda. Si ya existe un enlace, se conserva.
                                             </p>
                                         </label>
                                         
@@ -192,7 +194,7 @@ class EventosApp_Batch_Processor {
                                             <input type="radio" name="batch_mode" id="mode-custom" value="custom">
                                             <strong>Refresh Personalizado</strong>
                                             <p class="description" style="margin-left: 25px;">
-                                                Permite escoger exactamente qué recursos regenerar: QRs, PDF, ICS, Android Wallet, Apple Wallet e índice de búsqueda.
+                                                Permite escoger exactamente qué recursos regenerar: QRs, PDF, ICS, Android Wallet, Apple Wallet, piezas WhatsApp, QR WhatsApp e índice de búsqueda.
                                             </p>
                                         </label>
                                     </fieldset>
@@ -2085,7 +2087,7 @@ class EventosApp_Batch_Processor {
             return [];
         }
 
-        $allowed = ['qrs', 'pdf', 'ics', 'android_wallet', 'apple_wallet', 'search_blob'];
+        $allowed = ['qrs', 'pdf', 'ics', 'android_wallet', 'apple_wallet', 'whatsapp_assets', 'qr_whatsapp', 'search_blob'];
         $clean = [];
 
         foreach ($assets as $asset) {
