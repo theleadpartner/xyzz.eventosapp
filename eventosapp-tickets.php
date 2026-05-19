@@ -964,8 +964,15 @@ function eventosapp_ticket_status_metabox($post) {
 function eventosapp_ticket_files_metabox($post) {
     $ticketID = get_post_meta($post->ID, 'eventosapp_ticketID', true);
 
-    // URL QR
+    // URL QR legacy
     $qr_url = $ticketID ? eventosapp_get_ticket_qr_url($ticketID) : '';
+
+    // URL QR WhatsApp generado por QR Manager
+    $whatsapp_qr_url = '';
+    $all_qr_codes_for_metabox = get_post_meta($post->ID, '_eventosapp_qr_codes', true);
+    if (is_array($all_qr_codes_for_metabox) && !empty($all_qr_codes_for_metabox['whatsapp']['url'])) {
+        $whatsapp_qr_url = $all_qr_codes_for_metabox['whatsapp']['url'];
+    }
     // URL PDF
     $pdf_url = get_post_meta($post->ID, '_eventosapp_ticket_pdf_url', true);
     // ICS
@@ -1013,6 +1020,13 @@ function eventosapp_ticket_files_metabox($post) {
         <label>QR:</label>
         <?php if ($qr_url): ?>
             <a href="<?php echo esc_url($qr_url); ?>" target="_blank"><?php echo esc_html($qr_url); ?></a>
+        <?php else: ?>
+            <span style="color:#888;">No generado aún.</span>
+        <?php endif; ?>
+
+        <label>QR WhatsApp:</label>
+        <?php if ($whatsapp_qr_url): ?>
+            <a href="<?php echo esc_url($whatsapp_qr_url); ?>" target="_blank"><?php echo esc_html($whatsapp_qr_url); ?></a>
         <?php else: ?>
             <span style="color:#888;">No generado aún.</span>
         <?php endif; ?>
