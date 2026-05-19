@@ -252,6 +252,24 @@ if (!function_exists('evapp_webhook_public_conditional_summary')) {
  * Convierte el resultado interno de anexos en una salida segura para el consumidor del webhook.
  * La versión completa se conserva en post_meta y error_log para depuración interna.
  */
+if (!function_exists('evapp_webhook_public_whatsapp_assets_summary')) {
+  function evapp_webhook_public_whatsapp_assets_summary($whatsapp_assets = null) {
+    if (!is_array($whatsapp_assets)) return null;
+
+    $errors = isset($whatsapp_assets['errors']) && is_array($whatsapp_assets['errors']) ? $whatsapp_assets['errors'] : [];
+
+    return [
+      'context'             => isset($whatsapp_assets['context']) ? sanitize_key((string) $whatsapp_assets['context']) : '',
+      'variant_applied'     => !empty($whatsapp_assets['variant']['applied']),
+      'variant_key'         => isset($whatsapp_assets['variant']['variant_key']) ? sanitize_key((string) $whatsapp_assets['variant']['variant_key']) : '',
+      'landing_ready'       => !empty($whatsapp_assets['landing_url']),
+      'qr_ready'            => !empty($whatsapp_assets['qr_url']),
+      'message_image_ready' => !empty($whatsapp_assets['message_image_url']),
+      'errors_count'        => count($errors),
+    ];
+  }
+}
+
 if (!function_exists('evapp_webhook_public_asset_refresh_summary')) {
   function evapp_webhook_public_asset_refresh_summary($asset_refresh_result = null, $ticket_id = 0) {
     if (!is_array($asset_refresh_result)) return null;
@@ -270,6 +288,7 @@ if (!function_exists('evapp_webhook_public_asset_refresh_summary')) {
       'wallet_android'             => evapp_webhook_public_status($asset_refresh_result['wallet_android'] ?? null),
       'wallet_apple'               => evapp_webhook_public_status($asset_refresh_result['wallet_apple'] ?? null),
       'search_index'               => evapp_webhook_public_status($asset_refresh_result['search_index'] ?? null),
+      'whatsapp_assets'            => evapp_webhook_public_whatsapp_assets_summary($asset_refresh_result['whatsapp_assets'] ?? null),
       'errors_count'               => count($errors),
     ];
 
@@ -758,6 +777,7 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
       'wallet_apple'               => null,
       'wallet_apple_url'           => '',
       'search_index'               => null,
+      'whatsapp_assets'            => null,
       'errors'                     => [],
     ];
 
@@ -926,6 +946,27 @@ if (!function_exists('evapp_webhook_refresh_ticket_assets')) {
       } catch (\Throwable $e) {
         $result['errors'][] = 'search_index: '.$e->getMessage();
       }
+    }
+
+    // 9) Activos públicos de WhatsApp: landing, QR dedicado e imagen final del mensaje.
+    if (function_exists('eventosapp_whatsapp_prepare_ticket_assets')) {
+      try {
+        $result['whatsapp_assets'] = eventosapp_whatsapp_prepare_ticket_assets($ticket_id, [
+          'event_id'               => $evento_id,
+          'context'                => $context . '_webhook_whatsapp_assets',
+          'apply_variant'          => false,
+          'refresh_enabled_assets' => false,
+          'ensure_qr'              => true,
+          'ensure_landing'         => true,
+          'ensure_message_image'   => true,
+          'rebuild_search_index'   => false,
+          'log'                    => true,
+        ]);
+      } catch (\Throwable $e) {
+        $result['errors'][] = 'whatsapp_assets: '.$e->getMessage();
+      }
+    } else {
+      $result['whatsapp_assets'] = 'helper_not_available';
     }
 
     update_post_meta($ticket_id, '_eventosapp_webhook_assets_last_sync', current_time('mysql'));
