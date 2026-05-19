@@ -4,7 +4,7 @@
  *
  * Crea una pantalla independiente para enviar tickets por WhatsApp en lotes,
  * usando filtros similares al envío masivo de email y permitiendo seleccionar
- * la plantilla aprobada por Meta que se usará en toda la campaña.
+ * las plantillas aprobadas por Meta que se usarán según la modalidad del ticket.
  *
  * Este archivo no modifica el flujo actual de envíos manuales/automáticos.
  * Usa los helpers existentes de WhatsApp, plantillas, QR, variantes y assets
@@ -216,6 +216,263 @@ if ( ! function_exists('eventosapp_whatsapp_masivo_delivery_options') ) {
     }
 }
 
+
+/**
+ * Etiquetas de modalidad de ticket usadas por el envío masivo.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_ticket_modalidad_labels') ) {
+    function eventosapp_whatsapp_masivo_ticket_modalidad_labels() {
+        return function_exists('eventosapp_ticket_modalidad_options')
+            ? eventosapp_ticket_modalidad_options()
+            : [
+                'presencial' => 'Presencial',
+                'virtual'    => 'Virtual',
+            ];
+    }
+}
+
+/**
+ * Obtiene la modalidad normalizada del evento.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_get_event_modalidad') ) {
+    function eventosapp_whatsapp_masivo_get_event_modalidad($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return 'presencial';
+        }
+
+        if ( function_exists('eventosapp_get_event_modalidad') ) {
+            return eventosapp_get_event_modalidad($event_id);
+        }
+
+        $raw = get_post_meta($event_id, '_eventosapp_event_modalidad', true);
+        if ( function_exists('eventosapp_normalize_event_modalidad') ) {
+            return eventosapp_normalize_event_modalidad($raw ?: 'presencial');
+        }
+
+        $raw = sanitize_key((string) $raw);
+        return in_array($raw, ['presencial', 'virtual', 'presencial_virtual'], true) ? $raw : 'presencial';
+    }
+}
+
+/**
+ * Obtiene la etiqueta legible de modalidad del evento.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_get_event_modalidad_label') ) {
+    function eventosapp_whatsapp_masivo_get_event_modalidad_label($event_id) {
+        if ( function_exists('eventosapp_get_event_modalidad_label') ) {
+            return eventosapp_get_event_modalidad_label($event_id);
+        }
+        $options = function_exists('eventosapp_event_modalidad_options')
+            ? eventosapp_event_modalidad_options()
+            : [
+                'presencial'         => 'Presencial',
+                'virtual'            => 'Virtual',
+                'presencial_virtual' => 'Presencial y Virtual',
+            ];
+        $mode = eventosapp_whatsapp_masivo_get_event_modalidad($event_id);
+        return $options[$mode] ?? 'Presencial';
+    }
+}
+
+/**
+ * Modalidades de ticket permitidas para el evento seleccionado.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_get_event_allowed_modalidades') ) {
+    function eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id) {
+        $event_id = absint($event_id);
+        if ( $event_id && function_exists('eventosapp_ticket_allowed_modalidades_for_event') ) {
+            $allowed = eventosapp_ticket_allowed_modalidades_for_event($event_id);
+            $allowed = is_array($allowed) ? array_values(array_unique(array_map('sanitize_key', $allowed))) : [];
+            $allowed = array_values(array_intersect(['presencial', 'virtual'], $allowed));
+            if ( ! empty($allowed) ) {
+                return $allowed;
+            }
+        }
+
+        $mode = eventosapp_whatsapp_masivo_get_event_modalidad($event_id);
+        if ( $mode === 'virtual' ) {
+            return ['virtual'];
+        }
+        if ( $mode === 'presencial_virtual' ) {
+            return ['presencial', 'virtual'];
+        }
+        return ['presencial'];
+    }
+}
+
+/**
+ * Valida si una plantilla está aprobada para envío.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_is_template_approved') ) {
+    function eventosapp_whatsapp_masivo_is_template_approved($template) {
+        if ( ! is_array($template) ) {
+            return false;
+        }
+        if ( function_exists('eventosapp_whatsapp_is_template_approved') ) {
+            return eventosapp_whatsapp_is_template_approved($template);
+        }
+        return in_array(strtoupper((string)($template['meta_status'] ?? '')), ['APPROVED', 'ACTIVE'], true);
+    }
+}
+
+/**
+ * Sanitiza el mapa de plantillas por modalidad.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_sanitize_template_map') ) {
+    function eventosapp_whatsapp_masivo_sanitize_template_map($template_map) {
+        $template_map = is_array($template_map) ? $template_map : [];
+        $clean = [];
+        foreach ( ['presencial', 'virtual'] as $mode ) {
+            $value = isset($template_map[$mode]) ? sanitize_key((string) $template_map[$mode]) : '';
+            if ( $value !== '' ) {
+                $clean[$mode] = $value;
+            }
+        }
+        return $clean;
+    }
+}
+
+/**
+ * Retorna el mapa de plantillas de un segmento, incluyendo compatibilidad con segmentos antiguos.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_get_segment_template_map') ) {
+    function eventosapp_whatsapp_masivo_get_segment_template_map($segment) {
+        $segment = is_array($segment) ? $segment : [];
+        $map = isset($segment['template_map']) && is_array($segment['template_map'])
+            ? eventosapp_whatsapp_masivo_sanitize_template_map($segment['template_map'])
+            : [];
+
+        if ( ! empty($map) ) {
+            return $map;
+        }
+
+        $legacy_template_id = isset($segment['template_id']) ? sanitize_key((string) $segment['template_id']) : '';
+        if ( $legacy_template_id !== '' ) {
+            $event_id = absint($segment['event_id'] ?? ($segment['filters']['evento_id'] ?? 0));
+            $allowed = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id);
+            foreach ( $allowed as $mode ) {
+                $map[$mode] = $legacy_template_id;
+            }
+        }
+
+        return $map;
+    }
+}
+
+/**
+ * Valida que cada modalidad requerida tenga una plantilla aprobada asignada.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_validate_template_map') ) {
+    function eventosapp_whatsapp_masivo_validate_template_map($template_map, $required_modalidades) {
+        $template_map = eventosapp_whatsapp_masivo_sanitize_template_map($template_map);
+        $required_modalidades = is_array($required_modalidades) ? $required_modalidades : [];
+        $required_modalidades = array_values(array_intersect(['presencial', 'virtual'], array_map('sanitize_key', $required_modalidades)));
+        $labels = eventosapp_whatsapp_masivo_ticket_modalidad_labels();
+        $templates = [];
+
+        foreach ( $required_modalidades as $mode ) {
+            $template_id = isset($template_map[$mode]) ? sanitize_key((string) $template_map[$mode]) : '';
+            if ( $template_id === '' ) {
+                return [
+                    'ok'       => false,
+                    'message'  => 'Falta seleccionar la plantilla para la modalidad ' . ($labels[$mode] ?? $mode) . '.',
+                    'templates'=> $templates,
+                ];
+            }
+
+            $template = eventosapp_whatsapp_masivo_get_template($template_id);
+            if ( ! eventosapp_whatsapp_masivo_is_template_approved($template) ) {
+                return [
+                    'ok'       => false,
+                    'message'  => 'La plantilla seleccionada para la modalidad ' . ($labels[$mode] ?? $mode) . ' no existe o no está aprobada por Meta.',
+                    'templates'=> $templates,
+                ];
+            }
+
+            $templates[$mode] = $template;
+        }
+
+        return [
+            'ok'        => true,
+            'message'   => '',
+            'templates' => $templates,
+        ];
+    }
+}
+
+/**
+ * Primer template id válido dentro del mapa. Se mantiene para compatibilidad interna del segmento.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_first_template_id_from_map') ) {
+    function eventosapp_whatsapp_masivo_first_template_id_from_map($template_map, $required_modalidades = []) {
+        $template_map = eventosapp_whatsapp_masivo_sanitize_template_map($template_map);
+        $required_modalidades = is_array($required_modalidades) && ! empty($required_modalidades) ? $required_modalidades : ['presencial', 'virtual'];
+        foreach ( $required_modalidades as $mode ) {
+            $mode = sanitize_key((string) $mode);
+            if ( ! empty($template_map[$mode]) ) {
+                return $template_map[$mode];
+            }
+        }
+        foreach ( $template_map as $template_id ) {
+            if ( $template_id !== '' ) {
+                return $template_id;
+            }
+        }
+        return '';
+    }
+}
+
+/**
+ * Obtiene la modalidad resuelta del ticket tomando en cuenta la modalidad del evento.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_get_ticket_modalidad_key') ) {
+    function eventosapp_whatsapp_masivo_get_ticket_modalidad_key($ticket_id, $event_id = 0) {
+        $ticket_id = absint($ticket_id);
+        $event_id = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $allowed = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id);
+
+        if ( count($allowed) === 1 ) {
+            return reset($allowed) ?: 'presencial';
+        }
+
+        if ( function_exists('eventosapp_get_ticket_modalidad') ) {
+            $mode = eventosapp_get_ticket_modalidad($ticket_id);
+        } else {
+            $mode = get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
+            $mode = function_exists('eventosapp_normalize_ticket_modalidad') ? eventosapp_normalize_ticket_modalidad($mode) : sanitize_key((string) $mode);
+        }
+
+        if ( ! in_array($mode, $allowed, true) ) {
+            $mode = reset($allowed) ?: 'presencial';
+        }
+
+        return $mode ?: 'presencial';
+    }
+}
+
+/**
+ * Resuelve la plantilla que corresponde a un ticket según su modalidad.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_resolve_template_id_for_ticket') ) {
+    function eventosapp_whatsapp_masivo_resolve_template_id_for_ticket($ticket_id, $segment) {
+        $segment = is_array($segment) ? $segment : [];
+        $event_id = absint($segment['event_id'] ?? ($segment['filters']['evento_id'] ?? 0));
+        if ( ! $event_id ) {
+            $event_id = absint(get_post_meta(absint($ticket_id), '_eventosapp_ticket_evento_id', true));
+        }
+
+        $template_map = eventosapp_whatsapp_masivo_get_segment_template_map($segment);
+        $mode = eventosapp_whatsapp_masivo_get_ticket_modalidad_key($ticket_id, $event_id);
+
+        if ( ! empty($template_map[$mode]) ) {
+            return sanitize_key((string) $template_map[$mode]);
+        }
+
+        return isset($segment['template_id']) ? sanitize_key((string) $segment['template_id']) : '';
+    }
+}
+
 /**
  * Registra el menú de administración independiente.
  */
@@ -244,11 +501,11 @@ function eventosapp_whatsapp_masivo_render_page() {
 
     echo '<div class="wrap">';
     echo '<h1>WhatsApp Ticket Masivo</h1>';
-    echo '<p class="description">Envía tickets por WhatsApp en lotes controlados, usando filtros de segmentación y una plantilla aprobada por Meta.</p>';
+    echo '<p class="description">Envía tickets por WhatsApp en lotes controlados, usando filtros de segmentación y plantillas aprobadas por Meta según la modalidad del ticket.</p>';
 
     echo '<h2 class="nav-tab-wrapper" style="margin:20px 0;">';
     $tabs = [
-        1 => 'Filtros, Segmentación y Plantilla',
+        1 => 'Evento, Plantillas y Segmentación',
         2 => 'Vista Previa',
         3 => 'Envío Masivo',
     ];
@@ -282,7 +539,7 @@ function eventosapp_whatsapp_masivo_render_page() {
 }
 
 /**
- * STEP 1: Filtros y plantilla.
+ * STEP 1: Evento, mapeo de plantillas y filtros.
  */
 function eventosapp_whatsapp_masivo_render_step1() {
     $eventos = get_posts([
@@ -299,6 +556,22 @@ function eventosapp_whatsapp_masivo_render_step1() {
     $templates = eventosapp_whatsapp_masivo_get_templates(true);
     $status_options = eventosapp_whatsapp_masivo_status_options();
     $delivery_options = eventosapp_whatsapp_masivo_delivery_options();
+    $modalidad_labels = eventosapp_whatsapp_masivo_ticket_modalidad_labels();
+    $event_modalidades = [];
+
+    foreach ( $eventos as $ev ) {
+        $allowed = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($ev->ID);
+        $event_modalidades[(string) $ev->ID] = [
+            'event_id'       => (int) $ev->ID,
+            'event_title'    => get_the_title($ev->ID),
+            'event_mode'     => eventosapp_whatsapp_masivo_get_event_modalidad($ev->ID),
+            'event_label'    => eventosapp_whatsapp_masivo_get_event_modalidad_label($ev->ID),
+            'allowed'        => $allowed,
+            'allowed_labels' => array_values(array_map(static function($mode) use ($modalidad_labels) {
+                return $modalidad_labels[$mode] ?? ucfirst($mode);
+            }, $allowed)),
+        ];
+    }
     ?>
     <style>
         .evapp-wa-masivo-form{max-width:960px;}
@@ -313,6 +586,10 @@ function eventosapp_whatsapp_masivo_render_step1() {
         .evapp-wa-extra-field-row{display:grid;grid-template-columns:200px 1fr;gap:10px;margin-bottom:10px;align-items:center;}
         .evapp-wa-info-box{background:#e7f7f3;border-left:4px solid #128c7e;padding:12px;margin:15px 0;}
         .evapp-wa-warning-box{background:#fff8e5;border-left:4px solid #dba617;padding:12px;margin:15px 0;}
+        .evapp-wa-template-map-row{display:none;}
+        .evapp-wa-event-summary{background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;padding:12px;border-radius:6px;margin:12px 0;}
+        .evapp-wa-template-required{color:#b91c1c;font-weight:700;}
+        @media (max-width:782px){.evapp-wa-filter-row,.evapp-wa-extra-field-row{grid-template-columns:1fr;}}
     </style>
 
     <?php if ( empty($templates) ) : ?>
@@ -327,31 +604,74 @@ function eventosapp_whatsapp_masivo_render_step1() {
         <?php wp_nonce_field('eventosapp_whatsapp_masivo_segment', 'evapp_whatsapp_masivo_nonce'); ?>
 
         <div class="evapp-wa-info-box">
-            <strong>💡 Instrucciones:</strong> selecciona la plantilla aprobada por Meta y configura los filtros. Los campos vacíos se ignoran. El envío se procesará en lotes para evitar sobrecarga del servidor.
+            <strong>💡 Instrucciones:</strong> primero selecciona el evento. Según la modalidad real del evento se mostrarán uno o dos campos de plantilla. En eventos híbridos se enviará la plantilla presencial a tickets presenciales y la plantilla virtual a tickets virtuales, sin excluir asistentes por usar una sola plantilla global.
         </div>
 
         <div class="evapp-wa-filter-section">
-            <h3>🧩 Plantilla WhatsApp a usar</h3>
+            <h3>1️⃣ Seleccionar Evento</h3>
             <div class="evapp-wa-filter-row">
                 <div class="evapp-wa-filter-field">
-                    <label for="template_id">Plantilla aprobada</label>
-                    <select name="template_id" id="template_id" required <?php disabled(empty($templates)); ?>>
-                        <option value="">-- Selecciona la plantilla --</option>
+                    <label for="evento_id">Evento <span class="evapp-wa-template-required">*</span></label>
+                    <select name="filters[evento_id]" id="evento_id" required>
+                        <option value="">-- Selecciona el evento --</option>
+                        <?php foreach ( $eventos as $ev ) : ?>
+                            <option value="<?php echo esc_attr($ev->ID); ?>"><?php echo esc_html($ev->post_title); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>El envío masivo de WhatsApp se ejecuta por evento para poder mapear correctamente las plantillas por modalidad.</small>
+                </div>
+                <div class="evapp-wa-filter-field">
+                    <label>Modalidad detectada</label>
+                    <div class="evapp-wa-event-summary" id="eventModalidadSummary">
+                        Selecciona un evento para ver si requiere plantilla presencial, virtual o ambas.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="evapp-wa-filter-section" id="templateMappingSection" style="display:none;">
+            <h3>2️⃣ Mapear Plantillas WhatsApp por Modalidad</h3>
+            <div class="evapp-wa-warning-box">
+                <strong>Importante:</strong> solo se pedirán las plantillas necesarias para la modalidad del evento seleccionado. Si el evento es presencial y virtual, ambos campos serán obligatorios para no dejar por fuera a ningún asistente.
+            </div>
+            <div class="evapp-wa-filter-row">
+                <div class="evapp-wa-filter-field evapp-wa-template-map-row" data-mode="presencial" id="templateRowPresencial">
+                    <label for="template_map_presencial">Plantilla para tickets presenciales <span class="evapp-wa-template-required">*</span></label>
+                    <select name="template_map[presencial]" id="template_map_presencial" disabled <?php disabled(empty($templates)); ?>>
+                        <option value="">-- Selecciona la plantilla presencial --</option>
                         <?php foreach ( $templates as $template_id => $template ) : ?>
                             <option value="<?php echo esc_attr($template_id); ?>">
                                 <?php echo esc_html(eventosapp_whatsapp_masivo_template_label($template)); ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
-                    <small>Esta plantilla se usará para todos los tickets del segmento, sin cambiar la plantilla seleccionada en el metabox del evento.</small>
+                    <small>Se usará únicamente en tickets cuya modalidad resuelta sea Presencial.</small>
                 </div>
+                <div class="evapp-wa-filter-field evapp-wa-template-map-row" data-mode="virtual" id="templateRowVirtual">
+                    <label for="template_map_virtual">Plantilla para tickets virtuales <span class="evapp-wa-template-required">*</span></label>
+                    <select name="template_map[virtual]" id="template_map_virtual" disabled <?php disabled(empty($templates)); ?>>
+                        <option value="">-- Selecciona la plantilla virtual --</option>
+                        <?php foreach ( $templates as $template_id => $template ) : ?>
+                            <option value="<?php echo esc_attr($template_id); ?>">
+                                <?php echo esc_html(eventosapp_whatsapp_masivo_template_label($template)); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>Se usará únicamente en tickets cuya modalidad resuelta sea Virtual.</small>
+                </div>
+            </div>
+            <div class="evapp-wa-filter-row">
                 <div class="evapp-wa-filter-field">
                     <label for="respect_rules">Reglas del evento</label>
                     <label style="font-weight:400;margin-top:8px;">
                         <input type="checkbox" name="respect_rules" id="respect_rules" value="1" checked>
-                        Respetar reglas de envío WhatsApp configuradas en cada evento
+                        Respetar reglas de envío WhatsApp configuradas en el evento
                     </label>
                     <small>Los tickets bloqueados por reglas quedarán como omitidos, no como error.</small>
+                </div>
+                <div class="evapp-wa-filter-field">
+                    <label>Asignación automática</label>
+                    <div class="evapp-wa-info-box" id="templateMappingHelp" style="margin:0;">Selecciona el evento para activar el mapeo de plantillas.</div>
                 </div>
             </div>
         </div>
@@ -395,18 +715,8 @@ function eventosapp_whatsapp_masivo_render_step1() {
         </div>
 
         <div class="evapp-wa-filter-section">
-            <h3>🎫 Evento, Localidad y Modalidad</h3>
+            <h3>🎫 Segmentación del Evento</h3>
             <div class="evapp-wa-filter-row">
-                <div class="evapp-wa-filter-field">
-                    <label for="evento_id">Evento</label>
-                    <select name="filters[evento_id]" id="evento_id">
-                        <option value="">-- Todos los eventos --</option>
-                        <?php foreach ( $eventos as $ev ) : ?>
-                            <option value="<?php echo esc_attr($ev->ID); ?>"><?php echo esc_html($ev->post_title); ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <small>Selecciona un evento específico.</small>
-                </div>
                 <div class="evapp-wa-filter-field">
                     <label for="localidad">Localidad</label>
                     <select name="filters[localidad]" id="localidad">
@@ -415,23 +725,12 @@ function eventosapp_whatsapp_masivo_render_step1() {
                             <option value="<?php echo esc_attr($loc); ?>"><?php echo esc_html($loc); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <small>Filtra por localidad del asistente.</small>
+                    <small>Filtra por localidad del asistente. Si lo dejas vacío, incluye todas las localidades del evento.</small>
                 </div>
-            </div>
-            <div class="evapp-wa-filter-row">
                 <div class="evapp-wa-filter-field">
                     <label for="event_date">Fecha específica del evento</label>
                     <input type="date" name="filters[event_date]" id="event_date">
-                    <small>Tickets válidos para esta fecha del evento.</small>
-                </div>
-                <div class="evapp-wa-filter-field">
-                    <label for="modalidad">Modalidad del ticket</label>
-                    <select name="filters[modalidad]" id="modalidad">
-                        <option value="">-- Todas las modalidades --</option>
-                        <option value="presencial">Presencial</option>
-                        <option value="virtual">Virtual</option>
-                    </select>
-                    <small>Filtra tickets presenciales o virtuales.</small>
+                    <small>Tickets válidos para esta fecha del evento. Déjalo vacío para incluir todas las fechas.</small>
                 </div>
             </div>
         </div>
@@ -460,7 +759,7 @@ function eventosapp_whatsapp_masivo_render_step1() {
         </div>
 
         <p>
-            <button type="submit" class="button button-primary button-large" <?php disabled(empty($templates)); ?>>
+            <button type="submit" class="button button-primary button-large" id="evappWhatsappMasivoSubmit" <?php disabled(empty($templates)); ?>>
                 Crear Segmento y Continuar →
             </button>
         </p>
@@ -468,8 +767,55 @@ function eventosapp_whatsapp_masivo_render_step1() {
 
     <script>
     jQuery(document).ready(function($){
-        $('#evento_id').on('change', function(){
-            var eventoId = $(this).val();
+        var eventModalidades = <?php echo wp_json_encode($event_modalidades); ?> || {};
+        var hasTemplates = <?php echo empty($templates) ? 'false' : 'true'; ?>;
+
+        function escapeHtml(value) {
+            return $('<div>').text(value || '').html();
+        }
+
+        function resetTemplateRows() {
+            $('.evapp-wa-template-map-row').hide().find('select').prop('required', false).prop('disabled', true);
+        }
+
+        function updateTemplateMapping() {
+            var eventoId = $('#evento_id').val();
+            var data = eventoId ? eventModalidades[eventoId] : null;
+            resetTemplateRows();
+
+            if (!data) {
+                $('#templateMappingSection').hide();
+                $('#eventModalidadSummary').html('Selecciona un evento para ver si requiere plantilla presencial, virtual o ambas.');
+                $('#templateMappingHelp').html('Selecciona el evento para activar el mapeo de plantillas.');
+                return;
+            }
+
+            var allowed = data.allowed || [];
+            var allowedLabels = data.allowed_labels || [];
+            $('#eventModalidadSummary').html(
+                '<strong>Evento:</strong> ' + escapeHtml(data.event_title) + '<br>' +
+                '<strong>Modalidad del evento:</strong> ' + escapeHtml(data.event_label) + '<br>' +
+                '<strong>Plantillas requeridas:</strong> ' + escapeHtml(allowedLabels.join(' y '))
+            );
+
+            $('#templateMappingSection').show();
+            allowed.forEach(function(mode){
+                var $row = $('.evapp-wa-template-map-row[data-mode="' + mode + '"]');
+                $row.show();
+                $row.find('select').prop('disabled', !hasTemplates).prop('required', hasTemplates);
+            });
+
+            if (allowed.length > 1) {
+                $('#templateMappingHelp').html('Este evento tiene modalidad presencial y virtual. El sistema escogerá automáticamente la plantilla según la modalidad de cada ticket.');
+            } else if (allowed[0] === 'virtual') {
+                $('#templateMappingHelp').html('Este evento es virtual. Todos los tickets del segmento usarán la plantilla virtual seleccionada.');
+            } else {
+                $('#templateMappingHelp').html('Este evento es presencial. Todos los tickets del segmento usarán la plantilla presencial seleccionada.');
+            }
+        }
+
+        function loadExtraFields() {
+            var eventoId = $('#evento_id').val();
             var $section = $('#extraFieldsSection');
             var $container = $('#extraFieldsContainer');
 
@@ -495,16 +841,16 @@ function eventosapp_whatsapp_masivo_render_step1() {
                         var html = '';
                         response.data.fields.forEach(function(field){
                             html += '<div class="evapp-wa-extra-field-row">';
-                            html += '<label>' + $('<div>').text(field.label).html() + '</label>';
+                            html += '<label>' + escapeHtml(field.label) + '</label>';
                             if (field.options && field.options.length > 0) {
-                                html += '<select name="filters[extra_fields][' + field.key + ']">';
+                                html += '<select name="filters[extra_fields][' + escapeHtml(field.key) + ']">';
                                 html += '<option value="">-- Cualquiera --</option>';
                                 field.options.forEach(function(opt){
-                                    html += '<option value="' + $('<div>').text(opt).html() + '">' + $('<div>').text(opt).html() + '</option>';
+                                    html += '<option value="' + escapeHtml(opt) + '">' + escapeHtml(opt) + '</option>';
                                 });
                                 html += '</select>';
                             } else {
-                                html += '<input type="text" name="filters[extra_fields][' + field.key + ']" placeholder="Valor a buscar">';
+                                html += '<input type="text" name="filters[extra_fields][' + escapeHtml(field.key) + ']" placeholder="Valor a buscar">';
                             }
                             html += '</div>';
                         });
@@ -517,7 +863,39 @@ function eventosapp_whatsapp_masivo_render_step1() {
                     $container.html('<p style="color:red;">Error al cargar campos adicionales.</p>');
                 }
             });
+        }
+
+        $('#evento_id').on('change', function(){
+            updateTemplateMapping();
+            loadExtraFields();
         });
+
+        $('#evappWhatsappMasivoForm').on('submit', function(e){
+            var eventoId = $('#evento_id').val();
+            if (!eventoId) {
+                e.preventDefault();
+                alert('Primero debes seleccionar el evento.');
+                return false;
+            }
+
+            var data = eventModalidades[eventoId] || {};
+            var allowed = data.allowed || [];
+            var missing = [];
+            allowed.forEach(function(mode){
+                var $select = $('.evapp-wa-template-map-row[data-mode="' + mode + '"]').find('select');
+                if (!$select.val()) {
+                    missing.push(mode === 'virtual' ? 'Virtual' : 'Presencial');
+                }
+            });
+
+            if (missing.length > 0) {
+                e.preventDefault();
+                alert('Falta seleccionar plantilla para: ' + missing.join(', '));
+                return false;
+            }
+        });
+
+        updateTemplateMapping();
     });
     </script>
     <?php
@@ -539,16 +917,29 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
     }
 
     $filters = isset($segment['filters']) && is_array($segment['filters']) ? $segment['filters'] : [];
+    $event_id = absint($segment['event_id'] ?? ($filters['evento_id'] ?? 0));
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+        echo '<div class="notice notice-error"><p>El segmento no tiene un evento válido. Vuelve al paso 1 y selecciona el evento.</p></div>';
+        echo '<p><a href="' . esc_url(admin_url('admin.php?page=eventosapp_whatsapp_masivo')) . '" class="button">← Volver a filtros</a></p>';
+        return;
+    }
+
+    $required_modalidades = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id);
+    $template_map = eventosapp_whatsapp_masivo_get_segment_template_map($segment);
+    $template_validation = eventosapp_whatsapp_masivo_validate_template_map($template_map, $required_modalidades);
+    $template_objects = isset($template_validation['templates']) && is_array($template_validation['templates']) ? $template_validation['templates'] : [];
+    $modalidad_labels = eventosapp_whatsapp_masivo_ticket_modalidad_labels();
+
     $ticket_ids = eventosapp_whatsapp_masivo_get_filtered_tickets($filters);
     $total = count($ticket_ids);
+    $segment['event_id'] = $event_id;
+    $segment['event_modalidad'] = eventosapp_whatsapp_masivo_get_event_modalidad($event_id);
+    $segment['required_modalidades'] = $required_modalidades;
+    $segment['template_map'] = $template_map;
     $segment['ticket_ids'] = $ticket_ids;
     $segment['total'] = $total;
     $segment['updated_at'] = current_time('mysql');
     update_option(eventosapp_whatsapp_masivo_segment_option_key($segment_id), $segment, false);
-
-    $template_id = sanitize_key((string)($segment['template_id'] ?? ''));
-    $template = eventosapp_whatsapp_masivo_get_template($template_id);
-    $template_ok = $template && ( function_exists('eventosapp_whatsapp_is_template_approved') ? eventosapp_whatsapp_is_template_approved($template) : in_array(strtoupper((string)($template['meta_status'] ?? '')), ['APPROVED', 'ACTIVE'], true) );
 
     ?>
     <style>
@@ -568,19 +959,26 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
         .evapp-wa-badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;line-height:1.4;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;}
         .evapp-wa-badge-error{background:#fee2e2;color:#991b1b;border-color:#fecaca;}
         .evapp-wa-badge-ok{background:#dcfce7;color:#166534;border-color:#bbf7d0;}
+        @media (max-width:782px){.evapp-wa-preview-stats{grid-template-columns:1fr;}.evapp-wa-preview-table{overflow-x:auto;}}
     </style>
 
-    <?php if ( ! $template_ok ) : ?>
+    <?php if ( empty($template_validation['ok']) ) : ?>
         <div class="notice notice-error">
-            <p><strong>La plantilla seleccionada ya no está aprobada o no existe.</strong> Vuelve al paso 1 y selecciona una plantilla disponible.</p>
+            <p><strong>El mapeo de plantillas no está completo.</strong> <?php echo esc_html((string)($template_validation['message'] ?? '')); ?></p>
         </div>
         <p><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_masivo')); ?>" class="button">← Volver a filtros</a></p>
         <?php return; ?>
     <?php endif; ?>
 
     <div class="evapp-wa-filters-applied">
-        <h4>🧩 Plantilla seleccionada</h4>
-        <span class="evapp-wa-filter-tag"><strong>Plantilla:</strong> <?php echo esc_html(eventosapp_whatsapp_masivo_template_label($template)); ?></span>
+        <h4>🧩 Evento y plantillas seleccionadas</h4>
+        <span class="evapp-wa-filter-tag"><strong>Evento:</strong> <?php echo esc_html(get_the_title($event_id)); ?></span>
+        <span class="evapp-wa-filter-tag"><strong>Modalidad del evento:</strong> <?php echo esc_html(eventosapp_whatsapp_masivo_get_event_modalidad_label($event_id)); ?></span>
+        <?php foreach ( $required_modalidades as $mode ) :
+            $template = $template_objects[$mode] ?? null;
+            ?>
+            <span class="evapp-wa-filter-tag"><strong>Plantilla <?php echo esc_html($modalidad_labels[$mode] ?? ucfirst($mode)); ?>:</strong> <?php echo esc_html(eventosapp_whatsapp_masivo_template_label($template)); ?></span>
+        <?php endforeach; ?>
         <span class="evapp-wa-filter-tag"><strong>Reglas del evento:</strong> <?php echo ! empty($segment['respect_rules']) ? 'Se respetan' : 'Se ignoran'; ?></span>
     </div>
 
@@ -610,8 +1008,7 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
             if ( $key === 'evento_id' ) {
                 $display_value = get_the_title((int) $value);
             } elseif ( $key === 'modalidad' ) {
-                $modalidad_opts = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial' => 'Presencial', 'virtual' => 'Virtual'];
-                $display_value = $modalidad_opts[$value] ?? $value;
+                $display_value = $modalidad_labels[$value] ?? $value;
             } elseif ( $key === 'whatsapp_status' ) {
                 $opts = eventosapp_whatsapp_masivo_status_options();
                 $display_value = $opts[$value] ?? $value;
@@ -631,13 +1028,13 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
             }
         }
         if ( ! $has_filters ) {
-            echo '<p><em>Sin filtros aplicados: se mostrarán todos los tickets.</em></p>';
+            echo '<p><em>Sin filtros adicionales: se mostrarán todos los tickets del evento seleccionado.</em></p>';
         }
         ?>
     </div>
 
     <div class="notice notice-info" style="margin:15px 0;">
-        <p><strong>Compatibilidad:</strong> antes de cada envío se preparan variantes, landing, QR específico de WhatsApp, imagen del mensaje, Wallet, PDF/ICS cuando aplique y se registra el resultado en el historial del ticket.</p>
+        <p><strong>Compatibilidad:</strong> antes de cada envío se preparan variantes, landing, QR específico de WhatsApp, imagen del mensaje, Wallet, PDF/ICS cuando aplique y se registra el resultado en el historial del ticket. La plantilla se resuelve por modalidad del ticket.</p>
     </div>
 
     <div class="evapp-wa-preview-stats">
@@ -678,25 +1075,29 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
                         $nombre = trim((string)get_post_meta($tid, '_eventosapp_asistente_nombre', true) . ' ' . (string)get_post_meta($tid, '_eventosapp_asistente_apellido', true));
                         $phone_raw = get_post_meta($tid, '_eventosapp_asistente_tel', true);
                         $phone = function_exists('eventosapp_whatsapp_normalize_phone') ? eventosapp_whatsapp_normalize_phone($phone_raw, $settings['default_country_code'] ?? '57') : preg_replace('/\D+/', '', (string)$phone_raw);
-                        $evento_id = absint(get_post_meta($tid, '_eventosapp_ticket_evento_id', true));
+                        $ticket_event_id = absint(get_post_meta($tid, '_eventosapp_ticket_evento_id', true));
                         $localidad = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
-                        $modalidad_label = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($tid) : ucfirst((string)get_post_meta($tid, '_eventosapp_ticket_modalidad', true));
+                        $ticket_modalidad = eventosapp_whatsapp_masivo_get_ticket_modalidad_key($tid, $event_id);
+                        $modalidad_label = $modalidad_labels[$ticket_modalidad] ?? ucfirst($ticket_modalidad);
+                        $row_template_id = eventosapp_whatsapp_masivo_resolve_template_id_for_ticket($tid, $segment);
+                        $row_template = eventosapp_whatsapp_masivo_get_template($row_template_id);
                         $ticket_code = get_post_meta($tid, 'eventosapp_ticketID', true);
                         $last_status = get_post_meta($tid, '_eventosapp_whatsapp_last_status', true);
                         $delivery_status = get_post_meta($tid, '_eventosapp_whatsapp_delivery_status', true);
                         $status_label = function_exists('eventosapp_whatsapp_status_label') ? eventosapp_whatsapp_status_label($last_status) : ($last_status ?: 'Sin estado');
                         $delivery_label = $delivery_status && function_exists('eventosapp_whatsapp_status_label') ? eventosapp_whatsapp_status_label($delivery_status) : '';
                         $phone_class = $phone ? 'evapp-wa-badge evapp-wa-badge-ok' : 'evapp-wa-badge evapp-wa-badge-error';
+                        $template_class = eventosapp_whatsapp_masivo_is_template_approved($row_template) ? 'evapp-wa-badge' : 'evapp-wa-badge evapp-wa-badge-error';
                     ?>
                         <tr>
                             <td><code><?php echo esc_html($ticket_code ?: $tid); ?></code></td>
                             <td><?php echo esc_html($nombre); ?></td>
                             <td><span class="<?php echo esc_attr($phone_class); ?>"><?php echo esc_html($phone ?: 'Sin celular válido'); ?></span></td>
-                            <td><?php echo esc_html($evento_id ? get_the_title($evento_id) : 'Sin evento'); ?></td>
+                            <td><?php echo esc_html($ticket_event_id ? get_the_title($ticket_event_id) : 'Sin evento'); ?></td>
                             <td><?php echo esc_html($localidad); ?></td>
-                            <td><?php echo esc_html($modalidad_label ?: 'Presencial'); ?></td>
+                            <td><?php echo esc_html($modalidad_label); ?></td>
                             <td><?php echo esc_html($status_label . ($delivery_label ? ' · ' . $delivery_label : '')); ?></td>
-                            <td><span class="evapp-wa-badge"><?php echo esc_html((string)($template['name'] ?? '')); ?></span></td>
+                            <td><span class="<?php echo esc_attr($template_class); ?>"><?php echo esc_html($row_template ? (string)($row_template['name'] ?? eventosapp_whatsapp_masivo_template_label($row_template)) : 'Sin plantilla'); ?></span></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
@@ -735,15 +1136,20 @@ function eventosapp_whatsapp_masivo_render_step3($segment_id) {
 
     $total = isset($segment['total']) ? absint($segment['total']) : 0;
     $ticket_ids = isset($segment['ticket_ids']) && is_array($segment['ticket_ids']) ? array_map('absint', $segment['ticket_ids']) : [];
-    $template = eventosapp_whatsapp_masivo_get_template((string)($segment['template_id'] ?? ''));
+    $event_id = absint($segment['event_id'] ?? ($segment['filters']['evento_id'] ?? 0));
+    $required_modalidades = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id);
+    $template_map = eventosapp_whatsapp_masivo_get_segment_template_map($segment);
+    $template_validation = eventosapp_whatsapp_masivo_validate_template_map($template_map, $required_modalidades);
+    $template_objects = isset($template_validation['templates']) && is_array($template_validation['templates']) ? $template_validation['templates'] : [];
+    $modalidad_labels = eventosapp_whatsapp_masivo_ticket_modalidad_labels();
 
     if ( $total === 0 || empty($ticket_ids) ) {
         echo '<div class="notice notice-warning"><p>No hay tickets para enviar.</p></div>';
         return;
     }
 
-    if ( ! $template || ( function_exists('eventosapp_whatsapp_is_template_approved') && ! eventosapp_whatsapp_is_template_approved($template) ) ) {
-        echo '<div class="notice notice-error"><p>La plantilla seleccionada no está disponible o no está aprobada.</p></div>';
+    if ( empty($template_validation['ok']) ) {
+        echo '<div class="notice notice-error"><p>' . esc_html((string)($template_validation['message'] ?? 'El mapeo de plantillas no es válido.')) . '</p></div>';
         return;
     }
     ?>
@@ -765,12 +1171,22 @@ function eventosapp_whatsapp_masivo_render_step3($segment_id) {
         .evapp-wa-log-error{color:#f87171;}
         .evapp-wa-log-info{color:#60a5fa;}
         .evapp-wa-log-warning{color:#fbbf24;}
+        .evapp-wa-template-pill{display:inline-block;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:999px;padding:4px 10px;margin:3px;font-size:12px;}
+        @media (max-width:782px){.evapp-wa-stats-grid{grid-template-columns:1fr 1fr;}}
     </style>
 
     <div class="evapp-wa-sending-container">
         <div class="evapp-wa-sending-card">
             <h2 style="margin-top:0;">📲 Envío Masivo de WhatsApp</h2>
-            <p><strong>Plantilla:</strong> <?php echo esc_html(eventosapp_whatsapp_masivo_template_label($template)); ?></p>
+            <p><strong>Evento:</strong> <?php echo esc_html(get_the_title($event_id)); ?></p>
+            <p><strong>Modalidad del evento:</strong> <?php echo esc_html(eventosapp_whatsapp_masivo_get_event_modalidad_label($event_id)); ?></p>
+            <p><strong>Plantillas:</strong>
+                <?php foreach ( $required_modalidades as $mode ) :
+                    $template = $template_objects[$mode] ?? null;
+                    ?>
+                    <span class="evapp-wa-template-pill"><?php echo esc_html(($modalidad_labels[$mode] ?? ucfirst($mode)) . ': ' . eventosapp_whatsapp_masivo_template_label($template)); ?></span>
+                <?php endforeach; ?>
+            </p>
 
             <div class="evapp-wa-status-message evapp-wa-status-processing" id="statusMessage">
                 <strong>🔄 Preparando envío...</strong>
@@ -918,44 +1334,70 @@ add_action('admin_post_eventosapp_whatsapp_masivo_create_segment', function() {
 
     check_admin_referer('eventosapp_whatsapp_masivo_segment', 'evapp_whatsapp_masivo_nonce');
 
-    $template_id = isset($_POST['template_id']) ? sanitize_key((string) wp_unslash($_POST['template_id'])) : '';
-    $template = eventosapp_whatsapp_masivo_get_template($template_id);
-    $template_ok = $template && ( function_exists('eventosapp_whatsapp_is_template_approved') ? eventosapp_whatsapp_is_template_approved($template) : in_array(strtoupper((string)($template['meta_status'] ?? '')), ['APPROVED', 'ACTIVE'], true) );
-
-    if ( ! $template_ok ) {
-        wp_die('La plantilla seleccionada no existe o no está aprobada por Meta.');
-    }
-
     $filters = isset($_POST['filters']) && is_array($_POST['filters']) ? wp_unslash($_POST['filters']) : [];
     $filters = eventosapp_whatsapp_masivo_sanitize_filters($filters);
 
+    $event_id = absint($filters['evento_id'] ?? 0);
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+        wp_die('Debes seleccionar un evento válido antes de crear el segmento de WhatsApp masivo.');
+    }
+    $filters['evento_id'] = $event_id;
+
+    $required_modalidades = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id);
+    $template_map_raw = isset($_POST['template_map']) && is_array($_POST['template_map']) ? wp_unslash($_POST['template_map']) : [];
+    $template_map = eventosapp_whatsapp_masivo_sanitize_template_map($template_map_raw);
+    $template_validation = eventosapp_whatsapp_masivo_validate_template_map($template_map, $required_modalidades);
+
+    if ( empty($template_validation['ok']) ) {
+        wp_die(esc_html((string)($template_validation['message'] ?? 'Debes seleccionar las plantillas requeridas para el evento.')));
+    }
+
+    $template_objects = isset($template_validation['templates']) && is_array($template_validation['templates']) ? $template_validation['templates'] : [];
+    $template_summary = [];
+    foreach ( $required_modalidades as $mode ) {
+        $template = $template_objects[$mode] ?? null;
+        $template_summary[$mode] = [
+            'template_id'   => sanitize_key((string)($template_map[$mode] ?? '')),
+            'template_name' => sanitize_key((string)($template['name'] ?? '')),
+            'template_lang' => sanitize_text_field((string)($template['language'] ?? '')),
+            'template_label'=> eventosapp_whatsapp_masivo_template_label($template),
+        ];
+    }
+
     $ticket_ids = eventosapp_whatsapp_masivo_get_filtered_tickets($filters);
     $segment_id = 'wa_' . time() . '_' . wp_generate_password(8, false, false);
+    $legacy_template_id = eventosapp_whatsapp_masivo_first_template_id_from_map($template_map, $required_modalidades);
 
     $segment = [
-        'id'            => $segment_id,
-        'created_at'    => current_time('mysql'),
-        'updated_at'    => current_time('mysql'),
-        'created_by'    => get_current_user_id(),
-        'template_id'   => $template_id,
-        'template_name' => sanitize_key((string)($template['name'] ?? '')),
-        'template_lang' => sanitize_text_field((string)($template['language'] ?? '')),
-        'respect_rules' => isset($_POST['respect_rules']) ? 1 : 0,
-        'filters'       => $filters,
-        'ticket_ids'    => $ticket_ids,
-        'total'         => count($ticket_ids),
+        'id'                   => $segment_id,
+        'created_at'           => current_time('mysql'),
+        'updated_at'           => current_time('mysql'),
+        'created_by'           => get_current_user_id(),
+        'event_id'             => $event_id,
+        'event_modalidad'      => eventosapp_whatsapp_masivo_get_event_modalidad($event_id),
+        'required_modalidades' => $required_modalidades,
+        'template_map'         => $template_map,
+        'template_summary'     => $template_summary,
+        'template_id'          => $legacy_template_id,
+        'respect_rules'        => isset($_POST['respect_rules']) ? 1 : 0,
+        'filters'              => $filters,
+        'ticket_ids'           => $ticket_ids,
+        'total'                => count($ticket_ids),
     ];
 
     update_option(eventosapp_whatsapp_masivo_segment_option_key($segment_id), $segment, false);
 
     eventosapp_whatsapp_masivo_activity_log('whatsapp_masivo_segmento_creado', [
-        'segment_id'    => $segment_id,
-        'template_id'   => $template_id,
-        'template_name' => $segment['template_name'],
-        'template_lang' => $segment['template_lang'],
-        'respect_rules' => $segment['respect_rules'] ? 'yes' : 'no',
-        'total'         => count($ticket_ids),
-        'filters'       => $filters,
+        'segment_id'            => $segment_id,
+        'event_id'              => $event_id,
+        'event_title'           => get_the_title($event_id),
+        'event_modalidad'       => $segment['event_modalidad'],
+        'required_modalidades'  => $required_modalidades,
+        'template_map'          => $template_map,
+        'template_summary'      => $template_summary,
+        'respect_rules'         => $segment['respect_rules'] ? 'yes' : 'no',
+        'total'                 => count($ticket_ids),
+        'filters'               => $filters,
     ]);
 
     wp_safe_redirect(admin_url('admin.php?page=eventosapp_whatsapp_masivo&step=2&segment_id=' . urlencode($segment_id)));
@@ -986,12 +1428,13 @@ add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
     }
 
     $ticket_ids = isset($segment['ticket_ids']) && is_array($segment['ticket_ids']) ? array_map('absint', $segment['ticket_ids']) : [];
-    $template_id = sanitize_key((string)($segment['template_id'] ?? ''));
-    $template = eventosapp_whatsapp_masivo_get_template($template_id);
-    $template_ok = $template && ( function_exists('eventosapp_whatsapp_is_template_approved') ? eventosapp_whatsapp_is_template_approved($template) : in_array(strtoupper((string)($template['meta_status'] ?? '')), ['APPROVED', 'ACTIVE'], true) );
+    $event_id = absint($segment['event_id'] ?? ($segment['filters']['evento_id'] ?? 0));
+    $required_modalidades = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id);
+    $template_map = eventosapp_whatsapp_masivo_get_segment_template_map($segment);
+    $template_validation = eventosapp_whatsapp_masivo_validate_template_map($template_map, $required_modalidades);
 
-    if ( ! $template_ok ) {
-        wp_send_json_error('La plantilla seleccionada no está aprobada o ya no existe.');
+    if ( empty($template_validation['ok']) ) {
+        wp_send_json_error((string)($template_validation['message'] ?? 'El mapeo de plantillas no está completo o contiene plantillas no aprobadas.'));
     }
 
     $batch = array_slice($ticket_ids, $offset, $batch_size);
@@ -999,13 +1442,29 @@ add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
     $errors = 0;
     $skipped = 0;
     $logs = [];
-    $source_key = 'whatsapp_bulk_' . $segment_id . '_' . md5($template_id . '|' . (string)($template['name'] ?? '') . '|' . (string)($template['language'] ?? ''));
+    $map_hash = md5((string) wp_json_encode($template_map));
 
     foreach ( $batch as $ticket_id ) {
         $ticket_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
         if ( ! $ticket_code ) {
             $ticket_code = (string) $ticket_id;
         }
+
+        $ticket_event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $ticket_modalidad = eventosapp_whatsapp_masivo_get_ticket_modalidad_key($ticket_id, $ticket_event_id ?: $event_id);
+        $template_id = eventosapp_whatsapp_masivo_resolve_template_id_for_ticket($ticket_id, $segment);
+        $template = eventosapp_whatsapp_masivo_get_template($template_id);
+
+        if ( ! eventosapp_whatsapp_masivo_is_template_approved($template) ) {
+            $errors++;
+            $logs[] = [
+                'message' => 'Ticket ' . $ticket_code . ': error — no hay plantilla aprobada para la modalidad ' . $ticket_modalidad . '.',
+                'type'    => 'error',
+            ];
+            continue;
+        }
+
+        $source_key = 'whatsapp_bulk_' . $segment_id . '_' . $ticket_modalidad . '_' . md5($map_hash . '|' . $template_id . '|' . (string)($template['name'] ?? '') . '|' . (string)($template['language'] ?? ''));
 
         $result = eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $template_id, [
             'context'     => 'whatsapp_bulk_send',
@@ -1024,14 +1483,14 @@ add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
         } elseif ( ! empty($result['skipped_duplicate']) ) {
             $skipped++;
             $logs[] = [
-                'message' => 'Ticket ' . $ticket_code . ': omitido por duplicado del mismo segmento.',
+                'message' => 'Ticket ' . $ticket_code . ': omitido por duplicado del mismo segmento y modalidad.',
                 'type'    => 'warning',
             ];
         } elseif ( ! empty($result['ok']) ) {
             $sent++;
             $template_name = sanitize_text_field((string)($result['template_name'] ?? ($template['name'] ?? '')));
             $logs[] = [
-                'message' => 'Ticket ' . $ticket_code . ': solicitud aceptada por Meta usando plantilla ' . $template_name . '.',
+                'message' => 'Ticket ' . $ticket_code . ': solicitud aceptada por Meta usando plantilla ' . $template_name . ' para modalidad ' . $ticket_modalidad . '.',
                 'type'    => 'success',
             ];
         } else {
