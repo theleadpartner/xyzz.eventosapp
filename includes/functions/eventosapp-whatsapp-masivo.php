@@ -2076,11 +2076,24 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
     $result['template_language'] = $template_language;
 
     if ( ! empty($result['ok']) ) {
+        $whatsapp_sent_at = current_time('mysql');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_status', 'aceptado_meta');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_status', 'pendiente_webhook');
         delete_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_at');
-        update_post_meta($ticket_id, '_eventosapp_whatsapp_last_sent_at', current_time('mysql'));
-        update_post_meta($ticket_id, '_eventosapp_whatsapp_last_to', $phone);
+        if ( function_exists('eventosapp_whatsapp_register_successful_send_tracking') ) {
+            eventosapp_whatsapp_register_successful_send_tracking($ticket_id, $phone, $args, $whatsapp_sent_at);
+        } else {
+            $first_sent = get_post_meta($ticket_id, '_eventosapp_whatsapp_first_sent_at', true);
+            if ( empty($first_sent) ) {
+                update_post_meta($ticket_id, '_eventosapp_whatsapp_first_sent_at', $whatsapp_sent_at);
+                update_post_meta($ticket_id, '_eventosapp_whatsapp_first_to', $phone);
+                update_post_meta($ticket_id, '_eventosapp_whatsapp_first_source', sanitize_key((string)($args['context'] ?? 'whatsapp_bulk_send')));
+            }
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_sent_status', 'enviado');
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_sent_at', $whatsapp_sent_at);
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_to', $phone);
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_source', sanitize_key((string)($args['context'] ?? 'whatsapp_bulk_send')));
+        }
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_error', '');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_response', $result['response'] ?? []);
         if ( $message_id !== '' ) {
