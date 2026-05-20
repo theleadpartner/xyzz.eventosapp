@@ -1652,6 +1652,13 @@ $headers[] = 'Fecha creación';
     $headers[] = 'Fecha del Primer Envío';
     $headers[] = 'Fecha del Último Envío';
     $headers[] = 'Canal de Envío';
+
+    // Encabezados de estado de WhatsApp
+    $headers[] = 'Estado WhatsApp Ticket';
+    $headers[] = 'Fecha del Primer Envío WhatsApp';
+    $headers[] = 'Fecha del Último Envío WhatsApp';
+    $headers[] = 'Canal de Envío WhatsApp';
+    $headers[] = 'Estado Entrega WhatsApp';
     
 // Encabezado para medio de check-in
     $headers[] = 'Medio de Check-in';
@@ -1887,6 +1894,50 @@ $headers[] = 'Fecha creación';
         $row[] = isset($email_source_labels[$email_source_raw])
             ? $email_source_labels[$email_source_raw]
             : ($email_source_raw ?: '');
+
+        // Datos de estado de WhatsApp
+        if (function_exists('eventosapp_whatsapp_get_send_tracking')) {
+            $whatsapp_tracking = eventosapp_whatsapp_get_send_tracking($tid, true);
+        } else {
+            $whatsapp_tracking = [
+                'sent_status'   => get_post_meta($tid, '_eventosapp_whatsapp_sent_status', true),
+                'first_sent_at' => get_post_meta($tid, '_eventosapp_whatsapp_first_sent_at', true),
+                'last_sent_at'  => get_post_meta($tid, '_eventosapp_whatsapp_last_sent_at', true),
+                'last_source'   => get_post_meta($tid, '_eventosapp_whatsapp_last_source', true),
+            ];
+        }
+
+        $whatsapp_sent_status = isset($whatsapp_tracking['sent_status']) ? sanitize_key((string)$whatsapp_tracking['sent_status']) : '';
+        $row[] = ($whatsapp_sent_status === 'enviado') ? 'Enviado' : 'No Enviado';
+
+        $whatsapp_first_sent = isset($whatsapp_tracking['first_sent_at']) ? (string)$whatsapp_tracking['first_sent_at'] : '';
+        if ($whatsapp_first_sent && function_exists('eventosapp_whatsapp_format_datetime')) {
+            $row[] = eventosapp_whatsapp_format_datetime($whatsapp_first_sent, 'Y-m-d H:i:s');
+        } else {
+            $whatsapp_first_ts = $whatsapp_first_sent ? strtotime($whatsapp_first_sent) : false;
+            $row[] = $whatsapp_first_ts ? date_i18n('Y-m-d H:i:s', $whatsapp_first_ts) : '';
+        }
+
+        $whatsapp_last_sent = isset($whatsapp_tracking['last_sent_at']) ? (string)$whatsapp_tracking['last_sent_at'] : '';
+        if ($whatsapp_last_sent && function_exists('eventosapp_whatsapp_format_datetime')) {
+            $row[] = eventosapp_whatsapp_format_datetime($whatsapp_last_sent, 'Y-m-d H:i:s');
+        } else {
+            $whatsapp_last_ts = $whatsapp_last_sent ? strtotime($whatsapp_last_sent) : false;
+            $row[] = $whatsapp_last_ts ? date_i18n('Y-m-d H:i:s', $whatsapp_last_ts) : '';
+        }
+
+        $whatsapp_source_raw = isset($whatsapp_tracking['last_source']) ? (string)$whatsapp_tracking['last_source'] : '';
+        $row[] = function_exists('eventosapp_whatsapp_source_label')
+            ? eventosapp_whatsapp_source_label($whatsapp_source_raw)
+            : ($whatsapp_source_raw ?: '');
+
+        $whatsapp_delivery_status = get_post_meta($tid, '_eventosapp_whatsapp_delivery_status', true);
+        if (!$whatsapp_delivery_status) {
+            $whatsapp_delivery_status = get_post_meta($tid, '_eventosapp_whatsapp_last_status', true);
+        }
+        $row[] = function_exists('eventosapp_whatsapp_status_label')
+            ? eventosapp_whatsapp_status_label($whatsapp_delivery_status)
+            : (string)$whatsapp_delivery_status;
         
 // Medio de check-in
         if (empty($checkin_media_labels) && $any_presencial_checked && $qr_type_checkin !== '') {
