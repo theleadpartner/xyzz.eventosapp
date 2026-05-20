@@ -28,7 +28,6 @@ function eventosapp_whatsapp_default_settings() {
         'api_version'          => 'v23.0',
         'phone_number_id'      => '',
         'phone_number_label'   => 'EventosApp',
-        'phone_number_waba_id' => '',
         'phone_accounts'       => [],
         'access_token'         => '',
         'default_country_code' => '57',
@@ -77,8 +76,8 @@ function eventosapp_whatsapp_sanitize_phone_account_label($value, $fallback = ''
  *
  * El número principal se conserva en phone_number_id para mantener compatibilidad
  * con instalaciones previas. Esta lista solo guarda números adicionales.
- * Cada número puede tener su WhatsApp Business Account ID para aprobar plantillas
- * en el WABA correcto cuando el organizador usa una cuenta propia.
+ * El WABA de aprobación de plantillas se administra por plantilla desde
+ * eventosapp-whatsapp-templates.php, no desde esta pantalla de envío.
  */
 function eventosapp_whatsapp_normalize_phone_accounts($accounts, $default_phone_number_id = '') {
     $default_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($default_phone_number_id);
@@ -106,14 +105,9 @@ function eventosapp_whatsapp_normalize_phone_accounts($accounts, $default_phone_
             $account['alias'] ?? ($account['label'] ?? ''),
             'WhatsApp ' . substr($phone_number_id, -4)
         );
-        $waba_id = eventosapp_whatsapp_sanitize_waba_id(
-            $account['waba_id'] ?? ($account['business_account_id'] ?? ($account['whatsapp_business_account_id'] ?? ''))
-        );
-
         $normalized[] = [
             'alias'           => $alias,
             'phone_number_id' => $phone_number_id,
-            'waba_id'         => $waba_id,
         ];
         $seen[$phone_number_id] = true;
     }
@@ -129,15 +123,13 @@ function eventosapp_whatsapp_get_phone_accounts($settings = null) {
 
     $default_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['phone_number_id'] ?? '');
     $default_label = eventosapp_whatsapp_sanitize_phone_account_label($settings['phone_number_label'] ?? '', 'EventosApp');
-    $default_waba_id = eventosapp_whatsapp_sanitize_waba_id($settings['phone_number_waba_id'] ?? '');
     $accounts = [];
 
     if ( $default_phone_number_id !== '' ) {
         $accounts[$default_phone_number_id] = [
             'alias'           => $default_label,
             'phone_number_id' => $default_phone_number_id,
-            'waba_id'         => $default_waba_id,
-            'label'           => $default_label . ' — ' . $default_phone_number_id . ($default_waba_id !== '' ? ' · WABA ' . $default_waba_id : '') . ' (por defecto)',
+            'label'           => $default_label . ' — ' . $default_phone_number_id . ' (por defecto)',
             'is_default'      => true,
         ];
     }
@@ -148,8 +140,7 @@ function eventosapp_whatsapp_get_phone_accounts($settings = null) {
         $accounts[$phone_number_id] = [
             'alias'           => $alias,
             'phone_number_id' => $phone_number_id,
-            'waba_id'         => eventosapp_whatsapp_sanitize_waba_id($account['waba_id'] ?? ''),
-            'label'           => $alias . ' — ' . $phone_number_id . (! empty($account['waba_id']) ? ' · WABA ' . eventosapp_whatsapp_sanitize_waba_id($account['waba_id']) : ''),
+            'label'           => $alias . ' — ' . $phone_number_id,
             'is_default'      => false,
         ];
     }
@@ -215,9 +206,6 @@ function eventosapp_whatsapp_resolve_sender_settings($event_id = 0, $settings = 
     $settings['sender_phone_label'] = is_array($account)
         ? eventosapp_whatsapp_sanitize_phone_account_label($account['alias'] ?? '', 'Número WhatsApp')
         : eventosapp_whatsapp_sanitize_phone_account_label($settings['phone_number_label'] ?? '', 'Número WhatsApp');
-    $settings['sender_waba_id'] = is_array($account)
-        ? eventosapp_whatsapp_sanitize_waba_id($account['waba_id'] ?? '')
-        : eventosapp_whatsapp_sanitize_waba_id($settings['phone_number_waba_id'] ?? '');
     $settings['_resolved_sender_account'] = is_array($account) ? $account : [];
 
     return $settings;
@@ -239,7 +227,6 @@ function eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id($phone_n
         $settings['phone_number_id'] = $phone_number_id;
         $settings['sender_phone_number_id'] = $phone_number_id;
         $settings['sender_phone_label'] = eventosapp_whatsapp_sanitize_phone_account_label($accounts[$phone_number_id]['alias'] ?? '', 'Número WhatsApp');
-        $settings['sender_waba_id'] = eventosapp_whatsapp_sanitize_waba_id($accounts[$phone_number_id]['waba_id'] ?? '');
         $settings['_resolved_sender_account'] = $accounts[$phone_number_id];
     }
 
@@ -252,15 +239,13 @@ function eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id($phone_n
 function eventosapp_whatsapp_sanitize_phone_accounts_from_request($default_phone_number_id = '') {
     $aliases = isset($_POST['phone_accounts_alias']) && is_array($_POST['phone_accounts_alias']) ? wp_unslash($_POST['phone_accounts_alias']) : [];
     $phone_ids = isset($_POST['phone_accounts_phone_number_id']) && is_array($_POST['phone_accounts_phone_number_id']) ? wp_unslash($_POST['phone_accounts_phone_number_id']) : [];
-    $waba_ids = isset($_POST['phone_accounts_waba_id']) && is_array($_POST['phone_accounts_waba_id']) ? wp_unslash($_POST['phone_accounts_waba_id']) : [];
     $raw_accounts = [];
-    $count = max(count($aliases), count($phone_ids), count($waba_ids));
+    $count = max(count($aliases), count($phone_ids));
 
     for ( $i = 0; $i < $count; $i++ ) {
         $raw_accounts[] = [
             'alias'           => $aliases[$i] ?? '',
             'phone_number_id' => $phone_ids[$i] ?? '',
-            'waba_id'         => $waba_ids[$i] ?? '',
         ];
     }
 
@@ -279,7 +264,6 @@ function eventosapp_whatsapp_get_settings() {
     $settings = wp_parse_args($saved, eventosapp_whatsapp_default_settings());
     $settings['phone_number_id'] = eventosapp_whatsapp_sanitize_phone_number_id($settings['phone_number_id'] ?? '');
     $settings['phone_number_label'] = eventosapp_whatsapp_sanitize_phone_account_label($settings['phone_number_label'] ?? '', 'EventosApp');
-    $settings['phone_number_waba_id'] = eventosapp_whatsapp_sanitize_waba_id($settings['phone_number_waba_id'] ?? '');
     $settings['phone_accounts'] = eventosapp_whatsapp_normalize_phone_accounts($settings['phone_accounts'] ?? [], $settings['phone_number_id']);
 
     $available_accounts = eventosapp_whatsapp_get_phone_accounts($settings);
@@ -1850,7 +1834,7 @@ function eventosapp_whatsapp_render_settings_page() {
             .evapp-wa-help{color:#646970;font-size:12px;margin:4px 0 0;}
             .evapp-wa-code{font-family:monospace;background:#f6f7f7;padding:2px 5px;border-radius:4px;}
             .evapp-wa-phone-accounts{display:flex;flex-direction:column;gap:10px;}
-            .evapp-wa-phone-account-row{display:grid;grid-template-columns:minmax(160px,1fr) minmax(200px,1fr) auto;gap:8px;align-items:center;background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:10px;}
+            .evapp-wa-phone-account-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(240px,1fr) auto;gap:8px;align-items:center;background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:10px;}
             .evapp-wa-phone-account-row input{width:100%;}
             @media (max-width: 782px){.evapp-wa-grid{grid-template-columns:1fr;}.evapp-wa-phone-account-row{grid-template-columns:1fr;}}
         </style>
@@ -1889,12 +1873,6 @@ function eventosapp_whatsapp_render_settings_page() {
                         <p class="evapp-wa-help">ID del número emisor principal de WhatsApp Business Platform. Este seguirá siendo el respaldo automático para eventos sin número propio.</p>
                     </div>
 
-                    <label for="evapp_wa_phone_number_waba_id">WhatsApp Business Account ID por defecto</label>
-                    <div>
-                        <input type="text" id="evapp_wa_phone_number_waba_id" name="phone_number_waba_id" value="<?php echo esc_attr($settings['phone_number_waba_id'] ?? ''); ?>" autocomplete="off" placeholder="Ej: 961206800238680">
-                        <p class="evapp-wa-help">WABA ID de la cuenta donde se aprueban las plantillas del número por defecto. Si ya lo tienes guardado en Plantillas WhatsApp, puedes dejarlo igual aquí para centralizar la relación número ⇄ WABA.</p>
-                    </div>
-
                     <label>Números adicionales</label>
                     <div>
                         <div class="evapp-wa-phone-accounts" id="evapp-wa-phone-accounts">
@@ -1902,13 +1880,12 @@ function eventosapp_whatsapp_render_settings_page() {
                                 <div class="evapp-wa-phone-account-row">
                                     <input type="text" name="phone_accounts_alias[]" value="<?php echo esc_attr($account['alias']); ?>" placeholder="Sobrenombre del organizador" autocomplete="off">
                                     <input type="text" name="phone_accounts_phone_number_id[]" value="<?php echo esc_attr($account['phone_number_id']); ?>" placeholder="Phone Number ID" autocomplete="off">
-                                    <input type="text" name="phone_accounts_waba_id[]" value="<?php echo esc_attr($account['waba_id'] ?? ''); ?>" placeholder="WhatsApp Business Account ID" autocomplete="off">
                                     <button type="button" class="button evapp-wa-remove-phone-account">Quitar</button>
                                 </div>
                             <?php endforeach; ?>
                         </div>
                         <p style="margin:10px 0 0;"><button type="button" class="button button-secondary" id="evapp-wa-add-phone-account">+ Agregar número emisor</button></p>
-                        <p class="evapp-wa-help">Agrega aquí los Phone Number ID de los organizadores y su WhatsApp Business Account ID. Todos usarán el mismo Access Token de la app, siempre que el usuario de sistema tenga permisos sobre esos números y cuentas.</p>
+                        <p class="evapp-wa-help">Agrega aquí los Phone Number ID de los organizadores. Todos usarán el mismo Access Token de la app, siempre que el usuario de sistema tenga permisos sobre esos números. El WABA ID para aprobar plantillas se define desde Plantillas WhatsApp en cada plantilla que use un número distinto al principal.</p>
                     </div>
 
                     <label for="evapp_wa_access_token">Access Token</label>
@@ -2035,7 +2012,6 @@ function eventosapp_whatsapp_render_settings_page() {
                         '<div class="evapp-wa-phone-account-row">' +
                             '<input type="text" name="phone_accounts_alias[]" value="" placeholder="Sobrenombre del organizador" autocomplete="off">' +
                             '<input type="text" name="phone_accounts_phone_number_id[]" value="" placeholder="Phone Number ID" autocomplete="off">' +
-                            '<input type="text" name="phone_accounts_waba_id[]" value="" placeholder="WhatsApp Business Account ID" autocomplete="off">' +
                             '<button type="button" class="button evapp-wa-remove-phone-account">Quitar</button>' +
                         '</div>'
                     );
@@ -2125,14 +2101,12 @@ add_action('admin_post_eventosapp_whatsapp_save_settings', function() {
     }
 
     $phone_number_id = isset($_POST['phone_number_id']) ? eventosapp_whatsapp_sanitize_phone_number_id(wp_unslash($_POST['phone_number_id'])) : '';
-    $phone_number_waba_id = isset($_POST['phone_number_waba_id']) ? eventosapp_whatsapp_sanitize_waba_id(wp_unslash($_POST['phone_number_waba_id'])) : '';
     $phone_accounts = eventosapp_whatsapp_sanitize_phone_accounts_from_request($phone_number_id);
     $phone_number_label = isset($_POST['phone_number_label']) ? eventosapp_whatsapp_sanitize_phone_account_label(wp_unslash($_POST['phone_number_label']), 'EventosApp') : 'EventosApp';
 
     $available_for_test = eventosapp_whatsapp_get_phone_accounts([
         'phone_number_id'      => $phone_number_id,
         'phone_number_label'   => $phone_number_label,
-        'phone_number_waba_id' => $phone_number_waba_id,
         'phone_accounts'       => $phone_accounts,
     ]);
     $test_phone_number_id = isset($_POST['test_phone_number_id']) ? eventosapp_whatsapp_sanitize_phone_number_id(wp_unslash($_POST['test_phone_number_id'])) : '';
@@ -2150,7 +2124,6 @@ add_action('admin_post_eventosapp_whatsapp_save_settings', function() {
         'api_version'            => $api_version,
         'phone_number_id'        => $phone_number_id,
         'phone_number_label'     => $phone_number_label,
-        'phone_number_waba_id'   => $phone_number_waba_id,
         'phone_accounts'         => $phone_accounts,
         'access_token'           => $access_token,
         'default_country_code'   => isset($_POST['default_country_code']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['default_country_code'])) : '57',
