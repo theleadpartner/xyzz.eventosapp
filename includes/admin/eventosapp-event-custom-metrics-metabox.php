@@ -151,6 +151,8 @@ if ( ! function_exists('eventosapp_custom_metrics_sanitize_settings') ) {
 if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
     function eventosapp_custom_metrics_get_available_fields($event_id){
         $event_id = (int) $event_id;
+        static $cache = [];
+        if ( isset($cache[$event_id]) ) return $cache[$event_id];
 
         $fields = [
             [ 'key'=>'ticket_public_id', 'label'=>'Ticket Public ID', 'type'=>'text', 'source'=>'system', 'meta_key'=>'eventosapp_ticketID' ],
@@ -213,16 +215,22 @@ if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
             $used[$key] = true;
         }
 
+        $cache[$event_id] = $out;
         return $out;
     }
 }
 
 if ( ! function_exists('eventosapp_custom_metrics_get_field_map') ) {
     function eventosapp_custom_metrics_get_field_map($event_id){
+        $event_id = (int) $event_id;
+        static $cache = [];
+        if ( isset($cache[$event_id]) ) return $cache[$event_id];
+
         $map = [];
         foreach ( eventosapp_custom_metrics_get_available_fields($event_id) as $field ) {
             $map[$field['key']] = $field;
         }
+        $cache[$event_id] = $map;
         return $map;
     }
 }
@@ -306,6 +314,65 @@ if ( ! function_exists('eventosapp_custom_metrics_get_layout_config') ) {
         $raw = get_post_meta((int) $event_id, EVAPP_CUSTOM_METRICS_META_KEY, true);
         if ( ! is_array($raw) ) $raw = [];
         return eventosapp_custom_metrics_sanitize_layout_config($raw);
+    }
+}
+
+
+if ( ! function_exists('eventosapp_custom_metrics_get_enabled_slots') ) {
+    function eventosapp_custom_metrics_get_enabled_slots($layout){
+        $slots = [];
+        if ( ! is_array($layout) || empty($layout['rows']) || ! is_array($layout['rows']) ) return $slots;
+
+        foreach ( $layout['rows'] as $row ) {
+            if ( empty($row['slots']) || ! is_array($row['slots']) ) continue;
+            foreach ( $row['slots'] as $slot ) {
+                if ( ! empty($slot['enabled']) ) $slots[] = $slot;
+            }
+        }
+
+        return $slots;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_has_enabled_slots') ) {
+    function eventosapp_custom_metrics_has_enabled_slots($event_id){
+        $event_id = (int) $event_id;
+        if ( $event_id <= 0 ) return false;
+        $layout = eventosapp_custom_metrics_get_layout_config($event_id);
+        return ! empty(eventosapp_custom_metrics_get_enabled_slots($layout));
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_required_field_keys_from_layout') ) {
+    function eventosapp_custom_metrics_get_required_field_keys_from_layout($layout){
+        $required = [];
+        foreach ( eventosapp_custom_metrics_get_enabled_slots($layout) as $slot ) {
+            $chart_type = isset($slot['chart_type']) ? (string) $slot['chart_type'] : 'column';
+            $aggr       = isset($slot['aggregation']) ? (string) $slot['aggregation'] : 'count';
+
+            $add_key = function($key) use (&$required){
+                $key = sanitize_key((string) $key);
+                if ( $key !== '' ) $required[$key] = true;
+            };
+
+            if ( $chart_type === 'table' ) {
+                $add_key(isset($slot['row_field']) ? $slot['row_field'] : '');
+                $add_key(isset($slot['column_field']) ? $slot['column_field'] : '');
+                if ( $aggr !== 'count' ) $add_key(isset($slot['value_field']) ? $slot['value_field'] : '');
+                continue;
+            }
+
+            if ( $chart_type === 'number_card' ) {
+                if ( $aggr !== 'count' ) $add_key(isset($slot['value_field']) ? $slot['value_field'] : '');
+                continue;
+            }
+
+            $add_key(isset($slot['label_field']) ? $slot['label_field'] : '');
+            $add_key(isset($slot['series_field']) ? $slot['series_field'] : '');
+            if ( $aggr !== 'count' ) $add_key(isset($slot['value_field']) ? $slot['value_field'] : '');
+        }
+
+        return array_keys($required);
     }
 }
 
@@ -428,17 +495,35 @@ if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value') ) {
 }
 
 if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
-    function eventosapp_custom_metrics_get_ticket_records($event_id){
+    function eventosapp_custom_metrics_get_ticket_records($event_id, $field_keys = null){
         $event_id = (int) $event_id;
         if ( $event_id <= 0 ) return [];
 
-        $fields = eventosapp_custom_metrics_get_available_fields($event_id);
+        $all_fields = eventosapp_custom_metrics_get_available_fields($event_id);
+        $fields = $all_fields;
+
+        if ( is_array($field_keys) ) {
+            $wanted = [];
+            foreach ( $field_keys as $field_key ) {
+                $field_key = sanitize_key((string) $field_key);
+                if ( $field_key !== '' ) $wanted[$field_key] = true;
+            }
+            $fields = [];
+            foreach ( $all_fields as $field ) {
+                $key = isset($field['key']) ? (string) $field['key'] : '';
+                if ( isset($wanted[$key]) ) $fields[] = $field;
+            }
+        }
+
         $query = new WP_Query([
-            'post_type'      => 'eventosapp_ticket',
-            'post_status'    => 'any',
-            'posts_per_page' => -1,
-            'fields'         => 'ids',
-            'meta_query'     => [
+            'post_type'              => 'eventosapp_ticket',
+            'post_status'            => 'any',
+            'posts_per_page'         => -1,
+            'fields'                 => 'ids',
+            'no_found_rows'          => true,
+            'update_post_meta_cache' => true,
+            'update_post_term_cache' => false,
+            'meta_query'             => [
                 [
                     'key'     => '_eventosapp_ticket_evento_id',
                     'value'   => $event_id,
@@ -447,8 +532,13 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
             ],
         ]);
 
+        $ticket_ids = array_map('intval', (array) $query->posts);
+        if ( ! empty($ticket_ids) ) {
+            update_meta_cache('post', $ticket_ids);
+        }
+
         $records = [];
-        foreach ( (array) $query->posts as $ticket_id ) {
+        foreach ( $ticket_ids as $ticket_id ) {
             $record = [];
             foreach ( $fields as $field ) {
                 $record[$field['key']] = eventosapp_custom_metrics_extract_ticket_value($ticket_id, $event_id, $field);
@@ -806,7 +896,17 @@ if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
         }
 
         $layout = eventosapp_custom_metrics_get_layout_config($event_id);
+        $enabled_slots = eventosapp_custom_metrics_get_enabled_slots($layout);
+        if ( empty($enabled_slots) ) {
+            return [
+                'settings'    => isset($layout['settings']) ? $layout['settings'] : eventosapp_custom_metrics_default_settings(),
+                'rows'        => [],
+                'has_metrics' => false,
+            ];
+        }
+
         $field_map = eventosapp_custom_metrics_get_field_map($event_id);
+        $required_field_keys = eventosapp_custom_metrics_get_required_field_keys_from_layout($layout);
         $records = null;
         $rows_out = [];
         $slot_index = 0;
@@ -817,7 +917,7 @@ if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
             foreach ( (array) $row['slots'] as $slot ) {
                 $slot_index++;
                 if ( empty($slot['enabled']) ) continue;
-                if ( $records === null ) $records = eventosapp_custom_metrics_get_ticket_records($event_id);
+                if ( $records === null ) $records = eventosapp_custom_metrics_get_ticket_records($event_id, $required_field_keys);
                 $payload = eventosapp_custom_metrics_build_slot_payload($event_id, $slot, $records, $field_map, $slot_index);
                 if ( ! empty($payload) ) {
                     $row_slots[] = $payload;
