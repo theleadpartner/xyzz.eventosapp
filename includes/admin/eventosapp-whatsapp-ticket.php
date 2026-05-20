@@ -1233,6 +1233,245 @@ function eventosapp_whatsapp_status_label($status) {
     return $labels[$status] ?? $status;
 }
 
+
+/**
+ * Estados del historial que cuentan como envío real de ticket por WhatsApp.
+ * Se usa "aceptado_meta" porque, al igual que wp_mail() en correo,
+ * confirma que la solicitud de envío salió correctamente desde EventosApp.
+ */
+function eventosapp_whatsapp_successful_send_statuses() {
+    return apply_filters('eventosapp_whatsapp_successful_send_statuses', [
+        'aceptado_meta',
+        'enviado',
+    ]);
+}
+
+/**
+ * Normaliza una fecha/hora guardada en postmeta para poder compararla.
+ */
+function eventosapp_whatsapp_datetime_timestamp($value) {
+    if (is_numeric($value)) {
+        return (int) $value;
+    }
+
+    $value = trim((string) $value);
+    if ($value === '') {
+        return 0;
+    }
+
+    $timestamp = strtotime($value);
+    return $timestamp ? (int) $timestamp : 0;
+}
+
+/**
+ * Formatea fechas de tracking WhatsApp para metaboxes y exportaciones.
+ */
+function eventosapp_whatsapp_format_datetime($value, $format = 'd/m/Y H:i') {
+    $timestamp = eventosapp_whatsapp_datetime_timestamp($value);
+    if (!$timestamp) {
+        return '';
+    }
+
+    return date_i18n($format, $timestamp);
+}
+
+/**
+ * Etiqueta legible para el origen/contexto del envío de WhatsApp.
+ */
+function eventosapp_whatsapp_source_label($source) {
+    $source = sanitize_key((string) $source);
+    $labels = [
+        'manual_admin'             => 'Envío manual (admin)',
+        'whatsapp_bulk_send'       => 'Envío masivo WhatsApp',
+        'whatsapp_mass_send'       => 'Envío masivo WhatsApp',
+        'masivo'                   => 'Envío masivo WhatsApp',
+        'email_history'            => 'Disparado por correo',
+        'email_status'             => 'Disparado por correo',
+        'email_hook'               => 'Disparado por correo',
+        'email_adminpost_shutdown' => 'Disparado por correo',
+        'webhook_create'           => 'Creación por webhook',
+        'webhook_update'           => 'Actualización por webhook',
+        'frontend'                 => 'Creación frontend',
+        'frontend_create'          => 'Creación frontend',
+        'frontend_edit'            => 'Módulo edición frontend',
+        'ticket_create'            => 'Creación de ticket',
+        'ticket_update'            => 'Actualización de ticket',
+        'reminder'                 => 'Recordatorio',
+        'unknown'                  => 'No especificado',
+        ''                         => '',
+    ];
+
+    return $labels[$source] ?? ($source ?: '');
+}
+
+/**
+ * Guarda el tracking principal de envíos WhatsApp en postmeta del ticket.
+ *
+ * Metadatos principales:
+ * - _eventosapp_whatsapp_sent_status: enviado/no_enviado
+ * - _eventosapp_whatsapp_first_sent_at: primera solicitud aceptada por Meta
+ * - _eventosapp_whatsapp_last_sent_at: última solicitud aceptada por Meta
+ * - _eventosapp_whatsapp_first_to / _eventosapp_whatsapp_last_to
+ * - _eventosapp_whatsapp_first_source / _eventosapp_whatsapp_last_source
+ * - _eventosapp_whatsapp_send_count
+ */
+function eventosapp_whatsapp_register_successful_send_tracking($ticket_id, $phone = '', $args = [], $sent_at = '') {
+    $ticket_id = absint($ticket_id);
+    if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+        return '';
+    }
+
+    $sent_at = trim((string) $sent_at);
+    if ($sent_at === '') {
+        $sent_at = current_time('mysql');
+    }
+
+    $phone = sanitize_text_field((string) $phone);
+    $source = sanitize_key((string)($args['context'] ?? 'unknown'));
+
+    $first_sent = get_post_meta($ticket_id, '_eventosapp_whatsapp_first_sent_at', true);
+    if (empty($first_sent)) {
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_first_sent_at', $sent_at);
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_first_to', $phone);
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_first_source', $source);
+    }
+
+    update_post_meta($ticket_id, '_eventosapp_whatsapp_sent_status', 'enviado');
+    update_post_meta($ticket_id, '_eventosapp_whatsapp_last_sent_at', $sent_at);
+    update_post_meta($ticket_id, '_eventosapp_whatsapp_last_to', $phone);
+    update_post_meta($ticket_id, '_eventosapp_whatsapp_last_source', $source);
+
+    $send_count = (int) get_post_meta($ticket_id, '_eventosapp_whatsapp_send_count', true);
+    update_post_meta($ticket_id, '_eventosapp_whatsapp_send_count', max(0, $send_count) + 1);
+
+    return $sent_at;
+}
+
+/**
+ * Obtiene el tracking de primer/último envío de WhatsApp.
+ * Si el ticket es anterior a este tracking, intenta reconstruirlo desde el historial.
+ */
+function eventosapp_whatsapp_get_send_tracking($ticket_id, $persist_recovered = false) {
+    $ticket_id = absint($ticket_id);
+    $empty = [
+        'sent_status'   => 'no_enviado',
+        'first_sent_at' => '',
+        'last_sent_at'  => '',
+        'first_to'      => '',
+        'last_to'       => '',
+        'first_source'  => '',
+        'last_source'   => '',
+        'send_count'    => 0,
+    ];
+
+    if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+        return $empty;
+    }
+
+    $tracking = [
+        'sent_status'   => sanitize_key((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_sent_status', true)),
+        'first_sent_at' => (string) get_post_meta($ticket_id, '_eventosapp_whatsapp_first_sent_at', true),
+        'last_sent_at'  => (string) get_post_meta($ticket_id, '_eventosapp_whatsapp_last_sent_at', true),
+        'first_to'      => (string) get_post_meta($ticket_id, '_eventosapp_whatsapp_first_to', true),
+        'last_to'       => (string) get_post_meta($ticket_id, '_eventosapp_whatsapp_last_to', true),
+        'first_source'  => sanitize_key((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_first_source', true)),
+        'last_source'   => sanitize_key((string) get_post_meta($ticket_id, '_eventosapp_whatsapp_last_source', true)),
+        'send_count'    => (int) get_post_meta($ticket_id, '_eventosapp_whatsapp_send_count', true),
+    ];
+
+    $successful_statuses = eventosapp_whatsapp_successful_send_statuses();
+    $history = get_post_meta($ticket_id, '_eventosapp_whatsapp_history', true);
+    if (!is_array($history)) {
+        $history = [];
+    }
+
+    $recovered = [];
+    foreach ($history as $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+        $entry_status = sanitize_key((string)($entry['status'] ?? ''));
+        if (!in_array($entry_status, $successful_statuses, true)) {
+            continue;
+        }
+        $entry_date = (string)($entry['date'] ?? '');
+        $entry_ts = eventosapp_whatsapp_datetime_timestamp($entry_date);
+        if (!$entry_ts) {
+            continue;
+        }
+        $recovered[] = [
+            'date'    => $entry_date,
+            'ts'      => $entry_ts,
+            'to'      => sanitize_text_field((string)($entry['to'] ?? '')),
+            'source'  => sanitize_key((string)($entry['context'] ?? 'unknown')),
+            'status'  => $entry_status,
+        ];
+    }
+
+    if (!empty($recovered)) {
+        usort($recovered, static function($a, $b) {
+            return ($a['ts'] ?? 0) <=> ($b['ts'] ?? 0);
+        });
+        $first_recovered = reset($recovered);
+        $last_recovered  = end($recovered);
+
+        if (empty($tracking['first_sent_at'])) {
+            $tracking['first_sent_at'] = (string)($first_recovered['date'] ?? '');
+            $tracking['first_to'] = (string)($first_recovered['to'] ?? '');
+            $tracking['first_source'] = sanitize_key((string)($first_recovered['source'] ?? 'unknown'));
+        }
+        if (empty($tracking['last_sent_at'])) {
+            $tracking['last_sent_at'] = (string)($last_recovered['date'] ?? '');
+            $tracking['last_to'] = (string)($last_recovered['to'] ?? '');
+            $tracking['last_source'] = sanitize_key((string)($last_recovered['source'] ?? 'unknown'));
+        }
+        if ($tracking['send_count'] <= 0) {
+            $tracking['send_count'] = count($recovered);
+        }
+    }
+
+    if (empty($tracking['sent_status'])) {
+        $tracking['sent_status'] = (!empty($tracking['first_sent_at']) || !empty($tracking['last_sent_at'])) ? 'enviado' : 'no_enviado';
+    }
+
+    if (!empty($tracking['last_sent_at']) && empty($tracking['first_sent_at'])) {
+        $tracking['first_sent_at'] = $tracking['last_sent_at'];
+        if (empty($tracking['first_to'])) {
+            $tracking['first_to'] = $tracking['last_to'];
+        }
+        if (empty($tracking['first_source'])) {
+            $tracking['first_source'] = $tracking['last_source'];
+        }
+    }
+
+    if ($persist_recovered && $tracking['sent_status'] === 'enviado') {
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_sent_status', 'enviado');
+        if (!empty($tracking['first_sent_at'])) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_first_sent_at', $tracking['first_sent_at']);
+        }
+        if (!empty($tracking['last_sent_at'])) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_sent_at', $tracking['last_sent_at']);
+        }
+        if (!empty($tracking['first_to'])) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_first_to', $tracking['first_to']);
+        }
+        if (!empty($tracking['last_to'])) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_to', $tracking['last_to']);
+        }
+        if (!empty($tracking['first_source'])) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_first_source', $tracking['first_source']);
+        }
+        if (!empty($tracking['last_source'])) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_last_source', $tracking['last_source']);
+        }
+        if ((int)$tracking['send_count'] > 0) {
+            update_post_meta($ticket_id, '_eventosapp_whatsapp_send_count', (int)$tracking['send_count']);
+        }
+    }
+
+    return wp_parse_args($tracking, $empty);
+}
+
 /**
  * Resume el payload sin exponer textos completos ni credenciales.
  */
@@ -2061,7 +2300,9 @@ function eventosapp_whatsapp_render_ticket_metabox($post) {
     $phone = get_post_meta($post->ID, '_eventosapp_asistente_tel', true);
     $normalized_phone = eventosapp_whatsapp_normalize_phone($phone, $settings['default_country_code'] ?? '57');
     $status = get_post_meta($post->ID, '_eventosapp_whatsapp_last_status', true);
-    $last_at = get_post_meta($post->ID, '_eventosapp_whatsapp_last_sent_at', true);
+    $tracking = eventosapp_whatsapp_get_send_tracking($post->ID, true);
+    $last_at = $tracking['last_sent_at'] ?: get_post_meta($post->ID, '_eventosapp_whatsapp_last_sent_at', true);
+    $first_at = $tracking['first_sent_at'] ?? '';
     $last_error = get_post_meta($post->ID, '_eventosapp_whatsapp_last_error', true);
     $last_message_id = get_post_meta($post->ID, '_eventosapp_whatsapp_last_message_id', true);
     $delivery_status = get_post_meta($post->ID, '_eventosapp_whatsapp_delivery_status', true);
@@ -2084,6 +2325,13 @@ function eventosapp_whatsapp_render_ticket_metabox($post) {
         .evapp-wa-side-warning{border-left-color:#dba617;background:#fff8e5;}
         .evapp-wa-side-error{border-left-color:#b32d2e;background:#fcf0f1;}
         .evapp-wa-side-ok{border-left-color:#00a32a;background:#edfaef;}
+        .evapp-wa-send-summary{padding:10px;border-radius:4px;margin:12px 0;border:1px solid #cbd5e1;background:#f8fafc;}
+        .evapp-wa-send-summary strong{display:block;margin-bottom:5px;}
+        .evapp-wa-send-summary span{display:block;font-size:12px;line-height:1.45;}
+        .evapp-wa-send-summary-ok{background:#d1fae5;border-color:#10b981;color:#065f46;}
+        .evapp-wa-send-summary-ok strong{color:#047857;}
+        .evapp-wa-send-summary-empty{background:#fee2e2;border-color:#ef4444;color:#7f1d1d;}
+        .evapp-wa-send-summary-empty strong{color:#dc2626;}
         .evapp-wa-side-small{font-size:12px;color:#646970;line-height:1.45;}
         .evapp-wa-history-mini{margin-left:16px;list-style:disc;}
         .evapp-wa-history-mini li{margin-bottom:7px;}
@@ -2094,6 +2342,26 @@ function eventosapp_whatsapp_render_ticket_metabox($post) {
     <p><strong>Celular normalizado:</strong><br><?php echo $normalized_phone ? esc_html($normalized_phone) : '<span style="color:#b32d2e;">No válido</span>'; ?></p>
     <p><strong>WhatsApp global:</strong> <?php echo ! empty($settings['enabled']) && $settings['enabled'] === '1' ? 'Activo' : 'Inactivo'; ?></p>
     <p><strong>WhatsApp en evento:</strong> <?php echo $event_enabled === '1' ? 'Activo' : 'Inactivo'; ?></p>
+
+    <?php if ( ($tracking['sent_status'] ?? '') === 'enviado' && ( $first_at || $last_at ) ) : ?>
+        <div class="evapp-wa-send-summary evapp-wa-send-summary-ok">
+            <strong>✓ Estado: WhatsApp enviado</strong>
+            <?php if ( $first_at ) : ?>
+                <span><strong style="display:inline;margin:0;color:inherit;">Primer envío:</strong> <?php echo esc_html(eventosapp_whatsapp_format_datetime($first_at)); ?></span>
+            <?php endif; ?>
+            <?php if ( $last_at ) : ?>
+                <span><strong style="display:inline;margin:0;color:inherit;">Último envío:</strong> <?php echo esc_html(eventosapp_whatsapp_format_datetime($last_at)); ?></span>
+            <?php endif; ?>
+            <?php if ( ! empty($tracking['last_to']) ) : ?>
+                <span><strong style="display:inline;margin:0;color:inherit;">Último destino:</strong> <?php echo esc_html($tracking['last_to']); ?></span>
+            <?php endif; ?>
+        </div>
+    <?php else : ?>
+        <div class="evapp-wa-send-summary evapp-wa-send-summary-empty">
+            <strong>✗ Estado: WhatsApp no enviado</strong>
+            <span>Aún no hay una solicitud aceptada por Meta para este ticket.</span>
+        </div>
+    <?php endif; ?>
 
     <?php
     $box_class = 'evapp-wa-side-status';
@@ -4295,11 +4563,11 @@ function eventosapp_whatsapp_send_ticket($ticket_id, $args = []) {
     update_post_meta($ticket_id, '_eventosapp_whatsapp_last_http_code', isset($result['http_code']) ? (int)$result['http_code'] : 0);
 
     if ( ! empty($result['ok']) ) {
+        $whatsapp_sent_at = current_time('mysql');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_status', 'aceptado_meta');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_status', 'pendiente_webhook');
         delete_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_at');
-        update_post_meta($ticket_id, '_eventosapp_whatsapp_last_sent_at', current_time('mysql'));
-        update_post_meta($ticket_id, '_eventosapp_whatsapp_last_to', $phone);
+        eventosapp_whatsapp_register_successful_send_tracking($ticket_id, $phone, $args, $whatsapp_sent_at);
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_error', '');
         update_post_meta($ticket_id, '_eventosapp_whatsapp_last_response', $result['response'] ?? []);
         $message_id = isset($result['message_id']) ? sanitize_text_field((string)$result['message_id']) : eventosapp_whatsapp_extract_message_id($result['response'] ?? []);
