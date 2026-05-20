@@ -1588,7 +1588,12 @@ add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
             continue;
         }
 
-        $source_key = 'whatsapp_bulk_' . $segment_id . '_' . $ticket_modalidad . '_' . md5($map_hash . '|' . $template_id . '|' . (string)($template['name'] ?? '') . '|' . (string)($template['language'] ?? ''));
+        $sender_key_for_segment = '';
+        if ( function_exists('eventosapp_whatsapp_get_settings') && function_exists('eventosapp_whatsapp_resolve_sender_settings') ) {
+            $sender_settings_for_segment = eventosapp_whatsapp_resolve_sender_settings($ticket_event_id ?: $event_id, eventosapp_whatsapp_get_settings());
+            $sender_key_for_segment = sanitize_text_field((string)($sender_settings_for_segment['sender_phone_number_id'] ?? ($sender_settings_for_segment['phone_number_id'] ?? '')));
+        }
+        $source_key = 'whatsapp_bulk_' . $segment_id . '_' . $ticket_modalidad . '_' . md5($map_hash . '|' . $template_id . '|' . (string)($template['name'] ?? '') . '|' . (string)($template['language'] ?? '') . '|' . $sender_key_for_segment);
 
         $result = eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $template_id, [
             'context'     => 'whatsapp_bulk_send',
@@ -1875,6 +1880,7 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
         'eventosapp_whatsapp_build_template_payload',
         'eventosapp_whatsapp_api_send_message',
         'eventosapp_whatsapp_add_ticket_log',
+        'eventosapp_whatsapp_resolve_sender_settings',
     ] as $required_function ) {
         if ( ! function_exists($required_function) ) {
             return ['ok' => false, 'message' => 'Falta la función requerida: ' . $required_function . '. Verifica que eventosapp-whatsapp-ticket.php esté cargado antes del módulo masivo.'];
@@ -1907,6 +1913,7 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
         return ['ok' => false, 'message' => 'La plantilla seleccionada no está aprobada o no existe.'];
     }
 
+    $settings = eventosapp_whatsapp_resolve_sender_settings($event_id, eventosapp_whatsapp_get_settings());
     $source_key = sanitize_text_field((string)($args['source_key'] ?? ''));
     if ( empty($args['force']) && $source_key !== '' ) {
         $last_source = get_post_meta($ticket_id, '_eventosapp_whatsapp_last_source_key', true);
@@ -1947,7 +1954,6 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
         }
     }
 
-    $settings = eventosapp_whatsapp_get_settings();
     $phone_raw = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
     $phone = eventosapp_whatsapp_normalize_phone($phone_raw, $settings['default_country_code'] ?? '57');
 
@@ -2011,6 +2017,8 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
         'source_key'                => $source_key,
         'to'                        => $phone,
         'phone_raw'                 => $phone_raw,
+        'sender_phone_number_id'    => sanitize_text_field((string)($settings['sender_phone_number_id'] ?? ($settings['phone_number_id'] ?? ''))),
+        'sender_phone_label'        => sanitize_text_field((string)($settings['sender_phone_label'] ?? ($settings['phone_number_label'] ?? ''))),
         'qr_url_present'            => $qr_url !== '',
         'message_image_url_present' => $message_image_url !== '',
         'transport'                 => $transport,
@@ -2032,6 +2040,8 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
     update_post_meta($ticket_id, '_eventosapp_whatsapp_last_template_id', $template_id);
     update_post_meta($ticket_id, '_eventosapp_whatsapp_last_template_name', $template_name);
     update_post_meta($ticket_id, '_eventosapp_whatsapp_last_template_language', $template_language);
+    update_post_meta($ticket_id, '_eventosapp_whatsapp_last_sender_phone_number_id', sanitize_text_field((string)($settings['sender_phone_number_id'] ?? ($settings['phone_number_id'] ?? ''))));
+    update_post_meta($ticket_id, '_eventosapp_whatsapp_last_sender_label', sanitize_text_field((string)($settings['sender_phone_label'] ?? ($settings['phone_number_label'] ?? ''))));
     update_post_meta($ticket_id, '_eventosapp_whatsapp_masivo_last_segment_id', sanitize_key((string)($args['segment_id'] ?? '')));
     update_post_meta($ticket_id, '_eventosapp_whatsapp_masivo_last_template_id', $template_id);
     update_post_meta($ticket_id, '_eventosapp_whatsapp_masivo_last_at', current_time('mysql'));
