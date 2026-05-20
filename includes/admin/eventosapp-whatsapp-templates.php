@@ -143,6 +143,9 @@ function eventosapp_whatsapp_templates_default_records() {
             'button_2_text'         => 'Agregar a agenda',
             'button_2_url'          => eventosapp_whatsapp_templates_button_url('ticket_ics'),
             'button_2_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_ics'),
+            'sender_phone_number_id' => '',
+            'sender_phone_label'    => 'Número por defecto',
+            'waba_id'               => '',
             'meta_template_id'      => '',
             'meta_status'           => 'LOCAL',
             'meta_category'         => '',
@@ -179,6 +182,9 @@ function eventosapp_whatsapp_templates_default_records() {
             'button_2_text'         => 'Agregar a agenda',
             'button_2_url'          => eventosapp_whatsapp_templates_button_url('ticket_ics'),
             'button_2_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_ics'),
+            'sender_phone_number_id' => '',
+            'sender_phone_label'    => 'Número por defecto',
+            'waba_id'               => '',
             'meta_template_id'      => '',
             'meta_status'           => 'LOCAL',
             'meta_category'         => '',
@@ -285,6 +291,119 @@ function eventosapp_whatsapp_templates_update_settings($settings) {
         $settings = eventosapp_whatsapp_templates_default_settings();
     }
     update_option(EVENTOSAPP_WHATSAPP_TEMPLATES_OPTION, $settings, false);
+}
+
+/**
+ * Sanitiza IDs numéricos de WhatsApp Business Account.
+ */
+function eventosapp_whatsapp_templates_sanitize_waba_id($value) {
+    if ( function_exists('eventosapp_whatsapp_sanitize_waba_id') ) {
+        return eventosapp_whatsapp_sanitize_waba_id($value);
+    }
+    return preg_replace('/\D+/', '', (string) $value);
+}
+
+/**
+ * Sanitiza Phone Number ID usando el helper principal cuando está disponible.
+ */
+function eventosapp_whatsapp_templates_sanitize_phone_number_id($value) {
+    if ( function_exists('eventosapp_whatsapp_sanitize_phone_number_id') ) {
+        return eventosapp_whatsapp_sanitize_phone_number_id($value);
+    }
+    return preg_replace('/\D+/', '', (string) $value);
+}
+
+/**
+ * Obtiene las cuentas/números configurados en WhatsApp Tickets.
+ */
+function eventosapp_whatsapp_templates_get_phone_accounts() {
+    if ( function_exists('eventosapp_whatsapp_get_settings') && function_exists('eventosapp_whatsapp_get_phone_accounts') ) {
+        return eventosapp_whatsapp_get_phone_accounts(eventosapp_whatsapp_get_settings());
+    }
+    return [];
+}
+
+/**
+ * Devuelve el Phone Number ID por defecto de WhatsApp Tickets.
+ */
+function eventosapp_whatsapp_templates_get_default_phone_number_id() {
+    if ( function_exists('eventosapp_whatsapp_get_settings') ) {
+        $wa_settings = eventosapp_whatsapp_get_settings();
+        return eventosapp_whatsapp_templates_sanitize_phone_number_id($wa_settings['phone_number_id'] ?? '');
+    }
+    return '';
+}
+
+/**
+ * Devuelve datos completos del número/cuenta seleccionada para una plantilla.
+ * Si la plantilla no tiene número explícito, se interpreta como número por defecto
+ * para mantener compatibilidad con las plantillas aprobadas antes de agregar multi-número.
+ */
+function eventosapp_whatsapp_templates_resolve_sender_account($phone_number_id = '', $template_settings = null) {
+    $template_settings = is_array($template_settings) ? $template_settings : eventosapp_whatsapp_templates_get_settings();
+    $accounts = eventosapp_whatsapp_templates_get_phone_accounts();
+    $phone_number_id = eventosapp_whatsapp_templates_sanitize_phone_number_id($phone_number_id);
+    $default_phone_number_id = eventosapp_whatsapp_templates_get_default_phone_number_id();
+
+    if ( $phone_number_id === '' ) {
+        $phone_number_id = $default_phone_number_id;
+    }
+
+    if ( $phone_number_id !== '' && isset($accounts[$phone_number_id]) && is_array($accounts[$phone_number_id]) ) {
+        $account = $accounts[$phone_number_id];
+        $waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($account['waba_id'] ?? '');
+        if ( $waba_id === '' && $phone_number_id === $default_phone_number_id ) {
+            $waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '');
+        }
+        return [
+            'phone_number_id' => $phone_number_id,
+            'alias'           => sanitize_text_field((string)($account['alias'] ?? 'Número WhatsApp')),
+            'label'           => sanitize_text_field((string)($account['label'] ?? (($account['alias'] ?? 'Número WhatsApp') . ' — ' . $phone_number_id))),
+            'waba_id'         => $waba_id,
+            'is_default'      => ! empty($account['is_default']),
+        ];
+    }
+
+    return [
+        'phone_number_id' => $phone_number_id,
+        'alias'           => $phone_number_id !== '' ? 'Número no disponible' : 'Número por defecto',
+        'label'           => $phone_number_id !== '' ? 'Número no disponible — ' . $phone_number_id : 'Número por defecto',
+        'waba_id'         => $phone_number_id === $default_phone_number_id ? eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '') : '',
+        'is_default'      => $phone_number_id === '' || $phone_number_id === $default_phone_number_id,
+    ];
+}
+
+/**
+ * WABA efectivo de una plantilla según el número marcado.
+ */
+function eventosapp_whatsapp_templates_get_template_waba_id($template, $template_settings = null) {
+    $template = is_array($template) ? $template : [];
+    $template_settings = is_array($template_settings) ? $template_settings : eventosapp_whatsapp_templates_get_settings();
+    $sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '');
+    $account = eventosapp_whatsapp_templates_resolve_sender_account($sender_phone, $template_settings);
+
+    // El WABA configurado actualmente para el número tiene prioridad sobre el valor histórico
+    // guardado en la plantilla. Así se evita seguir enviando/sincronizando contra un WABA viejo
+    // cuando el administrador corrige el número en WhatsApp Tickets.
+    $waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($account['waba_id'] ?? '');
+    if ( $waba_id === '' ) {
+        $waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template['waba_id'] ?? '');
+    }
+    if ( $waba_id === '' && ! empty($account['is_default']) ) {
+        $waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '');
+    }
+    return $waba_id;
+}
+
+/**
+ * Etiqueta administrativa del número al que pertenece una plantilla.
+ */
+function eventosapp_whatsapp_templates_get_template_sender_label($template, $template_settings = null) {
+    $template = is_array($template) ? $template : [];
+    $template_settings = is_array($template_settings) ? $template_settings : eventosapp_whatsapp_templates_get_settings();
+    $sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '');
+    $account = eventosapp_whatsapp_templates_resolve_sender_account($sender_phone, $template_settings);
+    return sanitize_text_field((string)($account['label'] ?? 'Número por defecto'));
 }
 
 /**
@@ -526,6 +645,25 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         $modality = 'custom';
     }
 
+    $template_settings = eventosapp_whatsapp_templates_get_settings();
+    $requested_sender_phone = array_key_exists('sender_phone_number_id', $raw)
+        ? eventosapp_whatsapp_templates_sanitize_phone_number_id($raw['sender_phone_number_id'])
+        : eventosapp_whatsapp_templates_sanitize_phone_number_id($existing['sender_phone_number_id'] ?? '');
+    $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($requested_sender_phone, $template_settings);
+    $effective_sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? $requested_sender_phone);
+    $existing_effective_sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($existing['sender_phone_number_id'] ?? '');
+    if ( $existing_effective_sender_phone === '' ) {
+        $existing_effective_sender_phone = eventosapp_whatsapp_templates_get_default_phone_number_id();
+    }
+    $sender_changed = ! empty($existing) && $effective_sender_phone !== '' && $existing_effective_sender_phone !== '' && $effective_sender_phone !== $existing_effective_sender_phone;
+    $effective_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($sender_account['waba_id'] ?? '');
+    if ( $effective_waba_id === '' && ! $sender_changed ) {
+        $effective_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($existing['waba_id'] ?? '');
+    }
+    if ( $effective_waba_id === '' && ! empty($sender_account['is_default']) ) {
+        $effective_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '');
+    }
+
     $template = wp_parse_args([
         'id'                   => $id,
         'is_default'           => ! empty($existing['is_default']) && $existing['is_default'] === '1' ? '1' : '0',
@@ -554,14 +692,17 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'button_2_text'        => sanitize_text_field($raw['button_2_text'] ?? ($existing['button_2_text'] ?? '')),
         'button_2_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_2_url'] ?? ($existing['button_2_url'] ?? '')),
         'button_2_example'     => esc_url_raw($raw['button_2_example'] ?? ($existing['button_2_example'] ?? '')),
-        'meta_template_id'     => sanitize_text_field($existing['meta_template_id'] ?? ''),
-        'meta_status'          => sanitize_text_field($existing['meta_status'] ?? 'LOCAL'),
+        'sender_phone_number_id' => $effective_sender_phone,
+        'sender_phone_label'   => sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp'))),
+        'waba_id'              => $effective_waba_id,
+        'meta_template_id'     => $sender_changed ? '' : sanitize_text_field($existing['meta_template_id'] ?? ''),
+        'meta_status'          => $sender_changed ? 'LOCAL' : sanitize_text_field($existing['meta_status'] ?? 'LOCAL'),
         'meta_category'        => sanitize_text_field($existing['meta_category'] ?? ''),
-        'meta_rejected_reason' => sanitize_text_field($existing['meta_rejected_reason'] ?? ''),
-        'last_api_message'     => sanitize_text_field($existing['last_api_message'] ?? ''),
-        'last_api_response'    => isset($existing['last_api_response']) && is_array($existing['last_api_response']) ? $existing['last_api_response'] : [],
-        'last_submitted_at'    => sanitize_text_field($existing['last_submitted_at'] ?? ''),
-        'last_checked_at'      => sanitize_text_field($existing['last_checked_at'] ?? ''),
+        'meta_rejected_reason' => $sender_changed ? '' : sanitize_text_field($existing['meta_rejected_reason'] ?? ''),
+        'last_api_message'     => $sender_changed ? 'Número emisor cambiado. Debes enviar esta plantilla nuevamente a Meta para el WABA correspondiente.' : sanitize_text_field($existing['last_api_message'] ?? ''),
+        'last_api_response'    => $sender_changed ? [] : (isset($existing['last_api_response']) && is_array($existing['last_api_response']) ? $existing['last_api_response'] : []),
+        'last_submitted_at'    => $sender_changed ? '' : sanitize_text_field($existing['last_submitted_at'] ?? ''),
+        'last_checked_at'      => $sender_changed ? '' : sanitize_text_field($existing['last_checked_at'] ?? ''),
         'created_at'           => sanitize_text_field($existing['created_at'] ?? current_time('mysql')),
         'updated_at'           => current_time('mysql'),
     ], []);
@@ -1074,16 +1215,20 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
         return ['ok' => false, 'message' => 'Plantilla local no encontrada.'];
     }
 
-    $waba_id = preg_replace('/\D+/', '', (string)($settings['waba_id'] ?? ''));
+    $template = $settings['templates'][$template_id];
+    $waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
     if ( $waba_id === '' ) {
-        return ['ok' => false, 'message' => 'Configura primero el WhatsApp Business Account ID.'];
+        return ['ok' => false, 'message' => 'Configura el WhatsApp Business Account ID del número emisor al que pertenece esta plantilla.'];
     }
 
-    $template = $settings['templates'][$template_id];
+    $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
     $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'] ?? '', $template['body_examples'] ?? '');
     $template['body_text_meta'] = sanitize_textarea_field($prepared_body['text'] ?? ($template['body_text'] ?? ''));
     $template['body_variable_map'] = eventosapp_whatsapp_templates_sanitize_body_variable_map($prepared_body['variable_numbers'] ?? []);
     $template['body_variable_signature'] = sanitize_text_field($prepared_body['signature'] ?? md5((string)($template['body_text'] ?? '')));
+    $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
+    $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
+    $template['waba_id'] = $waba_id;
     $settings['templates'][$template_id] = $template;
     eventosapp_whatsapp_templates_update_settings($settings);
 
@@ -1098,6 +1243,16 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
         'category'   => 'UTILITY',
         'components' => eventosapp_whatsapp_templates_build_meta_components($template),
     ];
+
+    if ( function_exists('eventosapp_whatsapp_log') ) {
+        eventosapp_whatsapp_log('Plantilla WhatsApp enviada a Meta con número emisor', [
+            'template_id' => $template_id,
+            'template_name' => $template['name'] ?? '',
+            'sender_phone_number_id' => $template['sender_phone_number_id'] ?? '',
+            'sender_phone_label' => $template['sender_phone_label'] ?? '',
+            'waba_id' => $waba_id,
+        ]);
+    }
 
     if ( ! empty($template['meta_template_id']) ) {
         $path = rawurlencode($template['meta_template_id']);
@@ -1163,6 +1318,7 @@ function eventosapp_whatsapp_templates_check_status($template_id) {
         $template['meta_status'] = ! empty($response['status']) ? sanitize_text_field((string)$response['status']) : $template['meta_status'];
         $template['meta_category'] = ! empty($response['category']) ? sanitize_text_field((string)$response['category']) : $template['meta_category'];
         $template['meta_rejected_reason'] = ! empty($response['rejected_reason']) ? sanitize_text_field((string)$response['rejected_reason']) : '';
+        $template['waba_id'] = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
         $template['last_checked_at'] = current_time('mysql');
         $template['last_api_message'] = sanitize_text_field((string)($api_result['message'] ?? ''));
         $template['last_api_response'] = $response;
@@ -1184,12 +1340,13 @@ function eventosapp_whatsapp_templates_sync_template_by_name($template_id) {
         return ['ok' => false, 'message' => 'Plantilla local no encontrada.'];
     }
 
-    $waba_id = preg_replace('/\D+/', '', (string)($settings['waba_id'] ?? ''));
+    $template = $settings['templates'][$template_id];
+    $waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
     if ( $waba_id === '' ) {
-        return ['ok' => false, 'message' => 'Configura primero el WhatsApp Business Account ID.'];
+        return ['ok' => false, 'message' => 'Configura el WhatsApp Business Account ID del número emisor de esta plantilla.'];
     }
 
-    $template = $settings['templates'][$template_id];
+    $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
     $fields = 'id,name,status,category,language,rejected_reason,quality_score';
     $path = rawurlencode($waba_id) . '/message_templates?limit=100&fields=' . rawurlencode($fields);
     $api_result = eventosapp_whatsapp_templates_api_request('GET', $path);
@@ -1217,6 +1374,9 @@ function eventosapp_whatsapp_templates_sync_template_by_name($template_id) {
     $template['meta_status'] = ! empty($found['status']) ? sanitize_text_field((string)$found['status']) : 'UNKNOWN';
     $template['meta_category'] = ! empty($found['category']) ? sanitize_text_field((string)$found['category']) : '';
     $template['meta_rejected_reason'] = ! empty($found['rejected_reason']) ? sanitize_text_field((string)$found['rejected_reason']) : '';
+    $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
+    $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
+    $template['waba_id'] = $waba_id;
     $template['last_checked_at'] = current_time('mysql');
     $template['last_api_message'] = 'Plantilla sincronizada desde Meta por nombre e idioma.';
     $template['last_api_response'] = $found;
@@ -1231,18 +1391,50 @@ function eventosapp_whatsapp_templates_sync_template_by_name($template_id) {
  */
 function eventosapp_whatsapp_templates_sync_all() {
     $settings = eventosapp_whatsapp_templates_get_settings();
-    $waba_id = preg_replace('/\D+/', '', (string)($settings['waba_id'] ?? ''));
+    $templates = isset($settings['templates']) && is_array($settings['templates']) ? $settings['templates'] : [];
 
-    if ( $waba_id === '' ) {
-        return ['ok' => false, 'message' => 'Configura primero el WhatsApp Business Account ID.'];
+    $waba_ids = [];
+    $default_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($settings['waba_id'] ?? '');
+    if ( $default_waba_id !== '' ) {
+        $waba_ids[$default_waba_id] = $default_waba_id;
+    }
+
+    foreach ( $templates as $template ) {
+        if ( ! is_array($template) ) {
+            continue;
+        }
+        $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
+        if ( $template_waba_id !== '' ) {
+            $waba_ids[$template_waba_id] = $template_waba_id;
+        }
+    }
+
+    if ( empty($waba_ids) ) {
+        return ['ok' => false, 'message' => 'Configura al menos un WhatsApp Business Account ID para sincronizar plantillas.'];
     }
 
     $fields = 'id,name,status,category,language,rejected_reason,quality_score';
-    $path = rawurlencode($waba_id) . '/message_templates?limit=100&fields=' . rawurlencode($fields);
-    $api_result = eventosapp_whatsapp_templates_api_request('GET', $path);
+    $remote_by_waba = [];
+    $last_response = [];
 
-    if ( empty($api_result['ok']) || empty($api_result['response']['data']) || ! is_array($api_result['response']['data']) ) {
-        return $api_result;
+    foreach ( $waba_ids as $waba_id ) {
+        $path = rawurlencode($waba_id) . '/message_templates?limit=100&fields=' . rawurlencode($fields);
+        $api_result = eventosapp_whatsapp_templates_api_request('GET', $path);
+        $last_response[$waba_id] = $api_result['response'] ?? null;
+
+        if ( empty($api_result['ok']) || empty($api_result['response']['data']) || ! is_array($api_result['response']['data']) ) {
+            continue;
+        }
+
+        $remote_by_waba[$waba_id] = $api_result['response']['data'];
+    }
+
+    if ( empty($remote_by_waba) ) {
+        return [
+            'ok' => false,
+            'message' => 'No se pudieron consultar plantillas en los WABA configurados.',
+            'response' => $last_response,
+        ];
     }
 
     $updated = 0;
@@ -1250,17 +1442,28 @@ function eventosapp_whatsapp_templates_sync_all() {
         if ( ! is_array($template) ) {
             continue;
         }
-        foreach ( $api_result['response']['data'] as $remote ) {
+
+        $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
+        if ( $template_waba_id === '' || empty($remote_by_waba[$template_waba_id]) ) {
+            continue;
+        }
+
+        foreach ( $remote_by_waba[$template_waba_id] as $remote ) {
             if ( ! is_array($remote) ) {
                 continue;
             }
             if ( ($remote['name'] ?? '') !== ($template['name'] ?? '') || ($remote['language'] ?? '') !== ($template['language'] ?? '') ) {
                 continue;
             }
+
+            $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
             $template['meta_template_id'] = ! empty($remote['id']) ? sanitize_text_field((string)$remote['id']) : ($template['meta_template_id'] ?? '');
             $template['meta_status'] = ! empty($remote['status']) ? sanitize_text_field((string)$remote['status']) : ($template['meta_status'] ?? 'UNKNOWN');
             $template['meta_category'] = ! empty($remote['category']) ? sanitize_text_field((string)$remote['category']) : ($template['meta_category'] ?? '');
             $template['meta_rejected_reason'] = ! empty($remote['rejected_reason']) ? sanitize_text_field((string)$remote['rejected_reason']) : '';
+            $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
+            $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
+            $template['waba_id'] = $template_waba_id;
             $template['last_checked_at'] = current_time('mysql');
             $template['last_api_response'] = $remote;
             $settings['templates'][$local_id] = $template;
@@ -1270,12 +1473,11 @@ function eventosapp_whatsapp_templates_sync_all() {
     }
 
     $settings['last_sync_at'] = current_time('mysql');
-    $settings['last_message'] = 'Sincronización ejecutada. Plantillas locales actualizadas: ' . $updated;
+    $settings['last_message'] = 'Sincronización ejecutada por WABA. Plantillas locales actualizadas: ' . $updated;
     eventosapp_whatsapp_templates_update_settings($settings);
 
-    return ['ok' => true, 'message' => $settings['last_message'], 'response' => $api_result['response']];
+    return ['ok' => true, 'message' => $settings['last_message'], 'response' => $last_response];
 }
-
 /**
  * Render principal del módulo.
  */
@@ -1431,7 +1633,7 @@ function eventosapp_whatsapp_templates_render_list($settings) {
     <div class="evapp-wa-tpl-card">
         <h2>Plantillas disponibles</h2>
         <p>
-            Las dos plantillas por defecto ya quedan creadas localmente como base: una para modalidad presencial y otra para modalidad virtual. Puedes editarlas, duplicarlas o enviar su estructura a Meta para aprobación.
+            Las dos plantillas por defecto ya quedan creadas localmente como base: una para modalidad presencial y otra para modalidad virtual. Puedes editarlas, duplicarlas o enviar su estructura a Meta para aprobación marcándolas para el número emisor correspondiente.
         </p>
 
         <p class="evapp-wa-tpl-actions">
@@ -1458,6 +1660,7 @@ function eventosapp_whatsapp_templates_render_list($settings) {
                 <tr>
                     <th>Plantilla</th>
                     <th>Modalidad</th>
+                    <th>Número / WABA</th>
                     <th>Idioma / Categoría</th>
                     <th>Estado Meta</th>
                     <th>Botones</th>
@@ -1476,6 +1679,16 @@ function eventosapp_whatsapp_templates_render_list($settings) {
                             <?php if ( ! empty($template['meta_template_id']) ) : ?><br><small>ID Meta: <?php echo esc_html($template['meta_template_id']); ?></small><?php endif; ?>
                         </td>
                         <td><?php echo esc_html(eventosapp_whatsapp_templates_modality_label($template['modality'] ?? 'custom')); ?></td>
+                        <td>
+                            <?php
+                            $sender_label = eventosapp_whatsapp_templates_get_template_sender_label($template, $settings);
+                            $sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '') ?: eventosapp_whatsapp_templates_get_default_phone_number_id();
+                            $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
+                            ?>
+                            <strong><?php echo esc_html($sender_label); ?></strong>
+                            <?php if ( $sender_phone !== '' ) : ?><br><small>Phone ID: <?php echo esc_html($sender_phone); ?></small><?php endif; ?>
+                            <?php if ( $template_waba_id !== '' ) : ?><br><small>WABA: <?php echo esc_html($template_waba_id); ?></small><?php else : ?><br><small style="color:#b91c1c;">Sin WABA ID</small><?php endif; ?>
+                        </td>
                         <td>
                             <?php echo esc_html($template['language'] ?? 'es'); ?><br>
                             <?php echo esc_html($template['category'] ?? 'UTILITY'); ?>
@@ -1576,7 +1789,13 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
         $is_new = true;
     }
 
+    $phone_accounts = eventosapp_whatsapp_templates_get_phone_accounts();
+    $template_sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '') ?: eventosapp_whatsapp_templates_get_default_phone_number_id();
+    $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
+
     $preview_payload = [
+        'waba_id'    => $template_waba_id,
+        'sender_phone_number_id' => $template_sender_phone,
         'name'       => $template['name'] ?? '',
         'language'   => $template['language'] ?? 'es',
         'category'   => 'UTILITY',
@@ -1601,7 +1820,36 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 <label for="evapp_tpl_name">Nombre técnico Meta</label>
                 <div>
                     <input type="text" id="evapp_tpl_name" name="template[name]" value="<?php echo esc_attr($template['name'] ?? ''); ?>" required>
-                    <p class="evapp-wa-tpl-help">Usa minúsculas, números y guion bajo. Ejemplo: <span class="evapp-wa-tpl-code">eventosapp_ticket_presencial_v1</span>.</p>
+                    <p class="evapp-wa-tpl-help">Usa minúsculas, números y guion bajo. Para aprobar una versión por otro número, duplica la plantilla y cambia el nombre técnico para que sea único dentro del WABA seleccionado.</p>
+                </div>
+
+                <label for="evapp_tpl_sender_phone">Número emisor de esta plantilla</label>
+                <div>
+                    <?php if ( empty($phone_accounts) ) : ?>
+                        <p class="evapp-wa-tpl-help" style="margin-top:0;color:#b91c1c;">Primero configura al menos el Phone Number ID por defecto en WhatsApp Tickets.</p>
+                        <input type="hidden" name="template[sender_phone_number_id]" value="<?php echo esc_attr($template_sender_phone); ?>">
+                    <?php else : ?>
+                        <select id="evapp_tpl_sender_phone" name="template[sender_phone_number_id]" required>
+                            <?php foreach ( $phone_accounts as $account_id => $account ) :
+                                $account_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($account['waba_id'] ?? '');
+                                if ( $account_waba_id === '' && ! empty($account['is_default']) ) {
+                                    $account_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($settings['waba_id'] ?? '');
+                                }
+                                $account_label = (string)($account['label'] ?? (($account['alias'] ?? 'Número WhatsApp') . ' — ' . $account_id));
+                                if ( $account_waba_id === '' ) {
+                                    $account_label .= ' · sin WABA ID';
+                                }
+                            ?>
+                                <option value="<?php echo esc_attr($account_id); ?>" <?php selected($template_sender_phone, $account_id); ?>><?php echo esc_html($account_label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <p class="evapp-wa-tpl-help">Esta marca controla en qué WhatsApp Business Account ID se crea/sincroniza la plantilla y evita que luego se use con un número emisor diferente en tickets o envío masivo.</p>
+                        <?php if ( $template_waba_id !== '' ) : ?>
+                            <p class="evapp-wa-tpl-help">WABA efectivo para esta plantilla: <span class="evapp-wa-tpl-code"><?php echo esc_html($template_waba_id); ?></span>.</p>
+                        <?php else : ?>
+                            <p class="evapp-wa-tpl-help" style="color:#b91c1c;">Este número no tiene WABA ID configurado. No podrás enviarla a aprobación hasta guardar el WABA ID en WhatsApp Tickets o en la conexión de plantillas para el número por defecto.</p>
+                        <?php endif; ?>
+                    <?php endif; ?>
                 </div>
 
                 <label for="evapp_tpl_language">Idioma</label>
