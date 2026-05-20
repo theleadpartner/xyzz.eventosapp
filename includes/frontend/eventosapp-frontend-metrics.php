@@ -154,7 +154,15 @@ add_shortcode('eventosapp_front_metrics', function(){
         .evapp-qr-table { grid-column: span 6; }
       }
       /* Métricas personalizadas configuradas por evento */
-      .evapp-custom-metrics-shell { grid-column: span 12; display:none; }
+      .evapp-custom-metrics-panel { grid-column: span 12; display:none; }
+      .evapp-custom-metrics-panel.is-visible { display:block; }
+      .evapp-custom-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; background:#0b1020; color:#eaf1ff; border-radius:16px; padding:14px 16px; margin:0 0 12px; box-shadow:0 8px 24px rgba(0,0,0,.12); }
+      .evapp-custom-toolbar-title { font-weight:900; color:#cfe0ff; margin:0 0 4px; font-size:1rem; }
+      .evapp-custom-toolbar-status { color:#a9b6d3; font-size:.9rem; line-height:1.35; }
+      .evapp-custom-toolbar-status.is-loading { color:#facc15; }
+      .evapp-custom-toolbar-status.is-error { color:#ffb4b4; }
+      .evapp-custom-toolbar .button { white-space:nowrap; }
+      .evapp-custom-metrics-shell { display:none; }
       .evapp-custom-metrics-shell.is-visible { display:block; }
       .evapp-custom-title { margin:8px 0 12px; font-size:1.15rem; font-weight:900; letter-spacing:.2px; }
       .evapp-custom-row { display:grid; grid-template-columns:repeat(12,1fr); gap:12px; margin-bottom:12px; }
@@ -308,7 +316,16 @@ add_shortcode('eventosapp_front_metrics', function(){
         </div>
 
         <!-- Métricas personalizadas configuradas en el evento -->
-        <div id="evappCustomMetrics" class="evapp-custom-metrics-shell"></div>
+        <div id="evappCustomMetricsPanel" class="evapp-custom-metrics-panel" aria-live="polite">
+          <div class="evapp-custom-toolbar">
+            <div>
+              <div class="evapp-custom-toolbar-title">Métricas personalizadas</div>
+              <div id="evappCustomMetricsStatus" class="evapp-custom-toolbar-status">Esperando a que terminen de cargar las métricas por defecto…</div>
+            </div>
+            <button type="button" class="button" id="evappCustomReloadBtn" disabled>Recargar personalizadas</button>
+          </div>
+          <div id="evappCustomMetrics" class="evapp-custom-metrics-shell"></div>
+        </div>
       </div>
     </div>
     <?php
@@ -347,7 +364,10 @@ $js = <<<'JS'
         // Referencias para gráfico y tabla de medios de check-in
         const qrPieHint = document.getElementById('evappQrPieHint');
         const qrTableBody = document.getElementById('evappQrTableBody');
+        const customMetricsPanel = document.getElementById('evappCustomMetricsPanel');
         const customMetricsWrap = document.getElementById('evappCustomMetrics');
+        const customMetricsStatus = document.getElementById('evappCustomMetricsStatus');
+        const customReloadBtn = document.getElementById('evappCustomReloadBtn');
 
         // Filtros
         const modeSel = document.getElementById('evappMode');
@@ -380,6 +400,14 @@ $js = <<<'JS'
         let qrPieChart = null; // Chart para medios de check-in
         let customCharts = {}; // Gráficos personalizados por evento
 
+        let defaultFetchInProgress = false;
+        let defaultFetchPromise = null;
+        let pendingDefaultFetch = false;
+        let customFetchInProgress = false;
+        let customReloadQueued = false;
+        let customHasLoaded = false;
+        let customMetricsAvailable = false;
+
         // Color estable por nombre de sesión
         function colorFor(text){
             let h = 0;
@@ -398,6 +426,41 @@ $js = <<<'JS'
 
         function fmt(n){ return (n||0).toLocaleString(); }
         function pct(n){ return (Math.round((n||0)*100)/100).toFixed(2) + '%'; }
+
+        function setCustomPanelVisible(visible){
+            if (!customMetricsPanel) return;
+            if (visible) customMetricsPanel.classList.add('is-visible');
+            else customMetricsPanel.classList.remove('is-visible');
+        }
+
+        function setCustomStatus(message, state){
+            if (!customMetricsStatus) return;
+            customMetricsStatus.textContent = message || '';
+            customMetricsStatus.classList.remove('is-loading', 'is-error');
+            if (state === 'loading') customMetricsStatus.classList.add('is-loading');
+            if (state === 'error') customMetricsStatus.classList.add('is-error');
+        }
+
+        function setCustomButton(disabled, label){
+            if (!customReloadBtn) return;
+            customReloadBtn.disabled = !!disabled;
+            if (label) customReloadBtn.textContent = label;
+        }
+
+        function getCurrentFilters(){
+            const mode = modeSel ? modeSel.value : 'sum';
+            const filters = {
+                mode: mode,
+                checkin_type: checkinTypeSel ? checkinTypeSel.value : 'all'
+            };
+            if (mode === 'sum') {
+                filters.from = inFrom && inFrom.value ? inFrom.value : '';
+                filters.to = inTo && inTo.value ? inTo.value : '';
+            } else {
+                filters.day = inDay && inDay.value ? inDay.value : '';
+            }
+            return filters;
+        }
 
         function renderPie(data){
             const ctx = document.getElementById('evappPie').getContext('2d');
@@ -855,67 +918,232 @@ $js = <<<'JS'
             kpiChecked.textContent = fmt(checked||0) + ' Checked In' + suffix;
         }
 
-        async function fetchData(){
+        function afterDefaultMetricsLoaded(data){
+            customMetricsAvailable = !!(data && data.custom_metrics_available);
+
+            if (!customMetricsAvailable) {
+                customReloadQueued = false;
+                customHasLoaded = false;
+                destroyCustomCharts();
+                if (customMetricsWrap) {
+                    customMetricsWrap.classList.remove('is-visible');
+                    customMetricsWrap.innerHTML = '';
+                }
+                setCustomPanelVisible(false);
+                setCustomButton(true, 'Recargar personalizadas');
+                return;
+            }
+
+            setCustomPanelVisible(true);
+
+            if (!customHasLoaded && !customFetchInProgress) {
+                customReloadQueued = true;
+                setCustomStatus('Las métricas por defecto ya cargaron. Las personalizadas se cargarán enseguida.', 'loading');
+                setCustomButton(true, 'Cargando…');
+            } else if (!customFetchInProgress) {
+                setCustomStatus('La carga base terminó. Las personalizadas no se recargan automáticamente; usa el botón para refrescarlas bajo demanda.', '');
+                setCustomButton(false, 'Recargar personalizadas');
+            }
+        }
+
+        function requestDefaultMetricsLoad(options){
+            options = options || {};
+            if (customFetchInProgress) {
+                if (options.force) {
+                    pendingDefaultFetch = true;
+                    setCustomStatus('Recarga de métricas por defecto pendiente. Las personalizadas esperarán para no cruzar cargas.', 'loading');
+                }
+                return defaultFetchPromise || Promise.resolve(null);
+            }
+            return fetchData(options);
+        }
+
+        async function fetchData(options){
+            options = options || {};
+
+            if (defaultFetchInProgress) {
+                if (options.force) {
+                    pendingDefaultFetch = true;
+                    if (customMetricsAvailable) {
+                        setCustomPanelVisible(true);
+                        setCustomStatus('Hay una recarga de métricas por defecto en curso. Las personalizadas esperarán.', 'loading');
+                        setCustomButton(true, 'Esperando…');
+                    }
+                }
+                return defaultFetchPromise;
+            }
+
+            defaultFetchInProgress = true;
+
+            defaultFetchPromise = (async function(){
+                try {
+                    const fd = new FormData();
+                    fd.append('action',   'eventosapp_metrics_data');
+                    fd.append('security', ajaxNonce);
+
+                    const filters = getCurrentFilters();
+                    fd.append('mode', filters.mode || 'sum');
+                    fd.append('checkin_type', filters.checkin_type || 'all');
+                    if ((filters.mode || 'sum') === 'sum'){
+                        if (filters.from) fd.append('from', filters.from);
+                        if (filters.to)   fd.append('to',   filters.to);
+                    } else {
+                        if (filters.day)  fd.append('day',  filters.day);
+                    }
+
+                    const resp = await fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' });
+                    const j = await resp.json();
+                    if (!j || !j.success) throw new Error((j && j.data && j.data.error) ? j.data.error : 'Error');
+
+                    const d = j.data;
+
+                    if (!inDay.value && d.bar && d.bar.day)   inDay.value  = d.bar.day;
+                    if (!inFrom.value && d.bar && d.bar.from) inFrom.value = d.bar.from;
+                    if (!inTo.value && d.bar && d.bar.to)     inTo.value   = d.bar.to;
+
+                    if (checkinTypeSel && d.checkin_type && checkinTypeSel.value !== d.checkin_type) {
+                        checkinTypeSel.value = d.checkin_type;
+                    }
+
+                    setKpis(d.total_tickets, d.checked_in_total, d.checkin_filter_label || '');
+                    renderPie(d);
+                    renderBars(d);
+                    renderTable((d.table && d.table.rows) ? d.table.rows : [], d);
+                    renderQrPie(d.qr_stats);
+                    renderQrTable(d.qr_stats);
+                    afterDefaultMetricsLoaded(d);
+
+                    return d;
+                } catch(e){
+                    console.error(e);
+                    tableBody.innerHTML = '<tr><td colspan="6" class="evapp-bad">No se pudieron cargar las métricas.</td></tr>';
+                    qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-bad">Error al cargar datos de medios de check-in.</td></tr>';
+                    if (customMetricsAvailable) {
+                        setCustomPanelVisible(true);
+                        setCustomStatus('No se recargaron las personalizadas porque falló la carga de métricas por defecto.', 'error');
+                        setCustomButton(false, 'Recargar personalizadas');
+                    }
+                    throw e;
+                } finally {
+                    defaultFetchInProgress = false;
+                    defaultFetchPromise = null;
+
+                    if (pendingDefaultFetch) {
+                        pendingDefaultFetch = false;
+                        fetchData({force:true, reason:'queued'});
+                        return;
+                    }
+
+                    if (customReloadQueued) {
+                        customReloadQueued = false;
+                        fetchCustomMetrics();
+                    }
+                }
+            })();
+
+            return defaultFetchPromise;
+        }
+
+        function requestCustomMetricsLoad(){
+            if (!customMetricsAvailable) return;
+
+            setCustomPanelVisible(true);
+
+            if (defaultFetchInProgress || pendingDefaultFetch) {
+                customReloadQueued = true;
+                setCustomStatus('Esperando a que terminen las métricas por defecto para cargar las personalizadas.', 'loading');
+                setCustomButton(true, 'Esperando…');
+                return;
+            }
+
+            if (customFetchInProgress) {
+                customReloadQueued = true;
+                setCustomStatus('Ya hay una carga personalizada en curso. Se hará una recarga adicional al terminar.', 'loading');
+                setCustomButton(true, 'Cargando…');
+                return;
+            }
+
+            fetchCustomMetrics();
+        }
+
+        async function fetchCustomMetrics(){
+            if (!customMetricsAvailable || customFetchInProgress || defaultFetchInProgress || pendingDefaultFetch) {
+                if (customMetricsAvailable) customReloadQueued = true;
+                return;
+            }
+
+            customFetchInProgress = true;
+            setCustomPanelVisible(true);
+            setCustomStatus('Cargando métricas personalizadas después de la carga base…', 'loading');
+            setCustomButton(true, 'Cargando…');
+
             try {
                 const fd = new FormData();
-                fd.append('action',   'eventosapp_metrics_data');
+                const filters = getCurrentFilters();
+                fd.append('action', 'eventosapp_custom_metrics_data');
                 fd.append('security', ajaxNonce);
-
-                // Filtros actuales
-                const mode = modeSel.value;
-                fd.append('mode', mode);
-                const checkinType = checkinTypeSel ? checkinTypeSel.value : 'all';
-                fd.append('checkin_type', checkinType);
-                if (mode === 'sum'){
-                    if (inFrom.value) fd.append('from', inFrom.value);
-                    if (inTo.value)   fd.append('to',   inTo.value);
-                } else {
-                    if (inDay.value)  fd.append('day',  inDay.value);
+                fd.append('mode', filters.mode || 'sum');
+                fd.append('checkin_type', filters.checkin_type || 'all');
+                if ((filters.mode || 'sum') === 'sum') {
+                    if (filters.from) fd.append('from', filters.from);
+                    if (filters.to)   fd.append('to', filters.to);
+                } else if (filters.day) {
+                    fd.append('day', filters.day);
                 }
 
                 const resp = await fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' });
                 const j = await resp.json();
                 if (!j || !j.success) throw new Error((j && j.data && j.data.error) ? j.data.error : 'Error');
 
-                const d = j.data;
+                renderCustomMetrics(j.data ? j.data.custom_metrics : null);
+                customHasLoaded = true;
+                setCustomStatus('Métricas personalizadas cargadas. No se actualizarán solas; usa el botón cuando necesites refrescarlas.', '');
+                setCustomButton(false, 'Recargar personalizadas');
+            } catch(e) {
+                console.error(e);
+                setCustomStatus('No se pudieron cargar las métricas personalizadas.', 'error');
+                setCustomButton(false, 'Recargar personalizadas');
+            } finally {
+                customFetchInProgress = false;
 
-                // Autollenar inputs si vienen vacíos
-                if (!inDay.value && d.bar && d.bar.day)   inDay.value  = d.bar.day;
-                if (!inFrom.value && d.bar && d.bar.from) inFrom.value = d.bar.from;
-                if (!inTo.value && d.bar && d.bar.to)     inTo.value   = d.bar.to;
-
-                if (checkinTypeSel && d.checkin_type && checkinTypeSel.value !== d.checkin_type) {
-                    checkinTypeSel.value = d.checkin_type;
+                if (pendingDefaultFetch) {
+                    pendingDefaultFetch = false;
+                    fetchData({force:true, reason:'queued-after-custom'});
+                    return;
                 }
 
-                setKpis(d.total_tickets, d.checked_in_total, d.checkin_filter_label || '');
-                renderPie(d);
-                renderBars(d);
-                renderTable((d.table && d.table.rows) ? d.table.rows : [], d);
-                
-                // Renderizar gráfico y tabla de medios de check-in
-                renderQrPie(d.qr_stats);
-                renderQrTable(d.qr_stats);
-
-                // Métricas personalizadas configuradas desde el evento
-                renderCustomMetrics(d.custom_metrics);
-            } catch(e){
-                console.error(e);
-                tableBody.innerHTML = '<tr><td colspan="6" class="evapp-bad">No se pudieron cargar las métricas.</td></tr>';
-                qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-bad">Error al cargar datos de medios de check-in.</td></tr>';
-                renderCustomMetrics(null);
+                if (customReloadQueued) {
+                    customReloadQueued = false;
+                    fetchCustomMetrics();
+                }
             }
         }
 
-        btnApply.addEventListener('click', function(e){ e.preventDefault(); fetchData(); });
+        btnApply.addEventListener('click', function(e){
+            e.preventDefault();
+            customHasLoaded = false;
+            customReloadQueued = false;
+            requestDefaultMetricsLoad({force:true, reason:'apply'});
+        });
+
+        if (customReloadBtn) {
+            customReloadBtn.addEventListener('click', function(e){
+                e.preventDefault();
+                requestCustomMetricsLoad();
+            });
+        }
 
         // Espera al DOM
         if (document.readyState !== 'loading') init();
         else document.addEventListener('DOMContentLoaded', init);
 
         function init(){
-            fetchData();
-            setInterval(function(){ if (!document.hidden) fetchData(); }, 15000);
+            requestDefaultMetricsLoad({force:true, reason:'initial'});
+            setInterval(function(){
+                if (!document.hidden && !defaultFetchInProgress && !customFetchInProgress) {
+                    requestDefaultMetricsLoad({force:false, reason:'auto'});
+                }
+            }, 15000);
         }
     })();
 JS;
@@ -1012,15 +1240,21 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
 
     // Tickets del evento
     $q = new WP_Query([
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'any',
-        'posts_per_page' => -1,
-        'fields'         => 'ids',
-        'meta_query'     => [
+        'post_type'              => 'eventosapp_ticket',
+        'post_status'            => 'any',
+        'posts_per_page'         => -1,
+        'fields'                 => 'ids',
+        'no_found_rows'          => true,
+        'update_post_meta_cache' => true,
+        'update_post_term_cache' => false,
+        'meta_query'             => [
             ['key'=>'_eventosapp_ticket_evento_id', 'value'=>$event_id, 'compare'=>'='],
         ],
     ]);
-    $ids = $q->posts;
+    $ids = array_map('intval', (array) $q->posts);
+    if ( ! empty($ids) ) {
+        update_meta_cache('post', $ids);
+    }
     $total = count($ids);
 
     // Fechas válidas del evento activo.
@@ -1273,12 +1507,33 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             'types' => $qr_stats_filtered,
             'total' => $qr_total,
         ],
-        'custom_metrics' => function_exists('eventosapp_custom_metrics_get_payload')
-            ? eventosapp_custom_metrics_get_payload($event_id)
-            : ['settings' => ['show_header' => true, 'header_text' => 'Métricas personalizadas', 'header_color' => '#eaf1ff'], 'rows' => [], 'has_metrics' => false]
+        'custom_metrics_available' => function_exists('eventosapp_custom_metrics_has_enabled_slots')
+            ? eventosapp_custom_metrics_has_enabled_slots($event_id)
+            : false,
+        'custom_metrics' => null,
     ];
 
     wp_send_json_success($out);
+});
+
+add_action('wp_ajax_eventosapp_custom_metrics_data', function(){
+    check_ajax_referer('eventosapp_metrics_data', 'security');
+
+    if ( ! is_user_logged_in() ) wp_send_json_error(['error'=>'No autorizado']);
+    if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('metrics') ) {
+        wp_send_json_error(['error'=>'Permisos insuficientes']);
+    }
+
+    $event_id = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
+    if ( ! $event_id ) wp_send_json_error(['error'=>'No hay evento activo.']);
+
+    $payload = function_exists('eventosapp_custom_metrics_get_payload')
+        ? eventosapp_custom_metrics_get_payload($event_id)
+        : ['settings' => ['show_header' => true, 'header_text' => 'Métricas personalizadas', 'header_color' => '#eaf1ff'], 'rows' => [], 'has_metrics' => false];
+
+    wp_send_json_success([
+        'custom_metrics' => $payload,
+    ]);
 });
 
 
