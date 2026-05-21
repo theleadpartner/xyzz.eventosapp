@@ -148,6 +148,58 @@ if ( ! function_exists('eventosapp_custom_metrics_sanitize_settings') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_custom_metrics_normalize_field_key') ) {
+    function eventosapp_custom_metrics_normalize_field_key($field_key){
+        $field_key = sanitize_key((string) $field_key);
+        if ( $field_key === '' ) return '';
+
+        $aliases = [
+            '_eventosapp_ticket_modalidad'  => 'modalidad',
+            'eventosapp_ticket_modalidad'   => 'modalidad',
+            'ticket_modalidad'              => 'modalidad',
+            'modalidad_ticket'              => 'modalidad',
+            'modalidad_del_ticket'          => 'modalidad',
+            'tipo_modalidad'                => 'modalidad',
+        ];
+
+        return isset($aliases[$field_key]) ? $aliases[$field_key] : $field_key;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_ticket_modalidad_display') ) {
+    function eventosapp_custom_metrics_get_ticket_modalidad_display($ticket_id, $event_id = 0){
+        $ticket_id = (int) $ticket_id;
+        $event_id  = (int) $event_id;
+
+        if ( $ticket_id <= 0 ) return '';
+
+        if ( function_exists('eventosapp_get_ticket_modalidad_label') ) {
+            $label = eventosapp_get_ticket_modalidad_label($ticket_id);
+            if ( is_string($label) && trim($label) !== '' ) {
+                return sanitize_text_field($label);
+            }
+        }
+
+        $raw = get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true);
+        if ( function_exists('eventosapp_resolve_ticket_modalidad') ) {
+            $raw = eventosapp_resolve_ticket_modalidad($event_id, $raw, $raw);
+        } elseif ( function_exists('eventosapp_normalize_ticket_modalidad') ) {
+            $raw = eventosapp_normalize_ticket_modalidad($raw);
+        } else {
+            $raw = sanitize_key((string) $raw);
+            $raw = in_array($raw, ['presencial', 'virtual'], true) ? $raw : '';
+        }
+
+        $options = function_exists('eventosapp_ticket_modalidad_options')
+            ? eventosapp_ticket_modalidad_options()
+            : [ 'presencial' => 'Presencial', 'virtual' => 'Virtual' ];
+
+        if ( isset($options[$raw]) ) return sanitize_text_field($options[$raw]);
+        return $raw !== '' ? ucwords(str_replace(['_', '-'], ' ', sanitize_text_field($raw))) : '';
+    }
+}
+
 if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
     function eventosapp_custom_metrics_get_available_fields($event_id){
         $event_id = (int) $event_id;
@@ -169,6 +221,7 @@ if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
             [ 'key'=>'ciudad', 'label'=>'Ciudad', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_ciudad' ],
             [ 'key'=>'pais', 'label'=>'País', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_pais' ],
             [ 'key'=>'localidad', 'label'=>'Localidad', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_localidad' ],
+            [ 'key'=>'modalidad', 'label'=>'Modalidad', 'type'=>'text', 'source'=>'computed' ],
             [ 'key'=>'estado_pago', 'label'=>'Estado de pago', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_estado_pago' ],
             [ 'key'=>'checked_in_any', 'label'=>'Checked-In (algún día)', 'type'=>'text', 'source'=>'computed' ],
             [ 'key'=>'medio_checkin', 'label'=>'Medio de check-in', 'type'=>'text', 'source'=>'computed' ],
@@ -205,7 +258,7 @@ if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
         $used = [];
         $out  = [];
         foreach ( $fields as $field ) {
-            $key = sanitize_key(isset($field['key']) ? $field['key'] : '');
+            $key = eventosapp_custom_metrics_normalize_field_key(isset($field['key']) ? $field['key'] : '');
             if ( $key === '' || isset($used[$key]) ) continue;
 
             $field['key']   = $key;
@@ -246,18 +299,18 @@ if ( ! function_exists('eventosapp_custom_metrics_sanitize_slot') ) {
         $formats     = array_keys(eventosapp_custom_metrics_value_format_options());
         $percentages = array_keys(eventosapp_custom_metrics_percentage_options());
 
-        $legacy_label = isset($slot['label_field']) ? sanitize_key((string) $slot['label_field']) : $default['label_field'];
+        $legacy_label = isset($slot['label_field']) ? eventosapp_custom_metrics_normalize_field_key((string) $slot['label_field']) : $default['label_field'];
 
         $out = [];
         $out['enabled']              = ! empty($slot['enabled']);
         $out['title']                = sanitize_text_field(isset($slot['title']) ? (string) $slot['title'] : '');
         $out['chart_type']           = in_array($slot['chart_type'], $chart_types, true) ? $slot['chart_type'] : $default['chart_type'];
         $out['span']                 = (int) $slot['span'] === 2 ? 2 : 1;
-        $out['row_field']            = sanitize_key(isset($slot['row_field']) && $slot['row_field'] !== '' ? (string) $slot['row_field'] : $legacy_label);
-        $out['column_field']         = sanitize_key(isset($slot['column_field']) ? (string) $slot['column_field'] : $default['column_field']);
-        $out['label_field']          = sanitize_key($legacy_label !== '' ? $legacy_label : $out['row_field']);
-        $out['series_field']         = sanitize_key(isset($slot['series_field']) ? (string) $slot['series_field'] : '');
-        $out['value_field']          = sanitize_key(isset($slot['value_field']) ? (string) $slot['value_field'] : '');
+        $out['row_field']            = eventosapp_custom_metrics_normalize_field_key(isset($slot['row_field']) && $slot['row_field'] !== '' ? (string) $slot['row_field'] : $legacy_label);
+        $out['column_field']         = eventosapp_custom_metrics_normalize_field_key(isset($slot['column_field']) ? (string) $slot['column_field'] : $default['column_field']);
+        $out['label_field']          = eventosapp_custom_metrics_normalize_field_key($legacy_label !== '' ? $legacy_label : $out['row_field']);
+        $out['series_field']         = eventosapp_custom_metrics_normalize_field_key(isset($slot['series_field']) ? (string) $slot['series_field'] : '');
+        $out['value_field']          = eventosapp_custom_metrics_normalize_field_key(isset($slot['value_field']) ? (string) $slot['value_field'] : '');
         $out['aggregation']          = in_array($slot['aggregation'], $aggr_types, true) ? $slot['aggregation'] : $default['aggregation'];
         $out['sort_by']              = in_array($slot['sort_by'], $sort_types, true) ? $slot['sort_by'] : $default['sort_by'];
         $out['limit']                = max(1, min(500, (int) $slot['limit']));
@@ -270,7 +323,7 @@ if ( ! function_exists('eventosapp_custom_metrics_sanitize_slot') ) {
 
         if ( isset($slot['table_fields']) && is_array($slot['table_fields']) ) {
             foreach ( $slot['table_fields'] as $field_key ) {
-                $field_key = sanitize_key((string) $field_key);
+                $field_key = eventosapp_custom_metrics_normalize_field_key((string) $field_key);
                 if ( $field_key !== '' && ! in_array($field_key, $out['table_fields'], true) ) {
                     $out['table_fields'][] = $field_key;
                 }
@@ -351,7 +404,7 @@ if ( ! function_exists('eventosapp_custom_metrics_get_required_field_keys_from_l
             $aggr       = isset($slot['aggregation']) ? (string) $slot['aggregation'] : 'count';
 
             $add_key = function($key) use (&$required){
-                $key = sanitize_key((string) $key);
+                $key = eventosapp_custom_metrics_normalize_field_key((string) $key);
                 if ( $key !== '' ) $required[$key] = true;
             };
 
@@ -481,9 +534,10 @@ if ( ! function_exists('eventosapp_custom_metrics_ticket_first_qr_label') ) {
 
 if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value') ) {
     function eventosapp_custom_metrics_extract_ticket_value($ticket_id, $event_id, $field){
-        $key = isset($field['key']) ? (string) $field['key'] : '';
+        $key = eventosapp_custom_metrics_normalize_field_key(isset($field['key']) ? (string) $field['key'] : '');
 
         if ( $key === 'ticket_post_id' ) return (string) $ticket_id;
+        if ( $key === 'modalidad' ) return eventosapp_custom_metrics_get_ticket_modalidad_display($ticket_id, $event_id);
         if ( $key === 'checked_in_any' ) return eventosapp_custom_metrics_ticket_checked_in_any($ticket_id);
         if ( $key === 'medio_checkin' ) return eventosapp_custom_metrics_ticket_first_qr_label($ticket_id);
         if ( $key === 'fecha_creacion' ) return get_post_time('Y-m-d H:i:s', false, $ticket_id);
@@ -505,7 +559,7 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
         if ( is_array($field_keys) ) {
             $wanted = [];
             foreach ( $field_keys as $field_key ) {
-                $field_key = sanitize_key((string) $field_key);
+                $field_key = eventosapp_custom_metrics_normalize_field_key((string) $field_key);
                 if ( $field_key !== '' ) $wanted[$field_key] = true;
             }
             $fields = [];
@@ -1068,10 +1122,18 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                     let slots = row && Array.isArray(row.slots) ? row.slots : [];
                     if (!slots[0]) slots[0] = defaultSlot();
                     if (!slots[1]) slots[1] = defaultSlot();
-                    slots[0].row_field = slots[0].row_field || slots[0].label_field || 'localidad';
-                    slots[1].row_field = slots[1].row_field || slots[1].label_field || 'localidad';
-                    slots[0].label_field = slots[0].label_field || slots[0].row_field || 'localidad';
-                    slots[1].label_field = slots[1].label_field || slots[1].row_field || 'localidad';
+                    slots[0].row_field = normalizeFieldKey(slots[0].row_field || slots[0].label_field || 'localidad');
+                    slots[1].row_field = normalizeFieldKey(slots[1].row_field || slots[1].label_field || 'localidad');
+                    slots[0].column_field = normalizeFieldKey(slots[0].column_field || 'checked_in_any');
+                    slots[1].column_field = normalizeFieldKey(slots[1].column_field || 'checked_in_any');
+                    slots[0].label_field = normalizeFieldKey(slots[0].label_field || slots[0].row_field || 'localidad');
+                    slots[1].label_field = normalizeFieldKey(slots[1].label_field || slots[1].row_field || 'localidad');
+                    slots[0].series_field = normalizeFieldKey(slots[0].series_field || '');
+                    slots[1].series_field = normalizeFieldKey(slots[1].series_field || '');
+                    slots[0].value_field = normalizeFieldKey(slots[0].value_field || '');
+                    slots[1].value_field = normalizeFieldKey(slots[1].value_field || '');
+                    if (Array.isArray(slots[0].table_fields)) slots[0].table_fields = slots[0].table_fields.map(normalizeFieldKey).filter(Boolean);
+                    if (Array.isArray(slots[1].table_fields)) slots[1].table_fields = slots[1].table_fields.map(normalizeFieldKey).filter(Boolean);
                     return {slots:[Object.assign(defaultSlot(), slots[0]), Object.assign(defaultSlot(), slots[1])]};
                 });
             }
@@ -1090,8 +1152,31 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                 return html;
             }
 
+            function normalizeFieldKey(key){
+                key = String(key == null ? '' : key).toLowerCase().replace(/[^a-z0-9_\-]/g, '');
+                const aliases = {
+                    '_eventosapp_ticket_modalidad':'modalidad',
+                    'eventosapp_ticket_modalidad':'modalidad',
+                    'ticket_modalidad':'modalidad',
+                    'modalidad_ticket':'modalidad',
+                    'modalidad_del_ticket':'modalidad',
+                    'tipo_modalidad':'modalidad'
+                };
+                return aliases[key] || key;
+            }
+
+            function hasFieldKey(key){
+                key = normalizeFieldKey(key);
+                if (!key) return false;
+                return fields.some(function(f){ return String(f.key) === String(key); });
+            }
+
             function fieldOptions(selected, emptyLabel){
+                selected = normalizeFieldKey(selected);
                 let html = emptyLabel ? '<option value="">'+esc(emptyLabel)+'</option>' : '';
+                if (selected && !hasFieldKey(selected)) {
+                    html += '<option value="'+esc(selected)+'" selected>Campo no disponible: '+esc(selected)+'</option>';
+                }
                 fields.forEach(function(f){
                     html += '<option value="'+esc(f.key)+'" '+(String(selected)===String(f.key)?'selected':'')+'>'+esc(f.label)+'</option>';
                 });
@@ -1198,6 +1283,7 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                 else value = $control.val();
 
                 if (prop === 'span' || prop === 'limit') value = parseInt(value || 0, 10);
+                if (['row_field','column_field','label_field','series_field','value_field'].indexOf(prop) !== -1) value = normalizeFieldKey(value);
                 if (prop === 'row_field') state.rows[rowIndex].slots[slotIndex].label_field = value;
                 state.rows[rowIndex].slots[slotIndex][prop] = value;
                 syncHidden();
