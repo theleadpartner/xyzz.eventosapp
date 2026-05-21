@@ -80,18 +80,16 @@ function eventosapp_clear_sent_days($event_id) {
  * @param int $event_id ID del evento
  */
 function eventosapp_schedule_auth_codes_send($event_id) {
-    // Cancelar cualquier cron previo para este evento
+    // Cancelar cualquier cron previo para este evento.
+    // wp_schedule_single_event() trabaja con timestamps UNIX UTC; por eso aquí se evita
+    // mezclar timestamps locales de WordPress con timestamps reales de cron.
     $hook = 'eventosapp_send_auth_codes_scheduled';
     $args = [$event_id];
-    $timestamp = wp_next_scheduled($hook, $args);
-    
-    if ($timestamp) {
-        wp_unschedule_event($timestamp, $hook, $args);
-    }
+    wp_clear_scheduled_hook($hook, $args);
 
     // Obtener configuración
     $enabled = get_post_meta($event_id, '_eventosapp_ticket_double_auth_enabled', true);
-    $scheduled_datetime = get_post_meta($event_id, '_eventosapp_double_auth_scheduled_datetime', true);
+    $scheduled_datetime = absint(get_post_meta($event_id, '_eventosapp_double_auth_scheduled_datetime', true));
 
     if ($enabled !== '1' || !$scheduled_datetime) {
         return; // No programar si no está configurado
@@ -117,8 +115,11 @@ function eventosapp_schedule_auth_codes_send($event_id) {
         }
     }
     
-    // Si llegamos aquí, programar el envío inicial
-    wp_schedule_single_event($scheduled_datetime, $hook, $args);
+    // Si llegamos aquí, programar el envío inicial.
+    // $scheduled_datetime debe ser un Unix timestamp UTC generado con DateTime::getTimestamp().
+    if ($scheduled_datetime > 0) {
+        wp_schedule_single_event($scheduled_datetime, $hook, $args);
+    }
 }
 
 /**
@@ -138,7 +139,13 @@ function eventosapp_schedule_remaining_days($event_id, $event_days) {
     if (!$event_tz) {
         $event_tz = wp_timezone_string();
     }
-    
+
+    try {
+        $event_timezone = new DateTimeZone($event_tz);
+    } catch (Exception $e) {
+        $event_timezone = wp_timezone();
+    }
+
     // Programar envíos para los días que NO se han enviado (excepto el primero que ya se chequeó)
     for ($i = 1; $i < count($event_days); $i++) {
         $day = $event_days[$i];
@@ -149,11 +156,13 @@ function eventosapp_schedule_remaining_days($event_id, $event_days) {
         }
         
         try {
-            $dt = new DateTime($day . ' 06:00:00', new DateTimeZone($event_tz));
+            $dt = new DateTime($day . ' 06:00:00', $event_timezone);
             $timestamp = $dt->getTimestamp();
-            
-            // Solo programar si es futuro
-            if ($timestamp > current_time('timestamp')) {
+
+            // Solo programar si es futuro.
+            // Importante: WP-Cron requiere timestamps UNIX UTC. No usar current_time('timestamp')
+            // para comparar, porque WordPress lo ajusta con el offset del sitio.
+            if ($timestamp > time()) {
                 // Verificar si ya existe este evento programado
                 $existing = wp_next_scheduled('eventosapp_send_auth_codes_for_specific_day', [$event_id, $day]);
                 
