@@ -5327,7 +5327,113 @@ function eventosapp_whatsapp_process_webhook_inbound_message($message) {
 }
 
 /**
+ * Controla si un envío de correo puede disparar WhatsApp automáticamente.
+ *
+ * IMPORTANTE:
+ * - El botón manual de correo NO debe disparar WhatsApp.
+ * - El botón manual de WhatsApp conserva su flujo propio en admin_post_eventosapp_send_ticket_whatsapp.
+ * - Solo los orígenes automáticos conocidos pueden activar el puente correo -> WhatsApp.
+ */
+function eventosapp_whatsapp_is_manual_email_admin_request($ticket_id = 0) {
+    if ( empty($_REQUEST['action']) ) {
+        return false;
+    }
+
+    $action = sanitize_key(wp_unslash($_REQUEST['action']));
+    if ( $action !== 'eventosapp_send_ticket_email' ) {
+        return false;
+    }
+
+    $ticket_id = absint($ticket_id);
+    if ( ! $ticket_id ) {
+        return true;
+    }
+
+    foreach ( ['post_id', 'ticket_id', 'post'] as $request_key ) {
+        if ( isset($_REQUEST[$request_key]) && absint($_REQUEST[$request_key]) === $ticket_id ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function eventosapp_whatsapp_normalize_email_source($source) {
+    $source = is_scalar($source) ? (string) $source : '';
+    $source = strtolower(trim($source));
+    return sanitize_key($source);
+}
+
+function eventosapp_whatsapp_email_source_allows_auto_send($source, $ticket_id = 0, $entry = []) {
+    $source = eventosapp_whatsapp_normalize_email_source($source);
+
+    if ( eventosapp_whatsapp_is_manual_email_admin_request($ticket_id) ) {
+        return false;
+    }
+
+    $manual_sources = [
+        '',
+        'manual',
+        'admin',
+        'metabox',
+        'adminpost',
+        'manual_admin',
+        'manual_adminpost',
+        'email_manual',
+        'ticket_email_manual',
+    ];
+
+    if ( in_array($source, $manual_sources, true) ) {
+        return false;
+    }
+
+    $automatic_sources = [
+        'auto',
+        'automatico',
+        'automatic',
+        'webhook',
+        'frontend',
+        'public',
+        'import',
+        'importacion',
+        'bulk',
+        'masivo',
+        'reminder',
+        'recordatorio',
+        'cron',
+        'scheduled',
+        'api',
+        'automation',
+    ];
+
+    $allowed = in_array($source, $automatic_sources, true);
+
+    /**
+     * Permite extender desde otro archivo qué orígenes de correo pueden disparar WhatsApp.
+     * Por defecto se bloquean manual/admin y solo se aceptan orígenes automáticos conocidos.
+     */
+    return (bool) apply_filters('eventosapp_whatsapp_email_source_allows_auto_send', $allowed, $source, $ticket_id, $entry);
+}
+
+function eventosapp_whatsapp_get_latest_email_history_entry($history) {
+    if ( ! is_array($history) || empty($history) ) {
+        return [];
+    }
+
+    // El módulo de correo inserta el nuevo envío al inicio con array_unshift().
+    if ( isset($history[0]) && is_array($history[0]) ) {
+        return $history[0];
+    }
+
+    $last = end($history);
+    return is_array($last) ? $last : [];
+}
+
+/**
  * Disparo cuando el correo queda registrado como enviado.
+ *
+ * Se usa únicamente como puente para envíos automáticos. El envío manual por correo queda aislado
+ * para que no active WhatsApp por metadatos, hooks ni shutdown.
  */
 function eventosapp_whatsapp_trigger_from_email_meta($meta_id, $object_id, $meta_key, $_meta_value) {
     $ticket_id = absint($object_id);
@@ -5335,42 +5441,67 @@ function eventosapp_whatsapp_trigger_from_email_meta($meta_id, $object_id, $meta
         return;
     }
 
-    if ( $meta_key === '_eventosapp_ticket_email_history' ) {
-        $history = get_post_meta($ticket_id, '_eventosapp_ticket_email_history', true);
-        $count = is_array($history) ? count($history) : 0;
-        $last = ($count > 0 && is_array($history[$count - 1])) ? $history[$count - 1] : [];
-        $source_key = 'email_history:' . $count . ':' . md5(wp_json_encode($last));
-        eventosapp_whatsapp_send_ticket($ticket_id, [
-            'context' => 'email_history',
-            'source_key' => $source_key,
+    // Este meta se actualiza antes del historial y no trae el origen del envío.
+    // Si se usa para disparar WhatsApp, el botón manual de correo queda mezclado con WhatsApp.
+    if ( $meta_key === '_eventosapp_ticket_email_sent_status' ) {
+        eventosapp_whatsapp_add_activity_log('ticket_envio_whatsapp_no_disparado_por_status_email', [
+            'ticket_id' => $ticket_id,
+            'reason'    => 'El estado de correo no identifica si el origen fue manual o automático.',
         ]);
         return;
     }
 
-    if ( $meta_key === '_eventosapp_ticket_email_sent_status' ) {
-        $status = get_post_meta($ticket_id, '_eventosapp_ticket_email_sent_status', true);
-        if ( $status === 'enviado' ) {
-            $last_email_at = get_post_meta($ticket_id, '_eventosapp_ticket_last_email_at', true);
-            $source_key = 'email_status:' . md5((string)$last_email_at . ':' . (string)$status);
-            eventosapp_whatsapp_send_ticket($ticket_id, [
-                'context' => 'email_status',
-                'source_key' => $source_key,
-            ]);
-        }
+    if ( $meta_key !== '_eventosapp_ticket_email_history' ) {
+        return;
     }
+
+    $history = get_post_meta($ticket_id, '_eventosapp_ticket_email_history', true);
+    $count = is_array($history) ? count($history) : 0;
+    $last = eventosapp_whatsapp_get_latest_email_history_entry($history);
+    $source = eventosapp_whatsapp_normalize_email_source($last['source'] ?? '');
+
+    if ( ! eventosapp_whatsapp_email_source_allows_auto_send($source, $ticket_id, $last) ) {
+        eventosapp_whatsapp_add_activity_log('ticket_envio_whatsapp_omitido_por_correo_manual', [
+            'ticket_id' => $ticket_id,
+            'email_source' => $source,
+            'meta_key' => $meta_key,
+            'reason' => 'El correo fue manual/admin o no tiene un origen automático permitido.',
+        ]);
+        return;
+    }
+
+    $source_key = 'email_history:' . $source . ':' . $count . ':' . md5(wp_json_encode($last));
+    eventosapp_whatsapp_send_ticket($ticket_id, [
+        'context' => 'email_' . $source,
+        'source_key' => $source_key,
+    ]);
 }
 add_action('added_post_meta', 'eventosapp_whatsapp_trigger_from_email_meta', 20, 4);
 add_action('updated_post_meta', 'eventosapp_whatsapp_trigger_from_email_meta', 20, 4);
 
 /**
  * Compatibilidad con posibles hooks explícitos del módulo de correo.
+ * También respeta la separación de botones manuales: correo manual no dispara WhatsApp.
  */
-add_action('eventosapp_after_ticket_email_sent', function($ticket_id) {
-    eventosapp_whatsapp_send_ticket(absint($ticket_id), [
-        'context' => 'email_hook',
-        'source_key' => 'email_hook:' . time(),
+add_action('eventosapp_after_ticket_email_sent', function($ticket_id, $recipient = '', $args = []) {
+    $ticket_id = absint($ticket_id);
+    $args = is_array($args) ? $args : [];
+    $source = eventosapp_whatsapp_normalize_email_source($args['source'] ?? '');
+
+    if ( ! eventosapp_whatsapp_email_source_allows_auto_send($source, $ticket_id, $args) ) {
+        eventosapp_whatsapp_add_activity_log('ticket_envio_whatsapp_omitido_por_hook_correo_manual', [
+            'ticket_id' => $ticket_id,
+            'email_source' => $source,
+            'reason' => 'Hook de correo omitido porque no corresponde a un origen automático permitido.',
+        ]);
+        return;
+    }
+
+    eventosapp_whatsapp_send_ticket($ticket_id, [
+        'context' => 'email_hook_' . $source,
+        'source_key' => 'email_hook:' . $source . ':' . $ticket_id . ':' . time(),
     ]);
-}, 20, 1);
+}, 20, 3);
 
 /**
  * Disparos explícitos desde flujos que crean o actualizan tickets sin depender únicamente del correo.
@@ -5398,37 +5529,9 @@ add_action('eventosapp_frontend_ticket_created', function($ticket_id, $event_id 
 }, 30, 3);
 
 /**
- * Puente para el botón admin-post de correo: si el correo redirecciona con exit,
- * este shutdown todavía puede validar el estado final y disparar WhatsApp.
+ * El botón admin-post de correo queda aislado de WhatsApp.
+ *
+ * Antes existía un puente por shutdown para action=eventosapp_send_ticket_email que validaba
+ * el estado final del correo y disparaba WhatsApp. Ese puente causaba que el botón manual
+ * de correo ejecutara también el envío de WhatsApp, por eso se eliminó intencionalmente.
  */
-add_action('admin_init', function() {
-    if ( empty($_REQUEST['action']) || sanitize_key(wp_unslash($_REQUEST['action'])) !== 'eventosapp_send_ticket_email' ) {
-        return;
-    }
-
-    $ticket_id = 0;
-    foreach ( ['ticket_id', 'post', 'post_id'] as $key ) {
-        if ( isset($_REQUEST[$key]) ) {
-            $ticket_id = absint($_REQUEST[$key]);
-            break;
-        }
-    }
-
-    if ( ! $ticket_id ) {
-        return;
-    }
-
-    add_action('shutdown', function() use ($ticket_id) {
-        if ( get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
-            return;
-        }
-        if ( get_post_meta($ticket_id, '_eventosapp_ticket_email_sent_status', true) !== 'enviado' ) {
-            return;
-        }
-        $last_email_at = get_post_meta($ticket_id, '_eventosapp_ticket_last_email_at', true);
-        eventosapp_whatsapp_send_ticket($ticket_id, [
-            'context' => 'email_adminpost_shutdown',
-            'source_key' => 'email_adminpost:' . md5((string)$last_email_at),
-        ]);
-    });
-});
