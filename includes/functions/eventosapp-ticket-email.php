@@ -923,11 +923,23 @@ function eventosapp_event_start_timestamp($evento_id){
     if (!$date) return 0;
 
     $hora = get_post_meta($evento_id, '_eventosapp_hora_inicio', true) ?: '00:00';
+
     try {
-        $dt = new DateTimeImmutable($date.' '.$hora, new DateTimeZone($tz));
+        $tz_obj = new DateTimeZone($tz);
+    } catch (\Throwable $e) {
+        $tz_obj = wp_timezone();
+    }
+
+    try {
+        $dt = new DateTimeImmutable($date.' '.$hora, $tz_obj);
         return $dt->getTimestamp();
     } catch (\Throwable $e) {
-        return strtotime($date.' '.$hora); // fallback
+        try {
+            $dt = new DateTimeImmutable($date.' '.$hora, wp_timezone());
+            return $dt->getTimestamp();
+        } catch (\Throwable $fallback_error) {
+            return 0;
+        }
     }
 }
 
