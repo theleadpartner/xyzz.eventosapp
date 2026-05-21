@@ -762,12 +762,15 @@ if ( ! function_exists('eventosapp_custom_metrics_build_table_payload') ) {
         }
 
         return array_merge($base_payload, [
-            'columns'      => $headers,
-            'rows'         => $rows,
-            'row_title'    => $field_map[$row_key]['label'],
-            'column_title' => $field_map[$column_key]['label'],
-            'value_title'  => $aggr === 'count' ? 'Registros' : ( isset($field_map[$value_key]) ? $field_map[$value_key]['label'] : 'Valor' ),
-            'empty'        => empty($rows),
+            'columns'          => $headers,
+            'rows'             => $rows,
+            'row_title'        => $field_map[$row_key]['label'],
+            'column_title'     => $field_map[$column_key]['label'],
+            'value_title'      => $aggr === 'count' ? 'Registros' : ( isset($field_map[$value_key]) ? $field_map[$value_key]['label'] : 'Valor' ),
+            'dynamic_columns'  => $columns,
+            'has_total_column' => $with_total,
+            'total_title'      => 'Total',
+            'empty'            => empty($rows),
         ]);
     }
 }
