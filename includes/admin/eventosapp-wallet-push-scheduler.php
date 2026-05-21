@@ -23,6 +23,76 @@ function evapp_wps_table() {
     return $wpdb->prefix . 'evapp_wallet_pushes';
 }
 
+/**
+ * Retorna la fecha/hora actual en UTC para columnas DATETIME que se comparan con WP-Cron.
+ *
+ * El módulo guarda scheduled_at/sent_at/created_at en UTC porque los eventos de WP-Cron
+ * se programan con Unix timestamps UTC. Esto evita desfases cuando la zona horaria del
+ * sitio no coincide con UTC.
+ *
+ * @return string Fecha MySQL UTC: Y-m-d H:i:s
+ */
+function evapp_wps_now_gmt_mysql() {
+    return gmdate( 'Y-m-d H:i:s', time() );
+}
+
+/**
+ * Convierte un valor de input datetime-local, interpretado en la zona horaria del sitio,
+ * a fecha MySQL UTC y timestamp Unix UTC.
+ *
+ * @param string $datetime_local Valor tipo 2026-05-21T14:30 o 2026-05-21 14:30.
+ * @return array|false ['mysql_gmt' => string, 'timestamp' => int] o false si es inválido.
+ */
+function evapp_wps_local_datetime_to_gmt($datetime_local) {
+    $datetime_local = trim( (string) $datetime_local );
+    if ( $datetime_local === '' ) {
+        return false;
+    }
+
+    $datetime_local = str_replace( 'T', ' ', $datetime_local );
+
+    if ( ! preg_match( '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?$/', $datetime_local ) ) {
+        return false;
+    }
+
+    if ( preg_match( '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/', $datetime_local ) ) {
+        $datetime_local .= ':00';
+    }
+
+    try {
+        $dt_local = new DateTimeImmutable( $datetime_local, wp_timezone() );
+        $timestamp = $dt_local->getTimestamp();
+
+        return [
+            'mysql_gmt' => gmdate( 'Y-m-d H:i:s', $timestamp ),
+            'timestamp' => $timestamp,
+        ];
+    } catch ( Exception $e ) {
+        return false;
+    }
+}
+
+/**
+ * Convierte una fecha MySQL UTC a Unix timestamp UTC para wp_schedule_single_event().
+ *
+ * @param string $mysql_gmt Fecha MySQL en UTC.
+ * @return int
+ */
+function evapp_wps_gmt_mysql_to_timestamp( $mysql_gmt ) {
+    $mysql_gmt = trim( (string) $mysql_gmt );
+    if ( $mysql_gmt === '' ) {
+        return 0;
+    }
+
+    try {
+        $dt = new DateTimeImmutable( $mysql_gmt, new DateTimeZone( 'UTC' ) );
+        return $dt->getTimestamp();
+    } catch ( Exception $e ) {
+        $timestamp = strtotime( $mysql_gmt . ' UTC' );
+        return $timestamp ? (int) $timestamp : 0;
+    }
+}
+
 /* ============================================================
  * ============== CREACIÓN DE TABLA (dbDelta) =================
  * ============================================================ */
@@ -88,7 +158,7 @@ add_action( 'evapp_wps_cron_check', 'evapp_wps_process_pending' );
 function evapp_wps_process_pending() {
     global $wpdb;
     $table = evapp_wps_table();
-    $now   = current_time( 'mysql' );
+    $now   = evapp_wps_now_gmt_mysql();
 
     // Lock para evitar ejecuciones concurrentes
     if ( get_transient('evapp_wps_processing') ) return;
@@ -146,7 +216,7 @@ function evapp_wps_dispatch_push( $push_id ) {
     if ( empty( $errors ) ) {
         $wpdb->update(
             $table,
-            [ 'status' => 'sent', 'sent_at' => current_time('mysql'), 'error_msg' => null ],
+            [ 'status' => 'sent', 'sent_at' => evapp_wps_now_gmt_mysql(), 'error_msg' => null ],
             [ 'id'     => $push_id ],
             [ '%s',    '%s',                                            '%s' ],
             [ '%d' ]
@@ -513,7 +583,7 @@ function evapp_wps_render_metabox( WP_Post $post ) {
 
     // ── Formulario nueva notificación ─────────────────────────────────────────
     // Datetime mínima = ahora (hora local WP) en formato ISO para datetime-local
-    $min_dt = date_i18n( 'Y-m-d\TH:i', current_time('timestamp') + 60 );
+    $min_dt = current_datetime()->modify( '+60 seconds' )->format( 'Y-m-d\TH:i' );
 
     echo '<div class="evapp-wps-form-wrap">
         <h4>➕ Programar nueva notificación</h4>
@@ -693,19 +763,20 @@ add_action( 'wp_ajax_evapp_wps_add', function() {
         wp_send_json_error( 'Tipo de wallet no válido.' );
     }
 
-    // Convertir datetime-local (hora local WP) a datetime MySQL UTC
+    // Convertir datetime-local (hora local del sitio WP) a datetime MySQL UTC.
+    // WP-Cron requiere Unix timestamps UTC; por eso no se usa current_time('timestamp')
+    // ni se resta manualmente gmt_offset, ya que eso falla con zonas horarias/DST.
     if ( $send_now || ! $scheduled_str ) {
-        $scheduled_gmt = current_time( 'mysql', 1 ); // UTC inmediato
+        $scheduled_gmt = evapp_wps_now_gmt_mysql();
+        $ts_gmt        = time();
     } else {
-        // datetime-local viene como "2025-12-01T14:30" → timestamp local WP
-        $ts_local = strtotime( str_replace( 'T', ' ', $scheduled_str ) );
-        if ( ! $ts_local ) {
+        $converted = evapp_wps_local_datetime_to_gmt( $scheduled_str );
+        if ( ! $converted ) {
             wp_send_json_error( 'Fecha/hora inválida.' );
         }
-        // Convertir hora local a GMT: resta el offset
-        $offset_sec  = (int) get_option('gmt_offset') * 3600;
-        $ts_gmt      = $ts_local - $offset_sec;
-        $scheduled_gmt = gmdate( 'Y-m-d H:i:s', $ts_gmt );
+
+        $scheduled_gmt = $converted['mysql_gmt'];
+        $ts_gmt        = (int) $converted['timestamp'];
 
         if ( ! $send_now && $ts_gmt < ( time() + 30 ) ) {
             wp_send_json_error( 'La fecha/hora de envío debe ser futura.' );
@@ -724,7 +795,7 @@ add_action( 'wp_ajax_evapp_wps_add', function() {
             'scheduled_at' => $scheduled_gmt,
             'status'       => 'pending',
             'created_by'   => get_current_user_id(),
-            'created_at'   => current_time('mysql'),
+            'created_at'   => evapp_wps_now_gmt_mysql(),
         ],
         [ '%d', '%s', '%s', '%s', '%s', '%d', '%s' ]
     );
@@ -748,12 +819,16 @@ add_action( 'wp_ajax_evapp_wps_add', function() {
         }
     }
 
-    // Programar cron de respaldo para la hora exacta (wp_schedule_single_event usa timestamps Unix UTC)
-    wp_schedule_single_event(
-        strtotime( $scheduled_gmt ),
-        'evapp_wps_dispatch_single',
-        [ $push_id ]
-    );
+    // Programar cron de respaldo para la hora exacta.
+    // wp_schedule_single_event() usa Unix timestamps UTC.
+    $dispatch_timestamp = evapp_wps_gmt_mysql_to_timestamp( $scheduled_gmt );
+    if ( $dispatch_timestamp > 0 ) {
+        wp_schedule_single_event(
+            $dispatch_timestamp,
+            'evapp_wps_dispatch_single',
+            [ $push_id ]
+        );
+    }
 
     wp_send_json_success( [ 'message' => '📅 Notificación programada para ' . get_date_from_gmt( $scheduled_gmt, 'd/m/Y H:i' ) . '.' ] );
 } );
@@ -775,6 +850,7 @@ add_action( 'wp_ajax_evapp_wps_send_now', function() {
 
     $ok = evapp_wps_dispatch_push( $push_id );
     if ( $ok ) {
+        wp_clear_scheduled_hook( 'evapp_wps_dispatch_single', [ $push_id ] );
         wp_send_json_success( [ 'message' => 'Enviado.' ] );
     } else {
         global $wpdb;
@@ -800,7 +876,7 @@ add_action( 'wp_ajax_evapp_wps_delete', function() {
     $deleted = $wpdb->delete( evapp_wps_table(), [ 'id' => $push_id, 'evento_id' => $evento_id ], [ '%d', '%d' ] );
     if ( $deleted ) {
         // Cancelar cron de respaldo si existe
-        wp_unschedule_event( wp_next_scheduled('evapp_wps_dispatch_single', [ $push_id ]) ?: 0, 'evapp_wps_dispatch_single', [ $push_id ] );
+        wp_clear_scheduled_hook( 'evapp_wps_dispatch_single', [ $push_id ] );
         wp_send_json_success();
     } else {
         wp_send_json_error( 'No se pudo eliminar.' );
