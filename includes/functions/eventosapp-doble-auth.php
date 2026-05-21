@@ -569,11 +569,19 @@ function eventosapp_get_event_mass_log( $event_id ) {
  * @param int $timestamp Timestamp UNIX de cuándo enviar
  */
 function eventosapp_schedule_auth_codes( $event_id, $timestamp ) {
+    $event_id  = absint( $event_id );
+    $timestamp = absint( $timestamp );
+
+    if ( ! $event_id || ! $timestamp ) {
+        return false;
+    }
+
     // Cancelar cualquier evento programado anterior
     wp_clear_scheduled_hook( 'eventosapp_auto_send_auth_codes', [ $event_id ] );
-    
-    // Programar nuevo evento
-    wp_schedule_single_event( $timestamp, 'eventosapp_auto_send_auth_codes', [ $event_id ] );
+
+    // Programar nuevo evento.
+    // WP-Cron espera un Unix timestamp UTC real. No se debe pasar current_time('timestamp').
+    return wp_schedule_single_event( $timestamp, 'eventosapp_auto_send_auth_codes', [ $event_id ] );
 }
 
 /**
