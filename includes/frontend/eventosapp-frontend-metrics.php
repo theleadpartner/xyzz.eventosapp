@@ -131,6 +131,12 @@ add_shortcode('eventosapp_front_metrics', function(){
       .evapp-table table { width:100%; border-collapse:separate; border-spacing:0; }
       .evapp-table th, .evapp-table td { text-align:left; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.08); }
       .evapp-table thead th { position:sticky; top:0; background:#0f1835; color:#cfe0ff; z-index:1; }
+      .evapp-table thead tr:first-child th { z-index:3; }
+      .evapp-table thead tr:nth-child(2) th { top:42px; z-index:2; }
+      .evapp-table thead th.evapp-table-row-heading,
+      .evapp-table thead th.evapp-table-total-heading { vertical-align:middle; }
+      .evapp-table thead th.evapp-table-group-heading { text-align:center; font-weight:900; background:#111d3d; }
+      .evapp-table thead tr.evapp-table-subhead th { background:#0f1835; }
       .evapp-table tbody tr:nth-child(odd){ background:#0a1329; }
       .evapp-table tbody tr:nth-child(even){ background:#0c1733; }
       .evapp-pill-ok { background:#22c55e; color:#07120c; font-weight:900; border-radius:999px; padding:2px 8px; font-size:.85rem; }
@@ -179,9 +185,15 @@ add_shortcode('eventosapp_front_metrics', function(){
       .evapp-custom-table { width:100%; border-collapse:separate; border-spacing:0; }
       .evapp-custom-table th, .evapp-custom-table td { text-align:left; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.08); vertical-align:top; }
       .evapp-custom-table thead th { background:#0f1835; color:#cfe0ff; position:sticky; top:0; z-index:1; }
+      .evapp-custom-table thead tr:first-child th { z-index:3; }
+      .evapp-custom-table thead tr:nth-child(2) th { top:42px; z-index:2; }
+      .evapp-custom-table thead th.evapp-table-row-heading,
+      .evapp-custom-table thead th.evapp-table-total-heading { vertical-align:middle; }
+      .evapp-custom-table thead th.evapp-table-group-heading { text-align:center; font-weight:900; background:#111d3d; }
+      .evapp-custom-table thead tr.evapp-table-subhead th { background:#0f1835; }
       .evapp-custom-table tbody tr:nth-child(odd){ background:#0a1329; }
       .evapp-custom-table tbody tr:nth-child(even){ background:#0c1733; }
-      .evapp-custom-table tbody tr:last-child td { font-weight:800; border-top:2px solid rgba(255,255,255,.20); }
+      .evapp-custom-table tbody tr.evapp-custom-total-row td { font-weight:800; border-top:2px solid rgba(255,255,255,.20); }
       .evapp-custom-empty { color:#a9b6d3; font-size:.92rem; padding:8px 0; }
       .evapp-custom-chart-values { margin-top:10px; font-size:.88rem; color:#cfe0ff; display:grid; gap:4px; }
       .evapp-custom-chart-values div { display:flex; justify-content:space-between; gap:12px; border-bottom:1px solid rgba(255,255,255,.06); padding-bottom:4px; }
@@ -558,22 +570,40 @@ $js = <<<'JS'
             const showPresencial = data.show_presencial_metrics !== false;
             const useDetailed = showVirtual && showPresencial;
 
-            function setTableHeader(cols){
+            function setTableHeader(rowTitle, groupTitle, indicatorCols, totalTitle){
                 if (!tableHead) return;
-                tableHead.innerHTML = '<tr>' + cols.map(function(col){ return '<th>' + escapeHTML(col) + '</th>'; }).join('') + '</tr>';
+                indicatorCols = Array.isArray(indicatorCols) ? indicatorCols : [];
+                totalTitle = totalTitle || '';
+
+                let html = '<tr class="evapp-table-superhead">';
+                html += '<th class="evapp-table-row-heading" rowspan="2">' + escapeHTML(rowTitle || 'Indicador') + '</th>';
+                if (indicatorCols.length) {
+                    html += '<th class="evapp-table-group-heading" colspan="' + indicatorCols.length + '">' + escapeHTML(groupTitle || 'Indicadores') + '</th>';
+                }
+                if (totalTitle) {
+                    html += '<th class="evapp-table-total-heading" rowspan="2">' + escapeHTML(totalTitle) + '</th>';
+                }
+                html += '</tr><tr class="evapp-table-subhead">';
+                indicatorCols.forEach(function(col){
+                    html += '<th>' + escapeHTML(col) + '</th>';
+                });
+                html += '</tr>';
+                tableHead.innerHTML = html;
             }
 
-            let cols = ['Localidad'];
+            const rowTitle = 'Localidad';
+            let indicatorCols = [];
             if (useDetailed && selectedType === 'all') {
-                cols = cols.concat(['Check-ins presenciales', 'Check-ins virtuales', 'Check-ins únicos', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+                indicatorCols = ['Check-ins presenciales', 'Check-ins virtuales', 'Check-ins únicos', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones'];
             } else if (selectedType === 'virtual') {
-                cols = cols.concat(['Check-ins virtuales', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+                indicatorCols = ['Check-ins virtuales', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones'];
             } else if (selectedType === 'presencial') {
-                cols = cols.concat(['Check-ins presenciales', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+                indicatorCols = ['Check-ins presenciales', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones'];
             } else {
-                cols = cols.concat(['Check-ins', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones']);
+                indicatorCols = ['Check-ins', 'Not Check-ins', '% Asistencia', 'Check-ins sesiones adicionales (únicos)', '% asistentes a sesiones'];
             }
-            setTableHeader(cols);
+            const cols = [rowTitle].concat(indicatorCols);
+            setTableHeader(rowTitle, 'Indicadores de asistencia', indicatorCols, '');
 
             if (!rows || !rows.length){
                 tableBody.innerHTML = '<tr><td colspan="' + cols.length + '" class="evapp-muted">Sin datos.</td></tr>';
@@ -761,17 +791,39 @@ $js = <<<'JS'
         }
 
         function renderCustomTable(metric){
+            metric = metric || {};
             const columns = Array.isArray(metric.columns) ? metric.columns : [];
             const rows = Array.isArray(metric.rows) ? metric.rows : [];
             if (!columns.length || !rows.length) {
                 return '<div class="evapp-custom-empty">Sin datos para mostrar.</div>';
             }
 
-            let html = '<div class="evapp-custom-table-wrap"><table class="evapp-custom-table"><thead><tr>';
-            columns.forEach(function(col){ html += '<th>' + escapeHTML(col) + '</th>'; });
+            const rowTitle = metric.row_title || columns[0] || 'Indicador';
+            const columnTitle = metric.column_title || 'Columnas';
+            const totalTitle = metric.total_title || 'Total';
+            const hasTotalColumn = (typeof metric.has_total_column === 'boolean')
+                ? metric.has_total_column
+                : (columns.length > 1 && String(columns[columns.length - 1]).toLowerCase() === String(totalTitle).toLowerCase());
+            const dynamicColumnEnd = hasTotalColumn ? Math.max(columns.length - 1, 1) : columns.length;
+            const dynamicColumns = Array.isArray(metric.dynamic_columns) && metric.dynamic_columns.length
+                ? metric.dynamic_columns
+                : columns.slice(1, dynamicColumnEnd);
+
+            let html = '<div class="evapp-custom-table-wrap"><table class="evapp-custom-table"><thead>';
+            html += '<tr class="evapp-table-superhead">';
+            html += '<th class="evapp-table-row-heading" rowspan="2">' + escapeHTML(rowTitle) + '</th>';
+            if (dynamicColumns.length) {
+                html += '<th class="evapp-table-group-heading" colspan="' + dynamicColumns.length + '">' + escapeHTML(columnTitle) + '</th>';
+            }
+            if (hasTotalColumn) {
+                html += '<th class="evapp-table-total-heading" rowspan="2">' + escapeHTML(totalTitle) + '</th>';
+            }
+            html += '</tr><tr class="evapp-table-subhead">';
+            dynamicColumns.forEach(function(col){ html += '<th>' + escapeHTML(col) + '</th>'; });
             html += '</tr></thead><tbody>';
             rows.forEach(function(row){
-                html += '<tr>';
+                const isTotalRow = hasTotalColumn && row && String(row[0] || '').toLowerCase() === String(totalTitle).toLowerCase();
+                html += '<tr' + (isTotalRow ? ' class="evapp-custom-total-row"' : '') + '>';
                 columns.forEach(function(_, index){
                     html += '<td>' + escapeHTML((row && row[index] != null) ? row[index] : '') + '</td>';
                 });
