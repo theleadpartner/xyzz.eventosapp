@@ -48,6 +48,72 @@ if ( ! function_exists( 'eventosapp_registration_status_default_config' ) ) {
             'show_payment_status'     => '1',
             'show_checkin_status'     => '1',
             'show_localidad'          => '1',
+            'response_fields'         => [
+                'registration_status' => [
+                    'enabled' => '1',
+                    'label'   => 'Estado de inscripción',
+                ],
+                'modalidad' => [
+                    'enabled' => '1',
+                    'label'   => 'Modalidad',
+                ],
+                'virtual_access' => [
+                    'enabled' => '1',
+                    'label'   => 'Acceso virtual',
+                ],
+                'payment_status' => [
+                    'enabled' => '1',
+                    'label'   => 'Estado de pago',
+                ],
+                'checkin_status' => [
+                    'enabled' => '1',
+                    'label'   => 'Check-in',
+                ],
+                'nombre' => [
+                    'enabled' => '0',
+                    'label'   => 'Nombres',
+                ],
+                'apellido' => [
+                    'enabled' => '0',
+                    'label'   => 'Apellidos',
+                ],
+                'cc' => [
+                    'enabled' => '0',
+                    'label'   => 'Documento / Cédula',
+                ],
+                'email' => [
+                    'enabled' => '0',
+                    'label'   => 'Correo electrónico',
+                ],
+                'tel' => [
+                    'enabled' => '0',
+                    'label'   => 'Teléfono',
+                ],
+                'empresa' => [
+                    'enabled' => '0',
+                    'label'   => 'Empresa',
+                ],
+                'nit' => [
+                    'enabled' => '0',
+                    'label'   => 'NIT',
+                ],
+                'cargo' => [
+                    'enabled' => '0',
+                    'label'   => 'Cargo',
+                ],
+                'ciudad' => [
+                    'enabled' => '0',
+                    'label'   => 'Ciudad',
+                ],
+                'pais' => [
+                    'enabled' => '0',
+                    'label'   => 'País',
+                ],
+                'localidad' => [
+                    'enabled' => '1',
+                    'label'   => 'Localidad',
+                ],
+            ],
             'resend_enabled'          => '0',
             'resend_cooldown_hours'   => '24',
             'primary_color'           => '#2271b1',
@@ -135,6 +201,7 @@ if ( ! function_exists( 'eventosapp_registration_status_get_config' ) ) {
         $event_id = absint( $event_id );
         $saved    = $event_id ? get_post_meta( $event_id, EVENTOSAPP_REG_STATUS_META_CONFIG, true ) : [];
         $defaults = eventosapp_registration_status_default_config();
+        $saved_has_response_fields = is_array( $saved ) && isset( $saved['response_fields'] ) && is_array( $saved['response_fields'] );
         $config   = eventosapp_registration_status_merge_config( $defaults, is_array( $saved ) ? $saved : [] );
 
         if ( empty( $config['match_mode'] ) || ! in_array( $config['match_mode'], [ 'all', 'any' ], true ) ) {
@@ -171,6 +238,44 @@ if ( ! function_exists( 'eventosapp_registration_status_get_config' ) ) {
             $hex = sanitize_hex_color( isset( $config[ $color_key ] ) ? $config[ $color_key ] : '' );
             $config[ $color_key ] = $hex ? $hex : $defaults[ $color_key ];
         }
+
+        $available_response_fields = function_exists( 'eventosapp_registration_status_get_available_response_fields' )
+            ? eventosapp_registration_status_get_available_response_fields( $event_id )
+            : [];
+
+        $posted_response_fields = isset( $config['response_fields'] ) && is_array( $config['response_fields'] ) ? $config['response_fields'] : [];
+        $normalized_response_fields = [];
+
+        foreach ( $available_response_fields as $field_key => $field ) {
+            $field_config = isset( $posted_response_fields[ $field_key ] ) && is_array( $posted_response_fields[ $field_key ] ) ? $posted_response_fields[ $field_key ] : [];
+            $default_config = isset( $defaults['response_fields'][ $field_key ] ) && is_array( $defaults['response_fields'][ $field_key ] ) ? $defaults['response_fields'][ $field_key ] : [];
+
+            $enabled = isset( $field_config['enabled'] ) ? (string) $field_config['enabled'] : ( $default_config['enabled'] ?? '0' );
+
+            if ( ! $saved_has_response_fields ) {
+                if ( $field_key === 'payment_status' ) {
+                    $enabled = ! empty( $config['show_payment_status'] ) && $config['show_payment_status'] === '1' ? '1' : '0';
+                } elseif ( $field_key === 'checkin_status' ) {
+                    $enabled = ! empty( $config['show_checkin_status'] ) && $config['show_checkin_status'] === '1' ? '1' : '0';
+                } elseif ( $field_key === 'localidad' ) {
+                    $enabled = ! empty( $config['show_localidad'] ) && $config['show_localidad'] === '1' ? '1' : '0';
+                }
+            }
+
+            $label = isset( $field_config['label'] ) && $field_config['label'] !== ''
+                ? sanitize_text_field( $field_config['label'] )
+                : ( $default_config['label'] ?? $field['label'] );
+
+            $normalized_response_fields[ $field_key ] = [
+                'enabled' => $enabled === '1' ? '1' : '0',
+                'label'   => sanitize_text_field( $label ),
+            ];
+        }
+
+        $config['response_fields'] = $normalized_response_fields;
+        $config['show_payment_status'] = ! empty( $normalized_response_fields['payment_status']['enabled'] ) && $normalized_response_fields['payment_status']['enabled'] === '1' ? '1' : '0';
+        $config['show_checkin_status'] = ! empty( $normalized_response_fields['checkin_status']['enabled'] ) && $normalized_response_fields['checkin_status']['enabled'] === '1' ? '1' : '0';
+        $config['show_localidad']      = ! empty( $normalized_response_fields['localidad']['enabled'] ) && $normalized_response_fields['localidad']['enabled'] === '1' ? '1' : '0';
 
         return $config;
     }
@@ -274,6 +379,179 @@ if ( ! function_exists( 'eventosapp_registration_status_get_available_fields' ) 
         }
 
         return $fields;
+    }
+}
+
+/**
+ * Campos disponibles para mostrar en la respuesta pública cuando la inscripción existe.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_get_available_response_fields' ) ) {
+    function eventosapp_registration_status_get_available_response_fields( $event_id ) {
+        $fields = [
+            'registration_status' => [
+                'key'      => 'registration_status',
+                'label'    => 'Estado de inscripción',
+                'type'     => 'system',
+                'source'   => 'system',
+                'meta_key' => '',
+            ],
+            'modalidad' => [
+                'key'      => 'modalidad',
+                'label'    => 'Modalidad',
+                'type'     => 'system',
+                'source'   => 'system',
+                'meta_key' => '',
+            ],
+            'virtual_access' => [
+                'key'      => 'virtual_access',
+                'label'    => 'Acceso virtual',
+                'type'     => 'system',
+                'source'   => 'system',
+                'meta_key' => '',
+            ],
+            'payment_status' => [
+                'key'      => 'payment_status',
+                'label'    => 'Estado de pago',
+                'type'     => 'system',
+                'source'   => 'system',
+                'meta_key' => '',
+            ],
+            'checkin_status' => [
+                'key'      => 'checkin_status',
+                'label'    => 'Check-in',
+                'type'     => 'system',
+                'source'   => 'system',
+                'meta_key' => '',
+            ],
+            'nombre' => [
+                'key'      => 'nombre',
+                'label'    => 'Nombres',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_nombre',
+            ],
+            'apellido' => [
+                'key'      => 'apellido',
+                'label'    => 'Apellidos',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_apellido',
+            ],
+            'cc' => [
+                'key'      => 'cc',
+                'label'    => 'Documento / Cédula',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_cc',
+            ],
+            'email' => [
+                'key'      => 'email',
+                'label'    => 'Correo electrónico',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_email',
+            ],
+            'tel' => [
+                'key'      => 'tel',
+                'label'    => 'Teléfono',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_tel',
+            ],
+            'empresa' => [
+                'key'      => 'empresa',
+                'label'    => 'Empresa',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_empresa',
+            ],
+            'nit' => [
+                'key'      => 'nit',
+                'label'    => 'NIT',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_nit',
+            ],
+            'cargo' => [
+                'key'      => 'cargo',
+                'label'    => 'Cargo',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_cargo',
+            ],
+            'ciudad' => [
+                'key'      => 'ciudad',
+                'label'    => 'Ciudad',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_ciudad',
+            ],
+            'pais' => [
+                'key'      => 'pais',
+                'label'    => 'País',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_pais',
+            ],
+            'localidad' => [
+                'key'      => 'localidad',
+                'label'    => 'Localidad',
+                'type'     => 'meta',
+                'source'   => 'client',
+                'meta_key' => '_eventosapp_asistente_localidad',
+            ],
+        ];
+
+        if ( function_exists( 'eventosapp_get_event_extra_fields' ) ) {
+            $extras = eventosapp_get_event_extra_fields( $event_id );
+            if ( is_array( $extras ) ) {
+                foreach ( $extras as $extra ) {
+                    if ( empty( $extra['key'] ) ) {
+                        continue;
+                    }
+
+                    $extra_key = sanitize_key( $extra['key'] );
+                    if ( ! $extra_key ) {
+                        continue;
+                    }
+
+                    $field_key = 'extra_' . $extra_key;
+                    $label     = ! empty( $extra['label'] ) ? sanitize_text_field( $extra['label'] ) : $extra_key;
+
+                    $fields[ $field_key ] = [
+                        'key'      => $field_key,
+                        'label'    => 'Extra: ' . $label,
+                        'type'     => 'meta',
+                        'source'   => 'extra',
+                        'meta_key' => '_eventosapp_extra_' . $extra_key,
+                    ];
+                }
+            }
+        }
+
+        return $fields;
+    }
+}
+
+/**
+ * Campos activos para mostrar en la respuesta pública cuando la inscripción existe.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_get_enabled_response_fields' ) ) {
+    function eventosapp_registration_status_get_enabled_response_fields( $event_id, $config = null ) {
+        $event_id  = absint( $event_id );
+        $config    = is_array( $config ) ? $config : eventosapp_registration_status_get_config( $event_id );
+        $available = eventosapp_registration_status_get_available_response_fields( $event_id );
+        $enabled   = [];
+
+        foreach ( $available as $key => $field ) {
+            $field_config = isset( $config['response_fields'][ $key ] ) && is_array( $config['response_fields'][ $key ] ) ? $config['response_fields'][ $key ] : [];
+            if ( ! empty( $field_config['enabled'] ) && $field_config['enabled'] === '1' ) {
+                $field['public_label'] = ! empty( $field_config['label'] ) ? sanitize_text_field( $field_config['label'] ) : $field['label'];
+                $enabled[ $key ]       = $field;
+            }
+        }
+
+        return $enabled;
     }
 }
 
@@ -513,6 +791,7 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
         $event_id         = absint( $post->ID );
         $config           = eventosapp_registration_status_get_config( $event_id );
         $available_fields = eventosapp_registration_status_get_available_fields( $event_id );
+        $available_response_fields = eventosapp_registration_status_get_available_response_fields( $event_id );
         $token            = eventosapp_registration_status_get_token( $event_id );
         $embed_url        = eventosapp_registration_status_get_embed_url( $event_id );
         $iframe_code      = eventosapp_registration_status_get_iframe_code( $event_id );
@@ -533,6 +812,9 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
             .evapp-rs-textarea { width:100%; min-height:76px; }
             .evapp-rs-code { width:100%; font-family:Consolas, Monaco, monospace; font-size:12px; background:#f6f7f7; }
             .evapp-rs-pill { display:inline-block; background:#f0f6fc; color:#0969da; padding:2px 7px; border-radius:999px; font-size:11px; margin-left:4px; }
+            .evapp-rs-pill-system { background:#f6f7f7; color:#50575e; }
+            .evapp-rs-pill-client { background:#f0f6fc; color:#0969da; }
+            .evapp-rs-pill-extra { background:#fcf9e8; color:#996800; }
             .evapp-rs-number { max-width:120px; }
             .evapp-rs-color-field.wp-color-picker { max-width:95px; }
             @media (max-width: 980px) {
@@ -669,21 +951,59 @@ if ( ! function_exists( 'eventosapp_registration_status_render_metabox' ) ) {
         </div>
 
         <div class="evapp-rs-box">
-            <h4>Respuesta y reenvío de ticket</h4>
-            <p>
-                <label>
-                    <input type="checkbox" name="eventosapp_registration_status_config[show_payment_status]" value="1" <?php checked( $config['show_payment_status'], '1' ); ?>>
-                    Mostrar estado de pago del ticket
-                </label><br>
-                <label>
-                    <input type="checkbox" name="eventosapp_registration_status_config[show_checkin_status]" value="1" <?php checked( $config['show_checkin_status'], '1' ); ?>>
-                    Mostrar estado de check-in si existe
-                </label><br>
-                <label>
-                    <input type="checkbox" name="eventosapp_registration_status_config[show_localidad]" value="1" <?php checked( $config['show_localidad'], '1' ); ?>>
-                    Mostrar localidad si existe
-                </label>
+            <h4>Respuesta encontrada y datos visibles del cliente</h4>
+            <p class="evapp-rs-muted">
+                Activa únicamente los datos que quieres mostrar después de una consulta exitosa. Los campos vacíos del ticket no se imprimirán en la respuesta pública aunque estén activos.
             </p>
+
+            <table class="evapp-rs-field-table">
+                <thead>
+                    <tr>
+                        <th style="width:110px;">Mostrar</th>
+                        <th style="width:240px;">Dato disponible</th>
+                        <th>Etiqueta visible en la respuesta</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $available_response_fields as $field_key => $field ) :
+                        $field_config = isset( $config['response_fields'][ $field_key ] ) && is_array( $config['response_fields'][ $field_key ] ) ? $config['response_fields'][ $field_key ] : [];
+                        $enabled      = isset( $field_config['enabled'] ) ? $field_config['enabled'] : '0';
+                        $label        = ! empty( $field_config['label'] ) ? $field_config['label'] : $field['label'];
+                        $source_label = 'Sistema';
+                        $source_class = 'evapp-rs-pill-system';
+                        if ( $field['source'] === 'client' ) {
+                            $source_label = 'dato cliente';
+                            $source_class = 'evapp-rs-pill-client';
+                        } elseif ( $field['source'] === 'extra' ) {
+                            $source_label = 'campo extra';
+                            $source_class = 'evapp-rs-pill-extra';
+                        }
+                        ?>
+                        <tr>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="eventosapp_registration_status_config[response_fields][<?php echo esc_attr( $field_key ); ?>][enabled]" value="1" <?php checked( $enabled, '1' ); ?>>
+                                    Sí
+                                </label>
+                            </td>
+                            <td>
+                                <strong><?php echo esc_html( $field['label'] ); ?></strong>
+                                <span class="evapp-rs-pill <?php echo esc_attr( $source_class ); ?>"><?php echo esc_html( $source_label ); ?></span>
+                                <?php if ( ! empty( $field['meta_key'] ) ) : ?>
+                                    <br><span class="evapp-rs-muted"><code><?php echo esc_html( $field['meta_key'] ); ?></code></span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <input type="text" name="eventosapp_registration_status_config[response_fields][<?php echo esc_attr( $field_key ); ?>][label]" value="<?php echo esc_attr( $label ); ?>">
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <input type="hidden" name="eventosapp_registration_status_config[show_payment_status]" value="<?php echo esc_attr( $config['show_payment_status'] ); ?>">
+            <input type="hidden" name="eventosapp_registration_status_config[show_checkin_status]" value="<?php echo esc_attr( $config['show_checkin_status'] ); ?>">
+            <input type="hidden" name="eventosapp_registration_status_config[show_localidad]" value="<?php echo esc_attr( $config['show_localidad'] ); ?>">
 
             <hr>
 
@@ -911,6 +1231,26 @@ if ( ! function_exists( 'eventosapp_registration_status_save_metabox' ) ) {
                 'placeholder' => isset( $posted_field['placeholder'] ) ? sanitize_text_field( $posted_field['placeholder'] ) : sanitize_text_field( $fallback_placeholder ),
             ];
         }
+
+        $available_response_fields = eventosapp_registration_status_get_available_response_fields( $post_id );
+        $posted_response_fields    = isset( $raw['response_fields'] ) && is_array( $raw['response_fields'] ) ? $raw['response_fields'] : [];
+        $config['response_fields'] = [];
+
+        foreach ( $available_response_fields as $field_key => $field ) {
+            $posted_field = isset( $posted_response_fields[ $field_key ] ) && is_array( $posted_response_fields[ $field_key ] ) ? $posted_response_fields[ $field_key ] : [];
+            $existing     = isset( $current['response_fields'][ $field_key ] ) && is_array( $current['response_fields'][ $field_key ] ) ? $current['response_fields'][ $field_key ] : [];
+
+            $fallback_label = ! empty( $existing['label'] ) ? $existing['label'] : $field['label'];
+
+            $config['response_fields'][ $field_key ] = [
+                'enabled' => ! empty( $posted_field['enabled'] ) ? '1' : '0',
+                'label'   => isset( $posted_field['label'] ) ? sanitize_text_field( $posted_field['label'] ) : sanitize_text_field( $fallback_label ),
+            ];
+        }
+
+        $config['show_payment_status'] = ! empty( $config['response_fields']['payment_status']['enabled'] ) && $config['response_fields']['payment_status']['enabled'] === '1' ? '1' : '0';
+        $config['show_checkin_status'] = ! empty( $config['response_fields']['checkin_status']['enabled'] ) && $config['response_fields']['checkin_status']['enabled'] === '1' ? '1' : '0';
+        $config['show_localidad']      = ! empty( $config['response_fields']['localidad']['enabled'] ) && $config['response_fields']['localidad']['enabled'] === '1' ? '1' : '0';
 
         update_post_meta( $post_id, EVENTOSAPP_REG_STATUS_META_CONFIG, $config );
 
@@ -1598,6 +1938,87 @@ if ( ! function_exists( 'eventosapp_registration_status_format_public_text' ) ) 
 }
 
 /**
+ * Convierte valores guardados como array o texto en una cadena segura para mostrar.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_format_response_plain_value' ) ) {
+    function eventosapp_registration_status_format_response_plain_value( $value ) {
+        if ( is_array( $value ) ) {
+            $flat = [];
+            array_walk_recursive( $value, function( $item ) use ( &$flat ) {
+                if ( is_scalar( $item ) && trim( (string) $item ) !== '' ) {
+                    $flat[] = trim( sanitize_text_field( (string) $item ) );
+                }
+            } );
+
+            return implode( ', ', array_unique( $flat ) );
+        }
+
+        if ( ! is_scalar( $value ) ) {
+            return '';
+        }
+
+        return trim( sanitize_text_field( (string) $value ) );
+    }
+}
+
+/**
+ * Resuelve el valor visible de cada campo activo en la respuesta pública.
+ */
+if ( ! function_exists( 'eventosapp_registration_status_get_response_field_value' ) ) {
+    function eventosapp_registration_status_get_response_field_value( $field_key, $field, $ticket_id, $event_id ) {
+        $ticket_id = absint( $ticket_id );
+        $event_id  = absint( $event_id );
+
+        $result = [
+            'value'   => '',
+            'is_html' => false,
+        ];
+
+        if ( ! $ticket_id ) {
+            return $result;
+        }
+
+        switch ( $field_key ) {
+            case 'registration_status':
+                $result['value'] = 'Confirmada';
+                return $result;
+
+            case 'modalidad':
+                $result['value'] = function_exists( 'eventosapp_get_ticket_modalidad_label' )
+                    ? eventosapp_get_ticket_modalidad_label( $ticket_id )
+                    : '';
+                return $result;
+
+            case 'virtual_access':
+                $is_virtual_ticket = function_exists( 'eventosapp_ticket_is_virtual' ) && eventosapp_ticket_is_virtual( $ticket_id );
+                $virtual_url       = ( $is_virtual_ticket && function_exists( 'eventosapp_get_virtual_landing_url' ) )
+                    ? eventosapp_get_virtual_landing_url( $ticket_id )
+                    : '';
+
+                if ( $virtual_url ) {
+                    $result['value']   = '<a href="' . esc_url( $virtual_url ) . '" target="_blank" rel="noopener">Abrir acceso virtual</a>';
+                    $result['is_html'] = true;
+                }
+                return $result;
+
+            case 'payment_status':
+                $result['value'] = eventosapp_registration_status_get_payment_label( $ticket_id );
+                return $result;
+
+            case 'checkin_status':
+                $result['value'] = eventosapp_registration_status_get_checkin_label( $ticket_id );
+                return $result;
+        }
+
+        if ( ! empty( $field['meta_key'] ) ) {
+            $result['value'] = eventosapp_registration_status_format_response_plain_value( get_post_meta( $ticket_id, $field['meta_key'], true ) );
+        }
+
+        return $result;
+    }
+}
+
+/**
  * Render HTML para inscripción encontrada.
  */
 if ( ! function_exists( 'eventosapp_registration_status_render_found_html' ) ) {
@@ -1612,56 +2033,38 @@ if ( ! function_exists( 'eventosapp_registration_status_render_found_html' ) ) {
         ?>
         <h3><?php echo $title; ?></h3>
         <p><?php echo $message; ?></p>
-        <table class="evapp-rs-status-table">
-            <tbody>
-                <tr>
-                    <th>Estado de inscripción</th>
-                    <td>Confirmada</td>
-                </tr>
-                <?php
-                $modalidad_label = function_exists( 'eventosapp_get_ticket_modalidad_label' )
-                    ? eventosapp_get_ticket_modalidad_label( $ticket_id )
-                    : '';
-                $is_virtual_ticket = function_exists( 'eventosapp_ticket_is_virtual' ) && eventosapp_ticket_is_virtual( $ticket_id );
-                $virtual_url       = ( $is_virtual_ticket && function_exists( 'eventosapp_get_virtual_landing_url' ) )
-                    ? eventosapp_get_virtual_landing_url( $ticket_id )
-                    : '';
-                ?>
-                <?php if ( $modalidad_label ) : ?>
-                    <tr>
-                        <th>Modalidad</th>
-                        <td><?php echo esc_html( $modalidad_label ); ?></td>
-                    </tr>
-                <?php endif; ?>
-                <?php if ( $is_virtual_ticket && $virtual_url ) : ?>
-                    <tr>
-                        <th>Acceso virtual</th>
-                        <td><a href="<?php echo esc_url( $virtual_url ); ?>" target="_blank" rel="noopener">Abrir acceso virtual</a></td>
-                    </tr>
-                <?php endif; ?>
-                <?php if ( ! empty( $config['show_payment_status'] ) && $config['show_payment_status'] === '1' ) : ?>
-                    <tr>
-                        <th>Estado de pago</th>
-                        <td><?php echo esc_html( eventosapp_registration_status_get_payment_label( $ticket_id ) ); ?></td>
-                    </tr>
-                <?php endif; ?>
-                <?php if ( ! empty( $config['show_checkin_status'] ) && $config['show_checkin_status'] === '1' ) : ?>
-                    <tr>
-                        <th>Check-in</th>
-                        <td><?php echo esc_html( eventosapp_registration_status_get_checkin_label( $ticket_id ) ); ?></td>
-                    </tr>
-                <?php endif; ?>
-                <?php
-                $localidad = get_post_meta( $ticket_id, '_eventosapp_asistente_localidad', true );
-                if ( ! empty( $config['show_localidad'] ) && $config['show_localidad'] === '1' && $localidad ) :
-                    ?>
-                    <tr>
-                        <th>Localidad</th>
-                        <td><?php echo esc_html( $localidad ); ?></td>
-                    </tr>
-                <?php endif; ?>
-            </tbody>
-        </table>
+        <?php
+        $enabled_response_fields = eventosapp_registration_status_get_enabled_response_fields( $event_id, $config );
+        $response_rows           = [];
+
+        foreach ( $enabled_response_fields as $field_key => $field ) {
+            $value_data = eventosapp_registration_status_get_response_field_value( $field_key, $field, $ticket_id, $event_id );
+            $value      = isset( $value_data['value'] ) ? $value_data['value'] : '';
+
+            if ( $value === '' || $value === null ) {
+                continue;
+            }
+
+            $response_rows[] = [
+                'label'   => ! empty( $field['public_label'] ) ? $field['public_label'] : $field['label'],
+                'value'   => $value,
+                'is_html' => ! empty( $value_data['is_html'] ),
+            ];
+        }
+        ?>
+
+        <?php if ( ! empty( $response_rows ) ) : ?>
+            <table class="evapp-rs-status-table">
+                <tbody>
+                    <?php foreach ( $response_rows as $row ) : ?>
+                        <tr>
+                            <th><?php echo esc_html( $row['label'] ); ?></th>
+                            <td><?php echo $row['is_html'] ? wp_kses( $row['value'], [ 'a' => [ 'href' => true, 'target' => true, 'rel' => true ] ] ) : esc_html( $row['value'] ); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
 
         <?php if ( ! empty( $config['resend_enabled'] ) && $config['resend_enabled'] === '1' && $lookup_key ) : ?>
             <?php $cooldown_state = eventosapp_registration_status_get_resend_cooldown_state( $ticket_id, $config ); ?>
