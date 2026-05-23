@@ -746,17 +746,32 @@ function eventosapp_whatsapp_get_public_ticket_assets($ticket_id) {
     }
 
     $platform_url = function_exists('eventosapp_get_ticket_virtual_platform_url') ? eventosapp_get_ticket_virtual_platform_url($ticket_id) : ($event_id ? get_post_meta($event_id, '_eventosapp_virtual_url', true) : '');
+    $virtual_use_landing = $event_id && function_exists('eventosapp_virtual_landing_whatsapp_use_landing')
+        ? eventosapp_virtual_landing_whatsapp_use_landing($event_id)
+        : true;
+    $virtual_access_url = '';
+    if ( function_exists('eventosapp_get_virtual_whatsapp_access_url') ) {
+        $virtual_access_url = eventosapp_get_virtual_whatsapp_access_url($ticket_id);
+    } else {
+        $virtual_access_url = $virtual_use_landing && $virtual_landing ? $virtual_landing : $platform_url;
+        if ( ! $virtual_access_url ) {
+            $virtual_access_url = $virtual_landing;
+        }
+    }
+
     $landing_header = eventosapp_whatsapp_get_landing_header_image($ticket_id, $event_id);
 
     return [
-        'qr'              => esc_url_raw($qr_url),
-        'landing_header'  => esc_url_raw($landing_header),
-        'ics'             => esc_url_raw($ics_url),
-        'pdf'             => esc_url_raw($pdf_url),
-        'google_wallet'   => esc_url_raw($google_wallet),
-        'apple_wallet'    => esc_url_raw($apple_wallet),
-        'virtual_landing' => esc_url_raw($virtual_landing),
-        'platform_url'    => esc_url_raw($platform_url),
+        'qr'                  => esc_url_raw($qr_url),
+        'landing_header'      => esc_url_raw($landing_header),
+        'ics'                 => esc_url_raw($ics_url),
+        'pdf'                 => esc_url_raw($pdf_url),
+        'google_wallet'       => esc_url_raw($google_wallet),
+        'apple_wallet'        => esc_url_raw($apple_wallet),
+        'virtual_landing'     => esc_url_raw($virtual_landing),
+        'platform_url'        => esc_url_raw($platform_url),
+        'virtual_access_url'  => esc_url_raw($virtual_access_url),
+        'virtual_use_landing' => $virtual_use_landing ? 1 : 0,
     ];
 }
 
@@ -884,7 +899,7 @@ function eventosapp_whatsapp_render_public_ticket_landing_content($ticket_id = 0
                     <?php endif; ?>
 
                     <div class="evapp-ticket-buttons">
-                        <?php if ( $is_virtual && ! empty($assets['virtual_landing']) ) : ?><a class="evapp-ticket-button success" href="<?php echo esc_url($assets['virtual_landing']); ?>" target="_blank" rel="noopener noreferrer">Ingresar al evento virtual</a><?php endif; ?>
+                        <?php if ( $is_virtual && ! empty($assets['virtual_access_url']) ) : ?><a class="evapp-ticket-button success" href="<?php echo esc_url($assets['virtual_access_url']); ?>" target="_blank" rel="noopener noreferrer">Ingresar al evento virtual</a><?php endif; ?>
                         <?php if ( ! empty($assets['ics']) ) : ?><a class="evapp-ticket-button secondary" href="<?php echo esc_url($assets['ics']); ?>" target="_blank" rel="noopener noreferrer">Agregar a agenda</a><?php endif; ?>
                         <?php if ( ! empty($assets['pdf']) ) : ?><a class="evapp-ticket-button neutral" href="<?php echo esc_url($assets['pdf']); ?>" target="_blank" rel="noopener noreferrer">Descargar PDF</a><?php endif; ?>
                     </div>
@@ -1002,14 +1017,22 @@ function eventosapp_whatsapp_redirect_public_virtual_access() {
     }
 
     $assets = eventosapp_whatsapp_get_public_ticket_assets($ticket_id);
-    $target = ! empty($assets['virtual_landing']) ? $assets['virtual_landing'] : $assets['platform_url'];
+    $target = ! empty($assets['virtual_access_url']) ? $assets['virtual_access_url'] : (! empty($assets['virtual_landing']) ? $assets['virtual_landing'] : $assets['platform_url']);
 
     if ( empty($target) ) {
         status_header(404);
         wp_die('No se encontró enlace virtual para este ticket.');
     }
 
-    wp_safe_redirect($target);
+    if ( ! empty($assets['platform_url']) && $target === $assets['platform_url'] && function_exists('eventosapp_register_virtual_checkin') ) {
+        eventosapp_register_virtual_checkin($ticket_id, [
+            'origen'     => 'whatsapp-virtual-access-direct',
+            'ip'         => $_SERVER['REMOTE_ADDR'] ?? '',
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
+        ]);
+    }
+
+    wp_redirect(esc_url_raw($target), 302);
     exit;
 }
 add_action('admin_post_nopriv_eventosapp_whatsapp_virtual_access', 'eventosapp_whatsapp_redirect_public_virtual_access', 0);
@@ -1909,7 +1932,7 @@ function eventosapp_whatsapp_render_settings_page() {
                     <label for="evapp_wa_intro">Mensaje inicial</label>
                     <div>
                         <textarea id="evapp_wa_intro" name="message_intro"><?php echo esc_textarea($settings['message_intro']); ?></textarea>
-                        <p class="evapp-wa-help">Variables disponibles: <span class="evapp-wa-code">{{nombre}}</span>, <span class="evapp-wa-code">{{apellido}}</span>, <span class="evapp-wa-code">{{evento_nombre}}</span>, <span class="evapp-wa-code">{{ticket_id}}</span>.</p>
+                        <p class="evapp-wa-help">Variables disponibles: <span class="evapp-wa-code">{{nombre}}</span>, <span class="evapp-wa-code">{{apellido}}</span>, <span class="evapp-wa-code">{{evento_nombre}}</span>, <span class="evapp-wa-code">{{ticket_id}}</span>, <span class="evapp-wa-code">{{enlace_plataforma_virtual}}</span>, <span class="evapp-wa-code">{{enlace_virtual_whatsapp}}</span>.</p>
                     </div>
 
                     <label for="evapp_wa_debug">Depuración</label>
@@ -3993,6 +4016,11 @@ function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_i
         }
     }
 
+    $platform_direct_url = function_exists('eventosapp_get_ticket_virtual_platform_url') ? eventosapp_get_ticket_virtual_platform_url($ticket_id) : ($event_id ? get_post_meta($event_id, '_eventosapp_virtual_url', true) : '');
+    if ( $platform_direct_url === '' ) {
+        $platform_direct_url = 'Enlace de plataforma virtual';
+    }
+
     $organizador = $event_id ? (function_exists('eventosapp_get_nombre_organizador') ? eventosapp_get_nombre_organizador($event_id) : get_post_meta($event_id, '_eventosapp_organizador', true)) : '';
     if ( $organizador === '' ) {
         $organizador = 'Organizador del evento';
@@ -4007,7 +4035,28 @@ function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_i
         6 => $landing_url,
         7 => $organizador,
         8 => $modality === 'virtual' ? 'Virtual' : 'Presencial',
+        9 => $platform_direct_url,
     ];
+}
+
+if ( ! function_exists('eventosapp_whatsapp_runtime_template_button_enabled') ) {
+    /**
+     * Compatibilidad: las plantillas anteriores no guardaban estado del botón.
+     * Si no existe el meta de activación, se considera activo para no romper
+     * plantillas ya aprobadas.
+     */
+    function eventosapp_whatsapp_runtime_template_button_enabled($template, $button_number) {
+        $template = is_array($template) ? $template : [];
+        $button_number = absint($button_number);
+        $key = 'button_' . $button_number . '_enabled';
+
+        if ( ! array_key_exists($key, $template) ) {
+            return true;
+        }
+
+        $raw = strtolower(trim((string) $template[$key]));
+        return ! in_array($raw, ['0', 'no', 'false', 'off'], true);
+    }
 }
 
 /**
@@ -4069,6 +4118,10 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
 
     $button_index = 0;
     foreach ( [1, 2] as $i ) {
+        if ( ! eventosapp_whatsapp_runtime_template_button_enabled($template, $i) ) {
+            continue;
+        }
+
         $url = (string)($template['button_' . $i . '_url'] ?? '');
         $text = (string)($template['button_' . $i . '_text'] ?? '');
         if ( $text === '' || $url === '' ) {
@@ -4561,11 +4614,15 @@ function eventosapp_whatsapp_maybe_send_after_ticket_creation($ticket_id, $conte
  */
 function eventosapp_whatsapp_replace_message_vars($template, $ticket_id, $event_id) {
     $evento_nombre = $event_id ? get_the_title($event_id) : '';
+    $platform_url = function_exists('eventosapp_get_ticket_virtual_platform_url') ? eventosapp_get_ticket_virtual_platform_url($ticket_id) : ($event_id ? get_post_meta($event_id, '_eventosapp_virtual_url', true) : '');
+    $virtual_access_url = function_exists('eventosapp_get_virtual_whatsapp_access_url') ? eventosapp_get_virtual_whatsapp_access_url($ticket_id) : '';
     $vars = [
         '{{nombre}}' => get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true),
         '{{apellido}}' => get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true),
         '{{evento_nombre}}' => $evento_nombre ? '*' . $evento_nombre . '*' : '',
         '{{ticket_id}}' => get_post_meta($ticket_id, 'eventosapp_ticketID', true),
+        '{{enlace_plataforma_virtual}}' => $platform_url,
+        '{{enlace_virtual_whatsapp}}' => $virtual_access_url,
     ];
 
     return strtr((string)$template, array_map('sanitize_text_field', $vars));
@@ -4648,6 +4705,14 @@ function eventosapp_whatsapp_build_ticket_message($ticket_id) {
     if ( $is_virtual && function_exists('eventosapp_get_virtual_landing_url') ) {
         $virtual_landing = eventosapp_get_virtual_landing_url($ticket_id);
     }
+    $virtual_access_url = '';
+    if ( $is_virtual ) {
+        if ( function_exists('eventosapp_get_virtual_whatsapp_access_url') ) {
+            $virtual_access_url = eventosapp_get_virtual_whatsapp_access_url($ticket_id);
+        } else {
+            $virtual_access_url = $virtual_landing;
+        }
+    }
 
     $public_landing = eventosapp_whatsapp_public_ticket_landing_url(eventosapp_whatsapp_get_ticket_public_code($ticket_id));
 
@@ -4668,7 +4733,7 @@ function eventosapp_whatsapp_build_ticket_message($ticket_id) {
 
     if ( $is_virtual ) {
         if ( $virtual_platform ) $lines[] = '💻 *Plataforma:* ' . $virtual_platform;
-        if ( $virtual_landing ) $lines[] = '🔗 *Acceso virtual:* ' . $virtual_landing;
+        if ( $virtual_access_url ) $lines[] = '🔗 *Acceso virtual:* ' . $virtual_access_url;
     } else {
         if ( $direccion ) $lines[] = '📍 *Lugar:* ' . $direccion;
     }
