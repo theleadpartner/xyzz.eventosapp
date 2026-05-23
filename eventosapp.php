@@ -571,6 +571,47 @@ if ( ! function_exists('eventosapp_get_ticket_virtual_platform_url') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_event_virtual_access_uses_landing') ) {
+    /**
+     * Define si los enlaces públicos de acceso virtual deben pasar por la landing de EventosApp.
+     * Por compatibilidad, cualquier evento sin valor guardado se considera activo.
+     */
+    function eventosapp_event_virtual_access_uses_landing( $event_id ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return true;
+        }
+
+        $stored = get_post_meta( $event_id, '_eventosapp_virtual_access_use_landing', true );
+        return (string) $stored !== '0';
+    }
+}
+
+if ( ! function_exists('eventosapp_get_ticket_virtual_access_url') ) {
+    /**
+     * URL final que deben usar botones, correos, WhatsApp y paneles para abrir el acceso virtual.
+     * Si el evento tiene activa la landing, devuelve la landing pública de EventosApp.
+     * Si se desactiva, devuelve directamente el enlace de la plataforma configurada.
+     */
+    function eventosapp_get_ticket_virtual_access_url( $ticket_id ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id || get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
+            return '';
+        }
+
+        $event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        if ( $event_id && eventosapp_event_virtual_access_uses_landing( $event_id ) ) {
+            $landing_url = function_exists('eventosapp_get_virtual_landing_url') ? eventosapp_get_virtual_landing_url( $ticket_id ) : '';
+            if ( $landing_url ) {
+                return esc_url_raw( $landing_url );
+            }
+        }
+
+        $platform_url = eventosapp_get_ticket_virtual_platform_url( $ticket_id );
+        return $platform_url ? esc_url_raw( $platform_url ) : '';
+    }
+}
+
 if ( ! function_exists('eventosapp_ajax_register_virtual_checkin') ) {
     function eventosapp_ajax_register_virtual_checkin() {
         $ticket_id = eventosapp_resolve_ticket_from_request( $_REQUEST );
@@ -1039,9 +1080,11 @@ function eventosapp_render_metabox_evento($post) {
         'virtual'            => 'Virtual',
         'presencial_virtual' => 'Presencial y Virtual',
     ];
-    $virtual_url             = get_post_meta($post->ID, '_eventosapp_virtual_url', true) ?: '';
-    $virtual_platform        = get_post_meta($post->ID, '_eventosapp_virtual_platform', true) ?: '';
-    $virtual_access_datetime = get_post_meta($post->ID, '_eventosapp_virtual_access_datetime', true) ?: '';
+    $virtual_url                = get_post_meta($post->ID, '_eventosapp_virtual_url', true) ?: '';
+    $virtual_platform           = get_post_meta($post->ID, '_eventosapp_virtual_platform', true) ?: '';
+    $virtual_access_datetime    = get_post_meta($post->ID, '_eventosapp_virtual_access_datetime', true) ?: '';
+    $virtual_access_use_landing = get_post_meta($post->ID, '_eventosapp_virtual_access_use_landing', true);
+    $virtual_access_use_landing = ((string) $virtual_access_use_landing === '0') ? '0' : '1';
 
     // === VINCULACIÓN CON CLIENTE ===
     $usar_cliente = get_post_meta($post->ID, '_eventosapp_usar_cliente', true) === '1' ? '1' : '0';
@@ -1097,6 +1140,10 @@ function eventosapp_render_metabox_evento($post) {
     .evapp-modalidad-help { margin:6px 0 0; color:#1f4f82; font-size:12px; line-height:1.4; }
     .evapp-physical-fields, .evapp-virtual-fields { border:1px solid #e5e7eb; background:#fafafa; padding:12px; border-radius:10px; margin:10px 0 16px; }
     .evapp-virtual-fields h4, .evapp-physical-fields h4 { margin:0 0 10px; }
+    .evapp-virtual-redirect-toggle { display:block; border:1px solid #c7d2fe; background:#eef2ff; border-radius:10px; padding:10px 12px; margin:12px 0; }
+    .evapp-virtual-redirect-toggle label { display:flex; gap:8px; align-items:flex-start; font-weight:600; cursor:pointer; color:#1e3a8a; }
+    .evapp-virtual-redirect-toggle input { margin-top:2px; }
+    .evapp-virtual-redirect-toggle .muted { display:block; margin:6px 0 0 24px; line-height:1.4; }
     </style>
 
     <!-- Tipo de fecha -->
@@ -1185,7 +1232,15 @@ function eventosapp_render_metabox_evento($post) {
         <input type="text" class="eventosapp-input-wide" name="eventosapp_virtual_platform" value="<?php echo esc_attr($virtual_platform); ?>" placeholder="Ej: Zoom, Google Meet, Microsoft Teams"><br><br>
 
         <label><strong>Enlace del evento virtual:</strong></label><br>
-        <input type="url" class="eventosapp-input-wide" name="eventosapp_virtual_url" value="<?php echo esc_url($virtual_url); ?>" placeholder="https://..."><br><br>
+        <input type="url" class="eventosapp-input-wide" name="eventosapp_virtual_url" value="<?php echo esc_url($virtual_url); ?>" placeholder="https://..."><br>
+
+        <div class="evapp-virtual-redirect-toggle">
+            <label for="eventosapp_virtual_access_use_landing">
+                <input type="checkbox" id="eventosapp_virtual_access_use_landing" name="eventosapp_virtual_access_use_landing" value="1" <?php checked($virtual_access_use_landing, '1'); ?>>
+                Redirigir el acceso virtual a la landing de EventosApp
+            </label>
+            <span class="muted">Activo por defecto. Si se desmarca, los enlaces de acceso virtual enviados por correo, WhatsApp y mostrados en el ticket abrirán directamente el enlace de la plataforma configurada arriba.</span>
+        </div>
 
         <label><strong>Fecha y hora para habilitar el enlace:</strong></label><br>
         <input type="datetime-local" name="eventosapp_virtual_access_datetime" value="<?php echo esc_attr($virtual_access_datetime); ?>">
@@ -1490,6 +1545,7 @@ add_action('save_post_eventosapp_event', function($post_id) {
     update_post_meta($post_id, '_eventosapp_virtual_platform', sanitize_text_field($_POST['eventosapp_virtual_platform'] ?? ''));
     update_post_meta($post_id, '_eventosapp_virtual_url', esc_url_raw($_POST['eventosapp_virtual_url'] ?? ''));
     update_post_meta($post_id, '_eventosapp_virtual_access_datetime', sanitize_text_field($_POST['eventosapp_virtual_access_datetime'] ?? ''));
+    update_post_meta($post_id, '_eventosapp_virtual_access_use_landing', isset($_POST['eventosapp_virtual_access_use_landing']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_organizador_email', sanitize_email($_POST['eventosapp_organizador_email'] ?? ''));
     update_post_meta($post_id, '_eventosapp_organizador_tel', sanitize_text_field($_POST['eventosapp_organizador_tel'] ?? ''));
 
