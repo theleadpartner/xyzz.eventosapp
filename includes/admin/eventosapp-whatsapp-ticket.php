@@ -746,17 +746,23 @@ function eventosapp_whatsapp_get_public_ticket_assets($ticket_id) {
     }
 
     $platform_url = function_exists('eventosapp_get_ticket_virtual_platform_url') ? eventosapp_get_ticket_virtual_platform_url($ticket_id) : ($event_id ? get_post_meta($event_id, '_eventosapp_virtual_url', true) : '');
+    if ( function_exists('eventosapp_get_ticket_virtual_access_url') ) {
+        $virtual_access_url = eventosapp_get_ticket_virtual_access_url($ticket_id);
+    } else {
+        $virtual_access_url = $virtual_landing ?: $platform_url;
+    }
     $landing_header = eventosapp_whatsapp_get_landing_header_image($ticket_id, $event_id);
 
     return [
-        'qr'              => esc_url_raw($qr_url),
-        'landing_header'  => esc_url_raw($landing_header),
-        'ics'             => esc_url_raw($ics_url),
-        'pdf'             => esc_url_raw($pdf_url),
-        'google_wallet'   => esc_url_raw($google_wallet),
-        'apple_wallet'    => esc_url_raw($apple_wallet),
-        'virtual_landing' => esc_url_raw($virtual_landing),
-        'platform_url'    => esc_url_raw($platform_url),
+        'qr'                 => esc_url_raw($qr_url),
+        'landing_header'     => esc_url_raw($landing_header),
+        'ics'                => esc_url_raw($ics_url),
+        'pdf'                => esc_url_raw($pdf_url),
+        'google_wallet'      => esc_url_raw($google_wallet),
+        'apple_wallet'       => esc_url_raw($apple_wallet),
+        'virtual_landing'    => esc_url_raw($virtual_landing),
+        'virtual_access_url' => esc_url_raw($virtual_access_url),
+        'platform_url'       => esc_url_raw($platform_url),
     ];
 }
 
@@ -884,7 +890,7 @@ function eventosapp_whatsapp_render_public_ticket_landing_content($ticket_id = 0
                     <?php endif; ?>
 
                     <div class="evapp-ticket-buttons">
-                        <?php if ( $is_virtual && ! empty($assets['virtual_landing']) ) : ?><a class="evapp-ticket-button success" href="<?php echo esc_url($assets['virtual_landing']); ?>" target="_blank" rel="noopener noreferrer">Ingresar al evento virtual</a><?php endif; ?>
+                        <?php if ( $is_virtual && ! empty($assets['virtual_access_url']) ) : ?><a class="evapp-ticket-button success" href="<?php echo esc_url($assets['virtual_access_url']); ?>" target="_blank" rel="noopener noreferrer">Ingresar al evento virtual</a><?php endif; ?>
                         <?php if ( ! empty($assets['ics']) ) : ?><a class="evapp-ticket-button secondary" href="<?php echo esc_url($assets['ics']); ?>" target="_blank" rel="noopener noreferrer">Agregar a agenda</a><?php endif; ?>
                         <?php if ( ! empty($assets['pdf']) ) : ?><a class="evapp-ticket-button neutral" href="<?php echo esc_url($assets['pdf']); ?>" target="_blank" rel="noopener noreferrer">Descargar PDF</a><?php endif; ?>
                     </div>
@@ -1002,7 +1008,7 @@ function eventosapp_whatsapp_redirect_public_virtual_access() {
     }
 
     $assets = eventosapp_whatsapp_get_public_ticket_assets($ticket_id);
-    $target = ! empty($assets['virtual_landing']) ? $assets['virtual_landing'] : $assets['platform_url'];
+    $target = ! empty($assets['virtual_access_url']) ? $assets['virtual_access_url'] : $assets['platform_url'];
 
     if ( empty($target) ) {
         status_header(404);
@@ -4006,10 +4012,17 @@ function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_i
 
     $ticket_public = eventosapp_whatsapp_get_ticket_public_code($ticket_id);
     $landing_url = eventosapp_whatsapp_public_ticket_landing_url($ticket_public);
-    if ( $modality === 'virtual' && function_exists('eventosapp_get_virtual_landing_url') ) {
-        $virtual_landing = eventosapp_get_virtual_landing_url($ticket_id);
-        if ( $virtual_landing ) {
-            $landing_url = $virtual_landing;
+    if ( $modality === 'virtual' ) {
+        if ( function_exists('eventosapp_get_ticket_virtual_access_url') ) {
+            $virtual_access_url = eventosapp_get_ticket_virtual_access_url($ticket_id);
+            if ( $virtual_access_url ) {
+                $landing_url = $virtual_access_url;
+            }
+        } elseif ( function_exists('eventosapp_get_virtual_landing_url') ) {
+            $virtual_landing = eventosapp_get_virtual_landing_url($ticket_id);
+            if ( $virtual_landing ) {
+                $landing_url = $virtual_landing;
+            }
         }
     }
 
@@ -4664,9 +4677,11 @@ function eventosapp_whatsapp_build_ticket_message($ticket_id) {
         $pdf_url = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
     }
 
-    $virtual_landing = '';
-    if ( $is_virtual && function_exists('eventosapp_get_virtual_landing_url') ) {
-        $virtual_landing = eventosapp_get_virtual_landing_url($ticket_id);
+    $virtual_access_url = '';
+    if ( $is_virtual && function_exists('eventosapp_get_ticket_virtual_access_url') ) {
+        $virtual_access_url = eventosapp_get_ticket_virtual_access_url($ticket_id);
+    } elseif ( $is_virtual && function_exists('eventosapp_get_virtual_landing_url') ) {
+        $virtual_access_url = eventosapp_get_virtual_landing_url($ticket_id);
     }
 
     $public_landing = eventosapp_whatsapp_public_ticket_landing_url(eventosapp_whatsapp_get_ticket_public_code($ticket_id));
@@ -4688,7 +4703,7 @@ function eventosapp_whatsapp_build_ticket_message($ticket_id) {
 
     if ( $is_virtual ) {
         if ( $virtual_platform ) $lines[] = '💻 *Plataforma:* ' . $virtual_platform;
-        if ( $virtual_landing ) $lines[] = '🔗 *Acceso virtual:* ' . $virtual_landing;
+        if ( $virtual_access_url ) $lines[] = '🔗 *Acceso virtual:* ' . $virtual_access_url;
     } else {
         if ( $direccion ) $lines[] = '📍 *Lugar:* ' . $direccion;
     }
