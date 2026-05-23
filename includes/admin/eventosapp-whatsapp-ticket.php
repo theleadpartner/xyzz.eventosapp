@@ -3565,9 +3565,29 @@ function eventosapp_whatsapp_api_send_message($to, array $message_payload, $sett
 }
 
 function eventosapp_whatsapp_extract_api_error($decoded, $body, $code) {
-    if ( is_array($decoded) && ! empty($decoded['error']['message']) ) {
-        return 'Meta API: ' . sanitize_text_field($decoded['error']['message']);
+    if ( is_array($decoded) && ! empty($decoded['error']) && is_array($decoded['error']) ) {
+        $error = $decoded['error'];
+        $parts = [];
+
+        if ( ! empty($error['message']) ) {
+            $parts[] = sanitize_text_field((string) $error['message']);
+        }
+        if ( ! empty($error['error_user_title']) ) {
+            $parts[] = sanitize_text_field((string) $error['error_user_title']);
+        }
+        if ( ! empty($error['error_user_msg']) ) {
+            $parts[] = sanitize_text_field((string) $error['error_user_msg']);
+        }
+        if ( ! empty($error['error_subcode']) ) {
+            $parts[] = 'Subcódigo: ' . sanitize_text_field((string) $error['error_subcode']);
+        }
+
+        $parts = array_values(array_unique(array_filter($parts)));
+        if ( ! empty($parts) ) {
+            return 'Meta API: ' . implode(' | ', $parts);
+        }
     }
+
     if ( $body !== '' ) {
         return 'Meta API HTTP ' . (int)$code . ': ' . sanitize_text_field(wp_trim_words($body, 30, '...'));
     }
