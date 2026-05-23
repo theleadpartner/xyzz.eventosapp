@@ -113,6 +113,12 @@ if ( ! function_exists('eventosapp_render_virtual_landing_metabox') ) {
         $intro_title     = get_post_meta($event_id, '_eventosapp_virtual_landing_intro_title', true);
         $intro_text      = get_post_meta($event_id, '_eventosapp_virtual_landing_intro_text', true);
         $button_label    = get_post_meta($event_id, '_eventosapp_virtual_landing_button_label', true) ?: 'Ingresar a la sesión virtual';
+        $whatsapp_use_landing_raw = get_post_meta($event_id, '_eventosapp_virtual_landing_whatsapp_use_landing', true);
+        $whatsapp_use_landing = ($whatsapp_use_landing_raw === '' || $whatsapp_use_landing_raw === null)
+            ? true
+            : ! in_array(strtolower(trim((string) $whatsapp_use_landing_raw)), ['0', 'no', 'false', 'off'], true);
+        $platform_url    = get_post_meta($event_id, '_eventosapp_virtual_url', true);
+        $whatsapp_target_preview = $whatsapp_use_landing ? $effective_url : $platform_url;
         $colors          = eventosapp_virtual_landing_get_colors($event_id);
         $defaults        = eventosapp_virtual_landing_default_colors();
 
@@ -130,6 +136,9 @@ if ( ! function_exists('eventosapp_render_virtual_landing_metabox') ) {
             .evapp-vlanding-help { color:#64748b; font-size:12px; line-height:1.4; margin:5px 0 0; }
             .evapp-vlanding-effective { background:#f8fafc; border:1px dashed #cbd5e1; border-radius:10px; padding:12px; margin:0 0 16px; }
             .evapp-vlanding-effective code { font-size:13px; word-break:break-all; }
+            .evapp-vlanding-check { display:flex; gap:10px; align-items:flex-start; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; }
+            .evapp-vlanding-check input[type="checkbox"] { margin-top:2px; }
+            .evapp-vlanding-check strong { display:block; margin-bottom:3px; }
             .evapp-vlanding-color-grid { display:grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap:12px 18px; }
             .evapp-vlanding-media-row { display:flex; gap:8px; align-items:center; }
             .evapp-vlanding-media-row input { flex:1; }
@@ -168,6 +177,22 @@ if ( ! function_exists('eventosapp_render_virtual_landing_metabox') ) {
                         <p class="evapp-vlanding-help">
                             Si la dejas vacía, se genera automáticamente como <code>/virtual/nombre-del-evento</code>. También puedes escribir una ruta como <code>/virtual/mi-evento-vip</code>. No uses la URL de la plataforma virtual aquí; esa se configura en Detalles del Evento.
                         </p>
+                    </div>
+
+                    <div class="evapp-vlanding-field">
+                        <label for="eventosapp_virtual_landing_whatsapp_use_landing">Destino del botón virtual de WhatsApp</label>
+                        <div class="evapp-vlanding-check">
+                            <input type="checkbox" id="eventosapp_virtual_landing_whatsapp_use_landing" name="eventosapp_virtual_landing_whatsapp_use_landing" value="1" <?php checked($whatsapp_use_landing); ?>>
+                            <div>
+                                <strong>Enviar primero a la landing virtual de EventosApp</strong>
+                                <p class="evapp-vlanding-help" style="margin:0;">
+                                    Esta opción queda activa por defecto para mantener el comportamiento actual. Si la desmarcas, el botón virtual enviado por WhatsApp redirigirá directamente al enlace de la plataforma configurado en Detalles del Evento.
+                                </p>
+                                <p class="evapp-vlanding-help">
+                                    Destino actual de referencia: <code><?php echo esc_html($whatsapp_target_preview ?: 'No configurado'); ?></code>
+                                </p>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="evapp-vlanding-field">
@@ -305,6 +330,7 @@ if ( ! function_exists('eventosapp_save_virtual_landing_metabox') ) {
 
     update_post_meta($post_id, '_eventosapp_virtual_landing_header_url', esc_url_raw($_POST['eventosapp_virtual_landing_header_url'] ?? ''));
     update_post_meta($post_id, '_eventosapp_virtual_landing_organizer_logo_url', esc_url_raw($_POST['eventosapp_virtual_landing_organizer_logo_url'] ?? ''));
+    update_post_meta($post_id, '_eventosapp_virtual_landing_whatsapp_use_landing', isset($_POST['eventosapp_virtual_landing_whatsapp_use_landing']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_virtual_landing_intro_title', sanitize_text_field(wp_unslash($_POST['eventosapp_virtual_landing_intro_title'] ?? '')));
     update_post_meta($post_id, '_eventosapp_virtual_landing_intro_text', wp_kses_post(wp_unslash($_POST['eventosapp_virtual_landing_intro_text'] ?? '')));
     update_post_meta($post_id, '_eventosapp_virtual_landing_button_label', sanitize_text_field(wp_unslash($_POST['eventosapp_virtual_landing_button_label'] ?? 'Ingresar a la sesión virtual')));
