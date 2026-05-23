@@ -571,61 +571,6 @@ if ( ! function_exists('eventosapp_get_ticket_virtual_platform_url') ) {
     }
 }
 
-if ( ! function_exists('eventosapp_virtual_landing_whatsapp_use_landing') ) {
-    /**
-     * Define si el acceso virtual enviado por WhatsApp debe abrir primero la
-     * landing virtual de EventosApp. Por compatibilidad con eventos existentes,
-     * la opción queda activa cuando el meta todavía no existe.
-     */
-    function eventosapp_virtual_landing_whatsapp_use_landing( $event_id ) {
-        $event_id = absint( $event_id );
-        if ( ! $event_id ) {
-            return true;
-        }
-
-        $raw = get_post_meta( $event_id, '_eventosapp_virtual_landing_whatsapp_use_landing', true );
-        if ( $raw === '' || $raw === null ) {
-            return true;
-        }
-
-        $raw = strtolower( trim( (string) $raw ) );
-        return ! in_array( $raw, [ '0', 'no', 'false', 'off' ], true );
-    }
-}
-
-if ( ! function_exists('eventosapp_get_virtual_whatsapp_access_url') ) {
-    /**
-     * Resuelve el destino real que debe usar WhatsApp para un ticket virtual:
-     * landing virtual de EventosApp o enlace directo de la plataforma, según la
-     * configuración del evento.
-     */
-    function eventosapp_get_virtual_whatsapp_access_url( $ticket_id ) {
-        $ticket_id = absint( $ticket_id );
-        if ( ! $ticket_id || get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
-            return '';
-        }
-
-        $event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
-        $platform_url = eventosapp_get_ticket_virtual_platform_url( $ticket_id );
-        $landing_url = function_exists('eventosapp_get_virtual_landing_url') ? eventosapp_get_virtual_landing_url( $ticket_id ) : '';
-        $use_landing = $event_id ? eventosapp_virtual_landing_whatsapp_use_landing( $event_id ) : true;
-
-        if ( $use_landing && $landing_url ) {
-            return esc_url_raw( $landing_url );
-        }
-
-        if ( $platform_url ) {
-            return esc_url_raw( $platform_url );
-        }
-
-        if ( $landing_url ) {
-            return esc_url_raw( $landing_url );
-        }
-
-        return eventosapp_get_virtual_access_redirect_url( $ticket_id );
-    }
-}
-
 if ( ! function_exists('eventosapp_ajax_register_virtual_checkin') ) {
     function eventosapp_ajax_register_virtual_checkin() {
         $ticket_id = eventosapp_resolve_ticket_from_request( $_REQUEST );
