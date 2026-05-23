@@ -105,10 +105,81 @@ function eventosapp_whatsapp_templates_normalize_public_button_url($url) {
 }
 
 /**
- * Ejemplo completo de URL para aprobación de Meta.
+ * Ejemplo completo de URL para mostrar en ayudas internas o usar como valor del BODY.
  */
 function eventosapp_whatsapp_templates_button_example_url($action) {
-    return str_replace('{{1}}', 'ticket_demo_123', eventosapp_whatsapp_templates_button_url($action));
+    return str_replace('{{1}}', eventosapp_whatsapp_templates_default_button_variable_example(), eventosapp_whatsapp_templates_button_url($action));
+}
+
+/**
+ * Valor de ejemplo seguro para la variable dinámica de botones URL.
+ *
+ * Meta no espera la URL completa en components[].buttons[].example. Para botones
+ * con URL dinámica, el ejemplo debe ser únicamente el valor que reemplaza {{1}}.
+ */
+function eventosapp_whatsapp_templates_default_button_variable_example() {
+    return 'ticket_demo_123';
+}
+
+/**
+ * Sanitiza el campo de ejemplo de un botón URL.
+ *
+ * Se permite conservar ejemplos antiguos guardados como URL completa para poder
+ * extraer de ellos el sufijo correcto al construir el payload hacia Meta.
+ */
+function eventosapp_whatsapp_templates_sanitize_button_example($example) {
+    $example = trim((string) $example);
+    if ( $example === '' ) {
+        return '';
+    }
+
+    $example = wp_strip_all_tags($example);
+    $example = preg_replace('/[\r\n\t]+/', '', $example);
+    $example = trim($example);
+
+    return sanitize_text_field($example);
+}
+
+/**
+ * Extrae el valor que Meta debe recibir en el example de un botón URL dinámico.
+ *
+ * El campo puede venir de versiones anteriores como URL completa. En ese caso,
+ * esta función toma solo la parte que reemplaza {{1}}. Ejemplo:
+ * URL plantilla: https://dominio.com/ticket/?ticket={{1}}
+ * Ejemplo guardado: https://dominio.com/ticket/?ticket=ticket_demo_123
+ * Valor Meta: ticket_demo_123
+ */
+function eventosapp_whatsapp_templates_button_example_for_meta($url_template, $stored_example = '') {
+    $url_template = (string) $url_template;
+
+    if ( strpos($url_template, '{{1}}') === false ) {
+        return '';
+    }
+
+    $stored_example = eventosapp_whatsapp_templates_sanitize_button_example($stored_example);
+    $fallback = eventosapp_whatsapp_templates_default_button_variable_example();
+    if ( $stored_example === '' ) {
+        $stored_example = $fallback;
+    }
+
+    [$prefix, $suffix] = array_pad(explode('{{1}}', $url_template, 2), 2, '');
+
+    if ( $prefix !== '' && strpos($stored_example, $prefix) === 0 ) {
+        $candidate = substr($stored_example, strlen($prefix));
+        if ( $suffix !== '' && substr($candidate, -strlen($suffix)) === $suffix ) {
+            $candidate = substr($candidate, 0, -strlen($suffix));
+        }
+        $candidate = eventosapp_whatsapp_templates_sanitize_button_example($candidate);
+        if ( $candidate !== '' && ! preg_match('/^https?:\/\//i', $candidate) ) {
+            return $candidate;
+        }
+    }
+
+    if ( preg_match('/^https?:\/\//i', $stored_example) ) {
+        return $fallback;
+    }
+
+    return $stored_example;
 }
 
 /**
@@ -139,10 +210,10 @@ function eventosapp_whatsapp_templates_default_records() {
             'footer_text'           => 'EventosApp',
             'button_1_text'         => 'Ver mi ticket',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('ticket_landing'),
-            'button_1_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_landing'),
+            'button_1_example'      => eventosapp_whatsapp_templates_default_button_variable_example(),
             'button_2_text'         => 'Agregar a agenda',
             'button_2_url'          => eventosapp_whatsapp_templates_button_url('ticket_ics'),
-            'button_2_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_ics'),
+            'button_2_example'      => eventosapp_whatsapp_templates_default_button_variable_example(),
             'sender_phone_number_id' => '',
             'sender_phone_label'    => 'Número por defecto',
             'waba_id'               => '',
@@ -178,10 +249,10 @@ function eventosapp_whatsapp_templates_default_records() {
             'footer_text'           => 'EventosApp',
             'button_1_text'         => 'Ingresar al evento',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('virtual_access'),
-            'button_1_example'      => eventosapp_whatsapp_templates_button_example_url('virtual_access'),
+            'button_1_example'      => eventosapp_whatsapp_templates_default_button_variable_example(),
             'button_2_text'         => 'Agregar a agenda',
             'button_2_url'          => eventosapp_whatsapp_templates_button_url('ticket_ics'),
-            'button_2_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_ics'),
+            'button_2_example'      => eventosapp_whatsapp_templates_default_button_variable_example(),
             'sender_phone_number_id' => '',
             'sender_phone_label'    => 'Número por defecto',
             'waba_id'               => '',
@@ -696,10 +767,10 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'footer_text'          => sanitize_text_field($raw['footer_text'] ?? ($existing['footer_text'] ?? '')),
         'button_1_text'        => sanitize_text_field($raw['button_1_text'] ?? ($existing['button_1_text'] ?? '')),
         'button_1_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_1_url'] ?? ($existing['button_1_url'] ?? '')),
-        'button_1_example'     => esc_url_raw($raw['button_1_example'] ?? ($existing['button_1_example'] ?? '')),
+        'button_1_example'     => eventosapp_whatsapp_templates_sanitize_button_example($raw['button_1_example'] ?? ($existing['button_1_example'] ?? '')),
         'button_2_text'        => sanitize_text_field($raw['button_2_text'] ?? ($existing['button_2_text'] ?? '')),
         'button_2_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_2_url'] ?? ($existing['button_2_url'] ?? '')),
-        'button_2_example'     => esc_url_raw($raw['button_2_example'] ?? ($existing['button_2_example'] ?? '')),
+        'button_2_example'     => eventosapp_whatsapp_templates_sanitize_button_example($raw['button_2_example'] ?? ($existing['button_2_example'] ?? '')),
         'sender_phone_number_id' => $effective_sender_phone,
         'sender_phone_label'   => sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp'))),
         'waba_id'              => $effective_waba_id,
@@ -724,10 +795,10 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
     }
 
     if ( strpos($template['button_1_url'], '{{1}}') !== false && $template['button_1_example'] === '' ) {
-        $template['button_1_example'] = esc_url_raw(str_replace('{{1}}', 'ticket_demo_123', $template['button_1_url']));
+        $template['button_1_example'] = eventosapp_whatsapp_templates_default_button_variable_example();
     }
     if ( strpos($template['button_2_url'], '{{1}}') !== false && $template['button_2_example'] === '' ) {
-        $template['button_2_example'] = esc_url_raw(str_replace('{{1}}', 'ticket_demo_123', $template['button_2_url']));
+        $template['button_2_example'] = eventosapp_whatsapp_templates_default_button_variable_example();
     }
 
     $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'], $template['body_examples']);
@@ -776,8 +847,11 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
             if ( substr_count($url, '{{1}}') > 1 ) {
                 $errors[] = 'Cada botón URL solo puede usar una variable dinámica {{1}}.';
             }
-            if ( strpos($url, '{{1}}') !== false && empty($template['button_' . $i . '_example']) ) {
-                $errors[] = 'Cada botón con URL dinámica debe tener una URL de ejemplo completa.';
+            if ( strpos($url, '{{1}}') !== false ) {
+                $button_example_for_meta = eventosapp_whatsapp_templates_button_example_for_meta($url, $template['button_' . $i . '_example'] ?? '');
+                if ( $button_example_for_meta === '' ) {
+                    $errors[] = 'Cada botón con URL dinámica debe tener un valor de ejemplo para reemplazar {{1}}.';
+                }
             }
             $buttons++;
         }
@@ -847,8 +921,11 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
             'url'  => $url,
         ];
 
-        if ( strpos($url, '{{1}}') !== false && ! empty($template['button_' . $i . '_example']) ) {
-            $button['example'] = [ $template['button_' . $i . '_example'] ];
+        if ( strpos($url, '{{1}}') !== false ) {
+            $button_example_for_meta = eventosapp_whatsapp_templates_button_example_for_meta($url, $template['button_' . $i . '_example'] ?? '');
+            if ( $button_example_for_meta !== '' ) {
+                $button['example'] = [ $button_example_for_meta ];
+            }
         }
 
         $buttons[] = $button;
@@ -1949,16 +2026,16 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 <div>
                     <input type="text" name="template[button_1_text]" value="<?php echo esc_attr($template['button_1_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
                     <input type="text" name="template[button_1_url]" value="<?php echo esc_attr($template['button_1_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
-                    <input type="text" name="template[button_1_example]" value="<?php echo esc_attr($template['button_1_example'] ?? ''); ?>" placeholder="URL de ejemplo completa">
-                    <p class="evapp-wa-tpl-help">El botón URL puede usar una sola variable <span class="evapp-wa-tpl-code">{{1}}</span> al final para el identificador público del ticket.</p>
+                    <input type="text" name="template[button_1_example]" value="<?php echo esc_attr($template['button_1_example'] ?? ''); ?>" placeholder="ticket_demo_123">
+                    <p class="evapp-wa-tpl-help">El botón URL puede usar una sola variable <span class="evapp-wa-tpl-code">{{1}}</span> para el identificador público del ticket. En el campo de ejemplo escribe solo el valor que reemplaza esa variable, por ejemplo <span class="evapp-wa-tpl-code">ticket_demo_123</span>.</p>
                 </div>
 
                 <label>Botón 2</label>
                 <div>
                     <input type="text" name="template[button_2_text]" value="<?php echo esc_attr($template['button_2_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
                     <input type="text" name="template[button_2_url]" value="<?php echo esc_attr($template['button_2_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
-                    <input type="text" name="template[button_2_example]" value="<?php echo esc_attr($template['button_2_example'] ?? ''); ?>" placeholder="URL de ejemplo completa">
-                    <p class="evapp-wa-tpl-help">La estructura queda limitada a dos botones URL para mantener compatibilidad con Meta.</p>
+                    <input type="text" name="template[button_2_example]" value="<?php echo esc_attr($template['button_2_example'] ?? ''); ?>" placeholder="ticket_demo_123">
+                    <p class="evapp-wa-tpl-help">La estructura queda limitada a dos botones URL. En el ejemplo del botón escribe solo el valor dinámico, no la URL completa.</p>
                 </div>
             </div>
 
