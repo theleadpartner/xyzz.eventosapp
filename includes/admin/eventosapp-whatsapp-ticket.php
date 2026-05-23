@@ -3768,6 +3768,23 @@ function eventosapp_whatsapp_get_ticket_public_code($ticket_id) {
 }
 
 /**
+ * Prepara el valor runtime de {{1}} para botones URL dinámicos.
+ *
+ * Meta solo recibe el valor que reemplaza a {{1}}, no la URL completa.
+ * Si el identificador tiene espacios o caracteres especiales, se codifica para
+ * que la URL final del botón siga siendo válida.
+ */
+function eventosapp_whatsapp_prepare_url_button_parameter_value($value) {
+    $value = sanitize_text_field((string) $value);
+    $value = trim($value);
+    if ( $value === '' ) {
+        return '';
+    }
+
+    return rawurlencode(rawurldecode($value));
+}
+
+/**
  * Busca la plantilla aprobada más adecuada para el ticket.
  */
 function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $event_id = 0) {
@@ -4132,13 +4149,6 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
         }
 
         if ( strpos($url, '{{1}}') !== false ) {
-            $button_parameter_value = eventosapp_whatsapp_get_ticket_public_code($ticket_id);
-            if ( function_exists('eventosapp_whatsapp_templates_sanitize_button_url_parameter_value') ) {
-                $button_parameter_value = eventosapp_whatsapp_templates_sanitize_button_url_parameter_value($button_parameter_value);
-            } else {
-                $button_parameter_value = rawurlencode(rawurldecode((string) $button_parameter_value));
-            }
-
             $components[] = [
                 'type' => 'button',
                 'sub_type' => 'url',
@@ -4146,12 +4156,11 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
                 'parameters' => [
                     [
                         'type' => 'text',
-                        'text' => $button_parameter_value,
+                        'text' => eventosapp_whatsapp_prepare_url_button_parameter_value(eventosapp_whatsapp_get_ticket_public_code($ticket_id)),
                     ],
                 ],
             ];
             $debug['button_variable_components']++;
-            $debug['button_' . $i . '_parameter_value'] = $button_parameter_value;
         }
 
         $button_index++;
