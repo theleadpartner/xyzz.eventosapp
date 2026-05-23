@@ -997,6 +997,29 @@ function eventosapp_whatsapp_redirect_public_ticket_ics() {
 add_action('admin_post_nopriv_eventosapp_whatsapp_ticket_ics', 'eventosapp_whatsapp_redirect_public_ticket_ics', 0);
 add_action('admin_post_eventosapp_whatsapp_ticket_ics', 'eventosapp_whatsapp_redirect_public_ticket_ics', 0);
 
+if ( ! function_exists('eventosapp_whatsapp_redirect_to_virtual_target') ) {
+    /**
+     * Ejecuta la redirección final del acceso virtual de WhatsApp.
+     *
+     * No usa wp_safe_redirect() porque el destino puede ser una plataforma externa
+     * configurada en el evento (Zoom, Meet, Teams, etc.). wp_safe_redirect() bloquearía
+     * esos dominios y enviaría al fallback de WordPress, haciendo que los botones de
+     * plantillas WhatsApp no respeten la configuración de landing/plataforma directa.
+     */
+    function eventosapp_whatsapp_redirect_to_virtual_target($target) {
+        $target = esc_url_raw((string) $target);
+
+        if ( $target === '' ) {
+            status_header(404);
+            wp_die('No se encontró enlace virtual para este ticket.');
+        }
+
+        nocache_headers();
+        wp_redirect($target, 302, 'EventosApp WhatsApp');
+        exit;
+    }
+}
+
 /**
  * Redirige al acceso virtual público del ticket.
  */
@@ -1010,13 +1033,7 @@ function eventosapp_whatsapp_redirect_public_virtual_access() {
     $assets = eventosapp_whatsapp_get_public_ticket_assets($ticket_id);
     $target = ! empty($assets['virtual_access_url']) ? $assets['virtual_access_url'] : $assets['platform_url'];
 
-    if ( empty($target) ) {
-        status_header(404);
-        wp_die('No se encontró enlace virtual para este ticket.');
-    }
-
-    wp_safe_redirect($target);
-    exit;
+    eventosapp_whatsapp_redirect_to_virtual_target($target);
 }
 add_action('admin_post_nopriv_eventosapp_whatsapp_virtual_access', 'eventosapp_whatsapp_redirect_public_virtual_access', 0);
 add_action('admin_post_eventosapp_whatsapp_virtual_access', 'eventosapp_whatsapp_redirect_public_virtual_access', 0);
