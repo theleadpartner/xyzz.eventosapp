@@ -545,6 +545,34 @@ if (!function_exists('eventosapp_get_virtual_landing_url')) {
     }
 }
 
+if (!function_exists('eventosapp_event_virtual_access_uses_landing')) {
+    function eventosapp_event_virtual_access_uses_landing($event_id) {
+        $event_id = absint($event_id);
+        if (!$event_id) return true;
+
+        $stored = get_post_meta($event_id, '_eventosapp_virtual_access_use_landing', true);
+        return (string) $stored !== '0';
+    }
+}
+
+if (!function_exists('eventosapp_get_ticket_virtual_access_url')) {
+    function eventosapp_get_ticket_virtual_access_url($ticket_id) {
+        $ticket_id = absint($ticket_id);
+        if (!$ticket_id) return '';
+
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if ($event_id && eventosapp_event_virtual_access_uses_landing($event_id)) {
+            $landing_url = function_exists('eventosapp_get_virtual_landing_url') ? eventosapp_get_virtual_landing_url($ticket_id) : '';
+            if ($landing_url) {
+                return esc_url_raw($landing_url);
+            }
+        }
+
+        $platform_url = $event_id ? get_post_meta($event_id, '_eventosapp_virtual_url', true) : '';
+        return $platform_url ? esc_url_raw($platform_url) : '';
+    }
+}
+
 if (!function_exists('eventosapp_event_virtual_access_state')) {
     function eventosapp_event_virtual_access_state($evento_id, $ticket_id = 0) {
         $evento_id = absint($evento_id);
@@ -602,6 +630,7 @@ if (!function_exists('eventosapp_event_virtual_access_state')) {
             'now'          => $now,
             'timezone'     => $tz->getName(),
             'landing_url'  => $ticket_id ? eventosapp_get_virtual_landing_url($ticket_id) : '',
+            'access_url'   => $ticket_id ? eventosapp_get_ticket_virtual_access_url($ticket_id) : '',
         ];
     }
 }
