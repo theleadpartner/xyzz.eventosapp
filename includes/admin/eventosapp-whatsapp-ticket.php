@@ -4122,11 +4122,11 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
             continue;
         }
 
+        $text = (string)($template['button_' . $i . '_text'] ?? '');
         $url = (string)($template['button_' . $i . '_url'] ?? '');
         if ( function_exists('eventosapp_whatsapp_templates_normalize_button_url_for_storage') ) {
-            $url = eventosapp_whatsapp_templates_normalize_button_url_for_storage($url, $template['modality'] ?? '', $i);
+            $url = eventosapp_whatsapp_templates_normalize_button_url_for_storage($url, $template['modality'] ?? '', $i, $text);
         }
-        $text = (string)($template['button_' . $i . '_text'] ?? '');
         if ( $text === '' || $url === '' ) {
             continue;
         }
