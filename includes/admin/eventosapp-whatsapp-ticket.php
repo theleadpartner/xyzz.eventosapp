@@ -4132,6 +4132,13 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
         }
 
         if ( strpos($url, '{{1}}') !== false ) {
+            $button_parameter_value = eventosapp_whatsapp_get_ticket_public_code($ticket_id);
+            if ( function_exists('eventosapp_whatsapp_templates_sanitize_button_url_parameter_value') ) {
+                $button_parameter_value = eventosapp_whatsapp_templates_sanitize_button_url_parameter_value($button_parameter_value);
+            } else {
+                $button_parameter_value = rawurlencode(rawurldecode((string) $button_parameter_value));
+            }
+
             $components[] = [
                 'type' => 'button',
                 'sub_type' => 'url',
@@ -4139,11 +4146,12 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
                 'parameters' => [
                     [
                         'type' => 'text',
-                        'text' => eventosapp_whatsapp_get_ticket_public_code($ticket_id),
+                        'text' => $button_parameter_value,
                     ],
                 ],
             ];
             $debug['button_variable_components']++;
+            $debug['button_' . $i . '_parameter_value'] = $button_parameter_value;
         }
 
         $button_index++;
