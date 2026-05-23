@@ -137,9 +137,11 @@ function eventosapp_whatsapp_templates_default_records() {
             'body_text'             => "🎟️ Hola {{1}}, tu inscripción a *{{2}}* está confirmada.\n\n✅ Presenta este QR en el ingreso al evento.\n\n📌 *Detalles de tu inscripción:*\n\n🎫 *Evento:* {{2}}\n📅 *Fecha:* {{3}}\n🕒 *Hora:* {{4}}\n📍 *Lugar:* {{5}}\n👥 *Modalidad:* {{8}}\n🏢 *Organizador:* {{7}}\n\n🔗 Ingresa a tu 'Ticket' para ver:\n\n🍎 Ticket para *Apple Wallet*\n💳 Ticket para *Google Wallet*\n📄 Ticket descargable en *PDF*\n📆 Recordatorio para agregar a tu agenda\n\n✨ Te esperamos.",
             'body_examples'         => "María Pérez\nEvento Demo\n20 de mayo de 2026\n8:00 a. m.\nCentro de Convenciones\nhttps://demo.eventosapp.com/ticket_demo_123\nEventosApp\nPresencial",
             'footer_text'           => 'EventosApp',
+            'button_1_enabled'      => '1',
             'button_1_text'         => 'Ver mi ticket',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('ticket_landing'),
             'button_1_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_landing'),
+            'button_2_enabled'      => '1',
             'button_2_text'         => 'Agregar a agenda',
             'button_2_url'          => eventosapp_whatsapp_templates_button_url('ticket_ics'),
             'button_2_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_ics'),
@@ -176,9 +178,11 @@ function eventosapp_whatsapp_templates_default_records() {
             'body_text'             => "🎟️ Hola {{1}}, tu inscripción a *{{2}}* está confirmada.\n\n✅ Conserva este mensaje para consultar tu acceso al evento.\n\n📌 *Detalles de tu inscripción:*\n\n🎫 *Evento:* {{2}}\n📅 *Fecha:* {{3}}\n🕒 *Hora:* {{4}}\n💻 *Plataforma:* {{5}}\n👥 *Modalidad:* {{8}}\n🏢 *Organizador:* {{7}}\n\n🔗 Ingresa a tu 'Ticket' para ver:\n\n🍎 Ticket para *Apple Wallet*\n💳 Ticket para *Google Wallet*\n📄 Ticket descargable en *PDF*\n📆 Recordatorio para agregar a tu agenda\n\n✨ Te esperamos.",
             'body_examples'         => "María Pérez\nEvento Demo Virtual\n20 de mayo de 2026\n8:00 a. m.\nZoom\nhttps://demo.eventosapp.com/acceso_virtual\nEventosApp\nVirtual",
             'footer_text'           => 'EventosApp',
+            'button_1_enabled'      => '1',
             'button_1_text'         => 'Ingresar al evento',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('virtual_access'),
             'button_1_example'      => eventosapp_whatsapp_templates_button_example_url('virtual_access'),
+            'button_2_enabled'      => '1',
             'button_2_text'         => 'Agregar a agenda',
             'button_2_url'          => eventosapp_whatsapp_templates_button_url('ticket_ics'),
             'button_2_example'      => eventosapp_whatsapp_templates_button_example_url('ticket_ics'),
@@ -243,7 +247,7 @@ function eventosapp_whatsapp_templates_get_settings() {
             // desincronizar lo que Meta tiene aprobado con los parámetros que se envían en runtime.
             $current_status = strtoupper((string)($settings['templates'][$default_id]['meta_status'] ?? 'LOCAL'));
             if ( ! empty($settings['templates'][$default_id]['is_default']) && $settings['templates'][$default_id]['is_default'] === '1' && in_array($current_status, ['', 'LOCAL'], true) ) {
-                foreach ( ['body_text', 'body_examples', 'header_format', 'footer_text', 'button_1_text', 'button_1_url', 'button_1_example', 'button_2_text', 'button_2_url', 'button_2_example'] as $migrated_field ) {
+                foreach ( ['body_text', 'body_examples', 'header_format', 'footer_text', 'button_1_enabled', 'button_1_text', 'button_1_url', 'button_1_example', 'button_2_enabled', 'button_2_text', 'button_2_url', 'button_2_example'] as $migrated_field ) {
                     $settings['templates'][$default_id][$migrated_field] = $default_template[$migrated_field];
                 }
                 $changed = true;
@@ -517,10 +521,52 @@ function eventosapp_whatsapp_templates_body_example_fallback($variable_number) {
         6 => eventosapp_whatsapp_templates_button_example_url('ticket_landing'),
         7 => 'EventosApp',
         8 => 'Presencial',
+        9 => 'https://demo.eventosapp.com/plataforma-virtual',
     ];
 
     $variable_number = absint($variable_number);
     return $fallback[$variable_number] ?? ('Ejemplo ' . $variable_number);
+}
+
+/**
+ * Determina si un botón debe incluirse en la plantilla enviada a Meta.
+ * Las plantillas antiguas sin este campo se consideran activas para mantener
+ * compatibilidad con estructuras aprobadas previamente.
+ */
+function eventosapp_whatsapp_templates_button_enabled($template, $button_number) {
+    $template = is_array($template) ? $template : [];
+    $button_number = absint($button_number);
+    $key = 'button_' . $button_number . '_enabled';
+
+    if ( ! array_key_exists($key, $template) ) {
+        return true;
+    }
+
+    $raw = strtolower(trim((string) $template[$key]));
+    return ! in_array($raw, ['0', 'no', 'false', 'off'], true);
+}
+
+/**
+ * Normaliza el valor de activación del botón desde POST o desde opciones antiguas.
+ */
+function eventosapp_whatsapp_templates_normalize_button_enabled($raw, $existing, $button_number) {
+    $raw = is_array($raw) ? $raw : [];
+    $existing = is_array($existing) ? $existing : [];
+    $button_number = absint($button_number);
+    $key = 'button_' . $button_number . '_enabled';
+
+    if ( array_key_exists($key, $raw) ) {
+        $value = strtolower(trim((string) $raw[$key]));
+        return in_array($value, ['1', 'yes', 'true', 'on'], true) ? '1' : '0';
+    }
+
+    if ( array_key_exists($key, $existing) ) {
+        return eventosapp_whatsapp_templates_button_enabled($existing, $button_number) ? '1' : '0';
+    }
+
+    $text = trim((string)($existing['button_' . $button_number . '_text'] ?? ''));
+    $url = trim((string)($existing['button_' . $button_number . '_url'] ?? ''));
+    return ($text !== '' || $url !== '') ? '1' : '0';
 }
 
 /**
@@ -694,9 +740,11 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'body_variable_map'    => eventosapp_whatsapp_templates_sanitize_body_variable_map($existing['body_variable_map'] ?? []),
         'body_variable_signature' => sanitize_text_field($existing['body_variable_signature'] ?? ''),
         'footer_text'          => sanitize_text_field($raw['footer_text'] ?? ($existing['footer_text'] ?? '')),
+        'button_1_enabled'     => eventosapp_whatsapp_templates_normalize_button_enabled($raw, $existing, 1),
         'button_1_text'        => sanitize_text_field($raw['button_1_text'] ?? ($existing['button_1_text'] ?? '')),
         'button_1_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_1_url'] ?? ($existing['button_1_url'] ?? '')),
         'button_1_example'     => esc_url_raw($raw['button_1_example'] ?? ($existing['button_1_example'] ?? '')),
+        'button_2_enabled'     => eventosapp_whatsapp_templates_normalize_button_enabled($raw, $existing, 2),
         'button_2_text'        => sanitize_text_field($raw['button_2_text'] ?? ($existing['button_2_text'] ?? '')),
         'button_2_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_2_url'] ?? ($existing['button_2_url'] ?? '')),
         'button_2_example'     => esc_url_raw($raw['button_2_example'] ?? ($existing['button_2_example'] ?? '')),
@@ -714,6 +762,56 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'created_at'           => sanitize_text_field($existing['created_at'] ?? current_time('mysql')),
         'updated_at'           => current_time('mysql'),
     ], []);
+
+    $remote_template_exists = ! empty($existing['meta_template_id']) || ! in_array(strtoupper((string)($existing['meta_status'] ?? 'LOCAL')), ['', 'LOCAL'], true);
+    if ( $remote_template_exists && ! $remote_context_changed ) {
+        $structure_fields = [
+            'name',
+            'language',
+            'category',
+            'modality',
+            'header_format',
+            'header_text',
+            'header_sample_handle',
+            'body_text',
+            'body_examples',
+            'footer_text',
+            'button_1_enabled',
+            'button_1_text',
+            'button_1_url',
+            'button_1_example',
+            'button_2_enabled',
+            'button_2_text',
+            'button_2_url',
+            'button_2_example',
+        ];
+
+        $structure_changed = false;
+        foreach ( $structure_fields as $field ) {
+            if ( $field === 'button_1_enabled' ) {
+                $old_value = eventosapp_whatsapp_templates_normalize_button_enabled([], $existing, 1);
+            } elseif ( $field === 'button_2_enabled' ) {
+                $old_value = eventosapp_whatsapp_templates_normalize_button_enabled([], $existing, 2);
+            } else {
+                $old_value = (string)($existing[$field] ?? '');
+            }
+
+            $new_value = (string)($template[$field] ?? '');
+            if ( $old_value !== $new_value ) {
+                $structure_changed = true;
+                break;
+            }
+        }
+
+        if ( $structure_changed ) {
+            $template['meta_status'] = 'LOCAL';
+            $template['meta_rejected_reason'] = '';
+            $template['last_api_message'] = 'La estructura local de la plantilla cambió. Envíala nuevamente a Meta antes de usarla en envíos reales.';
+            $template['last_api_response'] = [];
+            $template['last_submitted_at'] = '';
+            $template['last_checked_at'] = '';
+        }
+    }
 
     if ( $template['name'] === '' ) {
         $template['name'] = 'eventosapp_template_' . substr(md5($id), 0, 8);
@@ -767,6 +865,10 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
 
     $buttons = 0;
     foreach ( [1, 2] as $i ) {
+        if ( ! eventosapp_whatsapp_templates_button_enabled($template, $i) ) {
+            continue;
+        }
+
         $text = trim((string)($template['button_' . $i . '_text'] ?? ''));
         $url  = trim((string)($template['button_' . $i . '_url'] ?? ''));
         if ( $text !== '' || $url !== '' ) {
@@ -835,6 +937,10 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
 
     $buttons = [];
     foreach ( [1, 2] as $i ) {
+        if ( ! eventosapp_whatsapp_templates_button_enabled($template, $i) ) {
+            continue;
+        }
+
         $text = trim((string)($template['button_' . $i . '_text'] ?? ''));
         $url  = trim((string)($template['button_' . $i . '_url'] ?? ''));
         if ( $text === '' || $url === '' ) {
@@ -1708,8 +1814,8 @@ function eventosapp_whatsapp_templates_render_list($settings) {
                             <?php if ( ! empty($template['last_api_message']) ) : ?><br><small><?php echo esc_html($template['last_api_message']); ?></small><?php endif; ?>
                         </td>
                         <td>
-                            <?php if ( ! empty($template['button_1_text']) ) : ?>1. <?php echo esc_html($template['button_1_text']); ?><br><?php endif; ?>
-                            <?php if ( ! empty($template['button_2_text']) ) : ?>2. <?php echo esc_html($template['button_2_text']); ?><?php endif; ?>
+                            <?php if ( ! empty($template['button_1_text']) ) : ?>1. <?php echo esc_html($template['button_1_text']); ?><?php if ( ! eventosapp_whatsapp_templates_button_enabled($template, 1) ) : ?> <em>(desactivado)</em><?php endif; ?><br><?php endif; ?>
+                            <?php if ( ! empty($template['button_2_text']) ) : ?>2. <?php echo esc_html($template['button_2_text']); ?><?php if ( ! eventosapp_whatsapp_templates_button_enabled($template, 2) ) : ?> <em>(desactivado)</em><?php endif; ?><?php endif; ?>
                         </td>
                         <td>
                             <div class="evapp-wa-tpl-actions">
@@ -1930,14 +2036,14 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 <label for="evapp_tpl_body">Cuerpo</label>
                 <div>
                     <textarea id="evapp_tpl_body" name="template[body_text]" required><?php echo esc_textarea($template['body_text'] ?? ''); ?></textarea>
-                    <p class="evapp-wa-tpl-help">Variables disponibles: <span class="evapp-wa-tpl-code">{{1}}</span> nombre del asistente, <span class="evapp-wa-tpl-code">{{2}}</span> evento, <span class="evapp-wa-tpl-code">{{3}}</span> fecha, <span class="evapp-wa-tpl-code">{{4}}</span> hora, <span class="evapp-wa-tpl-code">{{5}}</span> lugar o plataforma, <span class="evapp-wa-tpl-code">{{6}}</span> enlace público del ticket, <span class="evapp-wa-tpl-code">{{7}}</span> organizador, <span class="evapp-wa-tpl-code">{{8}}</span> modalidad.</p>
+                    <p class="evapp-wa-tpl-help">Variables disponibles: <span class="evapp-wa-tpl-code">{{1}}</span> nombre del asistente, <span class="evapp-wa-tpl-code">{{2}}</span> evento, <span class="evapp-wa-tpl-code">{{3}}</span> fecha, <span class="evapp-wa-tpl-code">{{4}}</span> hora, <span class="evapp-wa-tpl-code">{{5}}</span> lugar o plataforma, <span class="evapp-wa-tpl-code">{{6}}</span> enlace público del ticket/landing, <span class="evapp-wa-tpl-code">{{7}}</span> organizador, <span class="evapp-wa-tpl-code">{{8}}</span> modalidad, <span class="evapp-wa-tpl-code">{{9}}</span> enlace directo de la plataforma virtual.</p>
                     <p class="evapp-wa-tpl-help">Puedes quitar o reordenar variables. Antes de enviarla a Meta, EventosApp normaliza internamente el cuerpo para que el componente BODY siempre incluya el campo <span class="evapp-wa-tpl-code">example</span> requerido.</p>
                 </div>
 
                 <label for="evapp_tpl_body_examples">Ejemplos del cuerpo</label>
                 <div>
                     <textarea id="evapp_tpl_body_examples" name="template[body_examples]" required><?php echo esc_textarea($template['body_examples'] ?? ''); ?></textarea>
-                    <p class="evapp-wa-tpl-help">Un ejemplo por línea usando el número de la variable: línea 1 para <span class="evapp-wa-tpl-code">{{1}}</span>, línea 2 para <span class="evapp-wa-tpl-code">{{2}}</span>, línea 7 para <span class="evapp-wa-tpl-code">{{7}}</span> y línea 8 para <span class="evapp-wa-tpl-code">{{8}}</span>. Si falta una línea, EventosApp agrega un ejemplo seguro antes de enviar a Meta.</p>
+                    <p class="evapp-wa-tpl-help">Un ejemplo por línea usando el número de la variable: línea 1 para <span class="evapp-wa-tpl-code">{{1}}</span>, línea 2 para <span class="evapp-wa-tpl-code">{{2}}</span>, línea 7 para <span class="evapp-wa-tpl-code">{{7}}</span>, línea 8 para <span class="evapp-wa-tpl-code">{{8}}</span> y línea 9 para <span class="evapp-wa-tpl-code">{{9}}</span>. Si falta una línea, EventosApp agrega un ejemplo seguro antes de enviar a Meta.</p>
                 </div>
 
                 <label for="evapp_tpl_footer">Footer</label>
@@ -1947,18 +2053,28 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
 
                 <label>Botón 1</label>
                 <div>
+                    <input type="hidden" name="template[button_1_enabled]" value="0">
+                    <label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 8px;font-weight:600;">
+                        <input type="checkbox" name="template[button_1_enabled]" value="1" <?php checked(eventosapp_whatsapp_templates_button_enabled($template, 1)); ?>>
+                        Activar este botón en la plantilla
+                    </label>
                     <input type="text" name="template[button_1_text]" value="<?php echo esc_attr($template['button_1_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
                     <input type="text" name="template[button_1_url]" value="<?php echo esc_attr($template['button_1_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
                     <input type="text" name="template[button_1_example]" value="<?php echo esc_attr($template['button_1_example'] ?? ''); ?>" placeholder="URL de ejemplo completa">
-                    <p class="evapp-wa-tpl-help">El botón URL puede usar una sola variable <span class="evapp-wa-tpl-code">{{1}}</span> al final para el identificador público del ticket.</p>
+                    <p class="evapp-wa-tpl-help">El botón URL puede usar una sola variable <span class="evapp-wa-tpl-code">{{1}}</span> al final para el identificador público del ticket. Si lo desactivas, se conserva la configuración local, pero no se envía a Meta ni se usa en runtime.</p>
                 </div>
 
                 <label>Botón 2</label>
                 <div>
+                    <input type="hidden" name="template[button_2_enabled]" value="0">
+                    <label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 8px;font-weight:600;">
+                        <input type="checkbox" name="template[button_2_enabled]" value="1" <?php checked(eventosapp_whatsapp_templates_button_enabled($template, 2)); ?>>
+                        Activar este botón en la plantilla
+                    </label>
                     <input type="text" name="template[button_2_text]" value="<?php echo esc_attr($template['button_2_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
                     <input type="text" name="template[button_2_url]" value="<?php echo esc_attr($template['button_2_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
                     <input type="text" name="template[button_2_example]" value="<?php echo esc_attr($template['button_2_example'] ?? ''); ?>" placeholder="URL de ejemplo completa">
-                    <p class="evapp-wa-tpl-help">La estructura queda limitada a dos botones URL para mantener compatibilidad con Meta.</p>
+                    <p class="evapp-wa-tpl-help">La estructura queda limitada a dos botones URL para mantener compatibilidad con Meta. Puedes desactivar este botón para crear o reenviar una plantilla con un solo botón.</p>
                 </div>
             </div>
 
