@@ -735,13 +735,28 @@ function eventosapp_build_ticket_email_html($ticket_id) {
     $wallet_google_img = eventosapp_asset_url_with_version('assets/graphics/wallet_icons/google_wallet_btn.png');
     $wallet_apple_img  = eventosapp_asset_url_with_version('assets/graphics/wallet_icons/apple_wallet_btn.png');
 
-    $virtual_access_url = ($is_virtual_ticket && function_exists('eventosapp_get_virtual_landing_url')) ? eventosapp_get_virtual_landing_url($ticket_id) : '';
+    if ($is_virtual_ticket && function_exists('eventosapp_get_ticket_virtual_access_url')) {
+        $virtual_access_url = eventosapp_get_ticket_virtual_access_url($ticket_id);
+    } elseif ($is_virtual_ticket && function_exists('eventosapp_get_virtual_landing_url')) {
+        $virtual_access_url = eventosapp_get_virtual_landing_url($ticket_id);
+    } else {
+        $virtual_access_url = '';
+    }
+
+    $virtual_access_uses_landing = true;
+    if ($is_virtual_ticket && $evento_id && function_exists('eventosapp_event_virtual_access_uses_landing')) {
+        $virtual_access_uses_landing = eventosapp_event_virtual_access_uses_landing($evento_id);
+    }
 
     if ($is_virtual_ticket) {
         $ticket_access_block = '<div class="kvs" style="text-align:center;"><p style="margin:0 0 10px 0;"><strong>Acceso virtual del evento</strong></p>';
         if ($virtual_access_url) {
             $ticket_access_block .= '<p style="margin-top:8px;"><a class="btn btn-dark" href="' . esc_url($virtual_access_url) . '" target="_blank" rel="noopener noreferrer" aria-label="Abrir acceso virtual">Abrir acceso virtual</a></p>';
-            $ticket_access_block .= '<p class="muted" style="margin-top:8px;">El ingreso se habilitará en la landing de acuerdo con la fecha y hora configurada para el evento.</p>';
+            if ($virtual_access_uses_landing) {
+                $ticket_access_block .= '<p class="muted" style="margin-top:8px;">El ingreso se habilitará en la landing de acuerdo con la fecha y hora configurada para el evento.</p>';
+            } else {
+                $ticket_access_block .= '<p class="muted" style="margin-top:8px;">Este botón abre directamente el enlace de la plataforma virtual configurada para el evento.</p>';
+            }
         } else {
             $ticket_access_block .= '<p class="muted">El acceso virtual aún no tiene enlace configurado.</p>';
         }
