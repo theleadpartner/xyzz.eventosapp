@@ -2435,6 +2435,29 @@ function eventosapp_whatsapp_templates_public_action_router() {
     wp_die('Acción pública de WhatsApp no encontrada.');
 }
 
+if ( ! function_exists('eventosapp_whatsapp_redirect_to_virtual_target') ) {
+    /**
+     * Ejecuta la redirección final del acceso virtual de WhatsApp.
+     *
+     * No usa wp_safe_redirect() porque el destino puede ser una plataforma externa
+     * configurada en el evento (Zoom, Meet, Teams, etc.). wp_safe_redirect() bloquearía
+     * esos dominios y enviaría al fallback de WordPress, haciendo que los botones de
+     * plantillas WhatsApp no respeten la configuración de landing/plataforma directa.
+     */
+    function eventosapp_whatsapp_redirect_to_virtual_target($target) {
+        $target = esc_url_raw((string) $target);
+
+        if ( $target === '' ) {
+            status_header(404);
+            wp_die('No se encontró enlace virtual para este ticket.');
+        }
+
+        nocache_headers();
+        wp_redirect($target, 302, 'EventosApp WhatsApp');
+        exit;
+    }
+}
+
 function eventosapp_whatsapp_templates_render_public_ticket_landing() {
     $ticket_id = eventosapp_whatsapp_templates_resolve_ticket_from_request();
     if ( ! $ticket_id ) {
@@ -2452,8 +2475,7 @@ function eventosapp_whatsapp_templates_render_public_ticket_landing() {
     // Para tickets virtuales, cualquier botón genérico "Ver mi ticket" debe respetar
     // la configuración del evento: landing de EventosApp activa o plataforma directa.
     if ( $is_virtual && ! empty($assets['virtual_access_url']) ) {
-        wp_safe_redirect($assets['virtual_access_url']);
-        exit;
+        eventosapp_whatsapp_redirect_to_virtual_target($assets['virtual_access_url']);
     }
 
     $fecha = function_exists('eventosapp_whatsapp_get_event_date_label') ? eventosapp_whatsapp_get_event_date_label($event_id) : '';
@@ -2605,11 +2627,5 @@ function eventosapp_whatsapp_templates_redirect_virtual_access() {
     $assets = eventosapp_whatsapp_templates_get_ticket_assets($ticket_id);
     $target = ! empty($assets['virtual_access_url']) ? $assets['virtual_access_url'] : $assets['platform_url'];
 
-    if ( empty($target) ) {
-        status_header(404);
-        wp_die('No se encontró enlace virtual para este ticket.');
-    }
-
-    wp_safe_redirect($target);
-    exit;
+    eventosapp_whatsapp_redirect_to_virtual_target($target);
 }
