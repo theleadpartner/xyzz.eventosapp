@@ -1132,9 +1132,13 @@ function eventosapp_ticket_metabox_render($post) {
         'virtual'    => 'Virtual',
     ];
     $is_virtual_ticket = ($ticket_modalidad === 'virtual');
-    $virtual_landing_url = ($is_virtual_ticket && function_exists('eventosapp_get_virtual_landing_url'))
-        ? eventosapp_get_virtual_landing_url($post->ID)
-        : '';
+    if ($is_virtual_ticket && function_exists('eventosapp_get_ticket_virtual_access_url')) {
+        $virtual_access_url = eventosapp_get_ticket_virtual_access_url($post->ID);
+    } elseif ($is_virtual_ticket && function_exists('eventosapp_get_virtual_landing_url')) {
+        $virtual_access_url = eventosapp_get_virtual_landing_url($post->ID);
+    } else {
+        $virtual_access_url = '';
+    }
 
     // ¿el evento pide QR preimpreso?
     $use_preprinted = $evento_id ? (get_post_meta($evento_id, '_eventosapp_ticket_use_preprinted_qr', true) === '1') : false;
@@ -1161,9 +1165,9 @@ function eventosapp_ticket_metabox_render($post) {
                 <div class="eventosapp-ticket-qr-block">
                     <?php if ($is_virtual_ticket): ?>
                         <b>Acceso virtual del Ticket:</b><br>
-                        <?php if ($virtual_landing_url): ?>
-                            <a class="button button-secondary" href="<?php echo esc_url($virtual_landing_url); ?>" target="_blank" rel="noopener noreferrer">Abrir enlace de acceso virtual</a>
-                            <p style="margin:6px 0 0;color:#555;font-size:12px;">Este ticket es virtual: no usa QR presencial, PDF presencial ni Wallet.</p>
+                        <?php if ($virtual_access_url): ?>
+                            <a class="button button-secondary" href="<?php echo esc_url($virtual_access_url); ?>" target="_blank" rel="noopener noreferrer">Abrir enlace de acceso virtual</a>
+                            <p style="margin:6px 0 0;color:#555;font-size:12px;">Este ticket es virtual: el enlace respeta la configuración del evento para abrir la landing de EventosApp o la plataforma directa.</p>
                         <?php else: ?>
                             <span style="color:#b33;">El acceso virtual se generará cuando el ticket tenga ID público.</span>
                         <?php endif; ?>
