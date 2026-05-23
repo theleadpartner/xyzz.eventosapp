@@ -122,6 +122,75 @@ function eventosapp_whatsapp_templates_default_button_variable_example() {
 }
 
 /**
+ * Detecta cuántos botones URL activos tiene una plantilla.
+ *
+ * Se mantiene limitado a 1 o 2 porque este módulo trabaja exclusivamente con
+ * botones URL de plantillas de ticket. Si no hay botones diligenciados, se
+ * retorna 1 para que la UI permita construir una plantilla mínima sin forzar
+ * dos botones por defecto.
+ */
+function eventosapp_whatsapp_templates_detect_button_count($template) {
+    $template = is_array($template) ? $template : [];
+    $highest_active_slot = 0;
+
+    foreach ( [1, 2] as $button_number ) {
+        $text = trim((string)($template['button_' . $button_number . '_text'] ?? ''));
+        $url  = trim((string)($template['button_' . $button_number . '_url'] ?? ''));
+
+        if ( $text !== '' || $url !== '' ) {
+            $highest_active_slot = max($highest_active_slot, $button_number);
+        }
+    }
+
+    return $highest_active_slot >= 2 ? 2 : 1;
+}
+
+/**
+ * Normaliza la cantidad de botones configurada para una plantilla.
+ */
+function eventosapp_whatsapp_templates_normalize_button_count($value, $fallback_template = []) {
+    $count = absint($value);
+
+    if ( ! in_array($count, [1, 2], true) ) {
+        $count = eventosapp_whatsapp_templates_detect_button_count($fallback_template);
+    }
+
+    return $count >= 2 ? 2 : 1;
+}
+
+/**
+ * Devuelve los números de botón que deben guardarse, validarse, previsualizarse
+ * y enviarse a Meta según la configuración de la plantilla.
+ */
+function eventosapp_whatsapp_templates_get_enabled_button_numbers($template) {
+    $template = is_array($template) ? $template : [];
+    $count = eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
+
+    return $count >= 2 ? [1, 2] : [1];
+}
+
+/**
+ * Limpia los campos de botones que no estén habilitados en la plantilla.
+ */
+function eventosapp_whatsapp_templates_prune_disabled_buttons($template) {
+    $template = is_array($template) ? $template : [];
+    $button_count = eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
+    $template['button_count'] = (string) $button_count;
+
+    foreach ( [1, 2] as $button_number ) {
+        if ( $button_number <= $button_count ) {
+            continue;
+        }
+
+        $template['button_' . $button_number . '_text'] = '';
+        $template['button_' . $button_number . '_url'] = '';
+        $template['button_' . $button_number . '_example'] = '';
+    }
+
+    return $template;
+}
+
+/**
  * Sanitiza el campo de ejemplo de un botón URL.
  *
  * Se permite conservar ejemplos antiguos guardados como URL completa para poder
@@ -208,6 +277,7 @@ function eventosapp_whatsapp_templates_default_records() {
             'body_text'             => "🎟️ Hola {{1}}, tu inscripción a *{{2}}* está confirmada.\n\n✅ Presenta este QR en el ingreso al evento.\n\n📌 *Detalles de tu inscripción:*\n\n🎫 *Evento:* {{2}}\n📅 *Fecha:* {{3}}\n🕒 *Hora:* {{4}}\n📍 *Lugar:* {{5}}\n👥 *Modalidad:* {{8}}\n🏢 *Organizador:* {{7}}\n\n🔗 Ingresa a tu 'Ticket' para ver:\n\n🍎 Ticket para *Apple Wallet*\n💳 Ticket para *Google Wallet*\n📄 Ticket descargable en *PDF*\n📆 Recordatorio para agregar a tu agenda\n\n✨ Te esperamos.",
             'body_examples'         => "María Pérez\nEvento Demo\n20 de mayo de 2026\n8:00 a. m.\nCentro de Convenciones\nhttps://demo.eventosapp.com/ticket_demo_123\nEventosApp\nPresencial",
             'footer_text'           => 'EventosApp',
+            'button_count'          => '2',
             'button_1_text'         => 'Ver mi ticket',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('ticket_landing'),
             'button_1_example'      => eventosapp_whatsapp_templates_default_button_variable_example(),
@@ -247,6 +317,7 @@ function eventosapp_whatsapp_templates_default_records() {
             'body_text'             => "🎟️ Hola {{1}}, tu inscripción a *{{2}}* está confirmada.\n\n✅ Conserva este mensaje para consultar tu acceso al evento.\n\n📌 *Detalles de tu inscripción:*\n\n🎫 *Evento:* {{2}}\n📅 *Fecha:* {{3}}\n🕒 *Hora:* {{4}}\n💻 *Plataforma:* {{5}}\n👥 *Modalidad:* {{8}}\n🏢 *Organizador:* {{7}}\n\n🔗 Ingresa a tu 'Ticket' para ver:\n\n🍎 Ticket para *Apple Wallet*\n💳 Ticket para *Google Wallet*\n📄 Ticket descargable en *PDF*\n📆 Recordatorio para agregar a tu agenda\n\n✨ Te esperamos.",
             'body_examples'         => "María Pérez\nEvento Demo Virtual\n20 de mayo de 2026\n8:00 a. m.\nZoom\nhttps://demo.eventosapp.com/acceso_virtual\nEventosApp\nVirtual",
             'footer_text'           => 'EventosApp',
+            'button_count'          => '2',
             'button_1_text'         => 'Ingresar al evento',
             'button_1_url'          => eventosapp_whatsapp_templates_button_url('virtual_access'),
             'button_1_example'      => eventosapp_whatsapp_templates_default_button_variable_example(),
@@ -314,7 +385,7 @@ function eventosapp_whatsapp_templates_get_settings() {
             // desincronizar lo que Meta tiene aprobado con los parámetros que se envían en runtime.
             $current_status = strtoupper((string)($settings['templates'][$default_id]['meta_status'] ?? 'LOCAL'));
             if ( ! empty($settings['templates'][$default_id]['is_default']) && $settings['templates'][$default_id]['is_default'] === '1' && in_array($current_status, ['', 'LOCAL'], true) ) {
-                foreach ( ['body_text', 'body_examples', 'header_format', 'footer_text', 'button_1_text', 'button_1_url', 'button_1_example', 'button_2_text', 'button_2_url', 'button_2_example'] as $migrated_field ) {
+                foreach ( ['body_text', 'body_examples', 'header_format', 'footer_text', 'button_count', 'button_1_text', 'button_1_url', 'button_1_example', 'button_2_text', 'button_2_url', 'button_2_example'] as $migrated_field ) {
                     $settings['templates'][$default_id][$migrated_field] = $default_template[$migrated_field];
                 }
                 $changed = true;
@@ -325,6 +396,12 @@ function eventosapp_whatsapp_templates_get_settings() {
     foreach ( $settings['templates'] as $template_id => $template ) {
         if ( ! is_array($template) ) {
             continue;
+        }
+
+        $normalized_button_count = eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
+        if ( (string)($template['button_count'] ?? '') !== (string)$normalized_button_count ) {
+            $settings['templates'][$template_id]['button_count'] = (string)$normalized_button_count;
+            $changed = true;
         }
 
         foreach ( [1, 2] as $button_number ) {
@@ -342,6 +419,14 @@ function eventosapp_whatsapp_templates_get_settings() {
             $normalized_example = eventosapp_whatsapp_templates_normalize_public_button_url($current_example);
             if ( $normalized_example !== $current_example ) {
                 $settings['templates'][$template_id][$example_key] = $normalized_example;
+                $changed = true;
+            }
+        }
+
+        $pruned_template = eventosapp_whatsapp_templates_prune_disabled_buttons($settings['templates'][$template_id]);
+        foreach ( ['button_count', 'button_2_text', 'button_2_url', 'button_2_example'] as $button_field ) {
+            if ( (string)($settings['templates'][$template_id][$button_field] ?? '') !== (string)($pruned_template[$button_field] ?? '') ) {
+                $settings['templates'][$template_id][$button_field] = $pruned_template[$button_field] ?? '';
                 $changed = true;
             }
         }
@@ -742,6 +827,9 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         && $effective_waba_id !== $existing_waba_id
         && ( ! empty($existing['meta_template_id']) || strtoupper((string)($existing['meta_status'] ?? 'LOCAL')) !== 'LOCAL' );
     $remote_context_changed = $sender_changed || $remote_waba_changed;
+    $button_count_source = array_key_exists('button_count', $raw) ? $raw['button_count'] : ($existing['button_count'] ?? '');
+    $button_count_fallback = ! empty($raw) ? $raw : $existing;
+    $button_count = eventosapp_whatsapp_templates_normalize_button_count($button_count_source, $button_count_fallback);
 
     $template = wp_parse_args([
         'id'                   => $id,
@@ -765,6 +853,7 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'body_variable_map'    => eventosapp_whatsapp_templates_sanitize_body_variable_map($existing['body_variable_map'] ?? []),
         'body_variable_signature' => sanitize_text_field($existing['body_variable_signature'] ?? ''),
         'footer_text'          => sanitize_text_field($raw['footer_text'] ?? ($existing['footer_text'] ?? '')),
+        'button_count'         => (string) $button_count,
         'button_1_text'        => sanitize_text_field($raw['button_1_text'] ?? ($existing['button_1_text'] ?? '')),
         'button_1_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_1_url'] ?? ($existing['button_1_url'] ?? '')),
         'button_1_example'     => eventosapp_whatsapp_templates_sanitize_button_example($raw['button_1_example'] ?? ($existing['button_1_example'] ?? '')),
@@ -793,6 +882,8 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
     if ( $template['title'] === '' ) {
         $template['title'] = $template['name'];
     }
+
+    $template = eventosapp_whatsapp_templates_prune_disabled_buttons($template);
 
     if ( strpos($template['button_1_url'], '{{1}}') !== false && $template['button_1_example'] === '' ) {
         $template['button_1_example'] = eventosapp_whatsapp_templates_default_button_variable_example();
@@ -837,7 +928,7 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
     }
 
     $buttons = 0;
-    foreach ( [1, 2] as $i ) {
+    foreach ( eventosapp_whatsapp_templates_get_enabled_button_numbers($template) as $i ) {
         $text = trim((string)($template['button_' . $i . '_text'] ?? ''));
         $url  = trim((string)($template['button_' . $i . '_url'] ?? ''));
         if ( $text !== '' || $url !== '' ) {
@@ -908,7 +999,7 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
     }
 
     $buttons = [];
-    foreach ( [1, 2] as $i ) {
+    foreach ( eventosapp_whatsapp_templates_get_enabled_button_numbers($template) as $i ) {
         $text = trim((string)($template['button_' . $i . '_text'] ?? ''));
         $url  = trim((string)($template['button_' . $i . '_url'] ?? ''));
         if ( $text === '' || $url === '' ) {
@@ -1611,6 +1702,9 @@ function eventosapp_whatsapp_templates_render_page() {
             .evapp-wa-tpl-warning{background:#fff8e5;border-left:4px solid #dba617;padding:10px 12px;margin:12px 0;max-width:1180px;}
             .evapp-wa-tpl-info{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin:10px 0;line-height:1.5;}
             .evapp-wa-tpl-file-meta{background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:8px;margin-top:8px;}
+            .evapp-wa-tpl-button-box{background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:10px;margin-bottom:10px;max-width:720px;box-sizing:border-box;}
+            .evapp-wa-tpl-button-box strong{display:block;margin-bottom:7px;}
+            .evapp-wa-tpl-button-box input[type="text"]{background:#fff;}
             .evapp-wa-tpl-image-preview{display:flex;align-items:center;gap:12px;margin-top:8px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:9px;max-width:720px;}
             .evapp-wa-tpl-image-preview img{max-width:190px;max-height:88px;width:auto;height:auto;object-fit:cover;background:#fff;border:1px solid #dcdcde;border-radius:6px;}
         </style>
@@ -1785,8 +1879,22 @@ function eventosapp_whatsapp_templates_render_list($settings) {
                             <?php if ( ! empty($template['last_api_message']) ) : ?><br><small><?php echo esc_html($template['last_api_message']); ?></small><?php endif; ?>
                         </td>
                         <td>
-                            <?php if ( ! empty($template['button_1_text']) ) : ?>1. <?php echo esc_html($template['button_1_text']); ?><br><?php endif; ?>
-                            <?php if ( ! empty($template['button_2_text']) ) : ?>2. <?php echo esc_html($template['button_2_text']); ?><?php endif; ?>
+                            <?php
+                            $enabled_buttons = eventosapp_whatsapp_templates_get_enabled_button_numbers($template);
+                            $listed_buttons = 0;
+                            foreach ( $enabled_buttons as $button_number ) :
+                                $button_text = trim((string)($template['button_' . $button_number . '_text'] ?? ''));
+                                if ( $button_text === '' ) {
+                                    continue;
+                                }
+                                $listed_buttons++;
+                            ?>
+                                <?php echo esc_html($button_number); ?>. <?php echo esc_html($button_text); ?><br>
+                            <?php endforeach; ?>
+                            <?php if ( $listed_buttons === 0 ) : ?>
+                                <small>Sin botones activos</small><br>
+                            <?php endif; ?>
+                            <small><?php echo esc_html(count($enabled_buttons)); ?> botón<?php echo count($enabled_buttons) === 1 ? '' : 'es'; ?> configurado<?php echo count($enabled_buttons) === 1 ? '' : 's'; ?></small>
                         </td>
                         <td>
                             <div class="evapp-wa-tpl-actions">
@@ -1880,6 +1988,9 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
     $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
     $template_custom_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template['waba_id'] ?? '');
     $template_uses_default_sender = ($template_sender_phone === '' || $template_sender_phone === $default_sender_phone);
+    $template_button_count = eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
+    $template['button_count'] = (string) $template_button_count;
+    $template = eventosapp_whatsapp_templates_prune_disabled_buttons($template);
 
     $preview_payload = [
         'waba_id'    => $template_waba_id,
@@ -2022,20 +2133,32 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                     <input type="text" id="evapp_tpl_footer" name="template[footer_text]" value="<?php echo esc_attr($template['footer_text'] ?? ''); ?>">
                 </div>
 
-                <label>Botón 1</label>
+                <label for="evapp_tpl_button_count">Cantidad de botones URL</label>
                 <div>
-                    <input type="text" name="template[button_1_text]" value="<?php echo esc_attr($template['button_1_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
-                    <input type="text" name="template[button_1_url]" value="<?php echo esc_attr($template['button_1_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
-                    <input type="text" name="template[button_1_example]" value="<?php echo esc_attr($template['button_1_example'] ?? ''); ?>" placeholder="ticket_demo_123">
-                    <p class="evapp-wa-tpl-help">El botón URL puede usar una sola variable <span class="evapp-wa-tpl-code">{{1}}</span> para el identificador público del ticket. En el campo de ejemplo escribe solo el valor que reemplaza esa variable, por ejemplo <span class="evapp-wa-tpl-code">ticket_demo_123</span>.</p>
+                    <select id="evapp_tpl_button_count" name="template[button_count]">
+                        <option value="1" <?php selected($template_button_count, 1); ?>>1 botón</option>
+                        <option value="2" <?php selected($template_button_count, 2); ?>>2 botones</option>
+                    </select>
+                    <p class="evapp-wa-tpl-help">Usa <strong>1 botón</strong> cuando solo quieras enviar el acceso principal del ticket. Si cambias una plantilla duplicada de 2 a 1 botón, EventosApp limpiará el Botón 2 para que no viaje en el payload enviado a Meta.</p>
                 </div>
 
-                <label>Botón 2</label>
+                <label>Botones URL</label>
                 <div>
-                    <input type="text" name="template[button_2_text]" value="<?php echo esc_attr($template['button_2_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
-                    <input type="text" name="template[button_2_url]" value="<?php echo esc_attr($template['button_2_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
-                    <input type="text" name="template[button_2_example]" value="<?php echo esc_attr($template['button_2_example'] ?? ''); ?>" placeholder="ticket_demo_123">
-                    <p class="evapp-wa-tpl-help">La estructura queda limitada a dos botones URL. En el ejemplo del botón escribe solo el valor dinámico, no la URL completa.</p>
+                    <div class="evapp-wa-tpl-button-box" data-evapp-wa-button-box="1">
+                        <strong>Botón 1</strong>
+                        <input type="text" name="template[button_1_text]" value="<?php echo esc_attr($template['button_1_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
+                        <input type="text" name="template[button_1_url]" value="<?php echo esc_attr($template['button_1_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
+                        <input type="text" name="template[button_1_example]" value="<?php echo esc_attr($template['button_1_example'] ?? ''); ?>" placeholder="ticket_demo_123">
+                        <p class="evapp-wa-tpl-help">El botón URL puede usar una sola variable <span class="evapp-wa-tpl-code">{{1}}</span> para el identificador público del ticket. En el campo de ejemplo escribe solo el valor que reemplaza esa variable, por ejemplo <span class="evapp-wa-tpl-code">ticket_demo_123</span>.</p>
+                    </div>
+
+                    <div class="evapp-wa-tpl-button-box" data-evapp-wa-button-box="2">
+                        <strong>Botón 2</strong>
+                        <input type="text" name="template[button_2_text]" value="<?php echo esc_attr($template['button_2_text'] ?? ''); ?>" placeholder="Texto del botón" style="margin-bottom:6px;">
+                        <input type="text" name="template[button_2_url]" value="<?php echo esc_attr($template['button_2_url'] ?? ''); ?>" placeholder="URL con {{1}}" style="margin-bottom:6px;">
+                        <input type="text" name="template[button_2_example]" value="<?php echo esc_attr($template['button_2_example'] ?? ''); ?>" placeholder="ticket_demo_123">
+                        <p class="evapp-wa-tpl-help">Este bloque se limpia y se oculta cuando la plantilla queda configurada con 1 botón. En el ejemplo del botón escribe solo el valor dinámico, no la URL completa.</p>
+                    </div>
                 </div>
             </div>
 
@@ -2054,6 +2177,21 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 }
                 $sender.on('change', evappToggleTemplateWabaField);
                 evappToggleTemplateWabaField();
+
+                var $buttonCount = $('#evapp_tpl_button_count');
+                function evappToggleTemplateButtonBoxes(){
+                    var count = parseInt($buttonCount.val() || '1', 10);
+                    if (count !== 2) count = 1;
+                    $('[data-evapp-wa-button-box="2"]').toggle(count === 2);
+                    if (count === 1) {
+                        $('[data-evapp-wa-button-box="2"]').find('input[type="text"]').val('');
+                    }
+                }
+                $buttonCount.on('change', evappToggleTemplateButtonBoxes);
+                $buttonCount.closest('form').on('submit', function(){
+                    evappToggleTemplateButtonBoxes();
+                });
+                evappToggleTemplateButtonBoxes();
             });
             </script>
         </form>
