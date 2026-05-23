@@ -3664,6 +3664,40 @@ function eventosapp_whatsapp_is_template_approved($template) {
 }
 
 /**
+ * Detecta cuántos botones URL debe considerar el runtime de WhatsApp.
+ *
+ * Compatibilidad:
+ * - Plantillas nuevas: respetan template['button_count'].
+ * - Plantillas antiguas: si no existe button_count, se calcula por los campos
+ *   de botón diligenciados para mantener el comportamiento anterior.
+ */
+function eventosapp_whatsapp_runtime_template_button_count($template) {
+    $template = is_array($template) ? $template : [];
+    $count = absint($template['button_count'] ?? 0);
+
+    if ( ! in_array($count, [1, 2], true) ) {
+        $highest_active_slot = 0;
+        foreach ( [1, 2] as $button_number ) {
+            $text = trim((string)($template['button_' . $button_number . '_text'] ?? ''));
+            $url  = trim((string)($template['button_' . $button_number . '_url'] ?? ''));
+            if ( $text !== '' || $url !== '' ) {
+                $highest_active_slot = max($highest_active_slot, $button_number);
+            }
+        }
+        $count = $highest_active_slot >= 2 ? 2 : 1;
+    }
+
+    return $count >= 2 ? 2 : 1;
+}
+
+/**
+ * Devuelve los slots de botones que el runtime debe enviar a Meta.
+ */
+function eventosapp_whatsapp_runtime_template_button_numbers($template) {
+    return eventosapp_whatsapp_runtime_template_button_count($template) >= 2 ? [1, 2] : [1];
+}
+
+/**
  * Normaliza identificadores locales/remotos de plantilla para comparación.
  */
 function eventosapp_whatsapp_template_lookup_key($value) {
@@ -3698,6 +3732,13 @@ function eventosapp_whatsapp_prepare_runtime_template($template, $fallback_id = 
     $template['sender_phone_number_id'] = eventosapp_whatsapp_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '');
     $template['sender_phone_label'] = sanitize_text_field((string)($template['sender_phone_label'] ?? ''));
     $template['waba_id'] = eventosapp_whatsapp_sanitize_waba_id($template['waba_id'] ?? '');
+    $template['button_count'] = (string) eventosapp_whatsapp_runtime_template_button_count($template);
+
+    if ( $template['button_count'] === '1' ) {
+        $template['button_2_text'] = '';
+        $template['button_2_url'] = '';
+        $template['button_2_example'] = '';
+    }
 
     return $template;
 }
@@ -4071,6 +4112,7 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
         'header_format' => $template['header_format'] ?? '',
         'body_variable_count' => 0,
         'button_variable_components' => 0,
+        'button_count' => eventosapp_whatsapp_runtime_template_button_count($template),
     ];
 
     if ( ! empty($template['header_format']) && strtoupper((string)$template['header_format']) === 'IMAGE' ) {
@@ -4118,7 +4160,7 @@ function eventosapp_whatsapp_build_ticket_template_components($template, $ticket
     }
 
     $button_index = 0;
-    foreach ( [1, 2] as $i ) {
+    foreach ( eventosapp_whatsapp_runtime_template_button_numbers($template) as $i ) {
         $url = (string)($template['button_' . $i . '_url'] ?? '');
         $text = (string)($template['button_' . $i . '_text'] ?? '');
         if ( $text === '' || $url === '' ) {
