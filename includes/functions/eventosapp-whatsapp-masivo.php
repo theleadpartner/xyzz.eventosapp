@@ -82,6 +82,8 @@ if ( ! function_exists('eventosapp_whatsapp_masivo_get_templates') ) {
                 $runtime['id'] = sanitize_key((string)($runtime['id'] ?? $template_key));
                 $runtime['name'] = sanitize_key((string)($runtime['name'] ?? ''));
                 $runtime['language'] = sanitize_text_field((string)($runtime['language'] ?? 'es'));
+                $runtime['category'] = in_array(strtoupper(sanitize_key((string)($runtime['category'] ?? 'UTILITY'))), ['UTILITY', 'MARKETING'], true) ? strtoupper(sanitize_key((string)($runtime['category'] ?? 'UTILITY'))) : 'UTILITY';
+                $runtime['meta_category'] = strtoupper(sanitize_key((string)($runtime['meta_category'] ?? '')));
                 $runtime['meta_status'] = strtoupper(sanitize_text_field((string)($runtime['meta_status'] ?? 'LOCAL')));
             }
 
@@ -151,6 +153,8 @@ if ( ! function_exists('eventosapp_whatsapp_masivo_get_template') ) {
                     $template['_storage_key'] = sanitize_key((string) $key);
                     $template['name'] = sanitize_key((string)($template['name'] ?? ''));
                     $template['language'] = sanitize_text_field((string)($template['language'] ?? 'es'));
+                    $template['category'] = in_array(strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY'))), ['UTILITY', 'MARKETING'], true) ? strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY'))) : 'UTILITY';
+                    $template['meta_category'] = strtoupper(sanitize_key((string)($template['meta_category'] ?? '')));
                     $template['meta_status'] = strtoupper(sanitize_text_field((string)($template['meta_status'] ?? 'LOCAL')));
                     return $template;
                 }
@@ -174,6 +178,14 @@ if ( ! function_exists('eventosapp_whatsapp_masivo_template_label') ) {
         $name = trim((string)($template['name'] ?? ''));
         $language = trim((string)($template['language'] ?? ''));
         $status = strtoupper((string)($template['meta_status'] ?? ''));
+        $category_summary = function_exists('eventosapp_whatsapp_template_category_summary')
+            ? eventosapp_whatsapp_template_category_summary($template)
+            : [
+                'requested' => strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY'))),
+                'remote' => strtoupper(sanitize_key((string)($template['meta_category'] ?? ''))),
+                'label' => ucfirst(strtolower((string)($template['category'] ?? 'UTILITY'))),
+                'mismatch' => false,
+            ];
 
         $label = $title !== '' ? $title : ($name !== '' ? $name : 'Plantilla sin nombre');
         if ( $name !== '' && $title !== $name ) {
@@ -184,6 +196,9 @@ if ( ! function_exists('eventosapp_whatsapp_masivo_template_label') ) {
         }
         if ( $status !== '' ) {
             $label .= ' · ' . $status;
+        }
+        if ( ! empty($category_summary['label']) ) {
+            $label .= ' · ' . sanitize_text_field((string)$category_summary['label']);
         }
 
         if ( function_exists('eventosapp_whatsapp_get_template_sender_label') ) {
@@ -2132,6 +2147,13 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
     $transport = 'template';
     $template_name = sanitize_key((string)($template['name'] ?? ''));
     $template_language = sanitize_text_field((string)($template['language'] ?? ''));
+    $template_category_summary = function_exists('eventosapp_whatsapp_template_category_summary')
+        ? eventosapp_whatsapp_template_category_summary($template)
+        : [
+            'requested' => strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY'))),
+            'remote' => strtoupper(sanitize_key((string)($template['meta_category'] ?? ''))),
+            'mismatch' => false,
+        ];
 
     $pre_debug = [
         'ticket_id'                 => $ticket_id,
@@ -2150,6 +2172,9 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
         'template_storage_key'      => $template['_storage_key'] ?? '',
         'template_name'             => $template_name,
         'template_language'         => $template_language,
+        'template_category'         => $template_category_summary['requested'] ?? '',
+        'template_meta_category'    => $template_category_summary['remote'] ?? '',
+        'template_category_mismatch'=> ! empty($template_category_summary['mismatch']) ? 1 : 0,
         'template_meta_status'      => $template['meta_status'] ?? '',
         'template_sender_phone_number_id' => function_exists('eventosapp_whatsapp_get_template_sender_phone_number_id') ? eventosapp_whatsapp_get_template_sender_phone_number_id($template) : sanitize_text_field((string)($template['sender_phone_number_id'] ?? '')),
         'template_sender_label'     => function_exists('eventosapp_whatsapp_get_template_sender_label') ? eventosapp_whatsapp_get_template_sender_label($template) : sanitize_text_field((string)($template['sender_phone_label'] ?? '')),
@@ -2211,6 +2236,8 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
     $result['template_id'] = $template_id;
     $result['template_name'] = $template_name;
     $result['template_language'] = $template_language;
+    $result['template_category'] = $template_category_summary['requested'] ?? '';
+    $result['template_meta_category'] = $template_category_summary['remote'] ?? '';
 
     if ( ! empty($result['ok']) ) {
         $whatsapp_sent_at = current_time('mysql');
