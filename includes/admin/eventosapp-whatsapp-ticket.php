@@ -2960,6 +2960,41 @@ if ( ! function_exists('eventosapp_whatsapp_template_status_label') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_whatsapp_template_category_summary') ) {
+    function eventosapp_whatsapp_template_category_summary($template) {
+        $template = is_array($template) ? $template : [];
+
+        $requested = strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY')));
+        if ( $requested === '' ) {
+            $requested = 'UTILITY';
+        }
+        if ( function_exists('eventosapp_whatsapp_templates_sanitize_category') ) {
+            $requested = eventosapp_whatsapp_templates_sanitize_category($requested);
+        } elseif ( ! in_array($requested, ['UTILITY', 'MARKETING'], true) ) {
+            $requested = 'UTILITY';
+        }
+
+        $remote = strtoupper(sanitize_key((string)($template['meta_category'] ?? '')));
+        if ( function_exists('eventosapp_whatsapp_templates_normalize_meta_category') ) {
+            $remote = eventosapp_whatsapp_templates_normalize_meta_category($remote);
+        }
+
+        $requested_label = function_exists('eventosapp_whatsapp_templates_category_label') ? eventosapp_whatsapp_templates_category_label($requested) : ucfirst(strtolower($requested));
+        $remote_label = $remote !== '' ? (function_exists('eventosapp_whatsapp_templates_category_label') ? eventosapp_whatsapp_templates_category_label($remote) : ucfirst(strtolower($remote))) : '';
+        $mismatch = $remote !== '' && $remote !== $requested;
+
+        return [
+            'requested' => $requested,
+            'requested_label' => $requested_label,
+            'remote' => $remote,
+            'remote_label' => $remote_label,
+            'mismatch' => $mismatch,
+            'label' => $remote !== '' ? ($requested_label . ($mismatch ? ' / Meta: ' . $remote_label : '')) : $requested_label,
+        ];
+    }
+}
+
 if ( ! function_exists('eventosapp_whatsapp_get_template_sender_phone_number_id') ) {
     function eventosapp_whatsapp_get_template_sender_phone_number_id($template, $settings = null) {
         $settings = is_array($settings) ? wp_parse_args($settings, eventosapp_whatsapp_default_settings()) : eventosapp_whatsapp_get_settings();
@@ -3032,13 +3067,14 @@ if ( ! function_exists('eventosapp_whatsapp_render_event_template_select') ) {
                         $name = trim((string)($template['name'] ?? ''));
                         $template_sender = eventosapp_whatsapp_get_template_sender_phone_number_id($template, $settings);
                         $template_sender_label = eventosapp_whatsapp_get_template_sender_label($template, $settings);
-                        $option_label = ($title !== '' ? $title : $name) . ($name !== '' ? ' — ' . $name : '') . ' [' . $status_label . '] · ' . $template_sender_label;
+                        $category_summary = eventosapp_whatsapp_template_category_summary($template);
+                        $option_label = ($title !== '' ? $title : $name) . ($name !== '' ? ' — ' . $name : '') . ' [' . $status_label . '] · ' . $category_summary['label'] . ' · ' . $template_sender_label;
                     ?>
                         <option value="<?php echo esc_attr($template_id); ?>" data-sender-phone-number-id="<?php echo esc_attr($template_sender); ?>" <?php selected($current, $template_id); ?>><?php echo esc_html($option_label); ?></option>
                     <?php endforeach; ?>
                 </select>
                 <p class="evapp-wa-visual-help">
-                    Si eliges una plantilla no aprobada, EventosApp la mostrará en la configuración, pero al enviar usará una plantilla aprobada compatible como respaldo. Para envíos reales Meta exige estado aprobado. Las opciones se filtran en pantalla por el número emisor seleccionado para evitar usar una plantilla marcada para otro número.
+                    Si eliges una plantilla no aprobada, EventosApp la mostrará en la configuración, pero al enviar usará una plantilla aprobada compatible como respaldo. Para envíos reales Meta exige estado aprobado. La lista muestra si la plantilla es Utility o Marketing y también avisa cuando Meta la recategorizó. Las opciones se filtran en pantalla por el número emisor seleccionado para evitar usar una plantilla marcada para otro número.
                 </p>
             <?php endif; ?>
         </div>
@@ -3727,6 +3763,12 @@ function eventosapp_whatsapp_prepare_runtime_template($template, $fallback_id = 
     $template['language'] = sanitize_text_field((string)($template['language'] ?? 'es'));
     $template['modality'] = sanitize_key((string)($template['modality'] ?? 'custom'));
     $template['base_key'] = sanitize_key((string)($template['base_key'] ?? $template['modality']));
+    $template['category'] = function_exists('eventosapp_whatsapp_templates_sanitize_category')
+        ? eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY')
+        : (in_array(strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY'))), ['UTILITY', 'MARKETING'], true) ? strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY'))) : 'UTILITY');
+    $template['meta_category'] = function_exists('eventosapp_whatsapp_templates_normalize_meta_category')
+        ? eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '')
+        : strtoupper(sanitize_key((string)($template['meta_category'] ?? '')));
     $template['meta_status'] = strtoupper(sanitize_text_field((string)($template['meta_status'] ?? 'LOCAL')));
     $template['meta_template_id'] = sanitize_text_field((string)($template['meta_template_id'] ?? ''));
     $template['sender_phone_number_id'] = eventosapp_whatsapp_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '');
@@ -3866,6 +3908,9 @@ function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $even
                     'storage_key'          => $selected_template['_storage_key'] ?? '',
                     'template_name'        => $selected_template['name'] ?? '',
                     'language'             => $selected_template['language'] ?? '',
+                    'template_category'    => $selected_template['category'] ?? '',
+                    'template_meta_category' => $selected_template['meta_category'] ?? '',
+                    'template_category_mismatch' => ! empty(eventosapp_whatsapp_template_category_summary($selected_template)['mismatch']) ? 1 : 0,
                     'meta_status'          => $selected_template['meta_status'] ?? '',
                     'meta_template_id'     => $selected_template['meta_template_id'] ?? '',
                     'sender_phone_number_id' => $sender_phone_number_id,
@@ -3881,6 +3926,9 @@ function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $even
                 'selected_template_id' => $selected_template_id,
                 'template_found'       => $selected_template ? 1 : 0,
                 'selected_template_name' => $selected_template['name'] ?? '',
+                'selected_template_category' => $selected_template['category'] ?? '',
+                'selected_template_meta_category' => $selected_template['meta_category'] ?? '',
+                'selected_template_category_mismatch' => $selected_template ? (! empty(eventosapp_whatsapp_template_category_summary($selected_template)['mismatch']) ? 1 : 0) : 0,
                 'selected_template_status' => $selected_template['meta_status'] ?? '',
                 'sender_phone_number_id' => $sender_phone_number_id,
                 'template_sender_phone_number_id' => $selected_template ? eventosapp_whatsapp_get_template_sender_phone_number_id($selected_template) : '',
@@ -3919,6 +3967,9 @@ function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $even
                 'preferred_modality' => $preferred_modality,
                 'template_id'        => $template['id'] ?? '',
                 'template_name'      => $template['name'] ?? '',
+                'template_category'  => $template['category'] ?? '',
+                'template_meta_category' => $template['meta_category'] ?? '',
+                'template_category_mismatch' => ! empty(eventosapp_whatsapp_template_category_summary($template)['mismatch']) ? 1 : 0,
                 'meta_status'        => $template['meta_status'] ?? '',
                 'sender_phone_number_id' => $sender_phone_number_id,
                 'template_sender_phone_number_id' => eventosapp_whatsapp_get_template_sender_phone_number_id($template),
@@ -3940,6 +3991,9 @@ function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $even
             'preferred_modality' => $preferred_modality,
             'template_id'        => $fallback['id'] ?? '',
             'template_name'      => $fallback['name'] ?? '',
+            'template_category'  => $fallback['category'] ?? '',
+            'template_meta_category' => $fallback['meta_category'] ?? '',
+            'template_category_mismatch' => ! empty(eventosapp_whatsapp_template_category_summary($fallback)['mismatch']) ? 1 : 0,
             'meta_status'        => $fallback['meta_status'] ?? '',
             'sender_phone_number_id' => $sender_phone_number_id,
             'template_sender_phone_number_id' => eventosapp_whatsapp_get_template_sender_phone_number_id($fallback),
@@ -4106,9 +4160,13 @@ function eventosapp_whatsapp_get_template_values_for_ticket($ticket_id, $event_i
  */
 function eventosapp_whatsapp_build_ticket_template_components($template, $ticket_id, $event_id, $qr_url = '') {
     $components = [];
+    $category_summary = eventosapp_whatsapp_template_category_summary($template);
     $debug = [
         'template_name' => $template['name'] ?? '',
         'template_language' => $template['language'] ?? '',
+        'template_category' => $category_summary['requested'] ?? '',
+        'template_meta_category' => $category_summary['remote'] ?? '',
+        'template_category_mismatch' => ! empty($category_summary['mismatch']) ? 1 : 0,
         'header_format' => $template['header_format'] ?? '',
         'body_variable_count' => 0,
         'button_variable_components' => 0,
@@ -4222,6 +4280,9 @@ function eventosapp_whatsapp_build_ticket_payload($ticket_id, $message, $qr_url 
                         'name' => $template['name'] ?? '',
                         'language' => $template['language'] ?? '',
                         'modality' => $template['modality'] ?? '',
+                        'category' => $template['category'] ?? '',
+                        'meta_category' => $template['meta_category'] ?? '',
+                        'category_mismatch' => ! empty(eventosapp_whatsapp_template_category_summary($template)['mismatch']) ? 1 : 0,
                         'meta_status' => $template['meta_status'] ?? '',
                         'meta_template_id' => $template['meta_template_id'] ?? '',
                         'sender_phone_number_id' => eventosapp_whatsapp_get_template_sender_phone_number_id($template),
