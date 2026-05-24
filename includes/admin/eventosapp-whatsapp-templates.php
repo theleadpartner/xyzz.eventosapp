@@ -121,6 +121,163 @@ function eventosapp_whatsapp_templates_default_button_variable_example() {
     return 'ticket_demo_123';
 }
 
+
+/**
+ * Categorías soportadas por este módulo para plantillas de tickets.
+ *
+ * Se mantienen Utility y Marketing porque son las dos categorías que aplican
+ * para comunicaciones de eventos con botones, enlaces, imágenes y recordatorios.
+ * Authentication no se expone aquí para evitar que una plantilla de ticket viaje
+ * con una categoría que Meta restringe a códigos de verificación.
+ */
+function eventosapp_whatsapp_templates_supported_categories() {
+    return [
+        'UTILITY'   => 'Utility',
+        'MARKETING' => 'Marketing',
+    ];
+}
+
+/**
+ * Normaliza la categoría solicitada localmente.
+ */
+function eventosapp_whatsapp_templates_sanitize_category($category, $fallback = 'UTILITY') {
+    $category = strtoupper(sanitize_key((string) $category));
+    $fallback = strtoupper(sanitize_key((string) $fallback));
+    $supported = eventosapp_whatsapp_templates_supported_categories();
+
+    if ( $category === '' ) {
+        $category = $fallback;
+    }
+
+    if ( ! isset($supported[$category]) ) {
+        $category = isset($supported[$fallback]) ? $fallback : 'UTILITY';
+    }
+
+    return $category;
+}
+
+/**
+ * Normaliza la categoría devuelta por Meta sin forzarla a una lista cerrada.
+ */
+function eventosapp_whatsapp_templates_normalize_meta_category($category) {
+    $category = strtoupper(sanitize_key((string) $category));
+    return $category !== '' ? $category : '';
+}
+
+/**
+ * Etiqueta legible de categoría.
+ */
+function eventosapp_whatsapp_templates_category_label($category) {
+    $category = eventosapp_whatsapp_templates_normalize_meta_category($category);
+    $labels = eventosapp_whatsapp_templates_supported_categories();
+    return $labels[$category] ?? ($category !== '' ? $category : 'Sin categoría');
+}
+
+/**
+ * Detecta si Meta tiene una categoría diferente a la solicitada localmente.
+ */
+function eventosapp_whatsapp_templates_category_mismatch($template) {
+    $template = is_array($template) ? $template : [];
+    $requested = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+    $remote = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
+
+    return $remote !== '' && $requested !== '' && $remote !== $requested;
+}
+
+/**
+ * Mensaje administrativo para diferencias de categoría entre EventosApp y Meta.
+ */
+function eventosapp_whatsapp_templates_category_status_message($requested_category, $remote_category = '') {
+    $requested_category = eventosapp_whatsapp_templates_sanitize_category($requested_category ?: 'UTILITY');
+    $remote_category = eventosapp_whatsapp_templates_normalize_meta_category($remote_category);
+
+    if ( $remote_category === '' ) {
+        return 'Categoría solicitada a Meta: ' . eventosapp_whatsapp_templates_category_label($requested_category) . '.';
+    }
+
+    if ( $remote_category === $requested_category ) {
+        return 'Categoría confirmada por Meta: ' . eventosapp_whatsapp_templates_category_label($remote_category) . '.';
+    }
+
+    return 'Meta reporta categoría ' . eventosapp_whatsapp_templates_category_label($remote_category) . ' aunque EventosApp la tenía marcada como ' . eventosapp_whatsapp_templates_category_label($requested_category) . '. Revisa el contenido; si incluye promociones, premios, sorteos, ofertas o llamados comerciales, déjala como Marketing antes de reenviarla.';
+}
+
+/**
+ * Busca señales de contenido promocional para avisar antes de enviar como Utility.
+ * No bloquea el envío porque la decisión final la toma Meta.
+ */
+function eventosapp_whatsapp_templates_detect_marketing_signals($template) {
+    $template = is_array($template) ? $template : [];
+    $text = implode(' ', [
+        (string)($template['title'] ?? ''),
+        (string)($template['body_text'] ?? ''),
+        (string)($template['footer_text'] ?? ''),
+        (string)($template['button_1_text'] ?? ''),
+        (string)($template['button_2_text'] ?? ''),
+    ]);
+
+    if ( function_exists('remove_accents') ) {
+        $text = remove_accents($text);
+    }
+    $text = strtolower($text);
+
+    $checks = [
+        '/\bpremios?\b|\bsorteos?\b|\brifas?\b|\bgan(a|ar|ate|as|a\s+tu)\b/' => 'premios, sorteos o incentivos',
+        '/\bofertas?\b|\bdescuentos?\b|\bpromocion(es)?\b|\bcupon(es)?\b|\bgratis\b/' => 'ofertas, descuentos o promociones',
+        '/\bcompr(a|ar)\b|\bventa(s)?\b|\bproducto(s)?\b|\bservicio(s)?\b/' => 'contenido comercial o de venta',
+        '/\bparticipa\b|\bparticipar\b|\bregistrate\b|\binscribete\b|\baun estas a tiempo\b|\bte esperamos\b/' => 'llamados de participación o asistencia',
+        '/\bespectacular(es)?\b|\bimperdible\b|\bexclusiv(a|o|as|os)\b|\blimitad(a|o|as|os)\b/' => 'lenguaje promocional',
+    ];
+
+    $signals = [];
+    foreach ( $checks as $pattern => $label ) {
+        if ( preg_match($pattern, $text) ) {
+            $signals[] = $label;
+        }
+    }
+
+    return array_values(array_unique($signals));
+}
+
+/**
+ * Aviso de categoría según contenido y categoría solicitada.
+ */
+function eventosapp_whatsapp_templates_category_advice($template) {
+    $template = is_array($template) ? $template : [];
+    $category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+    $signals = eventosapp_whatsapp_templates_detect_marketing_signals($template);
+
+    if ( $category === 'UTILITY' && ! empty($signals) ) {
+        return 'Aviso de categoría: el texto tiene señales de Marketing (' . implode(', ', $signals) . '). Meta podría reclasificarla como Marketing aunque la envíes como Utility.';
+    }
+
+    if ( $category === 'MARKETING' ) {
+        return 'Plantilla marcada como Marketing: úsala para promociones, invitaciones, recordatorios con premios/sorteos, ofertas o llamados comerciales. Debe enviarse solo a usuarios con opt-in válido.';
+    }
+
+    return 'Plantilla marcada como Utility: úsala para confirmaciones, accesos, recordatorios operativos o actualizaciones directamente relacionadas con la inscripción del asistente.';
+}
+
+/**
+ * Extrae un resumen simple del quality_score devuelto por Meta.
+ */
+function eventosapp_whatsapp_templates_quality_summary($quality_score) {
+    if ( empty($quality_score) ) {
+        return '';
+    }
+
+    if ( is_array($quality_score) ) {
+        foreach ( ['score', 'rating', 'quality_rating', 'status'] as $key ) {
+            if ( ! empty($quality_score[$key]) && is_scalar($quality_score[$key]) ) {
+                return sanitize_text_field((string) $quality_score[$key]);
+            }
+        }
+        return sanitize_text_field(wp_json_encode($quality_score, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    return sanitize_text_field((string) $quality_score);
+}
+
 /**
  * Detecta cuántos botones URL activos tiene una plantilla.
  *
@@ -396,6 +553,18 @@ function eventosapp_whatsapp_templates_get_settings() {
     foreach ( $settings['templates'] as $template_id => $template ) {
         if ( ! is_array($template) ) {
             continue;
+        }
+
+        $normalized_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+        if ( (string)($template['category'] ?? '') !== $normalized_category ) {
+            $settings['templates'][$template_id]['category'] = $normalized_category;
+            $changed = true;
+        }
+
+        $normalized_meta_category = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
+        if ( (string)($template['meta_category'] ?? '') !== $normalized_meta_category ) {
+            $settings['templates'][$template_id]['meta_category'] = $normalized_meta_category;
+            $changed = true;
         }
 
         $normalized_button_count = eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
@@ -777,10 +946,10 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         $id = 'tpl_' . wp_generate_uuid4();
     }
 
-    $category = ! empty($raw['category']) ? strtoupper(sanitize_key($raw['category'])) : ($existing['category'] ?? 'UTILITY');
-    if ( $category !== 'UTILITY' ) {
-        $category = 'UTILITY';
-    }
+    $category = eventosapp_whatsapp_templates_sanitize_category(
+        $raw['category'] ?? ($existing['category'] ?? 'UTILITY'),
+        $existing['category'] ?? 'UTILITY'
+    );
 
     $language = ! empty($raw['language']) ? sanitize_text_field($raw['language']) : ($existing['language'] ?? 'es');
     $language = preg_replace('/[^a-zA-Z_\-]+/', '', $language);
@@ -865,7 +1034,7 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'waba_id'              => $effective_waba_id,
         'meta_template_id'     => $remote_context_changed ? '' : sanitize_text_field($existing['meta_template_id'] ?? ''),
         'meta_status'          => $remote_context_changed ? 'LOCAL' : sanitize_text_field($existing['meta_status'] ?? 'LOCAL'),
-        'meta_category'        => sanitize_text_field($existing['meta_category'] ?? ''),
+        'meta_category'        => eventosapp_whatsapp_templates_normalize_meta_category($existing['meta_category'] ?? ''),
         'meta_rejected_reason' => $remote_context_changed ? '' : sanitize_text_field($existing['meta_rejected_reason'] ?? ''),
         'last_api_message'     => $remote_context_changed ? 'Número emisor o WABA cambiado. Debes enviar esta plantilla nuevamente a Meta para el WABA correspondiente.' : sanitize_text_field($existing['last_api_message'] ?? ''),
         'last_api_response'    => $remote_context_changed ? [] : (isset($existing['last_api_response']) && is_array($existing['last_api_response']) ? $existing['last_api_response'] : []),
@@ -905,6 +1074,11 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
  */
 function eventosapp_whatsapp_templates_validate_for_meta($template) {
     $errors = [];
+
+    $category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+    if ( ! isset(eventosapp_whatsapp_templates_supported_categories()[$category]) ) {
+        $errors[] = 'La categoría de la plantilla no es compatible con este módulo. Usa Utility o Marketing.';
+    }
 
     if ( empty($template['name']) ) {
         $errors[] = 'Falta el nombre técnico de la plantilla.';
@@ -1064,7 +1238,7 @@ function eventosapp_whatsapp_templates_api_request($method, $path, $body = null)
                 'dry_run' => true,
                 'id' => 'dry_run_template_id',
                 'status' => 'DRY_RUN',
-                'category' => 'UTILITY',
+                'category' => is_array($body) && ! empty($body['category']) ? eventosapp_whatsapp_templates_sanitize_category($body['category']) : 'UTILITY',
             ],
         ];
     }
@@ -1399,6 +1573,8 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
 
     $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
     $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'] ?? '', $template['body_examples'] ?? '');
+    $requested_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+    $template['category'] = $requested_category;
     $template['body_text_meta'] = sanitize_textarea_field($prepared_body['text'] ?? ($template['body_text'] ?? ''));
     $template['body_variable_map'] = eventosapp_whatsapp_templates_sanitize_body_variable_map($prepared_body['variable_numbers'] ?? []);
     $template['body_variable_signature'] = sanitize_text_field($prepared_body['signature'] ?? md5((string)($template['body_text'] ?? '')));
@@ -1413,10 +1589,13 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
         return ['ok' => false, 'message' => implode(' ', $errors)];
     }
 
+    $category_advice = eventosapp_whatsapp_templates_category_advice($template);
+    $marketing_signals = eventosapp_whatsapp_templates_detect_marketing_signals($template);
+
     $payload = [
         'name'       => $template['name'],
         'language'   => $template['language'],
-        'category'   => 'UTILITY',
+        'category'   => $requested_category,
         'components' => eventosapp_whatsapp_templates_build_meta_components($template),
     ];
 
@@ -1424,16 +1603,25 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
         eventosapp_whatsapp_log('Plantilla WhatsApp enviada a Meta con número emisor', [
             'template_id' => $template_id,
             'template_name' => $template['name'] ?? '',
+            'requested_category' => $requested_category,
+            'current_meta_category' => eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? ''),
+            'category_advice' => $category_advice,
+            'marketing_signals' => $marketing_signals,
             'sender_phone_number_id' => $template['sender_phone_number_id'] ?? '',
             'sender_phone_label' => $template['sender_phone_label'] ?? '',
             'waba_id' => $waba_id,
+            'has_meta_template_id' => ! empty($template['meta_template_id']) ? 1 : 0,
+            'meta_template_id' => $template['meta_template_id'] ?? '',
+            'button_count' => $template['button_count'] ?? '',
+            'header_format' => $template['header_format'] ?? '',
+            'body_variable_map' => $template['body_variable_map'] ?? [],
         ]);
     }
 
     if ( ! empty($template['meta_template_id']) ) {
         $path = rawurlencode($template['meta_template_id']);
         $api_result = eventosapp_whatsapp_templates_api_request('POST', $path, [
-            'category'   => 'UTILITY',
+            'category'   => $requested_category,
             'components' => $payload['components'],
         ]);
     } else {
@@ -1452,18 +1640,52 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
         } elseif ( empty($template['meta_status']) || $template['meta_status'] === 'LOCAL' ) {
             $template['meta_status'] = 'PENDING';
         }
-        if ( ! empty($response['category']) ) {
-            $template['meta_category'] = sanitize_text_field((string) $response['category']);
+
+        $response_category = eventosapp_whatsapp_templates_normalize_meta_category($response['category'] ?? '');
+        if ( $response_category !== '' ) {
+            $template['meta_category'] = $response_category;
+        } elseif ( empty($template['meta_category']) ) {
+            $template['meta_category'] = $requested_category;
         }
+
         $template['meta_rejected_reason'] = '';
         $template['last_submitted_at'] = current_time('mysql');
     }
 
-    $template['last_api_message'] = sanitize_text_field((string)($api_result['message'] ?? ''));
+    $api_message = sanitize_text_field((string)($api_result['message'] ?? ''));
+    if ( ! empty($api_result['ok']) ) {
+        $category_message = eventosapp_whatsapp_templates_category_status_message($requested_category, $template['meta_category'] ?? '');
+        $api_message = trim($api_message . ' ' . $category_message);
+        if ( $requested_category === 'UTILITY' && ! empty($marketing_signals) ) {
+            $api_message = trim($api_message . ' Aviso: el contenido tiene señales promocionales y Meta puede moverlo a Marketing.');
+        }
+    }
+
+    $api_result['message'] = $api_message !== '' ? $api_message : ($api_result['message'] ?? '');
+    $template['last_api_message'] = sanitize_text_field((string)$api_result['message']);
     $template['last_api_response'] = $response;
     $template['updated_at'] = current_time('mysql');
     $settings['templates'][$template_id] = $template;
     eventosapp_whatsapp_templates_update_settings($settings);
+
+    if ( function_exists('eventosapp_whatsapp_log') ) {
+        eventosapp_whatsapp_log('Plantilla WhatsApp respuesta Meta categorización', [
+            'template_id' => $template_id,
+            'template_name' => $template['name'] ?? '',
+            'ok' => ! empty($api_result['ok']) ? 1 : 0,
+            'http_code' => $api_result['http_code'] ?? 0,
+            'requested_category' => $requested_category,
+            'meta_category' => eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? ''),
+            'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
+            'meta_status' => $template['meta_status'] ?? '',
+            'meta_template_id' => $template['meta_template_id'] ?? '',
+            'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
+            'quality_score' => eventosapp_whatsapp_templates_quality_summary($response['quality_score'] ?? ''),
+            'message' => $api_result['message'] ?? '',
+            'marketing_signals' => $marketing_signals,
+            'response' => $response,
+        ]);
+    }
 
     return $api_result;
 }
@@ -1492,14 +1714,30 @@ function eventosapp_whatsapp_templates_check_status($template_id) {
         $response = $api_result['response'];
         $template['meta_template_id'] = ! empty($response['id']) ? sanitize_text_field((string)$response['id']) : $template['meta_template_id'];
         $template['meta_status'] = ! empty($response['status']) ? sanitize_text_field((string)$response['status']) : $template['meta_status'];
-        $template['meta_category'] = ! empty($response['category']) ? sanitize_text_field((string)$response['category']) : $template['meta_category'];
+        $template['meta_category'] = ! empty($response['category']) ? eventosapp_whatsapp_templates_normalize_meta_category($response['category']) : eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
         $template['meta_rejected_reason'] = ! empty($response['rejected_reason']) ? sanitize_text_field((string)$response['rejected_reason']) : '';
         $template['waba_id'] = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
         $template['last_checked_at'] = current_time('mysql');
-        $template['last_api_message'] = sanitize_text_field((string)($api_result['message'] ?? ''));
+        $category_message = eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? '');
+        $template['last_api_message'] = sanitize_text_field(trim((string)($api_result['message'] ?? '') . ' ' . $category_message));
         $template['last_api_response'] = $response;
         $settings['templates'][$template_id] = $template;
         eventosapp_whatsapp_templates_update_settings($settings);
+
+        if ( function_exists('eventosapp_whatsapp_log') ) {
+            eventosapp_whatsapp_log('Plantilla WhatsApp estado consultado en Meta', [
+                'template_id' => $template_id,
+                'template_name' => $template['name'] ?? '',
+                'requested_category' => eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY'),
+                'meta_category' => $template['meta_category'] ?? '',
+                'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
+                'meta_status' => $template['meta_status'] ?? '',
+                'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
+                'quality_score' => eventosapp_whatsapp_templates_quality_summary($response['quality_score'] ?? ''),
+                'last_api_message' => $template['last_api_message'] ?? '',
+                'response' => $response,
+            ]);
+        }
     }
 
     return $api_result;
@@ -1548,18 +1786,34 @@ function eventosapp_whatsapp_templates_sync_template_by_name($template_id) {
 
     $template['meta_template_id'] = ! empty($found['id']) ? sanitize_text_field((string)$found['id']) : '';
     $template['meta_status'] = ! empty($found['status']) ? sanitize_text_field((string)$found['status']) : 'UNKNOWN';
-    $template['meta_category'] = ! empty($found['category']) ? sanitize_text_field((string)$found['category']) : '';
+    $template['meta_category'] = ! empty($found['category']) ? eventosapp_whatsapp_templates_normalize_meta_category($found['category']) : '';
     $template['meta_rejected_reason'] = ! empty($found['rejected_reason']) ? sanitize_text_field((string)$found['rejected_reason']) : '';
     $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
     $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
     $template['waba_id'] = $waba_id;
     $template['last_checked_at'] = current_time('mysql');
-    $template['last_api_message'] = 'Plantilla sincronizada desde Meta por nombre e idioma.';
+    $category_message = eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? '');
+    $template['last_api_message'] = sanitize_text_field('Plantilla sincronizada desde Meta por nombre e idioma. ' . $category_message);
     $template['last_api_response'] = $found;
     $settings['templates'][$template_id] = $template;
     eventosapp_whatsapp_templates_update_settings($settings);
 
-    return ['ok' => true, 'message' => 'Estado sincronizado desde Meta.', 'response' => $found];
+    if ( function_exists('eventosapp_whatsapp_log') ) {
+        eventosapp_whatsapp_log('Plantilla WhatsApp sincronizada por nombre', [
+            'template_id' => $template_id,
+            'template_name' => $template['name'] ?? '',
+            'requested_category' => eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY'),
+            'meta_category' => $template['meta_category'] ?? '',
+            'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
+            'meta_status' => $template['meta_status'] ?? '',
+            'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
+            'quality_score' => eventosapp_whatsapp_templates_quality_summary($found['quality_score'] ?? ''),
+            'waba_id' => $waba_id,
+            'response' => $found,
+        ]);
+    }
+
+    return ['ok' => true, 'message' => 'Estado sincronizado desde Meta. ' . $category_message, 'response' => $found];
 }
 
 /**
@@ -1635,15 +1889,30 @@ function eventosapp_whatsapp_templates_sync_all() {
             $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
             $template['meta_template_id'] = ! empty($remote['id']) ? sanitize_text_field((string)$remote['id']) : ($template['meta_template_id'] ?? '');
             $template['meta_status'] = ! empty($remote['status']) ? sanitize_text_field((string)$remote['status']) : ($template['meta_status'] ?? 'UNKNOWN');
-            $template['meta_category'] = ! empty($remote['category']) ? sanitize_text_field((string)$remote['category']) : ($template['meta_category'] ?? '');
+            $template['meta_category'] = ! empty($remote['category']) ? eventosapp_whatsapp_templates_normalize_meta_category($remote['category']) : eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
             $template['meta_rejected_reason'] = ! empty($remote['rejected_reason']) ? sanitize_text_field((string)$remote['rejected_reason']) : '';
             $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
             $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
             $template['waba_id'] = $template_waba_id;
             $template['last_checked_at'] = current_time('mysql');
+            $template['last_api_message'] = sanitize_text_field(eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? ''));
             $template['last_api_response'] = $remote;
             $settings['templates'][$local_id] = $template;
             $updated++;
+
+            if ( function_exists('eventosapp_whatsapp_log') ) {
+                eventosapp_whatsapp_log('Plantilla WhatsApp sincronizada en lote', [
+                    'template_id' => $local_id,
+                    'template_name' => $template['name'] ?? '',
+                    'requested_category' => eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY'),
+                    'meta_category' => $template['meta_category'] ?? '',
+                    'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
+                    'meta_status' => $template['meta_status'] ?? '',
+                    'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
+                    'quality_score' => eventosapp_whatsapp_templates_quality_summary($remote['quality_score'] ?? ''),
+                    'waba_id' => $template_waba_id,
+                ]);
+            }
             break;
         }
     }
@@ -1675,7 +1944,7 @@ function eventosapp_whatsapp_templates_render_page() {
     ?>
     <div class="wrap eventosapp-wa-templates">
         <h1>Plantillas WhatsApp</h1>
-        <p>Administra las plantillas transaccionales de WhatsApp para tickets presenciales y virtuales. La aprobación final siempre la realiza Meta.</p>
+        <p>Administra plantillas WhatsApp de tipo <strong>Utility</strong> y <strong>Marketing</strong> para tickets presenciales y virtuales. La aprobación final, la categoría efectiva y cualquier recategorización siempre las determina Meta.</p>
 
         <?php if ( $notice !== '' ) : ?>
             <div class="notice <?php echo $notice_ok ? 'notice-success' : 'notice-error'; ?> is-dismissible"><p><strong>EventosApp:</strong> <?php echo esc_html($notice); ?></p></div>
@@ -1697,6 +1966,12 @@ function eventosapp_whatsapp_templates_render_page() {
             .evapp-wa-status.APPROVED{background:#d1e7dd;color:#0f5132;}
             .evapp-wa-status.PENDING,.evapp-wa-status.IN_APPEAL{background:#fff3cd;color:#664d03;}
             .evapp-wa-status.REJECTED,.evapp-wa-status.PAUSED,.evapp-wa-status.DISABLED{background:#f8d7da;color:#842029;}
+            .evapp-wa-category{display:inline-block;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:600;background:#f0f0f1;color:#1d2327;margin:2px 0;}
+            .evapp-wa-category.UTILITY{background:#e7f1ff;color:#0a4b78;}
+            .evapp-wa-category.MARKETING{background:#fef3c7;color:#7c4a03;}
+            .evapp-wa-cat-mismatch{display:block;color:#b91c1c;font-weight:600;margin-top:4px;}
+            .evapp-wa-tpl-category-guide{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1180px;}
+            .evapp-wa-tpl-category-guide > div{background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:12px;}
             .evapp-wa-tpl-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
             .evapp-wa-tpl-preview{white-space:pre-wrap;background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:10px;line-height:1.45;}
             .evapp-wa-tpl-warning{background:#fff8e5;border-left:4px solid #dba617;padding:10px 12px;margin:12px 0;max-width:1180px;}
@@ -1762,6 +2037,17 @@ function eventosapp_whatsapp_templates_render_page() {
 
         <div class="evapp-wa-tpl-warning">
             <strong>Importante:</strong> la plantilla presencial usa encabezado de imagen para poder enviar el QR como imagen dinámica cuando se use en el envío final. El <span class="evapp-wa-tpl-code">Header Sample Handle</span> no es una URL pública: se genera subiendo una imagen JPG/PNG de muestra a Meta desde el formulario de edición. Sin ese handle, Meta rechazará la creación por API.
+        </div>
+
+        <div class="evapp-wa-tpl-category-guide">
+            <div>
+                <strong>Utility</strong>
+                <p class="evapp-wa-tpl-help">Usa esta categoría para confirmaciones, accesos, recordatorios operativos o actualizaciones directamente relacionadas con una inscripción existente. Evita premios, sorteos, ofertas, descuentos o lenguaje promocional.</p>
+            </div>
+            <div>
+                <strong>Marketing</strong>
+                <p class="evapp-wa-tpl-help">Usa esta categoría para invitaciones, campañas, promociones, sorteos, premios, llamados comerciales o mensajes que buscan aumentar asistencia o interacción. Si el contenido mezcla utilidad y promoción, es más seguro marcarlo como Marketing.</p>
+            </div>
         </div>
 
         <?php
@@ -1869,8 +2155,23 @@ function eventosapp_whatsapp_templates_render_list($settings) {
                             <?php if ( $template_waba_id !== '' ) : ?><br><small>WABA: <?php echo esc_html($template_waba_id); ?></small><?php else : ?><br><small style="color:#b91c1c;">Sin WABA ID</small><?php endif; ?>
                         </td>
                         <td>
+                            <?php
+                            $requested_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+                            $remote_category = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
+                            $category_mismatch = eventosapp_whatsapp_templates_category_mismatch($template);
+                            $quality_summary = eventosapp_whatsapp_templates_quality_summary($template['last_api_response']['quality_score'] ?? '');
+                            ?>
                             <?php echo esc_html($template['language'] ?? 'es'); ?><br>
-                            <?php echo esc_html($template['category'] ?? 'UTILITY'); ?>
+                            <small>Solicitada:</small> <span class="evapp-wa-category <?php echo esc_attr($requested_category); ?>"><?php echo esc_html(eventosapp_whatsapp_templates_category_label($requested_category)); ?></span>
+                            <?php if ( $remote_category !== '' ) : ?>
+                                <br><small>Meta:</small> <span class="evapp-wa-category <?php echo esc_attr($remote_category); ?>"><?php echo esc_html(eventosapp_whatsapp_templates_category_label($remote_category)); ?></span>
+                            <?php endif; ?>
+                            <?php if ( $category_mismatch ) : ?>
+                                <small class="evapp-wa-cat-mismatch">Recategorizada por Meta</small>
+                            <?php endif; ?>
+                            <?php if ( $quality_summary !== '' ) : ?>
+                                <br><small>Calidad: <?php echo esc_html($quality_summary); ?></small>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <span class="evapp-wa-status <?php echo esc_attr($status); ?>"><?php echo esc_html($status); ?></span>
@@ -1971,6 +2272,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
         $source['title'] = 'Nueva plantilla basada en ' . eventosapp_whatsapp_templates_modality_label($source['modality']);
         $source['meta_template_id'] = '';
         $source['meta_status'] = 'LOCAL';
+        $source['meta_category'] = '';
         $source['meta_rejected_reason'] = '';
         $source['last_api_message'] = '';
         $source['last_api_response'] = [];
@@ -1990,14 +2292,18 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
     $template_uses_default_sender = ($template_sender_phone === '' || $template_sender_phone === $default_sender_phone);
     $template_button_count = eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
     $template['button_count'] = (string) $template_button_count;
+    $template['category'] = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+    $template['meta_category'] = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
     $template = eventosapp_whatsapp_templates_prune_disabled_buttons($template);
+    $template_category_advice = eventosapp_whatsapp_templates_category_advice($template);
+    $template_category_mismatch = eventosapp_whatsapp_templates_category_mismatch($template);
 
     $preview_payload = [
         'waba_id'    => $template_waba_id,
         'sender_phone_number_id' => $template_sender_phone,
         'name'       => $template['name'] ?? '',
         'language'   => $template['language'] ?? 'es',
-        'category'   => 'UTILITY',
+        'category'   => $template['category'],
         'components' => eventosapp_whatsapp_templates_build_meta_components($template),
     ];
     ?>
@@ -2073,8 +2379,18 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
 
                 <label for="evapp_tpl_category">Categoría</label>
                 <div>
-                    <input type="text" id="evapp_tpl_category" name="template[category]" value="UTILITY" readonly>
-                    <p class="evapp-wa-tpl-help">Se fuerza Utility porque son mensajes transaccionales de confirmación/acceso al evento.</p>
+                    <select id="evapp_tpl_category" name="template[category]">
+                        <?php foreach ( eventosapp_whatsapp_templates_supported_categories() as $category_key => $category_label ) : ?>
+                            <option value="<?php echo esc_attr($category_key); ?>" <?php selected($template['category'] ?? 'UTILITY', $category_key); ?>><?php echo esc_html($category_label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="evapp-wa-tpl-help"><strong>Utility</strong>: confirmaciones, acceso y recordatorios operativos de una inscripción. <strong>Marketing</strong>: premios, sorteos, invitaciones promocionales, ofertas o llamados comerciales.</p>
+                    <div class="<?php echo $template_category_mismatch ? 'evapp-wa-tpl-warning' : 'evapp-wa-tpl-info'; ?>" style="margin-top:8px;">
+                        <?php echo esc_html($template_category_advice); ?>
+                        <?php if ( ! empty($template['meta_category']) ) : ?>
+                            <br><strong>Meta:</strong> <?php echo esc_html(eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? '')); ?>
+                        <?php endif; ?>
+                    </div>
                 </div>
 
                 <label for="evapp_tpl_header_format">Encabezado</label>
@@ -2329,6 +2645,7 @@ add_action('admin_post_eventosapp_whatsapp_templates_duplicate', function() {
     $copy['name'] = eventosapp_whatsapp_templates_sanitize_template_name(($copy['name'] ?? 'eventosapp_template') . '_copy_' . substr(md5($copy['id']), 0, 4));
     $copy['meta_template_id'] = '';
     $copy['meta_status'] = 'LOCAL';
+    $copy['meta_category'] = '';
     $copy['meta_rejected_reason'] = '';
     $copy['last_api_message'] = '';
     $copy['last_api_response'] = [];
