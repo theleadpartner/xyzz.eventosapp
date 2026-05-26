@@ -1026,7 +1026,9 @@ add_action('wp_ajax_eventosapp_front_get_ticket', function(){
         wp_send_json_error(['message' => 'Sin permisos'], 403);
     }
 
-    // 5) Datos
+    // 5) Datos: precarga metas del ticket y del evento para reducir consultas repetidas.
+    update_meta_cache('post', [$tid, $evento_id]);
+
     $nombre   = get_post_meta($tid, '_eventosapp_asistente_nombre', true);
     $apellido = get_post_meta($tid, '_eventosapp_asistente_apellido', true);
     $cc       = get_post_meta($tid, '_eventosapp_asistente_cc', true);
