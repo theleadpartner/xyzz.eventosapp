@@ -2309,30 +2309,40 @@ add_action('wp_ajax_eventosapp_ticket_get_event_summary', function() {
  * 5. AJAX: Búsqueda de usuario WordPress por nombre/correo
  */
 add_action('wp_ajax_eventosapp_ticket_user_search', function() {
+    if ( ! current_user_can('edit_posts') ) {
+        wp_send_json_error('Unauthorized', 403);
+    }
+
     $results = [];
-    $q = isset($_GET['q']) ? sanitize_text_field($_GET['q']) : '';
-    if(strlen($q) < 3) wp_send_json_success($results);
+    $q = isset($_GET['q']) ? sanitize_text_field(wp_unslash($_GET['q'])) : '';
+    if ( mb_strlen($q) < 3 ) wp_send_json_success($results);
 
     $allowed_roles = ['administrator', 'organizador', 'staff', 'logistico'];
+
+    $cache_key = 'evapp_user_search_' . md5($q . '|' . implode(',', $allowed_roles));
+    $cached = wp_cache_get($cache_key, 'eventosapp_admin');
+    if ( is_array($cached) ) {
+        wp_send_json_success($cached);
+    }
 
     $args = [
         'search'         => '*' . esc_attr($q) . '*',
         'search_columns' => ['user_login','user_nicename','user_email','display_name'],
-        'number'         => 30
+        'role__in'       => $allowed_roles,
+        'number'         => 30,
+        'count_total'    => false,
     ];
 
     $users = get_users($args);
 
     foreach($users as $u){
-        // Debug temporal:
-        // error_log('Usuario: '.$u->user_login.' -- Roles: '.json_encode($u->roles));
-        if (array_intersect($u->roles, $allowed_roles)) {
-            $results[] = [
-                'id'   => $u->ID,
-                'text' => $u->display_name . " ({$u->user_email})"
-            ];
-        }
+        $results[] = [
+            'id'   => $u->ID,
+            'text' => $u->display_name . " ({$u->user_email})"
+        ];
     }
+
+    wp_cache_set($cache_key, $results, 'eventosapp_admin', 60);
     wp_send_json_success($results);
 });
 
@@ -2865,32 +2875,42 @@ add_action('wp_ajax_eventosapp_reindex_tickets_all', function(){
 
 if ( ! function_exists( 'evapp_find_ticket_by_cedula_evento' ) ) {
     function evapp_find_ticket_by_cedula_evento( $cedula, $evento_id ) {
-        $cedula    = sanitize_text_field( $cedula );
-        $evento_id = (int) $evento_id;
+        global $wpdb;
+
+        $cedula    = sanitize_text_field( (string) $cedula );
+        $evento_id = absint( $evento_id );
         if ( ! $cedula || ! $evento_id ) return false;
 
-        $q = new WP_Query( [
-            'post_type'      => 'eventosapp_ticket',
-            'post_status'    => 'any',
-            'posts_per_page' => 1,
-            'fields'         => 'ids',
-            'no_found_rows'  => true,
-            'meta_query'     => [
-                'relation' => 'AND',
-                [
-                    'key'     => '_eventosapp_ticket_evento_id',
-                    'value'   => $evento_id,
-                    'type'    => 'NUMERIC',
-                    'compare' => '=',
-                ],
-                [
-                    'key'     => '_eventosapp_asistente_cc',
-                    'value'   => $cedula,
-                    'compare' => '=',
-                ],
-            ],
-        ] );
+        $cache_key = 'evapp_ticket_cc_event_' . md5($evento_id . '|' . $cedula);
+        $cached = wp_cache_get($cache_key, 'eventosapp_tickets');
+        if ( $cached !== false ) {
+            return $cached ? absint($cached) : false;
+        }
 
-        return ! empty( $q->posts ) ? (int) $q->posts[0] : false;
+        $ticket_id = $wpdb->get_var( $wpdb->prepare(
+            "SELECT cc_pm.post_id
+               FROM {$wpdb->postmeta} cc_pm
+               INNER JOIN {$wpdb->postmeta} event_pm
+                       ON event_pm.post_id = cc_pm.post_id
+                      AND event_pm.meta_key = %s
+                      AND event_pm.meta_value = %s
+               INNER JOIN {$wpdb->posts} p
+                       ON p.ID = cc_pm.post_id
+                      AND p.post_type = 'eventosapp_ticket'
+                      AND p.post_status NOT IN ('trash','auto-draft','inherit')
+              WHERE cc_pm.meta_key = %s
+                AND cc_pm.meta_value = %s
+              ORDER BY cc_pm.post_id DESC
+              LIMIT 1",
+            '_eventosapp_ticket_evento_id',
+            (string) $evento_id,
+            '_eventosapp_asistente_cc',
+            $cedula
+        ) );
+
+        $ticket_id = $ticket_id ? absint($ticket_id) : 0;
+        wp_cache_set($cache_key, $ticket_id, 'eventosapp_tickets', 60);
+
+        return $ticket_id ?: false;
     }
 }
