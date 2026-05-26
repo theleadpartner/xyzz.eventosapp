@@ -775,6 +775,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-event-checkl
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-ranking-networking.php'; // <-- NUEVO: Ranking de Networking
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-batch-refresh.php';   // <-- NUEVO: batch refresh tickets por evento
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-batch-processor.php'; // <-- NUEVO: Sistema de actualización por lote v3.0
+require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-health-monitor.php'; // Monitor de salud y rendimiento de EventosApp
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-webhook-conditionals.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-ticket-variants.php'; // NUEVO: variantes de ticket por reglas
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-networking-search.php';
