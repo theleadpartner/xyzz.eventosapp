@@ -124,8 +124,11 @@ function eventosapp_ticket_reminders_get_filter_fields($event_id = 0) {
         'modalidad'        => 'Modalidad del ticket',
         'creation_channel' => 'Canal de creación del ticket',
         'estado_pago'      => 'Estado de pago',
-        'checkin'          => 'Check-in presencial',
-        'checkin_virtual'  => 'Check-in virtual',
+        'checkin'                  => 'Check-in presencial',
+        'checkin_virtual'          => 'Check-in virtual',
+        'whatsapp_sent_status'     => 'WhatsApp enviado / no enviado',
+        'whatsapp_last_status'     => 'WhatsApp último estado local/API',
+        'whatsapp_delivery_status' => 'WhatsApp estado webhook',
     ];
 
     $event_id = absint($event_id);
@@ -306,6 +309,61 @@ function eventosapp_ticket_reminders_normalize_rules($rules) {
     return $clean;
 }
 
+
+function eventosapp_ticket_reminders_get_schedule_diagnostics($event_id, $items) {
+    $event_id = absint($event_id);
+    $items = is_array($items) ? $items : [];
+    $rows = [];
+    $now = time();
+    $executed = get_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_EXECUTED, true);
+    $executed = is_array($executed) ? $executed : [];
+
+    foreach ( $items as $item ) {
+        $reminder_id = sanitize_key($item['id'] ?? '');
+        $name = ! empty($item['name']) ? sanitize_text_field((string)$item['name']) : ($reminder_id !== '' ? $reminder_id : 'Recordatorio sin nombre');
+        $enabled = ($item['enabled'] ?? '0') === '1';
+        $run_at = $enabled ? eventosapp_ticket_reminders_calculate_run_timestamp($event_id, $item) : 0;
+        $next_cron = ($enabled && $reminder_id !== '') ? wp_next_scheduled(EVENTOSAPP_TICKET_REMINDERS_CRON_HOOK, [$event_id, $reminder_id]) : false;
+        $signature = ($enabled && $run_at > 0) ? eventosapp_ticket_reminders_item_signature($event_id, $item) : '';
+        $executed_row = ($reminder_id !== '' && isset($executed[$reminder_id]) && is_array($executed[$reminder_id])) ? $executed[$reminder_id] : [];
+        $executed_same_schedule = ! empty($executed_row['signature']) && $signature !== '' && hash_equals((string)$executed_row['signature'], (string)$signature);
+
+        if ( ! $enabled ) {
+            $status = 'Inactivo';
+            $detail = 'No se programará mientras esté desactivado.';
+        } elseif ( ! $run_at ) {
+            $status = 'Fecha inválida';
+            $detail = 'Revisa fecha/hora del evento o la fecha exacta del recordatorio.';
+        } elseif ( $next_cron ) {
+            $status = 'Programado en WP-Cron';
+            $detail = 'WordPress tiene una tarea pendiente para este recordatorio.';
+        } elseif ( $executed_same_schedule ) {
+            $status = 'Ejecutado';
+            $detail = 'Ya se ejecutó con esta misma programación.';
+        } elseif ( $run_at <= $now ) {
+            $status = 'Vencido sin tarea pendiente';
+            $detail = 'La hora calculada ya pasó y no hay una tarea WP-Cron pendiente. Guarda/actualiza el evento para resincronizar.';
+        } else {
+            $status = 'No programado';
+            $detail = 'La hora está en el futuro, pero no hay tarea WP-Cron pendiente. Guarda/actualiza el evento para resincronizar.';
+        }
+
+        $rows[] = [
+            'id' => $reminder_id,
+            'name' => $name,
+            'status' => $status,
+            'detail' => $detail,
+            'run_at_event_timezone' => $run_at ? eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $run_at) : '',
+            'run_at_utc' => $run_at ? gmdate('Y-m-d H:i:s', $run_at) : '',
+            'next_cron_event_timezone' => $next_cron ? eventosapp_ticket_reminders_format_timestamp_for_event($event_id, $next_cron) : '',
+            'next_cron_utc' => $next_cron ? gmdate('Y-m-d H:i:s', $next_cron) : '',
+            'last_execution' => ! empty($executed_row['date']) ? sanitize_text_field((string)$executed_row['date']) : '',
+        ];
+    }
+
+    return $rows;
+}
+
 add_action('add_meta_boxes', function() {
     add_meta_box(
         'eventosapp_ticket_reminders',
@@ -327,6 +385,7 @@ function eventosapp_ticket_reminders_render_metabox($post) {
     $log       = get_post_meta($post->ID, EVENTOSAPP_TICKET_REMINDERS_META_LOG, true);
     $event_start = eventosapp_ticket_reminders_get_event_start_info($post->ID);
     $whatsapp_enabled = get_post_meta($post->ID, '_eventosapp_ticket_whatsapp_enabled', true) === '1';
+    $schedule_diagnostics = eventosapp_ticket_reminders_get_schedule_diagnostics($post->ID, $items);
 
     if ( ! is_array($log) ) {
         $log = [];
@@ -355,6 +414,10 @@ function eventosapp_ticket_reminders_render_metabox($post) {
         .evapp-reminder-conditions-table select,.evapp-reminder-conditions-table input{width:100%;max-width:100%;}
         .evapp-reminder-status{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:10px;margin:10px 0;}
         .evapp-reminder-status-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:12px;color:#475569;line-height:1.45;}
+        .evapp-reminder-diagnostics-table{width:100%;border-collapse:collapse;background:#fff;margin:8px 0 14px;border:1px solid #dcdcde;}
+        .evapp-reminder-diagnostics-table th,.evapp-reminder-diagnostics-table td{padding:8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top;font-size:12px;}
+        .evapp-reminder-diagnostics-table th{background:#f6f7f7;color:#1d2327;font-weight:700;}
+        .evapp-reminder-diagnostics-table code{white-space:normal;word-break:break-word;}
         .evapp-reminder-log-wrap{max-height:360px;overflow:auto;background:#111827;border-radius:8px;padding:0;border:1px solid #111827;}
         .evapp-reminder-log-table{width:100%;border-collapse:collapse;color:#e5e7eb;font-size:12px;line-height:1.35;}
         .evapp-reminder-log-table th{position:sticky;top:0;background:#0f172a;color:#cbd5e1;text-align:left;padding:8px;border-bottom:1px solid rgba(255,255,255,.12);}
@@ -412,6 +475,59 @@ function eventosapp_ticket_reminders_render_metabox($post) {
             </div>
         </div>
 
+        <h4>Diagnóstico de programación WP-Cron</h4>
+        <p class="evapp-reminders-help">
+            Esta tabla confirma la hora calculada del recordatorio, la tarea pendiente de WordPress y la última ejecución registrada. Si aparece "Vencido sin tarea pendiente" o "No programado", guarda/actualiza el evento para resincronizar la programación.
+        </p>
+        <?php if ( empty($schedule_diagnostics) ) : ?>
+            <p class="evapp-reminders-empty">No hay recordatorios para diagnosticar.</p>
+        <?php else : ?>
+            <table class="evapp-reminder-diagnostics-table">
+                <thead>
+                    <tr>
+                        <th>Recordatorio</th>
+                        <th>Estado</th>
+                        <th>Hora calculada</th>
+                        <th>Tarea WP-Cron</th>
+                        <th>Última ejecución</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $schedule_diagnostics as $diag ) : ?>
+                        <tr>
+                            <td>
+                                <strong><?php echo esc_html($diag['name']); ?></strong><br>
+                                <?php if ( ! empty($diag['id']) ) : ?>
+                                    <code><?php echo esc_html($diag['id']); ?></code>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <strong><?php echo esc_html($diag['status']); ?></strong><br>
+                                <?php echo esc_html($diag['detail']); ?>
+                            </td>
+                            <td>
+                                <?php if ( ! empty($diag['run_at_event_timezone']) ) : ?>
+                                    <?php echo esc_html($diag['run_at_event_timezone']); ?><br>
+                                    <code>UTC: <?php echo esc_html($diag['run_at_utc']); ?></code>
+                                <?php else : ?>
+                                    —
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ( ! empty($diag['next_cron_event_timezone']) ) : ?>
+                                    <?php echo esc_html($diag['next_cron_event_timezone']); ?><br>
+                                    <code>UTC: <?php echo esc_html($diag['next_cron_utc']); ?></code>
+                                <?php else : ?>
+                                    —
+                                <?php endif; ?>
+                            </td>
+                            <td><?php echo ! empty($diag['last_execution']) ? esc_html($diag['last_execution']) : '—'; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+
         <h4>Programación</h4>
         <div id="evapp-ticket-reminders-list">
             <?php if ( empty($items) ) : ?>
@@ -428,7 +544,7 @@ function eventosapp_ticket_reminders_render_metabox($post) {
         <h4>Filtros de destinatarios</h4>
         <p class="evapp-reminders-help">
             Las reglas <strong>No enviar</strong> tienen prioridad sobre las reglas <strong>Enviar</strong>. Si no creas reglas, el recordatorio se enviará a todos los tickets del evento que tengan un celular válido para WhatsApp.
-            Para modalidad usa <code>presencial</code> o <code>virtual</code>. Para canal de creación usa <code>manual</code>, <code>frontend</code>, <code>public</code>, <code>webhook</code> o <code>import</code>.
+            Para modalidad usa <code>presencial</code> o <code>virtual</code>. Para canal de creación usa <code>manual</code>, <code>frontend</code>, <code>public</code>, <code>webhook</code> o <code>import</code>. Para enviar solo a tickets sin envío aceptado por Meta usa el campo <code>WhatsApp enviado / no enviado</code>, operador <code>Es igual a</code> y valor <code>no_enviado</code>.
         </p>
 
         <div class="evapp-reminder-rules" id="evapp-ticket-reminder-rules-list">
@@ -1420,6 +1536,31 @@ function eventosapp_ticket_reminders_get_rule_field_value($ticket_id, $field) {
             return in_array('checked_in', $status, true) ? 'checked_in' : 'not_checked_in';
         }
         return (string)$status;
+    }
+
+    if ( $field === 'whatsapp_sent_status' ) {
+        if ( function_exists('eventosapp_whatsapp_get_send_tracking') ) {
+            $tracking = eventosapp_whatsapp_get_send_tracking($ticket_id, true);
+            $sent_status = is_array($tracking) && ! empty($tracking['sent_status']) ? sanitize_key((string)$tracking['sent_status']) : '';
+            return $sent_status !== '' ? $sent_status : 'no_enviado';
+        }
+
+        $sent_status = sanitize_key((string)get_post_meta($ticket_id, '_eventosapp_whatsapp_sent_status', true));
+        if ( $sent_status !== '' ) {
+            return $sent_status;
+        }
+
+        $first_sent = get_post_meta($ticket_id, '_eventosapp_whatsapp_first_sent_at', true);
+        $last_sent  = get_post_meta($ticket_id, '_eventosapp_whatsapp_last_sent_at', true);
+        return ($first_sent !== '' || $last_sent !== '') ? 'enviado' : 'no_enviado';
+    }
+
+    if ( $field === 'whatsapp_last_status' ) {
+        return sanitize_key((string)get_post_meta($ticket_id, '_eventosapp_whatsapp_last_status', true));
+    }
+
+    if ( $field === 'whatsapp_delivery_status' ) {
+        return sanitize_key((string)get_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_status', true));
     }
 
     if ( strpos($field, 'extra:') === 0 ) {
