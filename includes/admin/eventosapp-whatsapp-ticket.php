@@ -55,6 +55,7 @@ function eventosapp_whatsapp_default_settings() {
         'webhook_waba_id'        => '',
         'last_webhook_subscription_check' => [],
         'last_webhook_subscription_action' => [],
+        'last_webhook_endpoint_test' => [],
         'last_test_result'       => [],
         'message_intro'          => 'Hola {{nombre}}, tu inscripción para {{evento_nombre}} está confirmada.',
     ];
@@ -287,6 +288,9 @@ function eventosapp_whatsapp_get_settings() {
     if ( ! is_array($settings['last_webhook_subscription_action'] ?? null) ) {
         $settings['last_webhook_subscription_action'] = [];
     }
+    if ( ! is_array($settings['last_webhook_endpoint_test'] ?? null) ) {
+        $settings['last_webhook_endpoint_test'] = [];
+    }
 
     $available_accounts = eventosapp_whatsapp_get_phone_accounts($settings);
     $test_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['test_phone_number_id'] ?? '');
@@ -319,6 +323,66 @@ function eventosapp_whatsapp_get_effective_webhook_waba_id($settings = null) {
     }
 
     return $waba_id;
+}
+
+
+/**
+ * URLs públicas disponibles para recibir webhooks de WhatsApp.
+ *
+ * La URL recomendada evita /wp-admin/ para reducir bloqueos de seguridad,
+ * caché o reglas externas que a veces impiden que Meta entregue mensajes
+ * entrantes al endpoint admin-post.php. La URL antigua se conserva para
+ * compatibilidad con instalaciones que ya la tienen configurada.
+ */
+function eventosapp_whatsapp_get_webhook_urls() {
+    $public_query_url = add_query_arg('eventosapp_whatsapp_webhook', '1', home_url('/'));
+
+    return [
+        'recommended' => $public_query_url,
+        'public_query' => $public_query_url,
+        'admin_post' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook'),
+    ];
+}
+
+function eventosapp_whatsapp_get_recommended_webhook_url() {
+    $urls = eventosapp_whatsapp_get_webhook_urls();
+    return $urls['recommended'] ?? admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
+}
+
+/**
+ * Endpoint público alternativo para Meta.
+ *
+ * Permite configurar en Meta una URL sin /wp-admin/:
+ * https://tudominio.com/?eventosapp_whatsapp_webhook=1
+ */
+add_action('init', function() {
+    if ( ! isset($_GET['eventosapp_whatsapp_webhook']) ) {
+        return;
+    }
+    eventosapp_whatsapp_serve_webhook_request('public_query');
+}, 0);
+
+/**
+ * Registra un resumen técnico del intento de entrada del webhook antes de procesarlo.
+ */
+function eventosapp_whatsapp_store_webhook_transport_debug($transport, $raw = '', $extra = []) {
+    $debug = [
+        'received_at' => current_time('mysql'),
+        'transport' => sanitize_key((string) $transport),
+        'method' => isset($_SERVER['REQUEST_METHOD']) ? sanitize_text_field((string) $_SERVER['REQUEST_METHOD']) : '',
+        'content_type' => isset($_SERVER['CONTENT_TYPE']) ? sanitize_text_field((string) $_SERVER['CONTENT_TYPE']) : '',
+        'user_agent' => isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field((string) $_SERVER['HTTP_USER_AGENT']) : '',
+        'remote_addr' => isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field((string) $_SERVER['REMOTE_ADDR']) : '',
+        'raw_length' => strlen((string) $raw),
+        'raw_preview' => substr((string) $raw, 0, 250),
+        'query_keys' => array_keys($_GET),
+    ];
+
+    if ( is_array($extra) && ! empty($extra) ) {
+        $debug['extra'] = $extra;
+    }
+
+    update_option('eventosapp_whatsapp_last_webhook_transport_debug', eventosapp_whatsapp_sanitize_log_context($debug), false);
 }
 
 /**
@@ -2454,7 +2518,8 @@ function eventosapp_whatsapp_render_settings_page() {
 
     $settings = eventosapp_whatsapp_get_settings();
     $token_saved = ! empty($settings['access_token']);
-    $webhook_url = admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
+    $webhook_urls = function_exists('eventosapp_whatsapp_get_webhook_urls') ? eventosapp_whatsapp_get_webhook_urls() : ['recommended' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook'), 'admin_post' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook')];
+    $webhook_url = $webhook_urls['recommended'] ?? admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
     $last_test = isset($settings['last_test_result']) && is_array($settings['last_test_result']) ? $settings['last_test_result'] : [];
     ?>
     <div class="wrap eventosapp-whatsapp-settings">
@@ -2591,10 +2656,10 @@ function eventosapp_whatsapp_render_settings_page() {
                         </label>
                     </div>
 
-                    <label for="evapp_wa_webhook_url">Webhook de estados e inbox</label>
+                    <label for="evapp_wa_webhook_url">Webhook recomendado para Meta</label>
                     <div>
                         <input type="text" id="evapp_wa_webhook_url" value="<?php echo esc_attr($webhook_url); ?>" readonly onclick="this.select();">
-                        <p class="evapp-wa-help">Usa esta URL en Meta para recibir estados de entrega y mensajes entrantes. El inbox no usa cron: depende de que Meta envíe eventos POST al webhook.</p>
+                        <p class="evapp-wa-help">Configura esta URL en Meta como Callback URL. Evita <code>/wp-admin/</code> para reducir bloqueos de seguridad/caché. El inbox no usa cron: depende de que Meta envíe eventos POST al webhook.</p>
                     </div>
 
                     <label for="evapp_wa_webhook_verify_token">Token de verificación webhook</label>
@@ -2712,6 +2777,8 @@ function eventosapp_whatsapp_render_settings_page() {
         $last_inbox_debug = get_option('eventosapp_whatsapp_inbox_last_processed_message', []);
         $last_subscription_check = isset($settings['last_webhook_subscription_check']) && is_array($settings['last_webhook_subscription_check']) ? $settings['last_webhook_subscription_check'] : [];
         $last_subscription_action = isset($settings['last_webhook_subscription_action']) && is_array($settings['last_webhook_subscription_action']) ? $settings['last_webhook_subscription_action'] : [];
+        $last_endpoint_test = isset($settings['last_webhook_endpoint_test']) && is_array($settings['last_webhook_endpoint_test']) ? $settings['last_webhook_endpoint_test'] : [];
+        $last_transport_debug = get_option('eventosapp_whatsapp_last_webhook_transport_debug', []);
         ?>
         <div class="evapp-wa-card">
             <h2>Diagnóstico de webhook e Inbox WhatsApp</h2>
@@ -2720,13 +2787,16 @@ function eventosapp_whatsapp_render_settings_page() {
             </p>
             <table class="evapp-wa-status-table">
                 <tbody>
-                    <tr><th>URL webhook</th><td><span class="evapp-wa-code"><?php echo esc_html($webhook_url); ?></span></td></tr>
+                    <tr><th>URL recomendada para Meta</th><td><span class="evapp-wa-code"><?php echo esc_html($webhook_urls['recommended'] ?? $webhook_url); ?></span></td></tr>
+                    <tr><th>URL legacy admin-post</th><td><span class="evapp-wa-code"><?php echo esc_html($webhook_urls['admin_post'] ?? admin_url('admin-post.php?action=eventosapp_whatsapp_webhook')); ?></span><br><span class="evapp-wa-help">Solo mantenla si ya la tienes funcionando. Para nuevas pruebas usa la URL recomendada.</span></td></tr>
                     <tr><th>WABA efectivo</th><td><?php echo esc_html(eventosapp_whatsapp_get_effective_webhook_waba_id($settings) ?: 'Sin WABA ID configurado'); ?></td></tr>
+                    <tr><th>Último intento HTTP recibido</th><td><?php eventosapp_whatsapp_render_log_details(is_array($last_transport_debug) ? $last_transport_debug : []); ?></td></tr>
                     <tr><th>Último payload webhook recibido</th><td><?php echo esc_html($webhook_debug['received_at'] ?? 'Nunca registrado'); ?></td></tr>
                     <tr><th>Resumen último payload</th><td><?php eventosapp_whatsapp_render_log_details($webhook_debug['summary'] ?? []); ?></td></tr>
                     <tr><th>Último inbound detectado</th><td><?php eventosapp_whatsapp_render_log_details($last_inbound_debug ?: []); ?></td></tr>
                     <tr><th>Último inbox guardado</th><td><?php eventosapp_whatsapp_render_log_details($last_inbox_debug ?: []); ?></td></tr>
                     <tr><th>Teléfonos con inbound recibido</th><td><?php echo is_array($last_inbound_by_phone) ? esc_html((string) count($last_inbound_by_phone)) : '0'; ?></td></tr>
+                    <tr><th>Última prueba de endpoint público</th><td><?php eventosapp_whatsapp_render_log_details($last_endpoint_test ?: []); ?></td></tr>
                     <tr><th>Última revisión de suscripción</th><td><?php eventosapp_whatsapp_render_log_details($last_subscription_check ?: []); ?></td></tr>
                     <tr><th>Última acción de suscripción</th><td><?php eventosapp_whatsapp_render_log_details($last_subscription_action ?: []); ?></td></tr>
                 </tbody>
@@ -2744,6 +2814,11 @@ function eventosapp_whatsapp_render_settings_page() {
                     <input type="hidden" name="action" value="eventosapp_whatsapp_webhook_subscription_subscribe">
                     <input type="hidden" name="webhook_waba_id" value="<?php echo esc_attr(eventosapp_whatsapp_get_effective_webhook_waba_id($settings)); ?>">
                     <?php submit_button('Suscribir WABA al webhook', 'secondary', 'submit', false); ?>
+                </form>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                    <?php wp_nonce_field('eventosapp_whatsapp_webhook_endpoint_test', 'eventosapp_whatsapp_webhook_endpoint_test_nonce'); ?>
+                    <input type="hidden" name="action" value="eventosapp_whatsapp_webhook_endpoint_test">
+                    <?php submit_button('Probar endpoint webhook público', 'secondary', 'submit', false); ?>
                 </form>
                 <?php if ( function_exists('eventosapp_whatsapp_inbox_render_local_test_form') ) : ?>
                     <?php eventosapp_whatsapp_inbox_render_local_test_form('settings'); ?>
@@ -2789,6 +2864,143 @@ function eventosapp_whatsapp_render_settings_page() {
     </div>
     <?php
 }
+
+
+/**
+ * Construye un payload inbound similar al que envía Meta para probar el endpoint público completo.
+ */
+function eventosapp_whatsapp_build_webhook_endpoint_test_payload($settings = null) {
+    $settings = is_array($settings) ? wp_parse_args($settings, eventosapp_whatsapp_default_settings()) : eventosapp_whatsapp_get_settings();
+    $from_phone = function_exists('eventosapp_whatsapp_normalize_phone')
+        ? eventosapp_whatsapp_normalize_phone($settings['test_phone'] ?? '', $settings['default_country_code'] ?? '57')
+        : preg_replace('/\D+/', '', (string)($settings['test_phone'] ?? ''));
+
+    if ( $from_phone === '' ) {
+        $from_phone = '573000000000';
+    }
+
+    $sender_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['test_phone_number_id'] ?? '');
+    if ( $sender_phone_number_id === '' ) {
+        $sender_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['phone_number_id'] ?? '');
+    }
+
+    $now = time();
+    $message_id = 'endpoint_test_inbound_' . $now . '_' . wp_rand(1000, 9999);
+
+    return [
+        'object' => 'whatsapp_business_account',
+        'entry' => [
+            [
+                'id' => eventosapp_whatsapp_get_effective_webhook_waba_id($settings),
+                'changes' => [
+                    [
+                        'field' => 'messages',
+                        'value' => [
+                            'messaging_product' => 'whatsapp',
+                            'metadata' => [
+                                'display_phone_number' => $settings['phone_number_label'] ?? 'EventosApp',
+                                'phone_number_id' => $sender_phone_number_id,
+                            ],
+                            'contacts' => [
+                                [
+                                    'profile' => ['name' => 'Contacto prueba endpoint'],
+                                    'wa_id' => $from_phone,
+                                ],
+                            ],
+                            'messages' => [
+                                [
+                                    'from' => $from_phone,
+                                    'id' => $message_id,
+                                    'timestamp' => (string) $now,
+                                    'type' => 'text',
+                                    'text' => [
+                                        'body' => 'Mensaje de prueba enviado por HTTP al webhook público de EventosApp.',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ];
+}
+
+function eventosapp_whatsapp_run_webhook_endpoint_test($url = '') {
+    $settings = eventosapp_whatsapp_get_settings();
+    $urls = eventosapp_whatsapp_get_webhook_urls();
+    $url = esc_url_raw($url ?: ($urls['recommended'] ?? ''));
+
+    if ( $url === '' ) {
+        return [
+            'ok' => false,
+            'tested_at' => current_time('mysql'),
+            'message' => 'No hay URL pública de webhook para probar.',
+        ];
+    }
+
+    $payload = eventosapp_whatsapp_build_webhook_endpoint_test_payload($settings);
+    $message_id = $payload['entry'][0]['changes'][0]['value']['messages'][0]['id'] ?? '';
+
+    $response = wp_remote_post($url, [
+        'timeout' => min(60, max(10, absint($settings['request_timeout'] ?? 20))),
+        'redirection' => 3,
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'User-Agent' => 'EventosApp-Webhook-Self-Test',
+        ],
+        'body' => wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+
+    if ( is_wp_error($response) ) {
+        return [
+            'ok' => false,
+            'tested_at' => current_time('mysql'),
+            'url' => $url,
+            'message_id' => $message_id,
+            'message' => $response->get_error_message(),
+            'stage' => 'wp_remote_post',
+        ];
+    }
+
+    $code = (int) wp_remote_retrieve_response_code($response);
+    $body = (string) wp_remote_retrieve_body($response);
+    $ok = $code >= 200 && $code < 300;
+
+    return [
+        'ok' => $ok,
+        'tested_at' => current_time('mysql'),
+        'url' => $url,
+        'http_code' => $code,
+        'message_id' => $message_id,
+        'message' => $ok ? 'El endpoint público respondió correctamente. Si se creó una conversación de prueba, WordPress recibe POST por esta URL.' : 'El endpoint público respondió con error HTTP ' . $code,
+        'response_preview' => substr($body, 0, 500),
+    ];
+}
+
+add_action('admin_post_eventosapp_whatsapp_webhook_endpoint_test', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('Permisos insuficientes.');
+    }
+
+    if ( ! isset($_POST['eventosapp_whatsapp_webhook_endpoint_test_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_webhook_endpoint_test_nonce'], 'eventosapp_whatsapp_webhook_endpoint_test') ) {
+        wp_die('Nonce inválido.');
+    }
+
+    $result = eventosapp_whatsapp_run_webhook_endpoint_test();
+    $settings = eventosapp_whatsapp_get_settings();
+    $settings['last_webhook_endpoint_test'] = eventosapp_whatsapp_sanitize_log_context($result);
+    update_option(EVENTOSAPP_WHATSAPP_OPTION, $settings, false);
+
+    eventosapp_whatsapp_add_activity_log('webhook_endpoint_prueba_publica', $result);
+
+    wp_safe_redirect(add_query_arg([
+        'page' => 'eventosapp_whatsapp_tickets',
+        'evapp_whatsapp_webhook_diag' => '1',
+        'evapp_whatsapp_msg' => rawurlencode($result['message'] ?? 'Prueba de endpoint ejecutada.'),
+    ], admin_url('admin.php')));
+    exit;
+});
 
 /**
  * Guarda settings globales.
@@ -2860,6 +3072,7 @@ add_action('admin_post_eventosapp_whatsapp_save_settings', function() {
         'webhook_waba_id'        => $webhook_waba_id,
         'last_webhook_subscription_check' => isset($current['last_webhook_subscription_check']) && is_array($current['last_webhook_subscription_check']) ? $current['last_webhook_subscription_check'] : [],
         'last_webhook_subscription_action' => isset($current['last_webhook_subscription_action']) && is_array($current['last_webhook_subscription_action']) ? $current['last_webhook_subscription_action'] : [],
+        'last_webhook_endpoint_test' => isset($current['last_webhook_endpoint_test']) && is_array($current['last_webhook_endpoint_test']) ? $current['last_webhook_endpoint_test'] : [],
         'last_test_result'       => isset($current['last_test_result']) && is_array($current['last_test_result']) ? $current['last_test_result'] : [],
         'message_intro'          => isset($_POST['message_intro']) ? sanitize_textarea_field(wp_unslash($_POST['message_intro'])) : eventosapp_whatsapp_default_settings()['message_intro'],
     ];
@@ -6086,12 +6299,35 @@ add_action('admin_post_nopriv_eventosapp_whatsapp_webhook', 'eventosapp_whatsapp
 add_action('admin_post_eventosapp_whatsapp_webhook', 'eventosapp_whatsapp_handle_webhook_request');
 
 function eventosapp_whatsapp_handle_webhook_request() {
+    eventosapp_whatsapp_serve_webhook_request('admin_post');
+}
+
+/**
+ * Atiende cualquier endpoint de webhook disponible.
+ *
+ * $transport permite distinguir si Meta entró por admin-post.php o por la URL
+ * pública recomendada. Ambos caminos terminan en el mismo procesador, por lo
+ * que no cambia la lógica de estados ni de envíos existente.
+ */
+function eventosapp_whatsapp_serve_webhook_request($transport = 'admin_post') {
+    nocache_headers();
     $settings = eventosapp_whatsapp_get_settings();
+    eventosapp_whatsapp_store_webhook_transport_debug($transport, '', [
+        'stage' => 'request_start',
+    ]);
 
     if ( isset($_GET['hub_mode']) || isset($_GET['hub.mode']) ) {
         $mode = isset($_GET['hub_mode']) ? sanitize_text_field(wp_unslash($_GET['hub_mode'])) : sanitize_text_field(wp_unslash($_GET['hub.mode']));
         $token = isset($_GET['hub_verify_token']) ? sanitize_text_field(wp_unslash($_GET['hub_verify_token'])) : (isset($_GET['hub.verify_token']) ? sanitize_text_field(wp_unslash($_GET['hub.verify_token'])) : '');
         $challenge = isset($_GET['hub_challenge']) ? sanitize_text_field(wp_unslash($_GET['hub_challenge'])) : (isset($_GET['hub.challenge']) ? sanitize_text_field(wp_unslash($_GET['hub.challenge'])) : '');
+
+        eventosapp_whatsapp_store_webhook_transport_debug($transport, '', [
+            'stage' => 'verification',
+            'mode' => $mode,
+            'token_present' => $token !== '',
+            'challenge_present' => $challenge !== '',
+            'token_matches' => ( ! empty($settings['webhook_verify_token']) && hash_equals((string)$settings['webhook_verify_token'], (string)$token) ) ? 1 : 0,
+        ]);
 
         if ( $mode === 'subscribe' && $challenge !== '' && ! empty($settings['webhook_verify_token']) && hash_equals((string)$settings['webhook_verify_token'], (string)$token) ) {
             status_header(200);
@@ -6101,6 +6337,7 @@ function eventosapp_whatsapp_handle_webhook_request() {
         }
 
         eventosapp_whatsapp_log('Webhook verificación rechazada', [
+            'transport' => $transport,
             'mode' => $mode,
             'token_present' => $token !== '',
             'challenge_present' => $challenge !== '',
@@ -6112,27 +6349,37 @@ function eventosapp_whatsapp_handle_webhook_request() {
     }
 
     $raw = file_get_contents('php://input');
+    eventosapp_whatsapp_store_webhook_transport_debug($transport, (string) $raw, [
+        'stage' => 'payload_received',
+    ]);
+
     $payload = json_decode((string)$raw, true);
 
     if ( ! is_array($payload) ) {
+        eventosapp_whatsapp_store_webhook_transport_debug($transport, (string) $raw, [
+            'stage' => 'invalid_json',
+            'json_error' => function_exists('json_last_error_msg') ? json_last_error_msg() : 'json_error',
+        ]);
         eventosapp_whatsapp_log('Webhook recibido con JSON inválido', [
+            'transport' => $transport,
             'raw' => substr((string)$raw, 0, 500),
         ]);
         status_header(400);
-        wp_send_json(['ok' => false, 'message' => 'JSON inválido']);
+        wp_send_json(['ok' => false, 'message' => 'JSON inválido', 'transport' => $transport]);
     }
 
-    eventosapp_whatsapp_process_webhook_payload($payload);
+    eventosapp_whatsapp_process_webhook_payload($payload, $transport);
 
     status_header(200);
-    wp_send_json(['ok' => true]);
+    wp_send_json(['ok' => true, 'transport' => $transport]);
 }
 
-function eventosapp_whatsapp_process_webhook_payload($payload) {
+function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unknown') {
     $entries = isset($payload['entry']) && is_array($payload['entry']) ? $payload['entry'] : [];
 
     $summary = [
         'object' => $payload['object'] ?? '',
+        'transport' => sanitize_key((string) $transport),
         'entries' => count($entries),
         'changes' => 0,
         'statuses' => 0,
@@ -6172,6 +6419,7 @@ function eventosapp_whatsapp_process_webhook_payload($payload) {
     update_option('eventosapp_whatsapp_last_webhook_debug', [
         'received_at' => current_time('mysql'),
         'summary' => eventosapp_whatsapp_sanitize_log_context($summary),
+        'transport_debug' => get_option('eventosapp_whatsapp_last_webhook_transport_debug', []),
     ], false);
 
     eventosapp_whatsapp_add_activity_log('webhook_payload_recibido', $summary);
