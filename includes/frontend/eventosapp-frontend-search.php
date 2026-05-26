@@ -149,7 +149,8 @@ jQuery(function($){
       $in = $('#evfs-input'),
       $out= $('#evfs-results'),
       eventId = EvFrontSearch.event_id,
-      timer;
+      timer,
+      pendingSearch = null;
 
   function escHtml(value){
     if(value === null || typeof value === 'undefined') return '';
@@ -238,9 +239,15 @@ jQuery(function($){
     clearTimeout(timer);
     var q = $in.val().trim();
     var searchType = getSearchType();
-    if(!q || q.length < 2){ $out.empty(); return; }
+    var minLen = (searchType === 'all' || searchType === 'name' || searchType === 'email') ? 3 : 2;
+    if(!q || q.length < minLen){
+      if(pendingSearch && pendingSearch.readyState !== 4){ pendingSearch.abort(); }
+      $out.empty();
+      return;
+    }
     timer = setTimeout(function(){
-      $.getJSON(EvFrontSearch.ajax_url, {
+      if(pendingSearch && pendingSearch.readyState !== 4){ pendingSearch.abort(); }
+      pendingSearch = $.getJSON(EvFrontSearch.ajax_url, {
         action: 'eventosapp_front_search',
         security: EvFrontSearch.search_nonce,
         q: q,
@@ -249,8 +256,10 @@ jQuery(function($){
       }).done(function(resp){
         if(resp && resp.success){ render(resp.data||[]); }
         else { render([]); }
-      }).fail(function(){ render([]); });
-    }, 300);
+      }).fail(function(xhr, status){
+        if(status !== 'abort'){ render([]); }
+      });
+    }, 350);
   }
 
   $in.on('input', runSearch);
@@ -433,7 +442,7 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $event_id = (int) eventosapp_get_active_event();
     }
 
-    if ($q === '' || mb_strlen($q) < 2) wp_send_json_success([]);
+    if ($q === '') wp_send_json_success([]);
 
     if ( ! function_exists('eventosapp_normalize_text') ) {
         function eventosapp_normalize_text($s) {
@@ -503,7 +512,8 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $search_value = $q_norm;
     }
 
-    if ( $search_value === '' || mb_strlen($search_value) < 2 ) {
+    $min_len = in_array($search_type, ['all', 'name', 'email'], true) ? 3 : 2;
+    if ( $search_value === '' || mb_strlen($search_value) < $min_len ) {
         wp_send_json_success([]);
     }
 
@@ -517,11 +527,11 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $params = [];
 
         if ( ! empty($allowed_event_ids) ) {
-            $placeholders = implode(',', array_fill(0, count($allowed_event_ids), '%d'));
-            $join_event = " INNER JOIN {$wpdb->postmeta} evm ON evm.post_id = p.ID AND evm.meta_key = %s AND CAST(evm.meta_value AS UNSIGNED) IN ($placeholders)";
+            $placeholders = implode(',', array_fill(0, count($allowed_event_ids), '%s'));
+            $join_event = " INNER JOIN {$wpdb->postmeta} evm ON evm.post_id = p.ID AND evm.meta_key = %s AND evm.meta_value IN ($placeholders)";
             $params[] = '_eventosapp_ticket_evento_id';
             foreach ( $allowed_event_ids as $aid ) {
-                $params[] = (int) $aid;
+                $params[] = (string) absint($aid);
             }
         }
 
@@ -551,10 +561,18 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         return array_map('intval', (array) $ids);
     };
 
-    // 1) Consulta principal sobre índice segmentado.
-    $tickets = $find_ticket_ids([ $search_meta_map[$search_type] ], $like, 30);
+    $cache_key = 'evfs_ids_' . md5(wp_json_encode([
+        'q'      => $search_value,
+        'type'   => $search_type,
+        'events' => $allowed_event_ids,
+    ]));
+    $tickets = wp_cache_get($cache_key, 'eventosapp_search');
 
-    // 2) Fallback para tickets antiguos que aún no hayan sido reindexados con los nuevos metadatos.
+    if ( ! is_array($tickets) ) {
+        // 1) Consulta principal sobre índice segmentado.
+        $tickets = $find_ticket_ids([ $search_meta_map[$search_type] ], $like, 30);
+
+        // 2) Fallback para tickets antiguos que aún no hayan sido reindexados con los nuevos metadatos.
     if ( empty($tickets) && isset($raw_meta_fallback_map[$search_type]) ) {
         $fallback_value = ($search_type === 'cc' || $search_type === 'phone') ? ($q_digits !== '' ? $q_digits : $q) : $q_norm;
         $fallback_like  = '%' . $wpdb->esc_like($fallback_value) . '%';
@@ -562,8 +580,16 @@ add_action('wp_ajax_eventosapp_front_search', function(){
     }
 
     // 3) Último fallback compatible: índice amplio legado, solo si no se pidió "todos" y no hubo resultados.
-    if ( empty($tickets) && $search_type !== 'all' ) {
-        $tickets = $find_ticket_ids([ '_evapp_search_blob' ], '%' . $wpdb->esc_like($q_norm) . '%', 30);
+        if ( empty($tickets) && $search_type !== 'all' ) {
+            $tickets = $find_ticket_ids([ '_evapp_search_blob' ], '%' . $wpdb->esc_like($q_norm) . '%', 30);
+        }
+
+        wp_cache_set($cache_key, array_map('intval', (array) $tickets), 'eventosapp_search', 30);
+    }
+
+    $tickets = array_map('intval', (array) $tickets);
+    if ( ! empty($tickets) ) {
+        update_meta_cache('post', $tickets);
     }
 
     $out = [];
