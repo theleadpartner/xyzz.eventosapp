@@ -440,6 +440,7 @@ function eventosapp_whatsapp_channel_label($channel) {
         'ticket'       => 'Ticket individual',
         'masivo'       => 'Envío masivo',
         'recordatorio' => 'Recordatorio',
+        'inbox'        => 'Inbox WhatsApp',
         'webhook'      => 'Webhook Meta',
         'prueba'       => 'Prueba rápida',
         'sistema'      => 'Sistema',
@@ -453,6 +454,9 @@ function eventosapp_whatsapp_log_channel_from_context($context, $status = '') {
 
     if ( strpos($status, 'webhook_') === 0 || $context === 'webhook_status' ) {
         return 'webhook';
+    }
+    if ( strpos($context, 'inbox') !== false || strpos($status, 'mensaje_entrante') !== false || strpos($status, 'respuesta_') === 0 ) {
+        return 'inbox';
     }
     if ( in_array($context, ['ticket_reminder', 'reminder'], true) || strpos($context, 'reminder') !== false ) {
         return 'recordatorio';
@@ -545,6 +549,7 @@ function eventosapp_whatsapp_get_central_log_channels() {
         'ticket'       => 'Ticket individual',
         'masivo'       => 'Envío masivo',
         'recordatorio' => 'Recordatorio',
+        'inbox'        => 'Inbox WhatsApp',
         'webhook'      => 'Webhook Meta',
         'prueba'       => 'Prueba rápida',
         'sistema'      => 'Sistema',
@@ -5901,6 +5906,13 @@ function eventosapp_whatsapp_process_webhook_payload($payload) {
                 foreach ( $value['messages'] as $message ) {
                     if ( is_array($message) ) {
                         eventosapp_whatsapp_process_webhook_inbound_message($message);
+
+                        /**
+                         * Permite que módulos independientes, como el Inbox de WhatsApp,
+                         * procesen mensajes entrantes con todo el contexto del webhook
+                         * sin modificar la lógica existente de envíos ni estados.
+                         */
+                        do_action('eventosapp_whatsapp_webhook_inbound_message_received', $message, $value, $entry, $change, $payload);
                     }
                 }
             }
