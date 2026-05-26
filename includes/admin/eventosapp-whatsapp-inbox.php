@@ -986,15 +986,18 @@ function eventosapp_whatsapp_inbox_render_styles() {
 }
 
 function eventosapp_whatsapp_inbox_render_diagnostics_card() {
-    $webhook_url = admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
+    $webhook_urls = function_exists('eventosapp_whatsapp_get_webhook_urls') ? eventosapp_whatsapp_get_webhook_urls() : ['recommended' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook'), 'admin_post' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook')];
+    $webhook_url = $webhook_urls['recommended'] ?? admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
     $webhook_debug = get_option('eventosapp_whatsapp_last_webhook_debug', []);
     $last_inbound_debug = get_option('eventosapp_whatsapp_last_inbound_debug', []);
     $last_inbox_debug = get_option('eventosapp_whatsapp_inbox_last_processed_message', []);
     $last_message = eventosapp_whatsapp_inbox_get_last_message_debug();
     $last_inbound_by_phone = get_option('eventosapp_whatsapp_last_inbound_by_phone', []);
+    $last_transport_debug = get_option('eventosapp_whatsapp_last_webhook_transport_debug', []);
     $table = eventosapp_whatsapp_inbox_messages_table_name();
     $table_exists = eventosapp_whatsapp_inbox_table_exists($table);
     $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
+    $last_endpoint_test = isset($settings['last_webhook_endpoint_test']) && is_array($settings['last_webhook_endpoint_test']) ? $settings['last_webhook_endpoint_test'] : [];
     $effective_waba = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : '';
     ?>
     <div class="evapp-card">
@@ -1004,10 +1007,13 @@ function eventosapp_whatsapp_inbox_render_diagnostics_card() {
         </p>
         <table class="evapp-wa-inbox-table">
             <tbody>
-                <tr><th>Webhook configurado</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_url); ?></span></td></tr>
+                <tr><th>Webhook recomendado para Meta</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_url); ?></span></td></tr>
+                <tr><th>Webhook legacy admin-post</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_urls['admin_post'] ?? admin_url('admin-post.php?action=eventosapp_whatsapp_webhook')); ?></span></td></tr>
                 <tr><th>WABA efectivo</th><td><?php echo esc_html($effective_waba ?: 'Sin WABA ID configurado'); ?></td></tr>
                 <tr><th>Tabla del inbox</th><td><?php echo $table_exists ? 'Existe: ' . esc_html($table) : 'No existe todavía: ' . esc_html($table); ?></td></tr>
                 <tr><th>Conversaciones / mensajes</th><td><?php echo esc_html((string) eventosapp_whatsapp_inbox_count_conversations()); ?> conversaciones / <?php echo esc_html((string) eventosapp_whatsapp_inbox_count_messages()); ?> mensajes</td></tr>
+                <tr><th>Último intento HTTP recibido</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details(is_array($last_transport_debug) ? $last_transport_debug : []); } else { echo esc_html(wp_json_encode($last_transport_debug)); } ?></td></tr>
+                <tr><th>Última prueba de endpoint público</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_endpoint_test ?: []); } else { echo esc_html(wp_json_encode($last_endpoint_test)); } ?></td></tr>
                 <tr><th>Último payload webhook</th><td><?php echo esc_html($webhook_debug['received_at'] ?? 'Nunca registrado'); ?><?php if ( ! empty($webhook_debug['summary']) && function_exists('eventosapp_whatsapp_render_log_details') ) : ?><br><?php eventosapp_whatsapp_render_log_details($webhook_debug['summary']); ?><?php endif; ?></td></tr>
                 <tr><th>Último mensaje inbound detectado</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_inbound_debug ?: []); } else { echo esc_html(wp_json_encode($last_inbound_debug)); } ?></td></tr>
                 <tr><th>Último mensaje guardado por inbox</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_inbox_debug ?: []); } else { echo esc_html(wp_json_encode($last_inbox_debug)); } ?></td></tr>
@@ -1017,6 +1023,13 @@ function eventosapp_whatsapp_inbox_render_diagnostics_card() {
         </table>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
             <?php eventosapp_whatsapp_inbox_render_local_test_form('inbox'); ?>
+            <?php if ( function_exists('eventosapp_whatsapp_run_webhook_endpoint_test') ) : ?>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin:0;">
+                    <?php wp_nonce_field('eventosapp_whatsapp_webhook_endpoint_test', 'eventosapp_whatsapp_webhook_endpoint_test_nonce'); ?>
+                    <input type="hidden" name="action" value="eventosapp_whatsapp_webhook_endpoint_test">
+                    <?php submit_button('Probar endpoint público', 'secondary', 'submit', false); ?>
+                </form>
+            <?php endif; ?>
             <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_tickets')); ?>">Abrir diagnóstico API / WABA</a>
         </div>
     </div>
