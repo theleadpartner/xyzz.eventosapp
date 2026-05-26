@@ -1015,7 +1015,10 @@ add_action('wp_ajax_eventosapp_email_masivo_process_batch', function(){
     }
 
     $ticket_ids = $segment['ticket_ids'] ?? [];
-    $batch = array_slice($ticket_ids, $offset, $batch_size);
+    $batch = array_values(array_filter(array_map('absint', array_slice($ticket_ids, $offset, $batch_size))));
+    if ( ! empty($batch) ) {
+        update_meta_cache('post', $batch);
+    }
     
     $sent = 0;
     $errors = 0;
@@ -1259,7 +1262,10 @@ function eventosapp_email_masivo_get_filtered_tickets($filters) {
     }
 
     $query = new WP_Query($args);
-    $ticket_ids = $query->posts;
+    $ticket_ids = array_map('absint', (array) $query->posts);
+    if ( ! empty($ticket_ids) ) {
+        update_meta_cache('post', $ticket_ids);
+    }
 
     // Filtro adicional por fecha específica del evento
     if (!empty($filters['event_date'])) {
