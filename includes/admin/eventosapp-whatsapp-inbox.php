@@ -193,6 +193,633 @@ function eventosapp_whatsapp_inbox_truncate($text, $length = 140) {
     return strlen($text) > $length ? substr($text, 0, $length) . '…' : $text;
 }
 
+
+/**
+ * Metabox y motor de respuestas automáticas del Inbox WhatsApp por evento.
+ *
+ * Estas respuestas solo se evalúan cuando el mensaje entrante pudo asociarse a
+ * un ticket y a un evento. Así se evita responder conversaciones sueltas,
+ * pruebas locales o mensajes que no provengan de un ticket enviado por EventosApp.
+ */
+function eventosapp_whatsapp_inbox_autoreply_default_rule() {
+    return [
+        'enabled'          => '1',
+        'name'             => 'Respuesta automática',
+        'trigger_type'     => 'all',
+        'keywords'         => '',
+        'frequency'        => 'once_conversation',
+        'cooldown_minutes' => 60,
+        'message'          => '',
+    ];
+}
+
+function eventosapp_whatsapp_inbox_autoreply_frequency_options() {
+    return [
+        'once_conversation' => 'Una sola vez por conversación',
+        'cooldown'          => 'Repetir respetando intervalo mínimo',
+    ];
+}
+
+function eventosapp_whatsapp_inbox_autoreply_trigger_options() {
+    return [
+        'all'      => 'Cualquier mensaje entrante',
+        'contains' => 'Solo si el mensaje contiene palabra o frase',
+    ];
+}
+
+function eventosapp_whatsapp_inbox_normalize_autoreplies($rules) {
+    if ( ! is_array($rules) ) {
+        return [];
+    }
+
+    $clean = [];
+    foreach ( $rules as $rule ) {
+        if ( ! is_array($rule) ) {
+            continue;
+        }
+
+        $trigger_type = isset($rule['trigger_type']) ? sanitize_key(wp_unslash($rule['trigger_type'])) : 'all';
+        if ( ! array_key_exists($trigger_type, eventosapp_whatsapp_inbox_autoreply_trigger_options()) ) {
+            $trigger_type = 'all';
+        }
+
+        $frequency = isset($rule['frequency']) ? sanitize_key(wp_unslash($rule['frequency'])) : 'once_conversation';
+        if ( ! array_key_exists($frequency, eventosapp_whatsapp_inbox_autoreply_frequency_options()) ) {
+            $frequency = 'once_conversation';
+        }
+
+        $message = isset($rule['message']) ? sanitize_textarea_field(wp_unslash($rule['message'])) : '';
+        $message = trim($message);
+        if ( $message === '' ) {
+            continue;
+        }
+
+        $cooldown = isset($rule['cooldown_minutes']) ? absint($rule['cooldown_minutes']) : 60;
+        if ( $cooldown < 1 ) {
+            $cooldown = 1;
+        }
+        if ( $cooldown > 1440 ) {
+            $cooldown = 1440;
+        }
+
+        $clean[] = [
+            'enabled'          => isset($rule['enabled']) ? '1' : '0',
+            'name'             => isset($rule['name']) ? sanitize_text_field(wp_unslash($rule['name'])) : '',
+            'trigger_type'     => $trigger_type,
+            'keywords'         => isset($rule['keywords']) ? sanitize_textarea_field(wp_unslash($rule['keywords'])) : '',
+            'frequency'        => $frequency,
+            'cooldown_minutes' => $cooldown,
+            'message'          => $message,
+        ];
+    }
+
+    return $clean;
+}
+
+function eventosapp_whatsapp_inbox_get_event_autoreplies($event_id) {
+    $event_id = absint($event_id);
+    if ( ! $event_id ) {
+        return [];
+    }
+    $rules = get_post_meta($event_id, '_eventosapp_whatsapp_inbox_autoreplies', true);
+    return eventosapp_whatsapp_inbox_normalize_autoreplies($rules);
+}
+
+function eventosapp_whatsapp_inbox_split_autoreply_keywords($keywords) {
+    $keywords = (string) $keywords;
+    if ( trim($keywords) === '' ) {
+        return [];
+    }
+
+    $parts = preg_split('/[\r\n,]+/', $keywords);
+    $clean = [];
+    foreach ( (array) $parts as $part ) {
+        $part = trim(sanitize_text_field((string) $part));
+        if ( $part !== '' ) {
+            $clean[] = $part;
+        }
+    }
+    return array_values(array_unique($clean));
+}
+
+function eventosapp_whatsapp_inbox_lower($text) {
+    $text = (string) $text;
+    return function_exists('mb_strtolower') ? mb_strtolower($text, 'UTF-8') : strtolower($text);
+}
+
+function eventosapp_whatsapp_inbox_autoreply_message_matches_rule($rule, $message_body) {
+    $rule = wp_parse_args((array) $rule, eventosapp_whatsapp_inbox_autoreply_default_rule());
+    if ( $rule['enabled'] !== '1' ) {
+        return false;
+    }
+
+    $trigger_type = sanitize_key((string) $rule['trigger_type']);
+    if ( $trigger_type === 'all' ) {
+        return true;
+    }
+
+    if ( $trigger_type === 'contains' ) {
+        $body = eventosapp_whatsapp_inbox_lower(wp_strip_all_tags((string) $message_body));
+        if ( $body === '' ) {
+            return false;
+        }
+
+        foreach ( eventosapp_whatsapp_inbox_split_autoreply_keywords($rule['keywords'] ?? '') as $keyword ) {
+            $needle = eventosapp_whatsapp_inbox_lower($keyword);
+            if ( $needle !== '' && strpos($body, $needle) !== false ) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function eventosapp_whatsapp_inbox_autoreply_log_key($rule_index) {
+    return 'rule_' . absint($rule_index);
+}
+
+function eventosapp_whatsapp_inbox_autoreply_can_send($conversation_id, $rule_index, $rule) {
+    $conversation_id = absint($conversation_id);
+    if ( ! $conversation_id ) {
+        return false;
+    }
+
+    $rule = wp_parse_args((array) $rule, eventosapp_whatsapp_inbox_autoreply_default_rule());
+    $frequency = sanitize_key((string) $rule['frequency']);
+    $log = get_post_meta($conversation_id, '_evapp_wa_inbox_autoreply_log', true);
+    if ( ! is_array($log) ) {
+        $log = [];
+    }
+
+    $key = eventosapp_whatsapp_inbox_autoreply_log_key($rule_index);
+    $last_at = ! empty($log[$key]['last_at']) ? strtotime((string) $log[$key]['last_at']) : 0;
+
+    if ( $frequency === 'once_conversation' && $last_at > 0 ) {
+        return false;
+    }
+
+    if ( $frequency === 'cooldown' && $last_at > 0 ) {
+        $cooldown = max(1, absint($rule['cooldown_minutes'] ?? 60));
+        if ( (current_time('timestamp') - $last_at) < ($cooldown * MINUTE_IN_SECONDS) ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function eventosapp_whatsapp_inbox_autoreply_register_attempt($conversation_id, $rule_index, $rule, $ok, $message_id = '', $result_message = '') {
+    $conversation_id = absint($conversation_id);
+    if ( ! $conversation_id ) {
+        return;
+    }
+
+    $log = get_post_meta($conversation_id, '_evapp_wa_inbox_autoreply_log', true);
+    if ( ! is_array($log) ) {
+        $log = [];
+    }
+
+    $key = eventosapp_whatsapp_inbox_autoreply_log_key($rule_index);
+    $current = isset($log[$key]) && is_array($log[$key]) ? $log[$key] : [];
+    $attempts = absint($current['attempts'] ?? 0) + 1;
+
+    $log[$key] = [
+        'rule_index'     => absint($rule_index),
+        'rule_name'      => sanitize_text_field((string)($rule['name'] ?? '')),
+        'last_at'        => current_time('mysql'),
+        'last_ok'        => ! empty($ok) ? '1' : '0',
+        'last_message_id'=> sanitize_text_field((string) $message_id),
+        'last_result'    => sanitize_text_field((string) $result_message),
+        'attempts'       => $attempts,
+    ];
+
+    if ( count($log) > 25 ) {
+        $log = array_slice($log, -25, null, true);
+    }
+
+    update_post_meta($conversation_id, '_evapp_wa_inbox_autoreply_log', $log);
+}
+
+function eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, $key) {
+    $ticket_id = absint($ticket_id);
+    if ( ! $ticket_id ) {
+        return '';
+    }
+
+    $map = [
+        'nombre'    => '_eventosapp_asistente_nombre',
+        'apellido'  => '_eventosapp_asistente_apellido',
+        'cedula'    => '_eventosapp_asistente_cc',
+        'correo'    => '_eventosapp_asistente_email',
+        'email'     => '_eventosapp_asistente_email',
+        'telefono'  => '_eventosapp_asistente_tel',
+        'celular'   => '_eventosapp_asistente_tel',
+        'empresa'   => '_eventosapp_asistente_empresa',
+        'cargo'     => '_eventosapp_asistente_cargo',
+        'ciudad'    => '_eventosapp_asistente_ciudad',
+        'pais'      => '_eventosapp_asistente_pais',
+        'localidad' => '_eventosapp_asistente_localidad',
+    ];
+
+    $key = sanitize_key((string) $key);
+    if ( isset($map[$key]) ) {
+        return get_post_meta($ticket_id, $map[$key], true);
+    }
+
+    return '';
+}
+
+function eventosapp_whatsapp_inbox_autoreply_render_message($message, $context) {
+    $context = is_array($context) ? $context : [];
+    $ticket_id = absint($context['ticket_id'] ?? 0);
+    $event_id = absint($context['event_id'] ?? 0);
+
+    $nombre = trim((string) eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'nombre'));
+    $apellido = trim((string) eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'apellido'));
+    $nombre_completo = trim($nombre . ' ' . $apellido);
+
+    $replacements = [
+        '{{nombre}}'           => $nombre,
+        '{{apellido}}'         => $apellido,
+        '{{nombre_completo}}'  => $nombre_completo,
+        '{{evento_nombre}}'    => $event_id ? get_the_title($event_id) : '',
+        '{{ticket_id}}'        => $ticket_id ? (string) $ticket_id : '',
+        '{{cedula}}'           => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'cedula'),
+        '{{correo}}'           => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'correo'),
+        '{{email}}'            => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'email'),
+        '{{telefono}}'         => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'telefono'),
+        '{{celular}}'          => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'celular'),
+        '{{empresa}}'          => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'empresa'),
+        '{{cargo}}'            => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'cargo'),
+        '{{ciudad}}'           => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'ciudad'),
+        '{{pais}}'             => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'pais'),
+        '{{localidad}}'        => eventosapp_whatsapp_inbox_autoreply_get_ticket_value($ticket_id, 'localidad'),
+        '{{mensaje_recibido}}' => sanitize_textarea_field((string)($context['message_body'] ?? '')),
+        '{{fecha}}'            => date_i18n(get_option('date_format'), current_time('timestamp')),
+        '{{hora}}'             => date_i18n(get_option('time_format'), current_time('timestamp')),
+    ];
+
+    $message = strtr((string) $message, $replacements);
+    return trim(sanitize_textarea_field($message));
+}
+
+add_action('add_meta_boxes', function() {
+    foreach ( ['eventosapp_event', 'eventosapp_events'] as $post_type ) {
+        add_meta_box(
+            'eventosapp_whatsapp_inbox_autoreplies',
+            'WhatsApp Inbox - Respuestas Automáticas',
+            'eventosapp_whatsapp_inbox_render_event_autoreplies_metabox',
+            $post_type,
+            'normal',
+            'default'
+        );
+    }
+}, 30);
+
+function eventosapp_whatsapp_inbox_render_event_autoreplies_metabox($post) {
+    $enabled = get_post_meta($post->ID, '_eventosapp_whatsapp_inbox_autoreply_enabled', true);
+    $rules = eventosapp_whatsapp_inbox_get_event_autoreplies($post->ID);
+    $trigger_options = eventosapp_whatsapp_inbox_autoreply_trigger_options();
+    $frequency_options = eventosapp_whatsapp_inbox_autoreply_frequency_options();
+
+    wp_nonce_field('eventosapp_whatsapp_inbox_autoreplies_save', 'eventosapp_whatsapp_inbox_autoreplies_nonce');
+    ?>
+    <style>
+        .evapp-wa-auto-box{border:1px solid #dcdcde;background:#fff;border-radius:8px;padding:14px;margin:10px 0;}
+        .evapp-wa-auto-intro{padding:12px;border-left:4px solid #2271b1;background:#f0f6fc;margin:0 0 14px;}
+        .evapp-wa-auto-rule{border:1px solid #ccd0d4;border-left:4px solid #25D366;border-radius:8px;background:#fafafa;margin:14px 0;padding:14px;}
+        .evapp-wa-auto-head{display:grid;grid-template-columns:90px 1fr 180px 210px auto;gap:10px;align-items:center;margin-bottom:12px;}
+        .evapp-wa-auto-head input[type="text"],.evapp-wa-auto-head select{width:100%;}
+        .evapp-wa-auto-grid{display:grid;grid-template-columns:180px 1fr;gap:10px 14px;align-items:start;}
+        .evapp-wa-auto-grid textarea,.evapp-wa-auto-grid input[type="number"]{width:100%;}
+        .evapp-wa-auto-muted{color:#646970;font-size:12px;line-height:1.45;}
+        .evapp-wa-auto-empty{padding:12px;background:#f6f7f7;border:1px dashed #c3c4c7;border-radius:6px;}
+        .evapp-wa-auto-vars code{display:inline-block;margin:2px 4px 2px 0;}
+        @media (max-width: 1100px){.evapp-wa-auto-head,.evapp-wa-auto-grid{grid-template-columns:1fr;}.evapp-wa-auto-head label{display:block;}}
+    </style>
+
+    <div class="evapp-wa-auto-box">
+        <p class="evapp-wa-auto-intro">
+            Este módulo responde automáticamente cuando un asistente escribe al WhatsApp emisor y el mensaje entrante queda asociado a un <strong>ticket de este evento</strong>. No responde conversaciones sin ticket asociado.
+        </p>
+
+        <p>
+            <label>
+                <input type="checkbox" name="eventosapp_whatsapp_inbox_autoreply_enabled" value="1" <?php checked($enabled, '1'); ?>>
+                Activar respuestas automáticas para mensajes entrantes relacionados con tickets de este evento.
+            </label>
+        </p>
+
+        <p class="evapp-wa-auto-muted evapp-wa-auto-vars">
+            Variables disponibles:
+            <code>{{nombre}}</code><code>{{apellido}}</code><code>{{nombre_completo}}</code><code>{{evento_nombre}}</code><code>{{ticket_id}}</code><code>{{cedula}}</code><code>{{correo}}</code><code>{{telefono}}</code><code>{{localidad}}</code><code>{{mensaje_recibido}}</code><code>{{fecha}}</code><code>{{hora}}</code>
+        </p>
+
+        <div id="evapp-wa-auto-rules-list">
+            <?php if ( empty($rules) ) : ?>
+                <p class="evapp-wa-auto-empty" id="evapp-wa-auto-no-rules">No hay respuestas configuradas. Agrega una respuesta para activar el flujo.</p>
+            <?php else : ?>
+                <?php foreach ( $rules as $rule_index => $rule ) : ?>
+                    <?php eventosapp_whatsapp_inbox_render_autoreply_rule_row($rule_index, $rule, $trigger_options, $frequency_options); ?>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+
+        <p><button type="button" class="button button-secondary" id="evapp-wa-auto-add-rule">+ Agregar respuesta automática</button></p>
+    </div>
+
+    <script type="text/html" id="tmpl-evapp-wa-auto-rule">
+        <?php eventosapp_whatsapp_inbox_render_autoreply_rule_row('__RULE_INDEX__', eventosapp_whatsapp_inbox_autoreply_default_rule(), $trigger_options, $frequency_options); ?>
+    </script>
+
+    <script>
+    jQuery(function($){
+        function evappWaAutoReplaceAll(template, index){
+            return String(template || '').replace(/__RULE_INDEX__/g, String(index));
+        }
+        $('#evapp-wa-auto-add-rule').off('click.evappWaAuto').on('click.evappWaAuto', function(e){
+            e.preventDefault();
+            var $list = $('#evapp-wa-auto-rules-list');
+            var index = $list.find('.evapp-wa-auto-rule').length;
+            var html = evappWaAutoReplaceAll($('#tmpl-evapp-wa-auto-rule').html(), index);
+            $('#evapp-wa-auto-no-rules').remove();
+            $list.append(html);
+        });
+        $(document).off('click.evappWaAutoRemove', '.evapp-wa-auto-remove-rule').on('click.evappWaAutoRemove', '.evapp-wa-auto-remove-rule', function(e){
+            e.preventDefault();
+            $(this).closest('.evapp-wa-auto-rule').remove();
+            if (!$('#evapp-wa-auto-rules-list .evapp-wa-auto-rule').length) {
+                $('#evapp-wa-auto-rules-list').append('<p class="evapp-wa-auto-empty" id="evapp-wa-auto-no-rules">No hay respuestas configuradas. Agrega una respuesta para activar el flujo.</p>');
+            }
+        });
+    });
+    </script>
+    <?php
+}
+
+function eventosapp_whatsapp_inbox_render_autoreply_rule_row($rule_index, $rule, $trigger_options, $frequency_options) {
+    $rule = wp_parse_args((array) $rule, eventosapp_whatsapp_inbox_autoreply_default_rule());
+    ?>
+    <div class="evapp-wa-auto-rule" data-rule-index="<?php echo esc_attr($rule_index); ?>">
+        <div class="evapp-wa-auto-head">
+            <label><input type="checkbox" name="eventosapp_whatsapp_inbox_autoreplies[<?php echo esc_attr($rule_index); ?>][enabled]" value="1" <?php checked($rule['enabled'], '1'); ?>> Activa</label>
+            <input type="text" name="eventosapp_whatsapp_inbox_autoreplies[<?php echo esc_attr($rule_index); ?>][name]" value="<?php echo esc_attr($rule['name']); ?>" placeholder="Nombre interno">
+            <select name="eventosapp_whatsapp_inbox_autoreplies[<?php echo esc_attr($rule_index); ?>][trigger_type]">
+                <?php foreach ( $trigger_options as $key => $label ) : ?>
+                    <option value="<?php echo esc_attr($key); ?>" <?php selected($rule['trigger_type'], $key); ?>><?php echo esc_html($label); ?></option>
+                <?php endforeach; ?>
+            </select>
+            <select name="eventosapp_whatsapp_inbox_autoreplies[<?php echo esc_attr($rule_index); ?>][frequency]">
+                <?php foreach ( $frequency_options as $key => $label ) : ?>
+                    <option value="<?php echo esc_attr($key); ?>" <?php selected($rule['frequency'], $key); ?>><?php echo esc_html($label); ?></option>
+                <?php endforeach; ?>
+            </select>
+            <button type="button" class="button-link-delete evapp-wa-auto-remove-rule">Eliminar</button>
+        </div>
+
+        <div class="evapp-wa-auto-grid">
+            <label>Palabras o frases de activación</label>
+            <div>
+                <textarea name="eventosapp_whatsapp_inbox_autoreplies[<?php echo esc_attr($rule_index); ?>][keywords]" rows="3" placeholder="Ejemplo: hola, ayuda, soporte"><?php echo esc_textarea($rule['keywords']); ?></textarea>
+                <p class="evapp-wa-auto-muted">Solo se usan si el disparador seleccionado es “contiene palabra o frase”. Puedes separar por coma o por línea.</p>
+            </div>
+
+            <label>Intervalo mínimo</label>
+            <div>
+                <input type="number" min="1" max="1440" name="eventosapp_whatsapp_inbox_autoreplies[<?php echo esc_attr($rule_index); ?>][cooldown_minutes]" value="<?php echo esc_attr(absint($rule['cooldown_minutes'])); ?>">
+                <p class="evapp-wa-auto-muted">Minutos mínimos entre respuestas de esta regla cuando la frecuencia permite repetir. Máximo: 1440 minutos.</p>
+            </div>
+
+            <label>Mensaje automático</label>
+            <div>
+                <textarea name="eventosapp_whatsapp_inbox_autoreplies[<?php echo esc_attr($rule_index); ?>][message]" rows="5" placeholder="Hola {{nombre}}, recibimos tu mensaje. Esta línea no atiende solicitudes por WhatsApp."><?php echo esc_textarea($rule['message']); ?></textarea>
+                <p class="evapp-wa-auto-muted">Se envía como texto libre dentro de la ventana de atención abierta por el mensaje entrante del asistente.</p>
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+add_action('save_post_eventosapp_event', 'eventosapp_whatsapp_inbox_save_event_autoreplies_metabox', 35, 3);
+add_action('save_post_eventosapp_events', 'eventosapp_whatsapp_inbox_save_event_autoreplies_metabox', 35, 3);
+function eventosapp_whatsapp_inbox_save_event_autoreplies_metabox($post_id, $post = null, $update = false) {
+    if ( defined('DOING_AUTOSAVE') && DOING_AUTOSAVE ) {
+        return;
+    }
+    if ( wp_is_post_revision($post_id) ) {
+        return;
+    }
+    if ( ! current_user_can('edit_post', $post_id) ) {
+        return;
+    }
+    if ( ! isset($_POST['eventosapp_whatsapp_inbox_autoreplies_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_inbox_autoreplies_nonce'], 'eventosapp_whatsapp_inbox_autoreplies_save') ) {
+        return;
+    }
+
+    $enabled = isset($_POST['eventosapp_whatsapp_inbox_autoreply_enabled']) ? '1' : '0';
+    update_post_meta($post_id, '_eventosapp_whatsapp_inbox_autoreply_enabled', $enabled);
+
+    $raw_rules = isset($_POST['eventosapp_whatsapp_inbox_autoreplies']) && is_array($_POST['eventosapp_whatsapp_inbox_autoreplies'])
+        ? $_POST['eventosapp_whatsapp_inbox_autoreplies']
+        : [];
+    $rules = eventosapp_whatsapp_inbox_normalize_autoreplies($raw_rules);
+
+    if ( ! empty($rules) ) {
+        update_post_meta($post_id, '_eventosapp_whatsapp_inbox_autoreplies', $rules);
+    } else {
+        delete_post_meta($post_id, '_eventosapp_whatsapp_inbox_autoreplies');
+    }
+}
+
+function eventosapp_whatsapp_inbox_maybe_send_auto_reply($args) {
+    $args = is_array($args) ? $args : [];
+
+    if ( ! function_exists('eventosapp_whatsapp_api_send_message') || ! function_exists('eventosapp_whatsapp_get_settings') ) {
+        return false;
+    }
+
+    $conversation_id = absint($args['conversation_id'] ?? 0);
+    $event_id = absint($args['event_id'] ?? 0);
+    $ticket_id = absint($args['ticket_id'] ?? 0);
+    $to_phone = eventosapp_whatsapp_inbox_clean_phone($args['from_phone'] ?? '');
+    $sender_phone_number_id = eventosapp_whatsapp_inbox_clean_phone($args['sender_phone_number_id'] ?? '');
+    $message_body = (string)($args['message_body'] ?? '');
+
+    if ( ! $conversation_id || ! $event_id || ! $ticket_id || $to_phone === '' ) {
+        return false;
+    }
+
+    if ( get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
+        return false;
+    }
+
+    $ticket_event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+    if ( $ticket_event_id && $ticket_event_id !== $event_id ) {
+        $event_id = $ticket_event_id;
+    }
+
+    if ( get_post_meta($event_id, '_eventosapp_whatsapp_inbox_autoreply_enabled', true) !== '1' ) {
+        return false;
+    }
+
+    $rules = eventosapp_whatsapp_inbox_get_event_autoreplies($event_id);
+    if ( empty($rules) ) {
+        return false;
+    }
+
+    $selected_rule = null;
+    $selected_index = null;
+    foreach ( $rules as $rule_index => $rule ) {
+        if ( ! eventosapp_whatsapp_inbox_autoreply_message_matches_rule($rule, $message_body) ) {
+            continue;
+        }
+        if ( ! eventosapp_whatsapp_inbox_autoreply_can_send($conversation_id, $rule_index, $rule) ) {
+            continue;
+        }
+        $selected_rule = $rule;
+        $selected_index = $rule_index;
+        break;
+    }
+
+    if ( $selected_rule === null ) {
+        if ( function_exists('eventosapp_whatsapp_add_activity_log') ) {
+            eventosapp_whatsapp_add_activity_log('inbox_autorespuesta_omitida_sin_regla_disponible', [
+                'conversation_id' => $conversation_id,
+                'event_id'        => $event_id,
+                'ticket_id'       => $ticket_id,
+                'message_id'      => sanitize_text_field((string)($args['wa_message_id'] ?? '')),
+            ]);
+        }
+        return false;
+    }
+
+    $body = eventosapp_whatsapp_inbox_autoreply_render_message($selected_rule['message'], [
+        'conversation_id' => $conversation_id,
+        'event_id'        => $event_id,
+        'ticket_id'       => $ticket_id,
+        'message_body'    => $message_body,
+    ]);
+
+    if ( $body === '' ) {
+        return false;
+    }
+
+    if ( $sender_phone_number_id === '' && function_exists('eventosapp_whatsapp_get_event_sender_phone_number_id') ) {
+        $sender_phone_number_id = eventosapp_whatsapp_inbox_clean_phone(eventosapp_whatsapp_get_event_sender_phone_number_id($event_id));
+    }
+
+    $settings = eventosapp_whatsapp_get_settings();
+    if ( function_exists('eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id') ) {
+        $settings = eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id($sender_phone_number_id, $settings);
+    }
+    $settings['request_timeout'] = min(10, max(5, absint($settings['request_timeout'] ?? 20)));
+    $sender_phone_number_id = eventosapp_whatsapp_inbox_clean_phone($settings['sender_phone_number_id'] ?? ($settings['phone_number_id'] ?? $sender_phone_number_id));
+
+    $payload = [
+        'type' => 'text',
+        'text' => [
+            'preview_url' => false,
+            'body' => $body,
+        ],
+    ];
+
+    $result = eventosapp_whatsapp_api_send_message($to_phone, $payload, $settings);
+    $message_id = '';
+    if ( isset($result['message_id']) ) {
+        $message_id = sanitize_text_field((string) $result['message_id']);
+    } elseif ( function_exists('eventosapp_whatsapp_extract_message_id') ) {
+        $message_id = eventosapp_whatsapp_extract_message_id($result['response'] ?? []);
+    }
+
+    $ok = ! empty($result['ok']);
+    $created_at = current_time('mysql');
+    $contact_name = sanitize_text_field((string)($args['contact_name'] ?? get_post_meta($conversation_id, '_evapp_wa_inbox_contact_name', true)));
+    $display_phone = sanitize_text_field((string)($args['display_phone_number'] ?? get_post_meta($conversation_id, '_evapp_wa_inbox_display_phone_number', true)));
+    $local_message_id = $message_id ?: ('auto_out_' . $conversation_id . '_' . time() . '_' . wp_rand(1000, 9999));
+
+    $message_db_id = eventosapp_whatsapp_inbox_insert_message([
+        'conversation_id'        => $conversation_id,
+        'event_id'               => $event_id,
+        'ticket_id'              => $ticket_id,
+        'wa_message_id'          => $local_message_id,
+        'reply_to_message_id'    => sanitize_text_field((string)($args['wa_message_id'] ?? '')),
+        'direction'              => 'outbound',
+        'status'                 => $ok ? 'auto_reply_accepted_by_meta' : 'auto_reply_error',
+        'from_phone'             => $sender_phone_number_id,
+        'to_phone'               => $to_phone,
+        'sender_phone_number_id' => $sender_phone_number_id,
+        'display_phone_number'   => $display_phone,
+        'contact_name'           => $contact_name,
+        'message_type'           => 'text',
+        'body'                   => $body,
+        'raw_json'               => eventosapp_whatsapp_inbox_safe_json([
+            'payload' => $payload,
+            'result'  => $result,
+            'rule'    => [
+                'index' => $selected_index,
+                'name'  => $selected_rule['name'] ?? '',
+            ],
+        ]),
+        'origin_method'          => 'respuesta_automatica_inbox',
+        'origin_confidence'      => 'high',
+        'created_at'             => $created_at,
+    ]);
+
+    if ( $message_db_id ) {
+        eventosapp_whatsapp_inbox_update_conversation_after_message($conversation_id, $message_db_id, 'outbound', $body, $created_at, $event_id, $ticket_id);
+    }
+
+    eventosapp_whatsapp_inbox_autoreply_register_attempt($conversation_id, $selected_index, $selected_rule, $ok, $message_id, $result['message'] ?? '');
+
+    if ( $message_id !== '' && function_exists('eventosapp_whatsapp_register_message_map') ) {
+        eventosapp_whatsapp_register_message_map($message_id, $ticket_id, 'inbox_auto_reply', $to_phone);
+    }
+
+    if ( function_exists('eventosapp_whatsapp_insert_central_log') ) {
+        eventosapp_whatsapp_insert_central_log([
+            'created_at'             => $created_at,
+            'event_id'               => $event_id,
+            'ticket_id'              => $ticket_id,
+            'recipient'              => $to_phone,
+            'channel'                => 'inbox',
+            'context'                => 'inbox_auto_reply',
+            'status'                 => $ok ? 'respuesta_automatica_aceptada_meta' : 'respuesta_automatica_error',
+            'delivery_status'        => $ok ? 'pending_webhook' : 'failed_local',
+            'message_id'             => $message_id,
+            'source_key'             => 'inbox_auto_reply:' . $conversation_id . ':' . $message_db_id,
+            'sender_phone_number_id' => $sender_phone_number_id,
+            'sender_label'           => $settings['sender_phone_label'] ?? $display_phone,
+            'transport'              => 'freeform_text',
+            'http_code'              => isset($result['http_code']) ? absint($result['http_code']) : 0,
+            'message'                => $ok ? 'Respuesta automática del inbox aceptada por Meta.' : ($result['message'] ?? 'No se pudo enviar la respuesta automática.'),
+            'meta'                   => [
+                'conversation_id' => $conversation_id,
+                'inbox_message_id' => $message_db_id,
+                'inbound_message_id' => absint($args['inbound_message_id'] ?? 0),
+                'rule_index' => $selected_index,
+                'rule_name' => $selected_rule['name'] ?? '',
+                'api_result' => $result,
+            ],
+        ]);
+    }
+
+    if ( function_exists('eventosapp_whatsapp_add_activity_log') ) {
+        eventosapp_whatsapp_add_activity_log($ok ? 'inbox_autorespuesta_enviada' : 'inbox_autorespuesta_error', [
+            'conversation_id' => $conversation_id,
+            'event_id'        => $event_id,
+            'ticket_id'       => $ticket_id,
+            'to'              => $to_phone,
+            'message_id'      => $message_id,
+            'rule_index'      => $selected_index,
+            'rule_name'       => $selected_rule['name'] ?? '',
+            'result_message'  => $result['message'] ?? '',
+        ]);
+    }
+
+    return $ok;
+}
+
 /**
  * Extrae el nombre del contacto recibido en el webhook.
  */
@@ -889,6 +1516,22 @@ function eventosapp_whatsapp_inbox_handle_inbound_message($message, $value = [],
                 'origin' => $origin,
             ]);
         }
+
+        eventosapp_whatsapp_inbox_maybe_send_auto_reply([
+            'conversation_id'        => $conversation_id,
+            'inbound_message_id'     => $message_db_id,
+            'event_id'               => $event_id,
+            'ticket_id'              => $ticket_id,
+            'from_phone'             => $from_phone,
+            'sender_phone_number_id' => $sender_phone_number_id,
+            'display_phone_number'   => $display_phone_number,
+            'contact_name'           => $contact_name,
+            'message_body'           => $parts['body'],
+            'message_type'           => $parts['type'],
+            'wa_message_id'          => $wa_message_id,
+            'reply_to_message_id'    => $reply_to_message_id,
+            'origin'                 => $origin,
+        ]);
     } else {
         update_option('eventosapp_whatsapp_inbox_last_processed_message', eventosapp_whatsapp_inbox_safe_debug_array([
             'processed_at' => current_time('mysql'),
