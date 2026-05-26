@@ -19,6 +19,18 @@ if ( ! defined('EVENTOSAPP_WHATSAPP_ACTIVITY_LOG_OPTION') ) {
     define('EVENTOSAPP_WHATSAPP_ACTIVITY_LOG_OPTION', 'eventosapp_whatsapp_activity_log');
 }
 
+if ( ! defined('EVENTOSAPP_WHATSAPP_LOG_TABLE_VERSION') ) {
+    define('EVENTOSAPP_WHATSAPP_LOG_TABLE_VERSION', '2026.05.25.1');
+}
+
+if ( ! defined('EVENTOSAPP_WHATSAPP_LOG_RETENTION_DAYS') ) {
+    define('EVENTOSAPP_WHATSAPP_LOG_RETENTION_DAYS', 31);
+}
+
+if ( ! defined('EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK') ) {
+    define('EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK', 'eventosapp_whatsapp_cleanup_old_logs');
+}
+
 /**
  * Valores por defecto de la integración WhatsApp.
  */
@@ -333,6 +345,210 @@ function eventosapp_whatsapp_sanitize_log_context($value, $depth = 0) {
         return substr($text, 0, 1200) . '... [recortado]';
     }
     return $text;
+}
+
+
+/**
+ * Nombre de la tabla central de logs de WhatsApp.
+ */
+function eventosapp_whatsapp_log_table_name() {
+    global $wpdb;
+    return $wpdb->prefix . 'eventosapp_whatsapp_log';
+}
+
+/**
+ * Crea o actualiza la tabla central de logs de WhatsApp.
+ * Se ejecuta en activación y también como respaldo en init/admin_init.
+ */
+function eventosapp_whatsapp_install_log_table() {
+    global $wpdb;
+
+    $table_name = eventosapp_whatsapp_log_table_name();
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE {$table_name} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        created_at DATETIME NOT NULL,
+        event_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        ticket_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        ticket_code VARCHAR(120) NOT NULL DEFAULT '',
+        recipient VARCHAR(80) NOT NULL DEFAULT '',
+        channel VARCHAR(60) NOT NULL DEFAULT '',
+        context VARCHAR(120) NOT NULL DEFAULT '',
+        status VARCHAR(80) NOT NULL DEFAULT '',
+        delivery_status VARCHAR(80) NOT NULL DEFAULT '',
+        message_id VARCHAR(220) NOT NULL DEFAULT '',
+        source_key VARCHAR(220) NOT NULL DEFAULT '',
+        sender_phone_number_id VARCHAR(80) NOT NULL DEFAULT '',
+        sender_label VARCHAR(160) NOT NULL DEFAULT '',
+        transport VARCHAR(60) NOT NULL DEFAULT '',
+        template_name VARCHAR(190) NOT NULL DEFAULT '',
+        http_code SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        message TEXT NULL,
+        meta_json LONGTEXT NULL,
+        PRIMARY KEY  (id),
+        KEY created_at (created_at),
+        KEY event_id (event_id),
+        KEY ticket_id (ticket_id),
+        KEY channel (channel),
+        KEY status (status),
+        KEY delivery_status (delivery_status),
+        KEY message_id (message_id)
+    ) {$charset_collate};";
+
+    if ( ! function_exists('dbDelta') ) {
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    }
+
+    dbDelta($sql);
+    update_option('eventosapp_whatsapp_log_table_version', EVENTOSAPP_WHATSAPP_LOG_TABLE_VERSION, false);
+}
+
+function eventosapp_whatsapp_maybe_install_log_table() {
+    if ( get_option('eventosapp_whatsapp_log_table_version') !== EVENTOSAPP_WHATSAPP_LOG_TABLE_VERSION ) {
+        eventosapp_whatsapp_install_log_table();
+    }
+}
+
+function eventosapp_whatsapp_schedule_log_cleanup() {
+    if ( ! wp_next_scheduled(EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK) ) {
+        wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK);
+    }
+}
+
+add_action('init', function() {
+    eventosapp_whatsapp_maybe_install_log_table();
+    eventosapp_whatsapp_schedule_log_cleanup();
+}, 5);
+
+add_action(EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK, 'eventosapp_whatsapp_cleanup_old_logs');
+
+function eventosapp_whatsapp_cleanup_old_logs($days = null) {
+    global $wpdb;
+
+    $days = $days === null ? (int) EVENTOSAPP_WHATSAPP_LOG_RETENTION_DAYS : absint($days);
+    $days = max(1, $days);
+    $threshold = gmdate('Y-m-d H:i:s', current_time('timestamp') - ($days * DAY_IN_SECONDS));
+
+    $table_name = eventosapp_whatsapp_log_table_name();
+    $wpdb->query($wpdb->prepare("DELETE FROM {$table_name} WHERE created_at < %s", $threshold));
+}
+
+function eventosapp_whatsapp_channel_label($channel) {
+    $channel = sanitize_key((string) $channel);
+    $labels = [
+        'ticket'       => 'Ticket individual',
+        'masivo'       => 'Envío masivo',
+        'recordatorio' => 'Recordatorio',
+        'webhook'      => 'Webhook Meta',
+        'prueba'       => 'Prueba rápida',
+        'sistema'      => 'Sistema',
+    ];
+    return $labels[$channel] ?? ($channel ?: 'Sistema');
+}
+
+function eventosapp_whatsapp_log_channel_from_context($context, $status = '') {
+    $context = sanitize_key((string) $context);
+    $status  = sanitize_key((string) $status);
+
+    if ( strpos($status, 'webhook_') === 0 || $context === 'webhook_status' ) {
+        return 'webhook';
+    }
+    if ( in_array($context, ['ticket_reminder', 'reminder'], true) || strpos($context, 'reminder') !== false ) {
+        return 'recordatorio';
+    }
+    if ( in_array($context, ['whatsapp_bulk_send', 'whatsapp_mass_send', 'masivo'], true) || strpos($context, 'bulk') !== false || strpos($context, 'masivo') !== false ) {
+        return 'masivo';
+    }
+    if ( $context === 'quick_test' || strpos($context, 'test') !== false ) {
+        return 'prueba';
+    }
+    if ( $context !== '' ) {
+        return 'ticket';
+    }
+    return 'sistema';
+}
+
+function eventosapp_whatsapp_get_ticket_code_for_log($ticket_id) {
+    $ticket_id = absint($ticket_id);
+    if ( ! $ticket_id ) {
+        return '';
+    }
+
+    $code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+    if ( $code === '' ) {
+        $code = get_post_meta($ticket_id, '_eventosapp_ticket_public_code', true);
+    }
+    if ( $code === '' ) {
+        $code = (string) $ticket_id;
+    }
+    return sanitize_text_field((string) $code);
+}
+
+/**
+ * Inserta una línea en la tabla central de Log de WhatsApp.
+ */
+function eventosapp_whatsapp_insert_central_log($entry) {
+    global $wpdb;
+
+    if ( ! is_array($entry) ) {
+        return false;
+    }
+
+    eventosapp_whatsapp_maybe_install_log_table();
+
+    $ticket_id = absint($entry['ticket_id'] ?? 0);
+    $event_id  = absint($entry['event_id'] ?? 0);
+    if ( ! $event_id && $ticket_id ) {
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+    }
+
+    $context = sanitize_text_field((string)($entry['context'] ?? ''));
+    $status  = sanitize_text_field((string)($entry['status'] ?? ''));
+    $channel = sanitize_key((string)($entry['channel'] ?? ''));
+    if ( $channel === '' ) {
+        $channel = eventosapp_whatsapp_log_channel_from_context($context, $status);
+    }
+
+    $meta = isset($entry['meta']) && is_array($entry['meta']) ? eventosapp_whatsapp_sanitize_log_context($entry['meta']) : [];
+    $meta_json = $meta ? wp_json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
+
+    $data = [
+        'created_at'             => ! empty($entry['created_at']) ? sanitize_text_field((string)$entry['created_at']) : current_time('mysql'),
+        'event_id'               => $event_id,
+        'ticket_id'              => $ticket_id,
+        'ticket_code'            => sanitize_text_field((string)($entry['ticket_code'] ?? eventosapp_whatsapp_get_ticket_code_for_log($ticket_id))),
+        'recipient'              => sanitize_text_field((string)($entry['recipient'] ?? ($entry['to'] ?? ''))),
+        'channel'                => $channel,
+        'context'                => $context,
+        'status'                 => $status,
+        'delivery_status'        => sanitize_text_field((string)($entry['delivery_status'] ?? '')),
+        'message_id'             => sanitize_text_field((string)($entry['message_id'] ?? '')),
+        'source_key'             => sanitize_text_field((string)($entry['source_key'] ?? '')),
+        'sender_phone_number_id' => sanitize_text_field((string)($entry['sender_phone_number_id'] ?? '')),
+        'sender_label'           => sanitize_text_field((string)($entry['sender_label'] ?? ($entry['sender_phone_label'] ?? ''))),
+        'transport'              => sanitize_text_field((string)($entry['transport'] ?? '')),
+        'template_name'          => sanitize_text_field((string)($entry['template_name'] ?? '')),
+        'http_code'              => isset($entry['http_code']) ? absint($entry['http_code']) : 0,
+        'message'                => sanitize_textarea_field((string)($entry['message'] ?? '')),
+        'meta_json'              => $meta_json,
+    ];
+
+    $formats = ['%s','%d','%d','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%d','%s','%s'];
+    $inserted = $wpdb->insert(eventosapp_whatsapp_log_table_name(), $data, $formats);
+
+    return $inserted !== false ? (int) $wpdb->insert_id : false;
+}
+
+function eventosapp_whatsapp_get_central_log_channels() {
+    return [
+        'ticket'       => 'Ticket individual',
+        'masivo'       => 'Envío masivo',
+        'recordatorio' => 'Recordatorio',
+        'webhook'      => 'Webhook Meta',
+        'prueba'       => 'Prueba rápida',
+        'sistema'      => 'Sistema',
+    ];
 }
 
 /**
@@ -1487,6 +1703,13 @@ function eventosapp_whatsapp_successful_send_statuses() {
     return apply_filters('eventosapp_whatsapp_successful_send_statuses', [
         'aceptado_meta',
         'enviado',
+        'sent',
+        'webhook_sent',
+        'enviado_webhook',
+        'webhook_delivered',
+        'entregado',
+        'webhook_read',
+        'leido',
     ]);
 }
 
@@ -1807,7 +2030,289 @@ add_action('admin_menu', function() {
         'eventosapp_whatsapp_tickets',
         'eventosapp_whatsapp_render_settings_page'
     );
+
+    add_submenu_page(
+        'eventosapp_dashboard',
+        'Log de WhatsApp',
+        'Log de WhatsApp',
+        'manage_options',
+        'eventosapp_whatsapp_log',
+        'eventosapp_whatsapp_render_log_page',
+        22
+    );
 }, 20);
+
+
+add_action('admin_post_eventosapp_whatsapp_cleanup_old_logs_now', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes para ejecutar esta acción.');
+    }
+    if ( ! isset($_POST['eventosapp_whatsapp_cleanup_log_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_cleanup_log_nonce'], 'eventosapp_whatsapp_cleanup_old_logs_now') ) {
+        wp_die('Nonce inválido.');
+    }
+
+    eventosapp_whatsapp_cleanup_old_logs(EVENTOSAPP_WHATSAPP_LOG_RETENTION_DAYS);
+    wp_safe_redirect(add_query_arg('evapp_whatsapp_log_cleaned', '1', admin_url('admin.php?page=eventosapp_whatsapp_log')));
+    exit;
+});
+
+/**
+ * Render de la página central Log de WhatsApp.
+ */
+function eventosapp_whatsapp_render_log_page() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes para acceder a esta página.');
+    }
+
+    global $wpdb;
+    eventosapp_whatsapp_maybe_install_log_table();
+    $table_name = eventosapp_whatsapp_log_table_name();
+
+    $filters = [
+        'date_from'  => isset($_GET['date_from']) ? sanitize_text_field(wp_unslash($_GET['date_from'])) : '',
+        'date_to'    => isset($_GET['date_to']) ? sanitize_text_field(wp_unslash($_GET['date_to'])) : '',
+        'event_id'   => isset($_GET['event_id']) ? absint($_GET['event_id']) : 0,
+        'channel'    => isset($_GET['channel']) ? sanitize_key((string) wp_unslash($_GET['channel'])) : '',
+        'status'     => isset($_GET['status']) ? sanitize_key((string) wp_unslash($_GET['status'])) : '',
+        'search'     => isset($_GET['search']) ? sanitize_text_field(wp_unslash($_GET['search'])) : '',
+    ];
+
+    $where = ['1=1'];
+    $params = [];
+
+    if ( $filters['date_from'] !== '' ) {
+        $where[] = 'created_at >= %s';
+        $params[] = $filters['date_from'] . ' 00:00:00';
+    }
+    if ( $filters['date_to'] !== '' ) {
+        $where[] = 'created_at <= %s';
+        $params[] = $filters['date_to'] . ' 23:59:59';
+    }
+    if ( $filters['event_id'] ) {
+        $where[] = 'event_id = %d';
+        $params[] = $filters['event_id'];
+    }
+    if ( $filters['channel'] !== '' ) {
+        $where[] = 'channel = %s';
+        $params[] = $filters['channel'];
+    }
+    if ( $filters['status'] !== '' ) {
+        $where[] = '(status = %s OR delivery_status = %s)';
+        $params[] = $filters['status'];
+        $params[] = $filters['status'];
+    }
+    if ( $filters['search'] !== '' ) {
+        $like = '%' . $wpdb->esc_like($filters['search']) . '%';
+        $where[] = '(ticket_code LIKE %s OR recipient LIKE %s OR message_id LIKE %s OR source_key LIKE %s OR template_name LIKE %s OR message LIKE %s)';
+        array_push($params, $like, $like, $like, $like, $like, $like);
+    }
+
+    $where_sql = implode(' AND ', $where);
+    $per_page = 50;
+    $paged = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
+    $offset = ($paged - 1) * $per_page;
+
+    $count_sql = "SELECT COUNT(*) FROM {$table_name} WHERE {$where_sql}";
+    $total = ! empty($params)
+        ? (int) $wpdb->get_var($wpdb->prepare($count_sql, $params))
+        : (int) $wpdb->get_var($count_sql);
+
+    $rows_sql = "SELECT * FROM {$table_name} WHERE {$where_sql} ORDER BY created_at DESC, id DESC LIMIT %d OFFSET %d";
+    $rows_params = array_merge($params, [$per_page, $offset]);
+    $rows = $wpdb->get_results($wpdb->prepare($rows_sql, $rows_params), ARRAY_A);
+    if ( ! is_array($rows) ) {
+        $rows = [];
+    }
+
+    $events = get_posts([
+        'post_type'      => 'eventosapp_event',
+        'post_status'    => ['publish', 'draft', 'pending', 'private'],
+        'numberposts'    => -1,
+        'orderby'        => 'title',
+        'order'          => 'ASC',
+        'fields'         => 'ids',
+        'no_found_rows'  => true,
+    ]);
+
+    $channels = eventosapp_whatsapp_get_central_log_channels();
+    $status_options = [
+        'aceptado_meta'     => 'Aceptado por Meta',
+        'pendiente_webhook' => 'Pendiente de webhook',
+        'webhook_sent'      => 'Enviado por WhatsApp',
+        'webhook_delivered' => 'Entregado al dispositivo',
+        'webhook_read'      => 'Leído por el usuario',
+        'webhook_failed'    => 'Fallido en Meta',
+        'error'             => 'Error local/API',
+        'skipped'           => 'Omitido',
+        'preparado'         => 'Preparado',
+    ];
+
+    $base_url = admin_url('admin.php?page=eventosapp_whatsapp_log');
+    ?>
+    <div class="wrap evapp-wa-log-page">
+        <h1>Log de WhatsApp</h1>
+        <p class="description">Registro central de solicitudes, respuestas de Meta y webhooks de estado. La limpieza automática elimina registros de más de <?php echo esc_html((string) EVENTOSAPP_WHATSAPP_LOG_RETENTION_DAYS); ?> días.</p>
+
+        <?php if ( isset($_GET['evapp_whatsapp_log_cleaned']) ) : ?>
+            <div class="notice notice-success is-dismissible"><p><strong>EventosApp:</strong> se ejecutó la limpieza de logs antiguos.</p></div>
+        <?php endif; ?>
+
+        <style>
+            .evapp-wa-log-filters{background:#fff;border:1px solid #ccd0d4;border-radius:8px;padding:14px;margin:16px 0;display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:12px;align-items:end;}
+            .evapp-wa-log-filters label{display:flex;flex-direction:column;gap:5px;font-weight:600;}
+            .evapp-wa-log-filters input,.evapp-wa-log-filters select{width:100%;max-width:100%;}
+            .evapp-wa-log-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+            .evapp-wa-log-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #dcdcde;}
+            .evapp-wa-log-table th{background:#f6f7f7;text-align:left;padding:9px;border-bottom:1px solid #dcdcde;position:sticky;top:32px;z-index:2;}
+            .evapp-wa-log-table td{vertical-align:top;padding:9px;border-bottom:1px solid #eee;}
+            .evapp-wa-log-badge{display:inline-block;border-radius:999px;padding:3px 8px;font-size:11px;line-height:1.4;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;white-space:nowrap;}
+            .evapp-wa-log-success{background:#dcfce7;border-color:#bbf7d0;color:#166534;}
+            .evapp-wa-log-warning{background:#fef3c7;border-color:#fde68a;color:#92400e;}
+            .evapp-wa-log-error{background:#fee2e2;border-color:#fecaca;color:#991b1b;}
+            .evapp-wa-log-muted{color:#646970;font-size:12px;}
+            .evapp-wa-log-break{word-break:break-word;overflow-wrap:anywhere;}
+            .evapp-wa-log-details{max-width:520px;}
+            .evapp-wa-log-details summary{cursor:pointer;color:#2271b1;}
+            .evapp-wa-log-details pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;border-radius:6px;padding:10px;max-height:280px;overflow:auto;}
+            .evapp-wa-log-pagination{margin:14px 0;display:flex;gap:8px;align-items:center;}
+            @media (max-width:1100px){.evapp-wa-log-filters{grid-template-columns:1fr 1fr;}.evapp-wa-log-table{display:block;overflow-x:auto;}}
+            @media (max-width:782px){.evapp-wa-log-filters{grid-template-columns:1fr;}.evapp-wa-log-table th{position:static;}}
+        </style>
+
+        <form method="get" class="evapp-wa-log-filters">
+            <input type="hidden" name="page" value="eventosapp_whatsapp_log">
+            <label>Desde
+                <input type="date" name="date_from" value="<?php echo esc_attr($filters['date_from']); ?>">
+            </label>
+            <label>Hasta
+                <input type="date" name="date_to" value="<?php echo esc_attr($filters['date_to']); ?>">
+            </label>
+            <label>Evento
+                <select name="event_id">
+                    <option value="0">Todos los eventos</option>
+                    <?php foreach ( $events as $event_id ) : ?>
+                        <option value="<?php echo esc_attr($event_id); ?>" <?php selected($filters['event_id'], $event_id); ?>><?php echo esc_html(get_the_title($event_id)); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label>Canal
+                <select name="channel">
+                    <option value="">Todos los canales</option>
+                    <?php foreach ( $channels as $value => $label ) : ?>
+                        <option value="<?php echo esc_attr($value); ?>" <?php selected($filters['channel'], $value); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label>Estado
+                <select name="status">
+                    <option value="">Todos los estados</option>
+                    <?php foreach ( $status_options as $value => $label ) : ?>
+                        <option value="<?php echo esc_attr($value); ?>" <?php selected($filters['status'], $value); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label>Buscar
+                <input type="text" name="search" value="<?php echo esc_attr($filters['search']); ?>" placeholder="Ticket, teléfono, Message ID, plantilla...">
+            </label>
+            <div class="evapp-wa-log-tools">
+                <button type="submit" class="button button-primary">Filtrar</button>
+                <a class="button" href="<?php echo esc_url($base_url); ?>">Limpiar filtros</a>
+            </div>
+        </form>
+
+        <div class="evapp-wa-log-tools" style="margin:10px 0 16px;">
+            <strong><?php echo esc_html(number_format_i18n($total)); ?></strong> registros encontrados.
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline;">
+                <?php wp_nonce_field('eventosapp_whatsapp_cleanup_old_logs_now', 'eventosapp_whatsapp_cleanup_log_nonce'); ?>
+                <input type="hidden" name="action" value="eventosapp_whatsapp_cleanup_old_logs_now">
+                <button type="submit" class="button">Limpiar ahora registros antiguos</button>
+            </form>
+        </div>
+
+        <table class="evapp-wa-log-table">
+            <thead>
+                <tr>
+                    <th>Fecha</th>
+                    <th>Evento / Ticket</th>
+                    <th>Canal</th>
+                    <th>Estado</th>
+                    <th>Destino</th>
+                    <th>Meta</th>
+                    <th>Detalle</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php if ( empty($rows) ) : ?>
+                <tr><td colspan="7">No hay registros con los filtros seleccionados.</td></tr>
+            <?php else : ?>
+                <?php foreach ( $rows as $row ) :
+                    $status = sanitize_key((string)($row['status'] ?? ''));
+                    $delivery = sanitize_key((string)($row['delivery_status'] ?? ''));
+                    $badge_class = 'evapp-wa-log-badge';
+                    if ( in_array($status, ['aceptado_meta', 'webhook_sent', 'webhook_delivered', 'webhook_read'], true) || in_array($delivery, ['sent', 'delivered', 'read'], true) ) {
+                        $badge_class .= ' evapp-wa-log-success';
+                    } elseif ( in_array($status, ['error', 'webhook_failed', 'failed', 'fallido_webhook'], true) || $delivery === 'failed' ) {
+                        $badge_class .= ' evapp-wa-log-error';
+                    } elseif ( in_array($status, ['skipped', 'preparado'], true) || $delivery === 'pendiente_webhook' ) {
+                        $badge_class .= ' evapp-wa-log-warning';
+                    }
+                    $meta = [];
+                    if ( ! empty($row['meta_json']) ) {
+                        $decoded = json_decode((string)$row['meta_json'], true);
+                        $meta = is_array($decoded) ? $decoded : [];
+                    }
+                    ?>
+                    <tr>
+                        <td>
+                            <?php echo esc_html($row['created_at']); ?><br>
+                            <span class="evapp-wa-log-muted">ID <?php echo esc_html((string)$row['id']); ?></span>
+                        </td>
+                        <td class="evapp-wa-log-break">
+                            <?php if ( ! empty($row['event_id']) ) : ?>
+                                <strong><?php echo esc_html(get_the_title((int)$row['event_id'])); ?></strong><br>
+                            <?php endif; ?>
+                            <?php if ( ! empty($row['ticket_id']) ) : ?>
+                                <a href="<?php echo esc_url(get_edit_post_link((int)$row['ticket_id'])); ?>">Ticket <?php echo esc_html($row['ticket_code'] ?: $row['ticket_id']); ?></a>
+                            <?php else : ?>
+                                <span class="evapp-wa-log-muted">Sin ticket asociado</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><span class="evapp-wa-log-badge"><?php echo esc_html(eventosapp_whatsapp_channel_label($row['channel'])); ?></span><br><span class="evapp-wa-log-muted"><?php echo esc_html(eventosapp_whatsapp_source_label($row['context'])); ?></span></td>
+                        <td><span class="<?php echo esc_attr($badge_class); ?>"><?php echo esc_html(eventosapp_whatsapp_status_label($status)); ?></span><?php echo $delivery ? '<br><span class="evapp-wa-log-muted">Webhook: ' . esc_html(eventosapp_whatsapp_status_label($delivery)) . '</span>' : ''; ?></td>
+                        <td class="evapp-wa-log-break"><?php echo esc_html($row['recipient']); ?></td>
+                        <td class="evapp-wa-log-break">
+                            <?php if ( ! empty($row['http_code']) ) : ?><strong>HTTP:</strong> <?php echo esc_html((string)$row['http_code']); ?><br><?php endif; ?>
+                            <?php if ( ! empty($row['message_id']) ) : ?><strong>Message ID:</strong><br><span class="evapp-wa-log-muted"><?php echo esc_html($row['message_id']); ?></span><br><?php endif; ?>
+                            <?php if ( ! empty($row['template_name']) ) : ?><strong>Plantilla:</strong><br><span class="evapp-wa-log-muted"><?php echo esc_html($row['template_name']); ?></span><br><?php endif; ?>
+                            <?php if ( ! empty($row['sender_phone_number_id']) ) : ?><strong>Emisor:</strong><br><span class="evapp-wa-log-muted"><?php echo esc_html(trim($row['sender_label'] . ' ' . $row['sender_phone_number_id'])); ?></span><?php endif; ?>
+                        </td>
+                        <td class="evapp-wa-log-break">
+                            <?php echo esc_html($row['message']); ?>
+                            <?php if ( ! empty($meta) ) : ?>
+                                <details class="evapp-wa-log-details"><summary>Ver datos técnicos</summary><pre><?php echo esc_html(wp_json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?></pre></details>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            <?php endif; ?>
+            </tbody>
+        </table>
+
+        <?php
+        $total_pages = max(1, (int) ceil($total / $per_page));
+        if ( $total_pages > 1 ) :
+            $prev_url = add_query_arg(array_merge(array_filter($filters), ['page' => 'eventosapp_whatsapp_log', 'paged' => max(1, $paged - 1)]), admin_url('admin.php'));
+            $next_url = add_query_arg(array_merge(array_filter($filters), ['page' => 'eventosapp_whatsapp_log', 'paged' => min($total_pages, $paged + 1)]), admin_url('admin.php'));
+            ?>
+            <div class="evapp-wa-log-pagination">
+                <a class="button <?php echo $paged <= 1 ? 'disabled' : ''; ?>" href="<?php echo esc_url($prev_url); ?>">← Anterior</a>
+                <span>Página <?php echo esc_html((string)$paged); ?> de <?php echo esc_html((string)$total_pages); ?></span>
+                <a class="button <?php echo $paged >= $total_pages ? 'disabled' : ''; ?>" href="<?php echo esc_url($next_url); ?>">Siguiente →</a>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php
+}
 
 /**
  * Render de página de configuración WhatsApp.
@@ -2060,6 +2565,7 @@ function eventosapp_whatsapp_render_settings_page() {
             <h2>Registro global reciente de WhatsApp</h2>
             <p class="evapp-wa-help">
                 Este registro queda guardado en WordPress aunque el modo wp-debug.log esté apagado. Permite validar si Meta solo aceptó la solicitud, si llegó un webhook de entrega/lectura o si Meta devolvió un fallo posterior.
+                Para auditoría completa con filtros por fecha, evento y canal usa <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_log')); ?>">Log de WhatsApp</a>.
             </p>
             <?php if ( empty($activity_log) ) : ?>
                 <p>No hay actividad registrada todavía.</p>
@@ -4358,6 +4864,24 @@ function eventosapp_whatsapp_store_last_test_result($phone, $type, $result) {
 
     update_option(EVENTOSAPP_WHATSAPP_OPTION, $settings, false);
 
+    eventosapp_whatsapp_insert_central_log([
+        'created_at'      => $settings['last_test_result']['date'],
+        'channel'         => 'prueba',
+        'context'         => 'quick_test',
+        'status'          => ! empty($result['ok']) ? 'aceptado_meta' : 'error',
+        'delivery_status' => ! empty($result['ok']) ? 'pendiente_webhook' : '',
+        'recipient'       => $phone,
+        'message_id'      => $message_id,
+        'http_code'       => isset($result['http_code']) ? (int) $result['http_code'] : 0,
+        'transport'       => $type === 'template' ? 'template' : 'text',
+        'template_name'   => $type === 'template' ? sanitize_text_field((string)($settings['test_template_name'] ?? 'hello_world')) : '',
+        'message'         => sanitize_text_field((string)($result['message'] ?? '')),
+        'meta'            => [
+            'response_summary' => $result['response_summary'] ?? eventosapp_whatsapp_summarize_response($result['response'] ?? []),
+            'response'         => $result['response'] ?? [],
+        ],
+    ]);
+
     if ( $message_id !== '' ) {
         eventosapp_whatsapp_register_message_map($message_id, 0, 'quick_test', $phone);
     }
@@ -5273,6 +5797,32 @@ function eventosapp_whatsapp_add_ticket_log($ticket_id, $status, $message, $args
     }
 
     update_post_meta($ticket_id, '_eventosapp_whatsapp_history', $history);
+
+    $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+    eventosapp_whatsapp_insert_central_log([
+        'created_at'             => $entry['date'],
+        'event_id'               => $event_id,
+        'ticket_id'              => $ticket_id,
+        'ticket_code'            => eventosapp_whatsapp_get_ticket_code_for_log($ticket_id),
+        'recipient'              => $entry['to'],
+        'channel'                => eventosapp_whatsapp_log_channel_from_context($entry['context'], $entry['status']),
+        'context'                => $entry['context'],
+        'status'                 => $entry['status'],
+        'delivery_status'        => $entry['delivery_status'],
+        'message_id'             => $entry['message_id'],
+        'source_key'             => $entry['source_key'],
+        'sender_phone_number_id' => $entry['sender_phone_number_id'],
+        'sender_label'           => $entry['sender_phone_label'],
+        'transport'              => $entry['transport'],
+        'template_name'          => $entry['template_name'],
+        'http_code'              => $entry['http_code'],
+        'message'                => $entry['message'],
+        'meta'                   => [
+            'response_summary' => $entry['response_summary'],
+            'debug'            => $entry['debug'],
+            'meta_error'       => $entry['meta_error'] ?? [],
+        ],
+    ]);
 }
 
 /**
@@ -5449,6 +5999,20 @@ function eventosapp_whatsapp_update_last_test_delivery_status($message_id, $deli
         $settings['last_test_result']['message'] = $error_message;
     }
     update_option(EVENTOSAPP_WHATSAPP_OPTION, $settings, false);
+
+    eventosapp_whatsapp_insert_central_log([
+        'created_at'      => current_time('mysql'),
+        'channel'         => 'webhook',
+        'context'         => 'webhook_status',
+        'status'          => 'webhook_' . sanitize_key((string)$delivery_status),
+        'delivery_status' => sanitize_key((string)$delivery_status),
+        'recipient'       => sanitize_text_field((string)($settings['last_test_result']['to'] ?? '')),
+        'message_id'      => sanitize_text_field((string)$message_id),
+        'message'         => $error_message !== '' ? $error_message : 'Estado de prueba recibido por webhook: ' . sanitize_text_field((string)$delivery_status),
+        'meta'            => [
+            'test_result' => $settings['last_test_result'],
+        ],
+    ]);
 }
 
 function eventosapp_whatsapp_process_webhook_inbound_message($message) {
