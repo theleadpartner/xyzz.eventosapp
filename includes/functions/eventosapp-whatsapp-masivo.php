@@ -222,10 +222,12 @@ if ( ! function_exists('eventosapp_whatsapp_masivo_template_label') ) {
 if ( ! function_exists('eventosapp_whatsapp_masivo_status_options') ) {
     function eventosapp_whatsapp_masivo_status_options() {
         return [
-            'no_enviado'       => 'No enviado',
-            'aceptado_meta'    => 'Aceptado por Meta',
-            'error'            => 'Error local/API',
-            'skipped'          => 'Omitido',
+            'no_enviado'       => 'No enviado (sin solicitud aceptada por Meta)',
+            'enviado'          => 'Enviado (solicitud aceptada por Meta)',
+            'aceptado_meta'    => 'Último estado: aceptado por Meta',
+            'error'            => 'Último estado: error local/API',
+            'skipped'          => 'Último estado: omitido',
+            'preparado'        => 'Último estado: preparado',
         ];
     }
 }
@@ -1837,6 +1839,7 @@ function eventosapp_whatsapp_masivo_get_filtered_tickets($filters) {
     }
 
     $modalidad_filter = '';
+    $whatsapp_tracking_filter = '';
     if ( ! empty($filters['modalidad']) ) {
         $modalidad_filter = function_exists('eventosapp_normalize_ticket_modalidad')
             ? eventosapp_normalize_ticket_modalidad($filters['modalidad'])
@@ -1849,19 +1852,12 @@ function eventosapp_whatsapp_masivo_get_filtered_tickets($filters) {
 
     if ( ! empty($filters['whatsapp_status']) ) {
         $whatsapp_status = sanitize_key((string) $filters['whatsapp_status']);
-        if ( $whatsapp_status === 'no_enviado' ) {
-            $meta_query[] = [
-                'relation' => 'OR',
-                [
-                    'key'     => '_eventosapp_whatsapp_last_status',
-                    'compare' => 'NOT EXISTS',
-                ],
-                [
-                    'key'     => '_eventosapp_whatsapp_last_status',
-                    'value'   => '',
-                    'compare' => '=',
-                ],
-            ];
+
+        if ( in_array($whatsapp_status, ['no_enviado', 'enviado'], true) ) {
+            // Estos dos estados se filtran después de la consulta para poder usar
+            // eventosapp_whatsapp_get_send_tracking(..., true), que reconstruye envíos
+            // antiguos desde el historial si todavía no tienen metadatos de tracking.
+            $whatsapp_tracking_filter = $whatsapp_status;
         } else {
             $meta_query[] = [
                 'key'     => '_eventosapp_whatsapp_last_status',
@@ -1965,6 +1961,24 @@ function eventosapp_whatsapp_masivo_get_filtered_tickets($filters) {
     if ( ! empty($modalidad_filter) && function_exists('eventosapp_get_ticket_modalidad') ) {
         $ticket_ids = array_values(array_filter($ticket_ids, function($tid) use ($modalidad_filter) {
             return eventosapp_get_ticket_modalidad($tid) === $modalidad_filter;
+        }));
+    }
+
+    if ( $whatsapp_tracking_filter !== '' ) {
+        $ticket_ids = array_values(array_filter($ticket_ids, function($tid) use ($whatsapp_tracking_filter) {
+            if ( function_exists('eventosapp_whatsapp_get_send_tracking') ) {
+                $tracking = eventosapp_whatsapp_get_send_tracking($tid, true);
+                $sent_status = is_array($tracking) && ! empty($tracking['sent_status']) ? sanitize_key((string)$tracking['sent_status']) : 'no_enviado';
+            } else {
+                $sent_status = sanitize_key((string)get_post_meta($tid, '_eventosapp_whatsapp_sent_status', true));
+                if ( $sent_status === '' ) {
+                    $first_sent = get_post_meta($tid, '_eventosapp_whatsapp_first_sent_at', true);
+                    $last_sent  = get_post_meta($tid, '_eventosapp_whatsapp_last_sent_at', true);
+                    $sent_status = ($first_sent !== '' || $last_sent !== '') ? 'enviado' : 'no_enviado';
+                }
+            }
+
+            return $whatsapp_tracking_filter === 'enviado' ? $sent_status === 'enviado' : $sent_status !== 'enviado';
         }));
     }
 
