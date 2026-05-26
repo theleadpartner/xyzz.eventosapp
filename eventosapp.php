@@ -858,6 +858,14 @@ register_activation_hook(__FILE__, function () {
 
     // Marca para flushear cuando corra el init real de WP
     update_option('eventosapp_needs_flush', 1);
+
+    // Prepara la tabla central del Log de WhatsApp y su limpieza automática.
+    if ( function_exists('eventosapp_whatsapp_install_log_table') ) {
+        eventosapp_whatsapp_install_log_table();
+    }
+    if ( function_exists('eventosapp_whatsapp_schedule_log_cleanup') ) {
+        eventosapp_whatsapp_schedule_log_cleanup();
+    }
 });
 
 // En el primer init real, registra reglas (tu plugin ya las agrega con add_action('init', ...)) y flushea
@@ -870,6 +878,13 @@ add_action('init', function () {
 
 // (Opcional) Desactivación limpia: remueve el bloque y flushea
 register_deactivation_hook(__FILE__, function () {
+    if ( defined('EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK') ) {
+        $cleanup_timestamp = wp_next_scheduled(EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK);
+        if ( $cleanup_timestamp ) {
+            wp_unschedule_event($cleanup_timestamp, EVENTOSAPP_WHATSAPP_LOG_CLEANUP_HOOK);
+        }
+    }
+
     if ( ! function_exists('insert_with_markers') && file_exists( ABSPATH . 'wp-admin/includes/misc.php' ) ) {
         require_once ABSPATH . 'wp-admin/includes/misc.php';
     }
