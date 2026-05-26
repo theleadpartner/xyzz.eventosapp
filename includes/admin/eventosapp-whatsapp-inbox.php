@@ -15,7 +15,7 @@ if ( ! defined('ABSPATH') ) {
 }
 
 if ( ! defined('EVENTOSAPP_WHATSAPP_INBOX_TABLE_VERSION') ) {
-    define('EVENTOSAPP_WHATSAPP_INBOX_TABLE_VERSION', '2026.05.26.1');
+    define('EVENTOSAPP_WHATSAPP_INBOX_TABLE_VERSION', '2026.05.26.2');
 }
 
 if ( ! defined('EVENTOSAPP_WHATSAPP_INBOX_POST_TYPE') ) {
@@ -149,6 +149,13 @@ function eventosapp_whatsapp_inbox_safe_json($value) {
     return is_string($json) ? $json : '';
 }
 
+function eventosapp_whatsapp_inbox_safe_debug_array($value) {
+    if ( function_exists('eventosapp_whatsapp_sanitize_log_context') ) {
+        $value = eventosapp_whatsapp_sanitize_log_context($value);
+    }
+    return is_array($value) ? $value : [];
+}
+
 function eventosapp_whatsapp_inbox_truncate($text, $length = 140) {
     $text = trim(wp_strip_all_tags((string) $text));
     $length = max(20, absint($length));
@@ -273,6 +280,54 @@ function eventosapp_whatsapp_inbox_table_exists($table_name) {
     global $wpdb;
     $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
     return $found === $table_name;
+}
+
+function eventosapp_whatsapp_inbox_count_messages() {
+    global $wpdb;
+    $table = eventosapp_whatsapp_inbox_messages_table_name();
+    if ( ! eventosapp_whatsapp_inbox_table_exists($table) ) {
+        return 0;
+    }
+    return absint($wpdb->get_var("SELECT COUNT(*) FROM {$table}"));
+}
+
+function eventosapp_whatsapp_inbox_count_conversations() {
+    return absint(wp_count_posts(EVENTOSAPP_WHATSAPP_INBOX_POST_TYPE)->publish ?? 0);
+}
+
+function eventosapp_whatsapp_inbox_get_last_message_debug() {
+    global $wpdb;
+    $table = eventosapp_whatsapp_inbox_messages_table_name();
+    if ( ! eventosapp_whatsapp_inbox_table_exists($table) ) {
+        return [];
+    }
+    $row = $wpdb->get_row("SELECT id, conversation_id, event_id, ticket_id, wa_message_id, direction, status, from_phone, to_phone, sender_phone_number_id, message_type, body, created_at FROM {$table} ORDER BY id DESC LIMIT 1", ARRAY_A);
+    return is_array($row) ? $row : [];
+}
+
+function eventosapp_whatsapp_inbox_render_local_test_form($source = 'inbox') {
+    if ( ! current_user_can('manage_options') ) {
+        return;
+    }
+
+    $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
+    $test_phone = sanitize_text_field((string)($settings['test_phone'] ?? ''));
+    $sender_phone_number_id = function_exists('eventosapp_whatsapp_sanitize_phone_number_id')
+        ? eventosapp_whatsapp_sanitize_phone_number_id($settings['test_phone_number_id'] ?? ($settings['phone_number_id'] ?? ''))
+        : eventosapp_whatsapp_inbox_clean_phone($settings['test_phone_number_id'] ?? ($settings['phone_number_id'] ?? ''));
+    if ( $sender_phone_number_id === '' ) {
+        $sender_phone_number_id = eventosapp_whatsapp_inbox_clean_phone($settings['phone_number_id'] ?? '');
+    }
+    ?>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin:0;">
+        <?php wp_nonce_field('eventosapp_whatsapp_inbox_local_test', 'eventosapp_whatsapp_inbox_local_test_nonce'); ?>
+        <input type="hidden" name="action" value="eventosapp_whatsapp_inbox_local_test">
+        <input type="hidden" name="source" value="<?php echo esc_attr($source); ?>">
+        <input type="hidden" name="from_phone" value="<?php echo esc_attr($test_phone); ?>">
+        <input type="hidden" name="sender_phone_number_id" value="<?php echo esc_attr($sender_phone_number_id); ?>">
+        <?php submit_button('Crear inbound de prueba local', 'secondary', 'submit', false); ?>
+    </form>
+    <?php
 }
 
 /**
@@ -750,6 +805,19 @@ function eventosapp_whatsapp_inbox_handle_inbound_message($message, $value = [],
     if ( $message_db_id ) {
         eventosapp_whatsapp_inbox_update_conversation_after_message($conversation_id, $message_db_id, 'inbound', $parts['body'], $created_at, $event_id, $ticket_id);
 
+        update_option('eventosapp_whatsapp_inbox_last_processed_message', eventosapp_whatsapp_inbox_safe_debug_array([
+            'processed_at' => current_time('mysql'),
+            'conversation_id' => $conversation_id,
+            'inbox_message_id' => $message_db_id,
+            'from_phone' => $from_phone,
+            'wa_message_id' => $wa_message_id,
+            'message_type' => $parts['type'],
+            'event_id' => $event_id,
+            'ticket_id' => $ticket_id,
+            'reply_to_message_id' => $reply_to_message_id,
+            'origin' => $origin,
+        ]), false);
+
         if ( function_exists('eventosapp_whatsapp_insert_central_log') ) {
             eventosapp_whatsapp_insert_central_log([
                 'created_at'             => $created_at,
@@ -785,6 +853,23 @@ function eventosapp_whatsapp_inbox_handle_inbound_message($message, $value = [],
                 'event_id' => $event_id,
                 'ticket_id' => $ticket_id,
                 'origin' => $origin,
+            ]);
+        }
+    } else {
+        update_option('eventosapp_whatsapp_inbox_last_processed_message', eventosapp_whatsapp_inbox_safe_debug_array([
+            'processed_at' => current_time('mysql'),
+            'error' => 'No se pudo insertar el mensaje en la tabla del inbox.',
+            'conversation_id' => $conversation_id,
+            'from_phone' => $from_phone,
+            'wa_message_id' => $wa_message_id,
+            'event_id' => $event_id,
+            'ticket_id' => $ticket_id,
+        ]), false);
+        if ( function_exists('eventosapp_whatsapp_add_activity_log') ) {
+            eventosapp_whatsapp_add_activity_log('inbox_mensaje_no_insertado', [
+                'conversation_id' => $conversation_id,
+                'from' => $from_phone,
+                'message_id' => $wa_message_id,
             ]);
         }
     }
@@ -900,6 +985,44 @@ function eventosapp_whatsapp_inbox_render_styles() {
     <?php
 }
 
+function eventosapp_whatsapp_inbox_render_diagnostics_card() {
+    $webhook_url = admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
+    $webhook_debug = get_option('eventosapp_whatsapp_last_webhook_debug', []);
+    $last_inbound_debug = get_option('eventosapp_whatsapp_last_inbound_debug', []);
+    $last_inbox_debug = get_option('eventosapp_whatsapp_inbox_last_processed_message', []);
+    $last_message = eventosapp_whatsapp_inbox_get_last_message_debug();
+    $last_inbound_by_phone = get_option('eventosapp_whatsapp_last_inbound_by_phone', []);
+    $table = eventosapp_whatsapp_inbox_messages_table_name();
+    $table_exists = eventosapp_whatsapp_inbox_table_exists($table);
+    $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
+    $effective_waba = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : '';
+    ?>
+    <div class="evapp-card">
+        <h2>Diagnóstico rápido del Inbox</h2>
+        <p class="evapp-wa-muted">
+            El inbox no consulta mensajes por cron. WhatsApp Cloud API debe enviar un POST al webhook cuando el usuario responde. Si aquí no aparece un “Último payload webhook recibido”, Meta no está llegando a WordPress.
+        </p>
+        <table class="evapp-wa-inbox-table">
+            <tbody>
+                <tr><th>Webhook configurado</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_url); ?></span></td></tr>
+                <tr><th>WABA efectivo</th><td><?php echo esc_html($effective_waba ?: 'Sin WABA ID configurado'); ?></td></tr>
+                <tr><th>Tabla del inbox</th><td><?php echo $table_exists ? 'Existe: ' . esc_html($table) : 'No existe todavía: ' . esc_html($table); ?></td></tr>
+                <tr><th>Conversaciones / mensajes</th><td><?php echo esc_html((string) eventosapp_whatsapp_inbox_count_conversations()); ?> conversaciones / <?php echo esc_html((string) eventosapp_whatsapp_inbox_count_messages()); ?> mensajes</td></tr>
+                <tr><th>Último payload webhook</th><td><?php echo esc_html($webhook_debug['received_at'] ?? 'Nunca registrado'); ?><?php if ( ! empty($webhook_debug['summary']) && function_exists('eventosapp_whatsapp_render_log_details') ) : ?><br><?php eventosapp_whatsapp_render_log_details($webhook_debug['summary']); ?><?php endif; ?></td></tr>
+                <tr><th>Último mensaje inbound detectado</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_inbound_debug ?: []); } else { echo esc_html(wp_json_encode($last_inbound_debug)); } ?></td></tr>
+                <tr><th>Último mensaje guardado por inbox</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_inbox_debug ?: []); } else { echo esc_html(wp_json_encode($last_inbox_debug)); } ?></td></tr>
+                <tr><th>Último registro en tabla</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_message ?: []); } else { echo esc_html(wp_json_encode($last_message)); } ?></td></tr>
+                <tr><th>Teléfonos con inbound recibido</th><td><?php echo is_array($last_inbound_by_phone) ? esc_html((string) count($last_inbound_by_phone)) : '0'; ?></td></tr>
+            </tbody>
+        </table>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+            <?php eventosapp_whatsapp_inbox_render_local_test_form('inbox'); ?>
+            <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_tickets')); ?>">Abrir diagnóstico API / WABA</a>
+        </div>
+    </div>
+    <?php
+}
+
 function eventosapp_whatsapp_inbox_render_list() {
     $status = isset($_GET['wa_status']) ? sanitize_key(wp_unslash($_GET['wa_status'])) : '';
     $event_id = isset($_GET['event_id']) ? absint($_GET['event_id']) : 0;
@@ -956,6 +1079,7 @@ function eventosapp_whatsapp_inbox_render_list() {
         <p>Mensajes entrantes recibidos desde los números configurados en WhatsApp Cloud API. Cada conversación funciona como un ticket interno de atención.</p>
         <?php eventosapp_whatsapp_inbox_render_notices(); ?>
         <?php eventosapp_whatsapp_inbox_render_styles(); ?>
+        <?php eventosapp_whatsapp_inbox_render_diagnostics_card(); ?>
 
         <form method="get" class="evapp-wa-inbox-filters">
             <input type="hidden" name="page" value="eventosapp_whatsapp_inbox">
@@ -1185,6 +1309,77 @@ function eventosapp_whatsapp_inbox_render_conversation($conversation_id) {
     </div>
     <?php
 }
+
+add_action('admin_post_eventosapp_whatsapp_inbox_local_test', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes para probar el inbox.');
+    }
+    if ( ! isset($_POST['eventosapp_whatsapp_inbox_local_test_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_inbox_local_test_nonce'], 'eventosapp_whatsapp_inbox_local_test') ) {
+        wp_die('Nonce inválido.');
+    }
+
+    $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
+    $from_phone = isset($_POST['from_phone']) ? eventosapp_whatsapp_inbox_clean_phone(wp_unslash($_POST['from_phone'])) : '';
+    if ( $from_phone === '' ) {
+        $from_phone = eventosapp_whatsapp_inbox_clean_phone($settings['test_phone'] ?? '');
+    }
+    if ( $from_phone === '' ) {
+        $from_phone = '573000000000';
+    }
+
+    $sender_phone_number_id = isset($_POST['sender_phone_number_id']) ? eventosapp_whatsapp_inbox_clean_phone(wp_unslash($_POST['sender_phone_number_id'])) : '';
+    if ( $sender_phone_number_id === '' ) {
+        $sender_phone_number_id = eventosapp_whatsapp_inbox_clean_phone($settings['test_phone_number_id'] ?? ($settings['phone_number_id'] ?? ''));
+    }
+
+    $now = current_time('timestamp');
+    $message_id = 'local_test_inbound_' . $now . '_' . wp_rand(1000, 9999);
+    $message = [
+        'from' => $from_phone,
+        'id' => $message_id,
+        'timestamp' => (string) $now,
+        'type' => 'text',
+        'text' => [
+            'body' => 'Mensaje local de prueba para validar que el Inbox WhatsApp puede crear conversaciones sin depender de Meta.',
+        ],
+    ];
+    $value = [
+        'messaging_product' => 'whatsapp',
+        'metadata' => [
+            'display_phone_number' => $settings['phone_number_label'] ?? 'EventosApp',
+            'phone_number_id' => $sender_phone_number_id,
+        ],
+        'contacts' => [
+            [
+                'profile' => ['name' => 'Contacto de prueba local'],
+                'wa_id' => $from_phone,
+            ],
+        ],
+    ];
+
+    eventosapp_whatsapp_inbox_handle_inbound_message($message, $value, [], [], ['local_test' => true]);
+
+    if ( function_exists('eventosapp_whatsapp_process_webhook_inbound_message') ) {
+        eventosapp_whatsapp_process_webhook_inbound_message($message);
+    }
+
+    $source = isset($_POST['source']) ? sanitize_key(wp_unslash($_POST['source'])) : 'inbox';
+    if ( $source === 'settings' ) {
+        wp_safe_redirect(add_query_arg([
+            'page' => 'eventosapp_whatsapp_tickets',
+            'evapp_whatsapp_webhook_diag' => '1',
+            'evapp_whatsapp_msg' => rawurlencode('Mensaje local de prueba creado. Si aparece en el inbox, el módulo funciona y el pendiente está en la configuración de Meta/webhook.'),
+        ], admin_url('admin.php')));
+        exit;
+    }
+
+    wp_safe_redirect(add_query_arg([
+        'page' => 'eventosapp_whatsapp_inbox',
+        'evapp_wa_inbox_reply' => '1',
+        'evapp_wa_inbox_msg' => rawurlencode('Mensaje local de prueba creado. Si aparece en el inbox, el módulo funciona y el pendiente está en la configuración de Meta/webhook.'),
+    ], admin_url('admin.php')));
+    exit;
+});
 
 add_action('admin_post_eventosapp_whatsapp_inbox_update_conversation', function() {
     if ( ! current_user_can('manage_options') ) {
