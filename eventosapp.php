@@ -743,6 +743,10 @@ eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-masivo.php',
     'eventosapp-whatsapp-masivo.php',
 ]);
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-whatsapp-inbox.php',
+    'eventosapp-whatsapp-inbox.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-generador-masivo-qr.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-edit.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-metrics.php';
@@ -865,6 +869,11 @@ register_activation_hook(__FILE__, function () {
     }
     if ( function_exists('eventosapp_whatsapp_schedule_log_cleanup') ) {
         eventosapp_whatsapp_schedule_log_cleanup();
+    }
+
+    // Prepara la tabla independiente del Inbox de WhatsApp.
+    if ( function_exists('eventosapp_whatsapp_inbox_install_tables') ) {
+        eventosapp_whatsapp_inbox_install_tables();
     }
 });
 
