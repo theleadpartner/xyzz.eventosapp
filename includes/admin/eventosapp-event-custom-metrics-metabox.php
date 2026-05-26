@@ -569,6 +569,12 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
             }
         }
 
+        $cache_key = 'evapp_metrics_records_' . md5($event_id . '|' . wp_json_encode(array_map(function($f){ return isset($f['key']) ? $f['key'] : ''; }, $fields)));
+        $cached_records = get_transient($cache_key);
+        if ( is_array($cached_records) ) {
+            return $cached_records;
+        }
+
         $query = new WP_Query([
             'post_type'              => 'eventosapp_ticket',
             'post_status'            => 'any',
@@ -599,6 +605,8 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
             }
             $records[] = $record;
         }
+
+        set_transient($cache_key, $records, 2 * MINUTE_IN_SECONDS);
         return $records;
     }
 }
