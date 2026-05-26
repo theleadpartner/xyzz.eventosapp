@@ -740,7 +740,6 @@ eventosapp_require_first_existing_file([
 ]);
 eventosapp_require_first_existing_file([
     'includes/functions/eventosapp-whatsapp-masivo.php',
-    'includes/admin/eventosapp-whatsapp-masivo.php',
     'eventosapp-whatsapp-masivo.php',
 ]);
 eventosapp_require_first_existing_file([
