@@ -864,6 +864,15 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
 
     global $wpdb;
 
+    $force_refresh = ! empty($_POST['force_refresh']);
+    $cache_key = 'evapp_face_data_' . absint($event_id);
+    if ( ! $force_refresh ) {
+        $cached_payload = get_transient($cache_key);
+        if ( is_array($cached_payload) ) {
+            wp_send_json_success($cached_payload);
+        }
+    }
+
     // ── Paso 1: Obtener cédulas registradas en tickets del evento ──────────
     $cedulas_evento = $wpdb->get_col( $wpdb->prepare(
         "SELECT DISTINCT pm_cc.meta_value
@@ -954,11 +963,16 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
     sort( $version_data );
     $cache_version = substr( md5( implode( '|', $version_data ) . '|n' . $total_urls ), 0, 12 );
 
-    wp_send_json_success( [
+    $response = [
         'asistentes'    => $resultado,
         'total'         => count( $resultado ),
         'cache_version' => $cache_version,
-    ] );
+    ];
+
+    // Cache corto para evitar reconstruir el dataset completo en cada recarga del lector facial.
+    set_transient($cache_key, $response, 10 * MINUTE_IN_SECONDS);
+
+    wp_send_json_success( $response );
 } );
 
 
@@ -993,7 +1007,10 @@ add_action( 'wp_ajax_evapp_face_checkin_process', function () {
         wp_send_json_error( ['error' => 'Datos incompletos (cédula o evento).'] );
     }
 
-    error_log( "[EventosApp FaceCheckin] Cédula: $cedula | Evento: $event_id" );
+    eventosapp_face_checkin_debug_log('Solicitud de check-in facial', [
+        'event_id' => $event_id,
+        'cedula'   => $cedula,
+    ]);
 
     // Buscar ticket por cédula + evento usando la función existente
     $ticket_post_id = false;
@@ -1004,30 +1021,37 @@ add_action( 'wp_ajax_evapp_face_checkin_process', function () {
     if ( ! $ticket_post_id ) {
         // Intento directo por meta si la función no está disponible
         global $wpdb;
-        $ids = $wpdb->get_col( $wpdb->prepare(
-            "SELECT pm.post_id
-               FROM {$wpdb->postmeta} pm
-               JOIN {$wpdb->posts} p ON p.ID = pm.post_id
-              WHERE pm.meta_key   = '_eventosapp_asistente_cc'
-                AND pm.meta_value = %s
-                AND p.post_type   = 'eventosapp_ticket'
-                AND p.post_status != 'trash'",
+        $ticket_post_id = $wpdb->get_var( $wpdb->prepare(
+            "SELECT cc_pm.post_id
+               FROM {$wpdb->postmeta} cc_pm
+               INNER JOIN {$wpdb->postmeta} event_pm
+                       ON event_pm.post_id = cc_pm.post_id
+                      AND event_pm.meta_key = %s
+                      AND event_pm.meta_value = %s
+               INNER JOIN {$wpdb->posts} p
+                       ON p.ID = cc_pm.post_id
+                      AND p.post_type = 'eventosapp_ticket'
+                      AND p.post_status NOT IN ('trash','auto-draft','inherit')
+              WHERE cc_pm.meta_key = %s
+                AND cc_pm.meta_value = %s
+              LIMIT 1",
+            '_eventosapp_ticket_evento_id',
+            (string) absint($event_id),
+            '_eventosapp_asistente_cc',
             $cedula
         ) );
-        if ( $ids ) {
-            foreach ( $ids as $cand ) {
-                if ( (int) get_post_meta( $cand, '_eventosapp_ticket_evento_id', true ) === $event_id ) {
-                    $ticket_post_id = (int) $cand;
-                    break;
-                }
-            }
-        }
+        $ticket_post_id = $ticket_post_id ? absint($ticket_post_id) : false;
     }
 
     if ( ! $ticket_post_id ) {
-        error_log( "[EventosApp FaceCheckin] Ticket no encontrado para cédula $cedula en evento $event_id" );
+        eventosapp_face_checkin_debug_log('Ticket no encontrado', [
+            'event_id' => $event_id,
+            'cedula'   => $cedula,
+        ]);
         wp_send_json_error( ['error' => 'No se encontró ticket para esta persona en el evento activo.'] );
     }
+
+    update_meta_cache('post', [$ticket_post_id, $event_id]);
 
     // ── Control de pago (misma lógica que QR checkin) ───────────────────────
     $control_pago_activo = ( get_post_meta( $event_id, '_eventosapp_ticket_control_pago', true ) === '1' );
@@ -1108,9 +1132,17 @@ add_action( 'wp_ajax_evapp_face_checkin_process', function () {
             eventosapp_update_qr_usage_stats( $event_id, 'face_recognition' );
         }
 
-        error_log( "[EventosApp FaceCheckin] Check-in realizado - Ticket: $ticket_post_id | Cédula: $cedula | Fecha: $today" );
+        eventosapp_face_checkin_debug_log('Check-in facial realizado', [
+            'event_id'  => $event_id,
+            'ticket_id' => $ticket_post_id,
+            'fecha'     => $today,
+        ]);
     } else {
-        error_log( "[EventosApp FaceCheckin] Ya tenía check-in hoy - Ticket: $ticket_post_id | Cédula: $cedula" );
+        eventosapp_face_checkin_debug_log('Check-in facial ya registrado para hoy', [
+            'event_id'  => $event_id,
+            'ticket_id' => $ticket_post_id,
+            'fecha'     => $today,
+        ]);
     }
 
     // ── Respuesta ────────────────────────────────────────────────────────────
