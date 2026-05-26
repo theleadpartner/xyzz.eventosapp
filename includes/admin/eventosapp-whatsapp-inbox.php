@@ -15,7 +15,7 @@ if ( ! defined('ABSPATH') ) {
 }
 
 if ( ! defined('EVENTOSAPP_WHATSAPP_INBOX_TABLE_VERSION') ) {
-    define('EVENTOSAPP_WHATSAPP_INBOX_TABLE_VERSION', '2026.05.26.2');
+    define('EVENTOSAPP_WHATSAPP_INBOX_TABLE_VERSION', '2026.05.26.3');
 }
 
 if ( ! defined('EVENTOSAPP_WHATSAPP_INBOX_POST_TYPE') ) {
@@ -127,6 +127,34 @@ function eventosapp_whatsapp_inbox_status_label($status) {
     $status = sanitize_key((string) $status);
     $statuses = eventosapp_whatsapp_inbox_statuses();
     return $statuses[$status] ?? 'Abierto';
+}
+
+
+/**
+ * Tipos de cierre usados para clasificar conversaciones finalizadas.
+ */
+function eventosapp_whatsapp_inbox_close_types() {
+    return [
+        'atendido'              => 'Atendido / respuesta entregada',
+        'registro_confirmado'   => 'Registro o asistencia confirmada',
+        'soporte_resuelto'      => 'Soporte resuelto',
+        'informacion_enviada'   => 'Información enviada',
+        'no_requiere_respuesta' => 'No requiere respuesta',
+        'numero_equivocado'     => 'Número equivocado',
+        'spam'                  => 'Spam / no relacionado',
+        'otro'                  => 'Otro cierre',
+    ];
+}
+
+function eventosapp_whatsapp_inbox_close_type_label($type) {
+    $type = sanitize_key((string) $type);
+    $types = eventosapp_whatsapp_inbox_close_types();
+    return $types[$type] ?? '';
+}
+
+function eventosapp_whatsapp_inbox_is_final_status($status) {
+    $status = sanitize_key((string) $status);
+    return in_array($status, ['resolved', 'closed'], true);
 }
 
 function eventosapp_whatsapp_inbox_clean_phone($phone) {
@@ -704,6 +732,12 @@ function eventosapp_whatsapp_inbox_update_conversation_after_message($conversati
     update_post_meta($conversation_id, '_evapp_wa_inbox_last_message_at', $created_at);
     update_post_meta($conversation_id, '_evapp_wa_inbox_last_activity_at', $created_at);
 
+    if ( $direction === 'inbound' ) {
+        update_post_meta($conversation_id, '_evapp_wa_inbox_last_inbound_at', $created_at);
+    } elseif ( $direction === 'outbound' ) {
+        update_post_meta($conversation_id, '_evapp_wa_inbox_last_outbound_at', $created_at);
+    }
+
     if ( $event_id ) {
         update_post_meta($conversation_id, '_evapp_wa_inbox_event_id', absint($event_id));
     }
@@ -916,6 +950,141 @@ function eventosapp_whatsapp_inbox_get_messages($conversation_id, $limit = 200) 
     ), ARRAY_A);
 }
 
+
+function eventosapp_whatsapp_inbox_get_latest_message_id($conversation_id = 0) {
+    global $wpdb;
+    eventosapp_whatsapp_inbox_maybe_install_tables();
+    $table = eventosapp_whatsapp_inbox_messages_table_name();
+    if ( ! eventosapp_whatsapp_inbox_table_exists($table) ) {
+        return 0;
+    }
+
+    $conversation_id = absint($conversation_id);
+    if ( $conversation_id ) {
+        return absint($wpdb->get_var($wpdb->prepare(
+            "SELECT MAX(id) FROM {$table} WHERE conversation_id = %d",
+            $conversation_id
+        )));
+    }
+
+    return absint($wpdb->get_var("SELECT MAX(id) FROM {$table}"));
+}
+
+function eventosapp_whatsapp_inbox_get_latest_message_row($conversation_id = 0) {
+    global $wpdb;
+    eventosapp_whatsapp_inbox_maybe_install_tables();
+    $table = eventosapp_whatsapp_inbox_messages_table_name();
+    if ( ! eventosapp_whatsapp_inbox_table_exists($table) ) {
+        return [];
+    }
+
+    $conversation_id = absint($conversation_id);
+    if ( $conversation_id ) {
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE conversation_id = %d ORDER BY id DESC LIMIT 1",
+            $conversation_id
+        ), ARRAY_A);
+    } else {
+        $row = $wpdb->get_row("SELECT * FROM {$table} ORDER BY id DESC LIMIT 1", ARRAY_A);
+    }
+
+    return is_array($row) ? $row : [];
+}
+
+function eventosapp_whatsapp_inbox_get_new_messages($conversation_id, $last_message_id = 0, $limit = 50) {
+    global $wpdb;
+    $conversation_id = absint($conversation_id);
+    $last_message_id = absint($last_message_id);
+    $limit = min(100, max(1, absint($limit)));
+
+    if ( ! $conversation_id ) {
+        return [];
+    }
+
+    eventosapp_whatsapp_inbox_maybe_install_tables();
+    $table = eventosapp_whatsapp_inbox_messages_table_name();
+    if ( ! eventosapp_whatsapp_inbox_table_exists($table) ) {
+        return [];
+    }
+
+    return $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM {$table} WHERE conversation_id = %d AND id > %d ORDER BY id ASC LIMIT %d",
+        $conversation_id,
+        $last_message_id,
+        $limit
+    ), ARRAY_A);
+}
+
+function eventosapp_whatsapp_inbox_format_datetime_label($datetime) {
+    $datetime = sanitize_text_field((string) $datetime);
+    if ( $datetime === '' ) {
+        return '';
+    }
+    $timestamp = strtotime($datetime);
+    if ( ! $timestamp ) {
+        return $datetime;
+    }
+    return date_i18n('Y-m-d H:i:s', $timestamp);
+}
+
+function eventosapp_whatsapp_inbox_render_debug_details($summary, $data, $open = false) {
+    $summary = sanitize_text_field((string) $summary);
+    $data = is_array($data) ? $data : [];
+    ?>
+    <details class="evapp-wa-debug-details" <?php echo $open ? 'open' : ''; ?>>
+        <summary><?php echo esc_html($summary); ?></summary>
+        <div class="evapp-wa-debug-box">
+            <?php
+            if ( function_exists('eventosapp_whatsapp_render_log_details') ) {
+                eventosapp_whatsapp_render_log_details($data);
+            } else {
+                echo '<pre>' . esc_html(wp_json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '</pre>';
+            }
+            ?>
+        </div>
+    </details>
+    <?php
+}
+
+function eventosapp_whatsapp_inbox_render_message_html($message, $return = false) {
+    $message = is_array($message) ? $message : [];
+    $direction = sanitize_key((string)($message['direction'] ?? 'inbound'));
+    $body = (string)($message['body'] ?? '');
+    $contact_name = sanitize_text_field((string)($message['contact_name'] ?? ''));
+    $created_at = eventosapp_whatsapp_inbox_format_datetime_label($message['created_at'] ?? '');
+    $message_type = sanitize_key((string)($message['message_type'] ?? 'unknown'));
+    $status = sanitize_text_field((string)($message['status'] ?? ''));
+    $wa_message_id = sanitize_text_field((string)($message['wa_message_id'] ?? ''));
+    $reply_to_message_id = sanitize_text_field((string)($message['reply_to_message_id'] ?? ''));
+    $message_id = absint($message['id'] ?? 0);
+
+    ob_start();
+    ?>
+    <div class="evapp-wa-message <?php echo esc_attr($direction); ?>" data-message-id="<?php echo esc_attr($message_id); ?>">
+        <div class="evapp-wa-message-header">
+            <strong><?php echo $direction === 'outbound' ? 'EventosApp' : esc_html($contact_name ?: 'Contacto'); ?></strong>
+            <span><?php echo esc_html($created_at); ?></span>
+        </div>
+        <div class="evapp-wa-message-body"><?php echo esc_html($body); ?></div>
+        <details class="evapp-wa-message-meta">
+            <summary>Detalle técnico</summary>
+            <div class="evapp-wa-muted" style="margin-top:8px;">
+                Tipo: <?php echo esc_html($message_type); ?> — Estado: <?php echo esc_html($status); ?><br>
+                <?php if ( $wa_message_id !== '' ) : ?>Message ID: <span class="evapp-wa-break"><?php echo esc_html($wa_message_id); ?></span><?php endif; ?>
+                <?php if ( $reply_to_message_id !== '' ) : ?><br>Responde a: <span class="evapp-wa-break"><?php echo esc_html($reply_to_message_id); ?></span><?php endif; ?>
+            </div>
+        </details>
+    </div>
+    <?php
+    $html = ob_get_clean();
+
+    if ( $return ) {
+        return $html;
+    }
+
+    echo $html;
+}
+
 function eventosapp_whatsapp_inbox_find_conversations_by_message_search($search) {
     global $wpdb;
     $search = trim((string) $search);
@@ -963,25 +1132,198 @@ function eventosapp_whatsapp_inbox_render_notices() {
 function eventosapp_whatsapp_inbox_render_styles() {
     ?>
     <style>
-        .evapp-wa-inbox-wrap .evapp-card{background:#fff;border:1px solid #ccd0d4;border-radius:8px;padding:16px;margin:16px 0;}
+        .evapp-wa-inbox-wrap .evapp-card{background:#fff;border:1px solid #d7dce2;border-radius:12px;padding:18px;margin:16px 0;box-shadow:0 1px 1px rgba(0,0,0,.03);}
+        .evapp-wa-inbox-wrap .evapp-card h2{margin-top:0;}
+        .evapp-wa-inbox-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;}
+        .evapp-wa-live-pill{display:inline-flex;align-items:center;gap:7px;border:1px solid #c3dafe;background:#eef6ff;color:#1d4ed8;border-radius:999px;padding:6px 11px;font-size:12px;font-weight:700;}
+        .evapp-wa-live-dot{width:8px;height:8px;border-radius:999px;background:#22c55e;display:inline-block;box-shadow:0 0 0 4px rgba(34,197,94,.15);}
         .evapp-wa-inbox-filters{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:12px 0 18px;}
         .evapp-wa-inbox-filters label{font-weight:600;display:block;margin-bottom:4px;}
-        .evapp-wa-inbox-filters input,.evapp-wa-inbox-filters select{min-width:180px;}
+        .evapp-wa-inbox-filters input,.evapp-wa-inbox-filters select{min-width:180px;max-width:260px;}
         .evapp-wa-inbox-table{width:100%;border-collapse:collapse;background:#fff;}
         .evapp-wa-inbox-table th,.evapp-wa-inbox-table td{border:1px solid #dcdcde;padding:9px;text-align:left;vertical-align:top;}
         .evapp-wa-inbox-table th{background:#f6f7f7;}
+        .evapp-wa-inbox-table tr.evapp-wa-row-unread{background:#f8fbff;}
         .evapp-wa-badge{display:inline-block;border-radius:999px;padding:3px 9px;font-size:12px;line-height:1.4;background:#eef2ff;color:#1d3a8a;font-weight:600;}
         .evapp-wa-badge.open{background:#e7f7ed;color:#0a6b2b;}.evapp-wa-badge.pending{background:#fff4d6;color:#7a4b00;}.evapp-wa-badge.resolved{background:#edf7ff;color:#055a8c;}.evapp-wa-badge.closed{background:#f1f1f1;color:#555;}
         .evapp-wa-muted{color:#646970;font-size:12px;}.evapp-wa-break{word-break:break-all;}
-        .evapp-wa-thread{display:flex;flex-direction:column;gap:12px;max-width:980px;}
-        .evapp-wa-message{border:1px solid #dcdcde;border-radius:10px;padding:10px 12px;max-width:760px;background:#fff;}
-        .evapp-wa-message.inbound{align-self:flex-start;background:#fff;}.evapp-wa-message.outbound{align-self:flex-end;background:#f0f6fc;}
+        .evapp-wa-grid{display:grid;grid-template-columns:210px minmax(260px,1fr);gap:12px 16px;align-items:center;max-width:980px;}
+        .evapp-wa-grid label{font-weight:600;}.evapp-wa-grid textarea,.evapp-wa-grid select,.evapp-wa-grid input[type="text"]{width:100%;}
+        .evapp-wa-thread-shell{max-width:1040px;max-height:560px;overflow-y:auto;border:1px solid #d7dce2;border-radius:14px;background:#f6f7f7;padding:16px;scroll-behavior:smooth;}
+        .evapp-wa-thread{display:flex;flex-direction:column;gap:12px;min-height:180px;}
+        .evapp-wa-message{border:1px solid #dcdcde;border-radius:14px;padding:10px 12px;max-width:72%;background:#fff;box-shadow:0 1px 1px rgba(0,0,0,.03);}
+        .evapp-wa-message.inbound{align-self:flex-start;background:#fff;}.evapp-wa-message.outbound{align-self:flex-end;background:#eaf3ff;border-color:#c6defa;}
         .evapp-wa-message-header{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:12px;color:#646970;}
         .evapp-wa-message-body{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.45;}
-        .evapp-wa-grid{display:grid;grid-template-columns:210px minmax(260px,1fr);gap:12px 16px;align-items:center;max-width:900px;}
-        .evapp-wa-grid label{font-weight:600;}.evapp-wa-grid textarea,.evapp-wa-grid select,.evapp-wa-grid input[type="text"]{width:100%;}
-        @media (max-width: 782px){.evapp-wa-grid{grid-template-columns:1fr;}.evapp-wa-message{max-width:100%;}}
+        .evapp-wa-message-meta{margin-top:8px;font-size:12px;color:#646970;}
+        .evapp-wa-message-meta summary{cursor:pointer;color:#3c434a;}
+        .evapp-wa-reply-box textarea{width:100%;max-width:1040px;min-height:92px;border-radius:10px;}
+        .evapp-wa-reply-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;}
+        .evapp-wa-debug-details summary{cursor:pointer;font-weight:600;color:#1d4ed8;}
+        .evapp-wa-debug-box{margin-top:10px;max-height:260px;overflow:auto;background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:10px;}
+        .evapp-wa-debug-box pre{white-space:pre-wrap;margin:0;}
+        .evapp-wa-live-toast{position:fixed;right:24px;bottom:24px;z-index:99999;max-width:360px;background:#1d2327;color:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 12px 28px rgba(0,0,0,.22);display:none;}
+        .evapp-wa-live-toast.is-visible{display:block;}
+        .evapp-wa-live-toast strong{display:block;margin-bottom:4px;}.evapp-wa-live-toast p{margin:0 0 10px;color:#f0f0f1;}
+        .evapp-wa-live-toast a,.evapp-wa-live-toast button{margin-right:8px;}
+        @media (max-width: 782px){.evapp-wa-grid{grid-template-columns:1fr;}.evapp-wa-message{max-width:94%;}.evapp-wa-thread-shell{max-height:520px;}}
     </style>
+    <?php
+}
+
+function eventosapp_whatsapp_inbox_render_live_script($mode, $args = []) {
+    $mode = sanitize_key((string) $mode);
+    $config = [
+        'ajaxUrl'        => admin_url('admin-ajax.php'),
+        'nonce'          => wp_create_nonce('eventosapp_whatsapp_inbox_live'),
+        'mode'           => $mode,
+        'conversationId' => absint($args['conversation_id'] ?? 0),
+        'lastMessageId'  => absint($args['last_message_id'] ?? 0),
+        'listInterval'   => 15000,
+        'threadInterval' => 6000,
+        'idleInterval'   => 45000,
+    ];
+    ?>
+    <script>
+    (function(){
+        var cfg = <?php echo wp_json_encode($config); ?>;
+        var timer = null;
+        var running = false;
+        var originalTitle = document.title;
+        var unseenCount = 0;
+        var toast = document.getElementById('evapp-wa-live-toast');
+        var threadShell = document.getElementById('evapp-wa-thread-shell');
+        var thread = document.getElementById('evapp-wa-thread');
+        var statusNode = document.getElementById('evapp-wa-live-status-text');
+        var enableNotifications = document.getElementById('evapp-wa-enable-notifications');
+
+        function setStatus(text) {
+            if (statusNode) {
+                statusNode.textContent = text;
+            }
+        }
+
+        function schedule(delay) {
+            window.clearTimeout(timer);
+            timer = window.setTimeout(poll, delay);
+        }
+
+        function notify(title, body, url) {
+            unseenCount++;
+            document.title = '(' + unseenCount + ') ' + originalTitle;
+
+            if (toast) {
+                toast.querySelector('[data-wa-toast-title]').textContent = title;
+                toast.querySelector('[data-wa-toast-body]').textContent = body || '';
+                var link = toast.querySelector('[data-wa-toast-link]');
+                if (link && url) {
+                    link.href = url;
+                    link.style.display = 'inline-block';
+                } else if (link) {
+                    link.style.display = 'none';
+                }
+                toast.classList.add('is-visible');
+            }
+
+            if ('Notification' in window && Notification.permission === 'granted') {
+                try {
+                    var n = new Notification(title, { body: body || 'Nuevo mensaje recibido en EventosApp.' });
+                    if (url) {
+                        n.onclick = function(){ window.focus(); window.location.href = url; };
+                    }
+                } catch(e) {}
+            }
+        }
+
+        function appendMessages(html, latestId) {
+            if (!thread || !html) {
+                return;
+            }
+            thread.insertAdjacentHTML('beforeend', html);
+            cfg.lastMessageId = latestId || cfg.lastMessageId;
+            if (threadShell) {
+                threadShell.scrollTop = threadShell.scrollHeight;
+            }
+        }
+
+        function poll() {
+            if (running) {
+                schedule(cfg.mode === 'conversation' ? cfg.threadInterval : cfg.listInterval);
+                return;
+            }
+            if (document.hidden) {
+                schedule(cfg.idleInterval);
+                return;
+            }
+
+            running = true;
+            var form = new FormData();
+            form.append('action', 'eventosapp_whatsapp_inbox_poll');
+            form.append('nonce', cfg.nonce);
+            form.append('mode', cfg.mode);
+            form.append('conversation_id', cfg.conversationId);
+            form.append('last_message_id', cfg.lastMessageId);
+
+            fetch(cfg.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: form })
+                .then(function(r){ return r.json(); })
+                .then(function(res){
+                    if (!res || !res.success || !res.data) {
+                        setStatus('Sin conexión de actualización automática. Reintentando...');
+                        return;
+                    }
+                    var data = res.data;
+                    setStatus('Actualizado ' + (data.checked_at || 'ahora'));
+
+                    if (cfg.mode === 'conversation') {
+                        if (data.new_count > 0) {
+                            appendMessages(data.messages_html || '', data.latest_message_id || cfg.lastMessageId);
+                            notify('Nuevo mensaje de WhatsApp', data.latest_preview || 'La conversación recibió un mensaje nuevo.', data.conversation_url || '');
+                        } else if (data.latest_message_id) {
+                            cfg.lastMessageId = data.latest_message_id;
+                        }
+                    } else {
+                        if (data.has_new) {
+                            cfg.lastMessageId = data.latest_message_id || cfg.lastMessageId;
+                            notify('Nuevo mensaje en el Inbox WhatsApp', data.latest_preview || 'Hay un nuevo mensaje entrante.', data.conversation_url || '');
+                        }
+                    }
+                })
+                .catch(function(){
+                    setStatus('No se pudo revisar en tiempo real. Reintentando...');
+                })
+                .finally(function(){
+                    running = false;
+                    schedule(cfg.mode === 'conversation' ? cfg.threadInterval : cfg.listInterval);
+                });
+        }
+
+        if (enableNotifications && 'Notification' in window) {
+            enableNotifications.style.display = 'inline-block';
+            enableNotifications.addEventListener('click', function(e){
+                e.preventDefault();
+                Notification.requestPermission().then(function(permission){
+                    if (permission === 'granted') {
+                        setStatus('Notificaciones del navegador activadas.');
+                    }
+                });
+            });
+        }
+
+        document.addEventListener('visibilitychange', function(){
+            if (!document.hidden) {
+                document.title = originalTitle;
+                unseenCount = 0;
+                schedule(500);
+            }
+        });
+
+        if (threadShell) {
+            threadShell.scrollTop = threadShell.scrollHeight;
+        }
+
+        schedule(cfg.mode === 'conversation' ? cfg.threadInterval : cfg.listInterval);
+    })();
+    </script>
     <?php
 }
 
@@ -1001,10 +1343,15 @@ function eventosapp_whatsapp_inbox_render_diagnostics_card() {
     $effective_waba = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : '';
     ?>
     <div class="evapp-card">
-        <h2>Diagnóstico rápido del Inbox</h2>
-        <p class="evapp-wa-muted">
-            El inbox no consulta mensajes por cron. WhatsApp Cloud API debe enviar un POST al webhook cuando el usuario responde. Si aquí no aparece un “Último payload webhook recibido”, Meta no está llegando a WordPress.
-        </p>
+        <div class="evapp-wa-inbox-header">
+            <div>
+                <h2>Diagnóstico rápido del Inbox</h2>
+                <p class="evapp-wa-muted">
+                    El inbox recibe mensajes por webhook de Meta. Los detalles técnicos quedan comprimidos para que no ocupen la pantalla completa.
+                </p>
+            </div>
+            <span class="evapp-wa-live-pill"><span class="evapp-wa-live-dot"></span><span id="evapp-wa-live-status-text">Actualización automática activa</span></span>
+        </div>
         <table class="evapp-wa-inbox-table">
             <tbody>
                 <tr><th>Webhook recomendado para Meta</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_url); ?></span></td></tr>
@@ -1012,12 +1359,12 @@ function eventosapp_whatsapp_inbox_render_diagnostics_card() {
                 <tr><th>WABA efectivo</th><td><?php echo esc_html($effective_waba ?: 'Sin WABA ID configurado'); ?></td></tr>
                 <tr><th>Tabla del inbox</th><td><?php echo $table_exists ? 'Existe: ' . esc_html($table) : 'No existe todavía: ' . esc_html($table); ?></td></tr>
                 <tr><th>Conversaciones / mensajes</th><td><?php echo esc_html((string) eventosapp_whatsapp_inbox_count_conversations()); ?> conversaciones / <?php echo esc_html((string) eventosapp_whatsapp_inbox_count_messages()); ?> mensajes</td></tr>
-                <tr><th>Último intento HTTP recibido</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details(is_array($last_transport_debug) ? $last_transport_debug : []); } else { echo esc_html(wp_json_encode($last_transport_debug)); } ?></td></tr>
-                <tr><th>Última prueba de endpoint público</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_endpoint_test ?: []); } else { echo esc_html(wp_json_encode($last_endpoint_test)); } ?></td></tr>
-                <tr><th>Último payload webhook</th><td><?php echo esc_html($webhook_debug['received_at'] ?? 'Nunca registrado'); ?><?php if ( ! empty($webhook_debug['summary']) && function_exists('eventosapp_whatsapp_render_log_details') ) : ?><br><?php eventosapp_whatsapp_render_log_details($webhook_debug['summary']); ?><?php endif; ?></td></tr>
-                <tr><th>Último mensaje inbound detectado</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_inbound_debug ?: []); } else { echo esc_html(wp_json_encode($last_inbound_debug)); } ?></td></tr>
-                <tr><th>Último mensaje guardado por inbox</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_inbox_debug ?: []); } else { echo esc_html(wp_json_encode($last_inbox_debug)); } ?></td></tr>
-                <tr><th>Último registro en tabla</th><td><?php if ( function_exists('eventosapp_whatsapp_render_log_details') ) { eventosapp_whatsapp_render_log_details($last_message ?: []); } else { echo esc_html(wp_json_encode($last_message)); } ?></td></tr>
+                <tr><th>Último payload webhook</th><td><?php echo esc_html($webhook_debug['received_at'] ?? 'Nunca registrado'); ?><?php if ( ! empty($webhook_debug['summary']) ) : ?><?php eventosapp_whatsapp_inbox_render_debug_details('Ver resumen técnico del payload', $webhook_debug['summary']); ?><?php endif; ?></td></tr>
+                <tr><th>Último intento HTTP recibido</th><td><?php eventosapp_whatsapp_inbox_render_debug_details('Ver detalle del intento HTTP', is_array($last_transport_debug) ? $last_transport_debug : []); ?></td></tr>
+                <tr><th>Última prueba de endpoint público</th><td><?php eventosapp_whatsapp_inbox_render_debug_details('Ver detalle de la prueba', $last_endpoint_test ?: []); ?></td></tr>
+                <tr><th>Último mensaje inbound detectado</th><td><?php eventosapp_whatsapp_inbox_render_debug_details('Ver inbound detectado', $last_inbound_debug ?: []); ?></td></tr>
+                <tr><th>Último mensaje guardado por inbox</th><td><?php eventosapp_whatsapp_inbox_render_debug_details('Ver guardado del inbox', $last_inbox_debug ?: []); ?></td></tr>
+                <tr><th>Último registro en tabla</th><td><?php eventosapp_whatsapp_inbox_render_debug_details('Ver último registro', $last_message ?: []); ?></td></tr>
                 <tr><th>Teléfonos con inbound recibido</th><td><?php echo is_array($last_inbound_by_phone) ? esc_html((string) count($last_inbound_by_phone)) : '0'; ?></td></tr>
             </tbody>
         </table>
@@ -1031,6 +1378,7 @@ function eventosapp_whatsapp_inbox_render_diagnostics_card() {
                 </form>
             <?php endif; ?>
             <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_tickets')); ?>">Abrir diagnóstico API / WABA</a>
+            <button type="button" class="button" id="evapp-wa-enable-notifications" style="display:none;">Activar notificaciones del navegador</button>
         </div>
     </div>
     <?php
@@ -1040,6 +1388,10 @@ function eventosapp_whatsapp_inbox_render_list() {
     $status = isset($_GET['wa_status']) ? sanitize_key(wp_unslash($_GET['wa_status'])) : '';
     $event_id = isset($_GET['event_id']) ? absint($_GET['event_id']) : 0;
     $sender_phone_number_id = isset($_GET['sender_phone_number_id']) ? eventosapp_whatsapp_inbox_clean_phone(wp_unslash($_GET['sender_phone_number_id'])) : '';
+    $close_type = isset($_GET['close_type']) ? sanitize_key(wp_unslash($_GET['close_type'])) : '';
+    if ( $close_type !== '' && ! array_key_exists($close_type, eventosapp_whatsapp_inbox_close_types()) ) {
+        $close_type = '';
+    }
     $search = isset($_GET['s']) ? sanitize_text_field(wp_unslash($_GET['s'])) : '';
 
     $meta_query = ['relation' => 'AND'];
@@ -1059,6 +1411,12 @@ function eventosapp_whatsapp_inbox_render_list() {
         $meta_query[] = [
             'key'   => '_evapp_wa_inbox_sender_phone_number_id',
             'value' => $sender_phone_number_id,
+        ];
+    }
+    if ( $close_type !== '' ) {
+        $meta_query[] = [
+            'key'   => '_evapp_wa_inbox_close_type',
+            'value' => $close_type,
         ];
     }
 
@@ -1085,11 +1443,17 @@ function eventosapp_whatsapp_inbox_render_list() {
     $conversations = new WP_Query($query_args);
     $accounts = function_exists('eventosapp_whatsapp_get_phone_accounts') ? eventosapp_whatsapp_get_phone_accounts() : [];
     $events = eventosapp_whatsapp_inbox_get_events_for_filter();
+    $latest_message_id = eventosapp_whatsapp_inbox_get_latest_message_id();
 
     ?>
-    <div class="wrap evapp-wa-inbox-wrap">
-        <h1>Inbox WhatsApp</h1>
-        <p>Mensajes entrantes recibidos desde los números configurados en WhatsApp Cloud API. Cada conversación funciona como un ticket interno de atención.</p>
+    <div class="wrap evapp-wa-inbox-wrap" data-wa-inbox-mode="list" data-last-message-id="<?php echo esc_attr($latest_message_id); ?>">
+        <div class="evapp-wa-inbox-header">
+            <div>
+                <h1>Inbox WhatsApp</h1>
+                <p>Mensajes entrantes recibidos desde los números configurados en WhatsApp Cloud API. Cada conversación funciona como un ticket interno de atención.</p>
+            </div>
+            <span class="evapp-wa-live-pill"><span class="evapp-wa-live-dot"></span><span id="evapp-wa-live-status-text">Actualización automática activa</span></span>
+        </div>
         <?php eventosapp_whatsapp_inbox_render_notices(); ?>
         <?php eventosapp_whatsapp_inbox_render_styles(); ?>
         <?php eventosapp_whatsapp_inbox_render_diagnostics_card(); ?>
@@ -1120,6 +1484,15 @@ function eventosapp_whatsapp_inbox_render_list() {
                     <option value="">Todos</option>
                     <?php foreach ( $accounts as $account ) : ?>
                         <option value="<?php echo esc_attr($account['phone_number_id']); ?>" <?php selected($sender_phone_number_id, $account['phone_number_id']); ?>><?php echo esc_html($account['label'] ?? $account['phone_number_id']); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label for="close_type">Tipo de cierre</label>
+                <select id="close_type" name="close_type">
+                    <option value="">Todos</option>
+                    <?php foreach ( eventosapp_whatsapp_inbox_close_types() as $key => $label ) : ?>
+                        <option value="<?php echo esc_attr($key); ?>" <?php selected($close_type, $key); ?>><?php echo esc_html($label); ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
@@ -1160,9 +1533,15 @@ function eventosapp_whatsapp_inbox_render_list() {
                         $row_sender = get_post_meta($conversation_id, '_evapp_wa_inbox_sender_phone_number_id', true);
                         $display_phone = get_post_meta($conversation_id, '_evapp_wa_inbox_display_phone_number', true);
                         $origin_method = get_post_meta($conversation_id, '_evapp_wa_inbox_origin_method', true);
+                        $row_close_type = get_post_meta($conversation_id, '_evapp_wa_inbox_close_type', true);
+                        $row_close_label = eventosapp_whatsapp_inbox_close_type_label($row_close_type);
                         ?>
-                        <tr>
-                            <td><span class="evapp-wa-badge <?php echo esc_attr($row_status); ?>"><?php echo esc_html(eventosapp_whatsapp_inbox_status_label($row_status)); ?></span><?php if ( $unread ) : ?><br><span class="evapp-wa-badge" style="margin-top:6px;">No leídos: <?php echo esc_html($unread); ?></span><?php endif; ?></td>
+                        <tr class="<?php echo $unread ? 'evapp-wa-row-unread' : ''; ?>">
+                            <td>
+                                <span class="evapp-wa-badge <?php echo esc_attr($row_status); ?>"><?php echo esc_html(eventosapp_whatsapp_inbox_status_label($row_status)); ?></span>
+                                <?php if ( eventosapp_whatsapp_inbox_is_final_status($row_status) && $row_close_label !== '' ) : ?><br><span class="evapp-wa-muted">Cierre: <?php echo esc_html($row_close_label); ?></span><?php endif; ?>
+                                <?php if ( $unread ) : ?><br><span class="evapp-wa-badge" style="margin-top:6px;">No leídos: <?php echo esc_html($unread); ?></span><?php endif; ?>
+                            </td>
                             <td>
                                 <strong><?php echo esc_html($contact_name ?: 'Contacto WhatsApp'); ?></strong><br>
                                 <span class="evapp-wa-break">+<?php echo esc_html($from_phone); ?></span><br>
@@ -1201,6 +1580,13 @@ function eventosapp_whatsapp_inbox_render_list() {
                 <?php endif; ?>
             </tbody>
         </table>
+        <div id="evapp-wa-live-toast" class="evapp-wa-live-toast" role="status" aria-live="polite">
+            <strong data-wa-toast-title>Nuevo mensaje</strong>
+            <p data-wa-toast-body>Hay novedades en el Inbox WhatsApp.</p>
+            <a data-wa-toast-link class="button button-primary" href="#">Abrir conversación</a>
+            <button type="button" class="button" onclick="this.closest('#evapp-wa-live-toast').classList.remove('is-visible');">Ocultar</button>
+        </div>
+        <?php eventosapp_whatsapp_inbox_render_live_script('list', ['last_message_id' => $latest_message_id]); ?>
     </div>
     <?php
 }
@@ -1223,13 +1609,25 @@ function eventosapp_whatsapp_inbox_render_conversation($conversation_id) {
     $display_phone = get_post_meta($conversation_id, '_evapp_wa_inbox_display_phone_number', true);
     $origin_method = get_post_meta($conversation_id, '_evapp_wa_inbox_origin_method', true);
     $origin_confidence = get_post_meta($conversation_id, '_evapp_wa_inbox_origin_confidence', true);
+    $close_type = get_post_meta($conversation_id, '_evapp_wa_inbox_close_type', true);
+    $close_note = get_post_meta($conversation_id, '_evapp_wa_inbox_close_note', true);
+    $closed_at = get_post_meta($conversation_id, '_evapp_wa_inbox_closed_at', true);
+    $closed_by = absint(get_post_meta($conversation_id, '_evapp_wa_inbox_closed_by', true));
+    $close_label = eventosapp_whatsapp_inbox_close_type_label($close_type);
     $messages = eventosapp_whatsapp_inbox_get_messages($conversation_id, 300);
     $events = eventosapp_whatsapp_inbox_get_events_for_filter();
+    $latest_message_id = eventosapp_whatsapp_inbox_get_latest_message_id($conversation_id);
+    $closed_by_user = $closed_by ? get_userdata($closed_by) : null;
 
     ?>
-    <div class="wrap evapp-wa-inbox-wrap">
-        <h1>Conversación WhatsApp #<?php echo esc_html($conversation_id); ?></h1>
-        <p><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_inbox')); ?>">← Volver al Inbox</a></p>
+    <div class="wrap evapp-wa-inbox-wrap" data-wa-inbox-mode="conversation" data-conversation-id="<?php echo esc_attr($conversation_id); ?>" data-last-message-id="<?php echo esc_attr($latest_message_id); ?>">
+        <div class="evapp-wa-inbox-header">
+            <div>
+                <h1>Conversación WhatsApp #<?php echo esc_html($conversation_id); ?></h1>
+                <p><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_inbox')); ?>">← Volver al Inbox</a></p>
+            </div>
+            <span class="evapp-wa-live-pill"><span class="evapp-wa-live-dot"></span><span id="evapp-wa-live-status-text">Actualización automática activa</span></span>
+        </div>
         <?php eventosapp_whatsapp_inbox_render_notices(); ?>
         <?php eventosapp_whatsapp_inbox_render_styles(); ?>
 
@@ -1237,13 +1635,20 @@ function eventosapp_whatsapp_inbox_render_conversation($conversation_id) {
             <h2><?php echo esc_html($contact_name ?: 'Contacto WhatsApp'); ?> <span class="evapp-wa-muted">+<?php echo esc_html($from_phone); ?></span></h2>
             <p>
                 <span class="evapp-wa-badge <?php echo esc_attr($status); ?>"><?php echo esc_html(eventosapp_whatsapp_inbox_status_label($status)); ?></span>
+                <?php if ( eventosapp_whatsapp_inbox_is_final_status($status) && $close_label !== '' ) : ?> <span class="evapp-wa-badge">Cierre: <?php echo esc_html($close_label); ?></span><?php endif; ?>
                 <?php if ( $event_id ) : ?> <span class="evapp-wa-badge">Evento: <?php echo esc_html(get_the_title($event_id)); ?></span><?php endif; ?>
                 <?php if ( $ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket' ) : ?> <span class="evapp-wa-badge">Ticket #<?php echo esc_html($ticket_id); ?></span><?php endif; ?>
             </p>
             <p class="evapp-wa-muted">
                 Número emisor: <?php echo esc_html($sender_phone_number_id ?: 'No detectado'); ?> <?php echo $display_phone ? '— ' . esc_html($display_phone) : ''; ?><br>
                 Método de origen: <?php echo esc_html($origin_method ?: 'sin_origen'); ?> — confianza: <?php echo esc_html($origin_confidence ?: 'none'); ?>
+                <?php if ( eventosapp_whatsapp_inbox_is_final_status($status) && $closed_at ) : ?>
+                    <br>Cerrada el <?php echo esc_html(eventosapp_whatsapp_inbox_format_datetime_label($closed_at)); ?><?php echo $closed_by_user ? ' por ' . esc_html($closed_by_user->display_name) : ''; ?>
+                <?php endif; ?>
             </p>
+            <?php if ( eventosapp_whatsapp_inbox_is_final_status($status) && trim((string) $close_note) !== '' ) : ?>
+                <p><strong>Nota de cierre:</strong><br><?php echo nl2br(esc_html($close_note)); ?></p>
+            <?php endif; ?>
         </div>
 
         <div class="evapp-card">
@@ -1259,6 +1664,17 @@ function eventosapp_whatsapp_inbox_render_conversation($conversation_id) {
                         <option value="<?php echo esc_attr($key); ?>" <?php selected($status, $key); ?>><?php echo esc_html($label); ?></option>
                     <?php endforeach; ?>
                 </select>
+
+                <label for="evapp_wa_inbox_close_type">Tipo de cierre</label>
+                <select id="evapp_wa_inbox_close_type" name="close_type">
+                    <option value="">Sin clasificar</option>
+                    <?php foreach ( eventosapp_whatsapp_inbox_close_types() as $key => $label ) : ?>
+                        <option value="<?php echo esc_attr($key); ?>" <?php selected($close_type, $key); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+
+                <label for="evapp_wa_inbox_close_note">Nota de cierre</label>
+                <textarea id="evapp_wa_inbox_close_note" name="close_note" rows="3" placeholder="Opcional. Describe por qué se cerró la conversación."><?php echo esc_textarea($close_note); ?></textarea>
 
                 <label for="evapp_wa_inbox_event_id">Evento origen</label>
                 <select id="evapp_wa_inbox_event_id" name="event_id">
@@ -1278,50 +1694,126 @@ function eventosapp_whatsapp_inbox_render_conversation($conversation_id) {
                 </div>
 
                 <label></label>
-                <button type="submit" class="button button-primary">Guardar gestión</button>
+                <div>
+                    <button type="submit" class="button button-primary">Guardar gestión</button>
+                    <span class="evapp-wa-muted" style="margin-left:8px;">Para cerrar, selecciona estado Cerrado o Resuelto y asigna el tipo de cierre.</span>
+                </div>
             </form>
         </div>
 
-        <div class="evapp-card">
+        <div class="evapp-card evapp-wa-reply-box">
             <h2>Responder por WhatsApp</h2>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <?php wp_nonce_field('eventosapp_whatsapp_inbox_reply_' . $conversation_id, 'eventosapp_whatsapp_inbox_reply_nonce'); ?>
                 <input type="hidden" name="action" value="eventosapp_whatsapp_inbox_send_reply">
                 <input type="hidden" name="conversation_id" value="<?php echo esc_attr($conversation_id); ?>">
-                <textarea name="reply_body" rows="4" style="width:100%;max-width:900px;" placeholder="Escribe una respuesta libre. Meta solo permite mensajes libres dentro de la ventana de atención vigente."></textarea>
-                <p><button type="submit" class="button button-primary">Enviar respuesta</button></p>
+                <textarea name="reply_body" rows="4" placeholder="Escribe una respuesta libre. Meta solo permite mensajes libres dentro de la ventana de atención vigente."></textarea>
+                <div class="evapp-wa-reply-actions">
+                    <button type="submit" class="button button-primary">Enviar respuesta</button>
+                    <button type="button" class="button" id="evapp-wa-enable-notifications" style="display:none;">Activar notificaciones del navegador</button>
+                    <span class="evapp-wa-muted">Los mensajes nuevos se agregan abajo sin recargar esta página.</span>
+                </div>
             </form>
         </div>
 
         <div class="evapp-card">
             <h2>Mensajes</h2>
-            <div class="evapp-wa-thread">
-                <?php if ( empty($messages) ) : ?>
-                    <p>No hay mensajes registrados.</p>
-                <?php else : ?>
-                    <?php foreach ( $messages as $message ) :
-                        $direction = sanitize_key((string)($message['direction'] ?? 'inbound'));
-                        $body = (string)($message['body'] ?? '');
-                        ?>
-                        <div class="evapp-wa-message <?php echo esc_attr($direction); ?>">
-                            <div class="evapp-wa-message-header">
-                                <strong><?php echo $direction === 'outbound' ? 'EventosApp' : esc_html($message['contact_name'] ?: 'Contacto'); ?></strong>
-                                <span><?php echo esc_html($message['created_at']); ?></span>
-                            </div>
-                            <div class="evapp-wa-message-body"><?php echo esc_html($body); ?></div>
-                            <div class="evapp-wa-muted" style="margin-top:8px;">
-                                Tipo: <?php echo esc_html($message['message_type']); ?> — Estado: <?php echo esc_html($message['status']); ?><br>
-                                <?php if ( ! empty($message['wa_message_id']) ) : ?>Message ID: <span class="evapp-wa-break"><?php echo esc_html($message['wa_message_id']); ?></span><?php endif; ?>
-                                <?php if ( ! empty($message['reply_to_message_id']) ) : ?><br>Responde a: <span class="evapp-wa-break"><?php echo esc_html($message['reply_to_message_id']); ?></span><?php endif; ?>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
+            <div id="evapp-wa-thread-shell" class="evapp-wa-thread-shell">
+                <div id="evapp-wa-thread" class="evapp-wa-thread">
+                    <?php if ( empty($messages) ) : ?>
+                        <p>No hay mensajes registrados.</p>
+                    <?php else : ?>
+                        <?php foreach ( $messages as $message ) : ?>
+                            <?php eventosapp_whatsapp_inbox_render_message_html($message); ?>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
+
+        <div id="evapp-wa-live-toast" class="evapp-wa-live-toast" role="status" aria-live="polite">
+            <strong data-wa-toast-title>Nuevo mensaje</strong>
+            <p data-wa-toast-body>Hay novedades en esta conversación.</p>
+            <a data-wa-toast-link class="button button-primary" href="#">Abrir conversación</a>
+            <button type="button" class="button" onclick="this.closest('#evapp-wa-live-toast').classList.remove('is-visible');">Ocultar</button>
+        </div>
+        <?php eventosapp_whatsapp_inbox_render_live_script('conversation', ['conversation_id' => $conversation_id, 'last_message_id' => $latest_message_id]); ?>
     </div>
     <?php
 }
+
+
+add_action('wp_ajax_eventosapp_whatsapp_inbox_poll', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_send_json_error(['message' => 'No autorizado.'], 403);
+    }
+
+    $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+    if ( ! wp_verify_nonce($nonce, 'eventosapp_whatsapp_inbox_live') ) {
+        wp_send_json_error(['message' => 'Nonce inválido.'], 403);
+    }
+
+    $mode = isset($_POST['mode']) ? sanitize_key(wp_unslash($_POST['mode'])) : 'list';
+    $conversation_id = isset($_POST['conversation_id']) ? absint($_POST['conversation_id']) : 0;
+    $last_message_id = isset($_POST['last_message_id']) ? absint($_POST['last_message_id']) : 0;
+    $checked_at = date_i18n('H:i:s', current_time('timestamp'));
+
+    if ( $mode === 'conversation' ) {
+        if ( ! $conversation_id || get_post_type($conversation_id) !== EVENTOSAPP_WHATSAPP_INBOX_POST_TYPE ) {
+            wp_send_json_error(['message' => 'Conversación inválida.'], 400);
+        }
+
+        $new_messages = eventosapp_whatsapp_inbox_get_new_messages($conversation_id, $last_message_id, 60);
+        $latest_message_id = eventosapp_whatsapp_inbox_get_latest_message_id($conversation_id);
+        $messages_html = '';
+        $latest_preview = '';
+
+        if ( ! empty($new_messages) ) {
+            foreach ( $new_messages as $message ) {
+                $messages_html .= eventosapp_whatsapp_inbox_render_message_html($message, true);
+                $latest_preview = eventosapp_whatsapp_inbox_truncate($message['body'] ?? '', 120);
+            }
+            update_post_meta($conversation_id, '_evapp_wa_inbox_unread_count', 0);
+        }
+
+        wp_send_json_success([
+            'mode'              => 'conversation',
+            'checked_at'        => $checked_at,
+            'conversation_id'   => $conversation_id,
+            'conversation_url'  => admin_url('admin.php?page=eventosapp_whatsapp_inbox&conversation_id=' . $conversation_id),
+            'latest_message_id' => $latest_message_id,
+            'new_count'         => count($new_messages),
+            'messages_html'     => $messages_html,
+            'latest_preview'    => $latest_preview,
+        ]);
+    }
+
+    global $wpdb;
+    eventosapp_whatsapp_inbox_maybe_install_tables();
+    $table = eventosapp_whatsapp_inbox_messages_table_name();
+    $latest_row = [];
+    if ( eventosapp_whatsapp_inbox_table_exists($table) ) {
+        $row = $wpdb->get_row("SELECT * FROM {$table} WHERE direction = 'inbound' ORDER BY id DESC LIMIT 1", ARRAY_A);
+        $latest_row = is_array($row) ? $row : [];
+    }
+
+    $latest_message_id = absint($latest_row['id'] ?? 0);
+    $conversation_id = absint($latest_row['conversation_id'] ?? 0);
+    $latest_preview = eventosapp_whatsapp_inbox_truncate($latest_row['body'] ?? '', 120);
+    $contact_name = sanitize_text_field((string)($latest_row['contact_name'] ?? ''));
+    $from_phone = eventosapp_whatsapp_inbox_clean_phone($latest_row['from_phone'] ?? '');
+
+    wp_send_json_success([
+        'mode'              => 'list',
+        'checked_at'        => $checked_at,
+        'latest_message_id' => $latest_message_id,
+        'has_new'           => $latest_message_id > $last_message_id,
+        'conversation_id'   => $conversation_id,
+        'conversation_url'  => $conversation_id ? admin_url('admin.php?page=eventosapp_whatsapp_inbox&conversation_id=' . $conversation_id) : '',
+        'latest_preview'    => trim(($contact_name !== '' ? $contact_name . ': ' : ($from_phone !== '' ? '+' . $from_phone . ': ' : '')) . $latest_preview),
+    ]);
+});
+
 
 add_action('admin_post_eventosapp_whatsapp_inbox_local_test', function() {
     if ( ! current_user_can('manage_options') ) {
@@ -1413,9 +1905,29 @@ add_action('admin_post_eventosapp_whatsapp_inbox_update_conversation', function(
         $status = 'open';
     }
     $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
+    $close_type = isset($_POST['close_type']) ? sanitize_key(wp_unslash($_POST['close_type'])) : '';
+    if ( $close_type !== '' && ! array_key_exists($close_type, eventosapp_whatsapp_inbox_close_types()) ) {
+        $close_type = '';
+    }
+    $close_note = isset($_POST['close_note']) ? sanitize_textarea_field(wp_unslash($_POST['close_note'])) : '';
+    $previous_status = get_post_meta($conversation_id, '_evapp_wa_inbox_status', true) ?: 'open';
 
     update_post_meta($conversation_id, '_evapp_wa_inbox_status', $status);
     update_post_meta($conversation_id, '_evapp_wa_inbox_event_id', $event_id);
+
+    if ( eventosapp_whatsapp_inbox_is_final_status($status) ) {
+        if ( $close_type === '' ) {
+            $close_type = 'atendido';
+        }
+        update_post_meta($conversation_id, '_evapp_wa_inbox_close_type', $close_type);
+        update_post_meta($conversation_id, '_evapp_wa_inbox_close_note', $close_note);
+        update_post_meta($conversation_id, '_evapp_wa_inbox_closed_at', current_time('mysql'));
+        update_post_meta($conversation_id, '_evapp_wa_inbox_closed_by', get_current_user_id());
+        update_post_meta($conversation_id, '_evapp_wa_inbox_unread_count', 0);
+    } elseif ( eventosapp_whatsapp_inbox_is_final_status($previous_status) && ! eventosapp_whatsapp_inbox_is_final_status($status) ) {
+        update_post_meta($conversation_id, '_evapp_wa_inbox_reopened_at', current_time('mysql'));
+        update_post_meta($conversation_id, '_evapp_wa_inbox_reopened_by', get_current_user_id());
+    }
 
     $from_phone = get_post_meta($conversation_id, '_evapp_wa_inbox_from_phone', true);
     $contact_name = get_post_meta($conversation_id, '_evapp_wa_inbox_contact_name', true);
