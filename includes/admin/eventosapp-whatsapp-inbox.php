@@ -885,6 +885,31 @@ function eventosapp_whatsapp_inbox_extract_message_parts($message) {
             if ( $reply_id !== '' ) {
                 $body .= $body !== '' ? ' — ID: ' . $reply_id : 'ID: ' . $reply_id;
             }
+        } elseif ( $interactive_type === 'nfm_reply' ) {
+            $reply = isset($interactive['nfm_reply']) && is_array($interactive['nfm_reply']) ? $interactive['nfm_reply'] : [];
+            $reply_body = sanitize_textarea_field((string)($reply['body'] ?? ''));
+            $response_raw = (string)($reply['response_json'] ?? '');
+            $decoded = json_decode($response_raw, true);
+            $summary = '';
+            if ( function_exists('eventosapp_whatsapp_flows_format_response_summary') ) {
+                $summary = eventosapp_whatsapp_flows_format_response_summary($decoded);
+            } elseif ( is_array($decoded) ) {
+                $pairs = [];
+                foreach ( $decoded as $key => $value ) {
+                    if ( is_array($value) ) {
+                        $value = implode(', ', array_map('strval', $value));
+                    }
+                    $pairs[] = sanitize_text_field((string)$key) . ': ' . sanitize_text_field((string)$value);
+                }
+                $summary = implode("\n", $pairs);
+            }
+            $body = 'Respuesta de WhatsApp Flow recibida';
+            if ( $reply_body !== '' ) {
+                $body .= ' — ' . $reply_body;
+            }
+            if ( $summary !== '' ) {
+                $body .= "\n" . $summary;
+            }
         }
         $interactive_json = eventosapp_whatsapp_inbox_safe_json($interactive);
     } elseif ( in_array($type, ['image', 'video', 'audio', 'document', 'sticker'], true) ) {
@@ -1708,7 +1733,7 @@ function eventosapp_whatsapp_inbox_render_message_html($message, $return = false
             <strong><?php echo $direction === 'outbound' ? 'EventosApp' : esc_html($contact_name ?: 'Contacto'); ?></strong>
             <span><?php echo esc_html($created_at); ?></span>
         </div>
-        <div class="evapp-wa-message-body"><?php echo esc_html($body); ?></div>
+        <div class="evapp-wa-message-body"><?php echo nl2br(esc_html($body)); ?></div>
         <details class="evapp-wa-message-meta">
             <summary>Detalle técnico</summary>
             <div class="evapp-wa-muted" style="margin-top:8px;">
