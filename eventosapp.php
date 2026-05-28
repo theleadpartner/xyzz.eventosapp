@@ -195,6 +195,131 @@ if ( ! function_exists('eventosapp_get_event_current_date') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_normalize_datetime_local_value') ) {
+    /**
+     * Normaliza valores de <input type="datetime-local"> sin convertirlos a UTC.
+     *
+     * El navegador envía la fecha/hora como hora local del evento, por ejemplo:
+     * 2026-06-02T07:00. Este helper conserva esa hora exacta para evitar desfases
+     * al renderizar la landing virtual, correos o mensajes asociados al evento.
+     */
+    function eventosapp_normalize_datetime_local_value( $value ) {
+        if ( is_array( $value ) || is_object( $value ) ) {
+            return '';
+        }
+
+        $value = trim( sanitize_text_field( wp_unslash( (string) $value ) ) );
+        if ( $value === '' ) {
+            return '';
+        }
+
+        if ( preg_match( '/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})(?::\d{2})?(?:\.\d+)?(?:Z|[+\-]\d{2}:?\d{2})?$/i', $value, $matches ) ) {
+            return $matches[1] . 'T' . $matches[2];
+        }
+
+        return $value;
+    }
+}
+
+if ( ! function_exists('eventosapp_datetime_value_has_timezone') ) {
+    function eventosapp_datetime_value_has_timezone( $value ) {
+        if ( is_array( $value ) || is_object( $value ) ) {
+            return false;
+        }
+
+        $value = trim( (string) $value );
+        if ( $value === '' ) {
+            return false;
+        }
+
+        return (bool) preg_match( '/(?:Z|[+\-]\d{2}:?\d{2})$/i', $value );
+    }
+}
+
+if ( ! function_exists('eventosapp_get_virtual_access_datetime_object') ) {
+    /**
+     * Devuelve la fecha/hora de habilitación virtual como DateTimeImmutable
+     * en la zona horaria del evento.
+     *
+     * Regla importante:
+     * - Si el valor guardado no trae zona horaria explícita, se interpreta como hora local
+     *   de la zona configurada en el evento, NO como UTC.
+     * - Si algún flujo externo guarda una fecha con Z u offset, se respeta ese instante y
+     *   se convierte a la zona del evento solo para mostrarlo.
+     */
+    function eventosapp_get_virtual_access_datetime_object( $event_id, $raw_value = null ) {
+        $event_id = absint( $event_id );
+        $raw_value = ( $raw_value === null ) ? get_post_meta( $event_id, '_eventosapp_virtual_access_datetime', true ) : $raw_value;
+
+        if ( is_array( $raw_value ) || is_object( $raw_value ) ) {
+            return null;
+        }
+
+        $raw_value = trim( (string) $raw_value );
+        if ( $raw_value === '' ) {
+            return null;
+        }
+
+        $tz = function_exists('eventosapp_get_event_timezone_object') ? eventosapp_get_event_timezone_object( $event_id ) : wp_timezone();
+
+        try {
+            if ( eventosapp_datetime_value_has_timezone( $raw_value ) ) {
+                return ( new DateTimeImmutable( $raw_value ) )->setTimezone( $tz );
+            }
+
+            $clean_value = str_replace( 'T', ' ', $raw_value );
+            $clean_value = preg_replace( '/\.\d+$/', '', $clean_value );
+            $formats = [
+                '!Y-m-d H:i:s',
+                '!Y-m-d H:i',
+                '!Y-m-d',
+            ];
+
+            foreach ( $formats as $format ) {
+                $dt = DateTimeImmutable::createFromFormat( $format, $clean_value, $tz );
+                if ( $dt instanceof DateTimeImmutable ) {
+                    $errors = DateTimeImmutable::getLastErrors();
+                    if ( $errors === false || ( empty( $errors['warning_count'] ) && empty( $errors['error_count'] ) ) ) {
+                        return $dt;
+                    }
+                }
+            }
+
+            return ( new DateTimeImmutable( $raw_value, $tz ) )->setTimezone( $tz );
+        } catch ( Exception $e ) {
+            return null;
+        }
+    }
+}
+
+if ( ! function_exists('eventosapp_format_event_datetime') ) {
+    /**
+     * Formatea una fecha/hora usando siempre la zona horaria configurada en el evento.
+     */
+    function eventosapp_format_event_datetime( $event_id, $datetime, $format = 'd/m/Y H:i', $include_timezone = false ) {
+        $event_id = absint( $event_id );
+        $tz = function_exists('eventosapp_get_event_timezone_object') ? eventosapp_get_event_timezone_object( $event_id ) : wp_timezone();
+
+        if ( $datetime instanceof DateTimeInterface ) {
+            $local_datetime = ( new DateTimeImmutable( '@' . $datetime->getTimestamp() ) )->setTimezone( $tz );
+        } else {
+            $local_datetime = eventosapp_get_virtual_access_datetime_object( $event_id, $datetime );
+        }
+
+        if ( ! $local_datetime instanceof DateTimeInterface ) {
+            return '';
+        }
+
+        $label = $local_datetime->format( $format );
+        if ( $include_timezone ) {
+            $label .= ' (' . $tz->getName() . ')';
+        }
+
+        return $label;
+    }
+}
+
 if ( ! function_exists('eventosapp_array_meta') ) {
     function eventosapp_array_meta( $post_id, $meta_key ) {
         $value = get_post_meta( absint($post_id), $meta_key, true );
@@ -1114,7 +1239,8 @@ function eventosapp_render_metabox_evento($post) {
     ];
     $virtual_url                = get_post_meta($post->ID, '_eventosapp_virtual_url', true) ?: '';
     $virtual_platform           = get_post_meta($post->ID, '_eventosapp_virtual_platform', true) ?: '';
-    $virtual_access_datetime    = get_post_meta($post->ID, '_eventosapp_virtual_access_datetime', true) ?: '';
+    $virtual_access_datetime_raw = get_post_meta($post->ID, '_eventosapp_virtual_access_datetime', true) ?: '';
+    $virtual_access_datetime     = function_exists('eventosapp_normalize_datetime_local_value') ? eventosapp_normalize_datetime_local_value($virtual_access_datetime_raw) : $virtual_access_datetime_raw;
     $virtual_access_use_landing = get_post_meta($post->ID, '_eventosapp_virtual_access_use_landing', true);
     $virtual_access_use_landing = ((string) $virtual_access_use_landing === '0') ? '0' : '1';
 
@@ -1276,7 +1402,7 @@ function eventosapp_render_metabox_evento($post) {
 
         <label><strong>Fecha y hora para habilitar el enlace:</strong></label><br>
         <input type="datetime-local" name="eventosapp_virtual_access_datetime" value="<?php echo esc_attr($virtual_access_datetime); ?>">
-        <br><span class="muted">Antes de esta fecha/hora, la landing del ticket virtual mostrará que el botón todavía no está habilitado.</span>
+        <br><span class="muted">Antes de esta fecha/hora, la landing del ticket virtual mostrará que el botón todavía no está habilitado. Esta fecha/hora se interpreta en la zona horaria seleccionada arriba y no se convierte a UTC.</span>
     </div>
 
     <!-- === NOMBRE DEL ORGANIZADOR (con opción de vincular cliente) === -->
@@ -1576,7 +1702,10 @@ add_action('save_post_eventosapp_event', function($post_id) {
     update_post_meta($post_id, '_eventosapp_coordenadas', sanitize_text_field($_POST['eventosapp_coordenadas'] ?? ''));
     update_post_meta($post_id, '_eventosapp_virtual_platform', sanitize_text_field($_POST['eventosapp_virtual_platform'] ?? ''));
     update_post_meta($post_id, '_eventosapp_virtual_url', esc_url_raw($_POST['eventosapp_virtual_url'] ?? ''));
-    update_post_meta($post_id, '_eventosapp_virtual_access_datetime', sanitize_text_field($_POST['eventosapp_virtual_access_datetime'] ?? ''));
+    $virtual_access_datetime = function_exists('eventosapp_normalize_datetime_local_value')
+        ? eventosapp_normalize_datetime_local_value($_POST['eventosapp_virtual_access_datetime'] ?? '')
+        : sanitize_text_field($_POST['eventosapp_virtual_access_datetime'] ?? '');
+    update_post_meta($post_id, '_eventosapp_virtual_access_datetime', $virtual_access_datetime);
     update_post_meta($post_id, '_eventosapp_virtual_access_use_landing', isset($_POST['eventosapp_virtual_access_use_landing']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_organizador_email', sanitize_email($_POST['eventosapp_organizador_email'] ?? ''));
     update_post_meta($post_id, '_eventosapp_organizador_tel', sanitize_text_field($_POST['eventosapp_organizador_tel'] ?? ''));
