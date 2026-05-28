@@ -456,7 +456,7 @@ function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_conf
     ];
 
     return [
-        'version' => '7.1',
+        'version' => '7.3',
         'screens' => [
             [
                 'id'       => $screen_id,
@@ -567,9 +567,16 @@ function eventosapp_whatsapp_flows_graph_multipart_file_request($method, $path, 
 
         $ch = curl_init($endpoint);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+        if ( $method === 'POST' ) {
+            curl_setopt($ch, CURLOPT_POST, true);
+        } else {
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+        }
         curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . $access_token]);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . $access_token,
+            'Accept: application/json',
+        ]);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $post_fields);
         $raw_body = curl_exec($ch);
         $errno = curl_errno($ch);
@@ -1283,9 +1290,17 @@ add_action('admin_post_eventosapp_whatsapp_flow_create_meta', function() {
     }
 
     $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
+    $flow_json = eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($flow_post_id), false);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($flow_post_id), true));
+
     $body = [
         'name'       => sanitize_text_field($config['title']),
         'categories' => [$config['category']],
+        // Se envía el JSON desde la creación para evitar que Meta cree el Flow con el ejemplo
+        // predeterminado “Hello World”. Aun así se conserva el botón “Subir JSON” para
+        // reenviar cambios mientras el Flow esté en borrador.
+        'flow_json'  => $flow_json,
+        'publish'    => false,
     ];
 
     $result = eventosapp_whatsapp_flows_graph_request('POST', $waba_id . '/flows', $body, $settings);
@@ -1297,11 +1312,11 @@ add_action('admin_post_eventosapp_whatsapp_flow_create_meta', function() {
         if ( $meta_flow_id !== '' ) {
             update_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_id', $meta_flow_id);
             update_post_meta($flow_post_id, '_eventosapp_wa_flow_waba_id', $waba_id);
-            update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', 'draft_meta');
+            update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', 'draft_meta_json_ready');
             update_post_meta($flow_post_id, '_eventosapp_wa_flow_created_at_meta', current_time('mysql'));
         }
         eventosapp_whatsapp_flows_add_activity('flow_creado_en_meta', ['flow_post_id' => $flow_post_id, 'meta_flow_id' => $meta_flow_id, 'result' => $result]);
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'success', 'flow_message' => rawurlencode('Flow creado en Meta correctamente.')]);
+        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'success', 'flow_message' => rawurlencode('Flow creado en Meta correctamente con el JSON local generado por EventosApp. Revisa la vista previa antes de publicar.')]);
     }
 
     eventosapp_whatsapp_flows_add_activity('flow_error_crear_en_meta', ['flow_post_id' => $flow_post_id, 'result' => $result]);
@@ -1319,6 +1334,11 @@ add_action('admin_post_eventosapp_whatsapp_flow_upload_json', function() {
     $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
     if ( $meta_flow_id === '' ) {
         eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('Primero debes crear el Flow en Meta para obtener el Flow ID.')]);
+    }
+
+    $current_status = sanitize_key((string)($config['status'] ?? ''));
+    if ( in_array($current_status, ['published', 'publicado'], true) ) {
+        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('Meta no permite modificar el JSON de un Flow ya publicado. Presiona “Crear/Recrear en Meta con JSON local” para generar un nuevo Flow ID con la configuración actual de EventosApp.')]);
     }
 
     $file_path = eventosapp_whatsapp_flows_write_temp_flow_json($flow_post_id);
@@ -1345,10 +1365,15 @@ add_action('admin_post_eventosapp_whatsapp_flow_upload_json', function() {
     }
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_validation_errors', $validation_errors);
 
-    if ( ! empty($result['ok']) ) {
+    $meta_success = true;
+    if ( is_array($result['response'] ?? null) && array_key_exists('success', $result['response']) ) {
+        $meta_success = ! empty($result['response']['success']);
+    }
+
+    if ( ! empty($result['ok']) && $meta_success ) {
         update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', empty($validation_errors) ? 'json_uploaded' : 'json_with_validation_errors');
         eventosapp_whatsapp_flows_add_activity('flow_json_subido', ['flow_post_id' => $flow_post_id, 'meta_flow_id' => $meta_flow_id, 'validation_errors' => $validation_errors, 'result' => $result]);
-        $msg = empty($validation_errors) ? 'JSON subido y validado por Meta.' : 'JSON subido, pero Meta reportó errores de validación. Revisa el detalle.';
+        $msg = empty($validation_errors) ? 'JSON subido y validado por Meta. Ahora pide la vista previa para confirmar que no siga apareciendo el ejemplo “Hello World”.' : 'JSON subido, pero Meta reportó errores de validación. Revisa el detalle antes de publicar.';
         eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => empty($validation_errors) ? 'success' : 'warning', 'flow_message' => rawurlencode($msg)]);
     }
 
@@ -1367,6 +1392,10 @@ add_action('admin_post_eventosapp_whatsapp_flow_publish', function() {
     $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
     if ( $meta_flow_id === '' ) {
         eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('Falta Flow ID de Meta.')]);
+    }
+
+    if ( ! empty($config['validation_errors']) && is_array($config['validation_errors']) ) {
+        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('No se debe publicar todavía: Meta reporta errores de validación en el JSON del Flow.')]);
     }
 
     $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
@@ -1398,7 +1427,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_refresh', function() {
     }
 
     $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
-    $result = eventosapp_whatsapp_flows_graph_request('GET', $meta_flow_id . '?fields=id,name,status,categories,validation_errors', null, $settings);
+    $result = eventosapp_whatsapp_flows_graph_request('GET', $meta_flow_id . '?fields=id,name,status,categories,validation_errors,json_version,data_api_version,preview', null, $settings);
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_response', $result);
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', current_time('mysql'));
     if ( ! empty($result['ok']) && is_array($result['response'] ?? null) ) {
@@ -1428,12 +1457,12 @@ add_action('admin_post_eventosapp_whatsapp_flow_preview', function() {
     }
 
     $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
-    $result = eventosapp_whatsapp_flows_graph_request('GET', $meta_flow_id . '/preview', null, $settings);
+    $result = eventosapp_whatsapp_flows_graph_request('GET', $meta_flow_id . '?fields=preview.invalidate(false)', null, $settings);
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_response', $result);
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', current_time('mysql'));
 
     if ( ! empty($result['ok']) && is_array($result['response'] ?? null) ) {
-        $preview_url = esc_url_raw((string)($result['response']['preview_url'] ?? ($result['response']['url'] ?? '')));
+        $preview_url = esc_url_raw((string)($result['response']['preview']['preview_url'] ?? ($result['response']['preview_url'] ?? ($result['response']['url'] ?? ''))));
         if ( $preview_url !== '' ) {
             update_post_meta($flow_post_id, '_eventosapp_wa_flow_preview_url', $preview_url);
         }
@@ -1702,7 +1731,7 @@ function eventosapp_whatsapp_flows_render_page() {
 
                 <div class="evapp-card">
                     <h2>JSON generado</h2>
-                    <p class="evapp-muted">Este JSON es el que EventosApp sube a Meta cuando presionas “Subir JSON”.</p>
+                    <p class="evapp-muted">Este JSON es el que EventosApp envía a Meta al presionar “Crear/Recrear en Meta con JSON local” o “Subir JSON”.</p>
                     <textarea class="code" readonly><?php echo esc_textarea($json_preview); ?></textarea>
                 </div>
             </div>
@@ -1739,12 +1768,13 @@ function eventosapp_whatsapp_flows_render_page() {
                             <p><a class="button" target="_blank" href="<?php echo esc_url($edit_config['preview_url']); ?>">Abrir vista previa</a></p>
                         <?php endif; ?>
                         <div class="evapp-actions">
-                            <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_create_meta', 'eventosapp_whatsapp_flow_create_meta', 'Crear en Meta', $flow_id); ?>
+                            <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_create_meta', 'eventosapp_whatsapp_flow_create_meta', 'Crear/Recrear en Meta con JSON local', $flow_id); ?>
                             <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_upload_json', 'eventosapp_whatsapp_flow_upload_json', 'Subir JSON', $flow_id); ?>
                             <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_preview', 'eventosapp_whatsapp_flow_preview', 'Pedir preview', $flow_id); ?>
                             <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_refresh', 'eventosapp_whatsapp_flow_refresh', 'Sincronizar estado', $flow_id); ?>
                             <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_publish', 'eventosapp_whatsapp_flow_publish', 'Publicar', $flow_id, 'button-primary'); ?>
                         </div>
+                        <div class="evapp-warning"><strong>Importante:</strong> si este Flow fue publicado y en WhatsApp Manager todavía ves el ejemplo “Hello World”, no intentes corregirlo sobre el mismo Flow publicado. Usa “Crear/Recrear en Meta con JSON local”, luego “Pedir preview” y solo publica cuando la vista previa muestre las preguntas creadas en EventosApp.</div>
                         <?php if ( ! empty($edit_config['validation_errors']) && is_array($edit_config['validation_errors']) ) : ?>
                             <div class="evapp-warning"><strong>Errores de validación Meta:</strong><?php eventosapp_whatsapp_flows_render_debug($edit_config['validation_errors']); ?></div>
                         <?php endif; ?>
