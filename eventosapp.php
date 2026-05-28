@@ -735,6 +735,14 @@ eventosapp_require_first_existing_file([
     'eventosapp-whatsapp-templates.php',
 ]);
 eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-whatsapp-flows.php',
+    'eventosapp-whatsapp-flows.php',
+]);
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-whatsapp-flow-templates.php',
+    'eventosapp-whatsapp-flow-templates.php',
+]);
+eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-ticket-reminders.php',
     'eventosapp-ticket-reminders.php',
 ]);
