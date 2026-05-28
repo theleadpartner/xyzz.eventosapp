@@ -6498,6 +6498,12 @@ function eventosapp_whatsapp_process_webhook_status($status) {
 
     eventosapp_whatsapp_add_activity_log('webhook_estado_whatsapp', $webhook_debug);
 
+    /**
+     * Permite que módulos independientes, como WhatsApp Flows, procesen los
+     * estados de entrega sin tocar la lógica existente de tickets.
+     */
+    do_action('eventosapp_whatsapp_webhook_status_received', $status, $mapped, $webhook_debug);
+
     if ( $ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket' ) {
         update_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_status', $delivery_status);
         update_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_at', $delivery_at);
