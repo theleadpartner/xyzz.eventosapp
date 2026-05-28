@@ -98,7 +98,7 @@ if ( ! function_exists('eventosapp_find_event_by_virtual_slug') ) {
 
 if ( ! function_exists('eventosapp_virtual_landing_access_is_enabled') ) {
     function eventosapp_virtual_landing_access_is_enabled( $event_id ) {
-        $event_id = absint($event_id);
+        $event_id  = absint($event_id);
         $access_at = get_post_meta($event_id, '_eventosapp_virtual_access_datetime', true);
         if ( ! $access_at ) {
             return [
@@ -108,26 +108,39 @@ if ( ! function_exists('eventosapp_virtual_landing_access_is_enabled') ) {
             ];
         }
 
+        $tz = function_exists('eventosapp_get_event_timezone_object') ? eventosapp_get_event_timezone_object($event_id) : wp_timezone();
+
         try {
-            $tz  = function_exists('eventosapp_get_event_timezone_object') ? eventosapp_get_event_timezone_object($event_id) : wp_timezone();
-            $now = new DateTime('now', $tz);
-            $at  = new DateTime($access_at, $tz);
+            $now = new DateTimeImmutable('now', $tz);
+            $at  = function_exists('eventosapp_get_virtual_access_datetime_object')
+                ? eventosapp_get_virtual_access_datetime_object($event_id, $access_at)
+                : new DateTimeImmutable(str_replace('T', ' ', (string) $access_at), $tz);
+
+            if ( ! $at instanceof DateTimeInterface ) {
+                return [ 'enabled' => true, 'message' => '', 'label' => '' ];
+            }
+
+            $at = $at->setTimezone($tz);
         } catch ( Exception $e ) {
             return [ 'enabled' => true, 'message' => '', 'label' => '' ];
         }
+
+        $label = function_exists('eventosapp_format_event_datetime')
+            ? eventosapp_format_event_datetime($event_id, $at, 'd/m/Y H:i')
+            : $at->format('d/m/Y H:i');
 
         if ( $now >= $at ) {
             return [
                 'enabled' => true,
                 'message' => '',
-                'label'   => date_i18n('d/m/Y H:i', $at->getTimestamp()),
+                'label'   => $label,
             ];
         }
 
         return [
             'enabled' => false,
-            'message' => 'El acceso virtual se habilitará el ' . date_i18n('d/m/Y H:i', $at->getTimestamp()) . '.',
-            'label'   => date_i18n('d/m/Y H:i', $at->getTimestamp()),
+            'message' => 'El acceso virtual se habilitará el ' . $label . '.',
+            'label'   => $label,
         ];
     }
 }
