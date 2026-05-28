@@ -466,9 +466,11 @@ function eventosapp_whatsapp_flow_templates_render_page() {
     }
 
     $items = eventosapp_whatsapp_flow_templates_get_all();
+    $has_template_id_param = array_key_exists('template_id', $_GET);
     $template_id = sanitize_key((string)($_GET['template_id'] ?? ''));
-    $selected = $template_id ? eventosapp_whatsapp_flow_templates_get($template_id) : [];
-    if ( empty($selected) && ! empty($items) ) {
+    $creating_new_template = $has_template_id_param && ($template_id === '' || $template_id === '0');
+    $selected = ($template_id && $template_id !== '0') ? eventosapp_whatsapp_flow_templates_get($template_id) : [];
+    if ( ! $creating_new_template && empty($selected) && ! empty($items) ) {
         $first = reset($items);
         $selected = wp_parse_args($first, eventosapp_whatsapp_flow_templates_default_item());
         $template_id = $selected['id'];
@@ -478,9 +480,21 @@ function eventosapp_whatsapp_flow_templates_render_page() {
     $default_waba_id = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : ($settings['webhook_waba_id'] ?? '');
     $phone_accounts = function_exists('eventosapp_whatsapp_get_phone_accounts') ? eventosapp_whatsapp_get_phone_accounts($settings) : [];
     $flows = function_exists('eventosapp_whatsapp_flows_get_all_for_select') ? eventosapp_whatsapp_flows_get_all_for_select() : [];
+    $prefill_flow_post_id = absint($_GET['flow_post_id'] ?? 0);
+    $prefill_meta_flow_id = '';
+    $prefill_screen = 'SURVEY';
+    if ( $prefill_flow_post_id && function_exists('eventosapp_whatsapp_flows_get_flow_config') ) {
+        $prefill_flow = eventosapp_whatsapp_flows_get_flow_config($prefill_flow_post_id);
+        $prefill_meta_flow_id = preg_replace('/\D+/', '', (string)($prefill_flow['meta_flow_id'] ?? ''));
+        $prefill_screen = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', strtoupper((string)($prefill_flow['screen_id'] ?? 'SURVEY'))));
+    }
+
     $edit = ! empty($selected) ? wp_parse_args($selected, eventosapp_whatsapp_flow_templates_default_item()) : wp_parse_args([
         'waba_id' => $default_waba_id,
         'sender_phone_number_id' => $settings['phone_number_id'] ?? '',
+        'flow_post_id' => $prefill_flow_post_id,
+        'meta_flow_id' => $prefill_meta_flow_id,
+        'navigate_screen' => $prefill_screen ?: 'SURVEY',
     ], eventosapp_whatsapp_flow_templates_default_item());
     $edit['category'] = eventosapp_whatsapp_flow_templates_normalize_category($edit['category'] ?? 'UTILITY');
     $edit['language'] = eventosapp_whatsapp_flow_templates_normalize_language($edit['language'] ?? 'es_CO');
@@ -491,8 +505,17 @@ function eventosapp_whatsapp_flow_templates_render_page() {
         <h1>Plantillas Flow WhatsApp</h1>
         <?php eventosapp_whatsapp_flow_templates_render_notices(); ?>
         <style>
-            .eventosapp-wa-flow-templates .evapp-grid{display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,.8fr);gap:18px;align-items:start}.eventosapp-wa-flow-templates .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}.eventosapp-wa-flow-templates .evapp-card h2{margin-top:0}.eventosapp-wa-flow-templates .evapp-muted{color:#646970}.eventosapp-wa-flow-templates .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flow-templates .evapp-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flow-templates textarea.code{width:100%;min-height:260px;font-family:Menlo,Consolas,monospace}@media(max-width:1100px){.eventosapp-wa-flow-templates .evapp-grid{grid-template-columns:1fr}}
+            .eventosapp-wa-flow-templates .evapp-grid{display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,.8fr);gap:18px;align-items:start}.eventosapp-wa-flow-templates .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}.eventosapp-wa-flow-templates .evapp-card h2{margin-top:0}.eventosapp-wa-flow-templates .evapp-muted{color:#646970}.eventosapp-wa-flow-templates .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flow-templates .evapp-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flow-templates textarea.code{width:100%;min-height:260px;font-family:Menlo,Consolas,monospace}.eventosapp-wa-flow-templates .evapp-info{border-left:4px solid #2271b1;background:#f0f6fc;padding:10px;margin:10px 0}.eventosapp-wa-flow-templates .evapp-warning{border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0}@media(max-width:1100px){.eventosapp-wa-flow-templates .evapp-grid{grid-template-columns:1fr}}
         </style>
+
+        <div class="evapp-card">
+            <h2>¿Para qué sirve esta sección?</h2>
+            <div class="evapp-info">
+                <strong>WhatsApp Flows</strong> crea el formulario que el asistente responde dentro de WhatsApp.
+                <strong>Plantillas Flow WhatsApp</strong> crea el mensaje aprobado por Meta que abre ese formulario con un botón.
+                Si el asistente ya está en una conversación activa, puedes enviar el Flow directo. Si EventosApp necesita iniciar la conversación o enviar fuera de la ventana de atención de WhatsApp, usa una plantilla Flow aprobada.
+            </div>
+        </div>
 
         <div class="evapp-grid">
             <div>
