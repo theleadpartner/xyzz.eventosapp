@@ -146,6 +146,26 @@ add_action('admin_menu', function() {
         'eventosapp_whatsapp_flows_render_page',
         24
     );
+
+    add_submenu_page(
+        'eventosapp_dashboard',
+        'Gestionar Flows',
+        'Gestionar Flows',
+        'manage_options',
+        'eventosapp_whatsapp_flows_manage',
+        'eventosapp_whatsapp_flows_render_manage_page',
+        25
+    );
+
+    add_submenu_page(
+        'eventosapp_dashboard',
+        'Envío Masivo de Flows',
+        'Envío Masivo de Flows',
+        'manage_options',
+        'eventosapp_whatsapp_flows_bulk_send',
+        'eventosapp_whatsapp_flows_render_bulk_send_page',
+        26
+    );
 }, 22);
 
 function eventosapp_whatsapp_flows_categories() {
@@ -346,6 +366,100 @@ function eventosapp_whatsapp_flows_get_all_for_select() {
         ];
     }
     return $items;
+}
+
+
+function eventosapp_whatsapp_flows_get_all_for_management($args = []) {
+    $args = is_array($args) ? $args : [];
+    $search = sanitize_text_field((string)($args['search'] ?? ''));
+    $status_filter = sanitize_key((string)($args['status'] ?? ''));
+
+    $query_args = [
+        'post_type'      => EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE,
+        'post_status'    => ['publish', 'draft', 'private'],
+        'posts_per_page' => 300,
+        'orderby'        => 'date',
+        'order'          => 'DESC',
+    ];
+
+    if ( $search !== '' ) {
+        $query_args['s'] = $search;
+    }
+
+    $posts = get_posts($query_args);
+    $items = [];
+    foreach ( $posts as $post ) {
+        $config = eventosapp_whatsapp_flows_get_flow_config($post->ID);
+        if ( $status_filter !== '' && sanitize_key((string)($config['status'] ?? '')) !== $status_filter ) {
+            continue;
+        }
+        $stats = eventosapp_whatsapp_flows_get_stats($post->ID);
+        $items[] = [
+            'id'           => $post->ID,
+            'title'        => get_the_title($post),
+            'status'       => $config['status'] ?? 'local_draft',
+            'category'     => $config['category'] ?? 'SURVEY',
+            'screen_id'    => $config['screen_id'] ?? 'SURVEY',
+            'meta_flow_id' => $config['meta_flow_id'] ?? '',
+            'preview_url'  => $config['preview_url'] ?? '',
+            'updated_at'   => get_post_modified_time('Y-m-d H:i:s', false, $post, true),
+            'created_at'   => get_post_time('Y-m-d H:i:s', false, $post, true),
+            'last_sync_at' => $config['last_sync_at'] ?? '',
+            'stats'        => $stats,
+        ];
+    }
+    return $items;
+}
+
+function eventosapp_whatsapp_flows_get_events_for_select($limit = 300) {
+    return get_posts([
+        'post_type'      => 'eventosapp_event',
+        'post_status'    => ['publish', 'draft', 'private'],
+        'posts_per_page' => min(500, max(1, absint($limit))),
+        'orderby'        => 'date',
+        'order'          => 'DESC',
+    ]);
+}
+
+function eventosapp_whatsapp_flows_count_tickets_for_event($event_id) {
+    $event_id = absint($event_id);
+    if ( ! $event_id ) {
+        return 0;
+    }
+    $q = new WP_Query([
+        'post_type'      => 'eventosapp_ticket',
+        'post_status'    => ['publish', 'draft', 'private'],
+        'posts_per_page' => 1,
+        'fields'         => 'ids',
+        'no_found_rows'  => false,
+        'meta_query'     => [
+            [
+                'key'     => '_eventosapp_ticket_evento_id',
+                'value'   => $event_id,
+                'compare' => '=',
+            ],
+        ],
+    ]);
+    return (int) $q->found_posts;
+}
+
+function eventosapp_whatsapp_flows_ticket_has_existing_send($flow_post_id, $event_id, $ticket_id) {
+    global $wpdb;
+    eventosapp_whatsapp_flows_maybe_install_tables();
+    $flow_post_id = absint($flow_post_id);
+    $event_id = absint($event_id);
+    $ticket_id = absint($ticket_id);
+    if ( ! $flow_post_id || ! $event_id || ! $ticket_id ) {
+        return false;
+    }
+    $table = eventosapp_whatsapp_flows_sends_table_name();
+    $found = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM {$table} WHERE flow_post_id = %d AND event_id = %d AND ticket_id = %d AND status NOT IN ('failed_request','failed_webhook') LIMIT 1",
+        $flow_post_id,
+        $event_id,
+        $ticket_id
+    ));
+    return $found > 0;
 }
 
 function eventosapp_whatsapp_flows_get_flow_config($flow_post_id) {
@@ -1504,9 +1618,33 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
     $event_id = absint($_POST['campaign_event_id'] ?? 0);
     $limit = min(100, max(1, absint($_POST['campaign_limit'] ?? 25)));
     $offset = max(0, absint($_POST['campaign_offset'] ?? 0));
+    $skip_existing = ! empty($_POST['skip_existing_sends']);
+    $redirect_page = sanitize_key((string)($_POST['redirect_page'] ?? 'eventosapp_whatsapp_flows'));
+    $allowed_redirect_pages = ['eventosapp_whatsapp_flows', 'eventosapp_whatsapp_flows_bulk_send'];
+    if ( ! in_array($redirect_page, $allowed_redirect_pages, true) ) {
+        $redirect_page = 'eventosapp_whatsapp_flows';
+    }
+
+    $redirect_base = [
+        'page'          => $redirect_page,
+        'flow_id'       => $flow_post_id,
+        'bulk_flow_id'  => $flow_post_id,
+        'bulk_event_id' => $event_id,
+    ];
 
     if ( ! $flow_post_id || ! $event_id ) {
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('Debes seleccionar Flow y evento para el envío por lote.')]);
+        eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_base, [
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('Debes seleccionar Flow y evento para el envío por lote.'),
+        ]));
+    }
+
+    $flow_config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    if ( empty($flow_config['meta_flow_id']) ) {
+        eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_base, [
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('El Flow seleccionado todavía no tiene Flow ID de Meta. Créalo y publícalo antes del envío masivo.'),
+        ]));
     }
 
     $tickets = get_posts([
@@ -1515,6 +1653,8 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
         'posts_per_page' => $limit,
         'offset'         => $offset,
         'fields'         => 'ids',
+        'orderby'        => 'ID',
+        'order'          => 'ASC',
         'meta_query'     => [
             [
                 'key'     => '_eventosapp_ticket_evento_id',
@@ -1526,7 +1666,14 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
 
     $ok_count = 0;
     $error_count = 0;
+    $skipped_count = 0;
     foreach ( $tickets as $ticket_id ) {
+        $ticket_id = absint($ticket_id);
+        if ( $skip_existing && eventosapp_whatsapp_flows_ticket_has_existing_send($flow_post_id, $event_id, $ticket_id) ) {
+            $skipped_count++;
+            continue;
+        }
+
         $phone = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
         $result = eventosapp_whatsapp_flows_send_direct_flow($flow_post_id, $phone, [
             'ticket_id' => $ticket_id,
@@ -1542,21 +1689,22 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
     }
 
     update_option('eventosapp_whatsapp_flow_last_campaign_result', [
-        'flow_post_id' => $flow_post_id,
-        'event_id'     => $event_id,
-        'limit'        => $limit,
-        'offset'       => $offset,
-        'ok'           => $ok_count,
-        'errors'       => $error_count,
-        'processed'    => count($tickets),
-        'created_at'   => current_time('mysql'),
+        'flow_post_id'  => $flow_post_id,
+        'event_id'      => $event_id,
+        'limit'         => $limit,
+        'offset'        => $offset,
+        'ok'            => $ok_count,
+        'errors'        => $error_count,
+        'skipped'       => $skipped_count,
+        'processed'     => count($tickets),
+        'skip_existing' => $skip_existing ? 1 : 0,
+        'created_at'    => current_time('mysql'),
     ], false);
 
-    eventosapp_whatsapp_flows_notice_redirect([
-        'flow_id'      => $flow_post_id,
+    eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_base, [
         'flow_notice'  => $error_count ? 'warning' : 'success',
-        'flow_message' => rawurlencode('Lote procesado. Enviados: ' . $ok_count . '. Errores: ' . $error_count . '.'),
-    ]);
+        'flow_message' => rawurlencode('Lote procesado. Enviados: ' . $ok_count . '. Omitidos: ' . $skipped_count . '. Errores: ' . $error_count . '.'),
+    ]));
 });
 
 add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
@@ -1598,10 +1746,16 @@ function eventosapp_whatsapp_flows_render_page() {
     }
 
     eventosapp_whatsapp_flows_maybe_install_tables();
+    $has_flow_id_param = array_key_exists('flow_id', $_GET);
     $flow_id = absint($_GET['flow_id'] ?? 0);
+    $creating_new_flow = $has_flow_id_param && $flow_id === 0;
     $flows = eventosapp_whatsapp_flows_get_all_for_select();
     $selected = $flow_id ? eventosapp_whatsapp_flows_get_flow_config($flow_id) : [];
-    if ( empty($selected) && ! empty($flows) ) {
+
+    // Importante: cuando se entra con flow_id=0 se debe abrir un formulario limpio.
+    // Antes se seleccionaba automáticamente el último Flow y al guardar parecía que
+    // EventosApp sobrescribía el anterior.
+    if ( ! $creating_new_flow && empty($selected) && ! empty($flows) ) {
         $first = reset($flows);
         $selected = eventosapp_whatsapp_flows_get_flow_config($first['id']);
         $flow_id = absint($first['id']);
@@ -1615,13 +1769,7 @@ function eventosapp_whatsapp_flows_render_page() {
     $stats = eventosapp_whatsapp_flows_get_stats($flow_id);
     $recent_sends = eventosapp_whatsapp_flows_get_recent_sends($flow_id, 25);
     $recent_responses = eventosapp_whatsapp_flows_get_recent_responses($flow_id, 25);
-    $events = get_posts([
-        'post_type'      => 'eventosapp_event',
-        'post_status'    => ['publish', 'draft', 'private'],
-        'posts_per_page' => 200,
-        'orderby'        => 'date',
-        'order'          => 'DESC',
-    ]);
+    $events = eventosapp_whatsapp_flows_get_events_for_select(300);
 
     $new_config = [
         'id'                     => 0,
@@ -1739,6 +1887,7 @@ function eventosapp_whatsapp_flows_render_page() {
             <div>
                 <div class="evapp-card">
                     <h2>Flows creados</h2>
+                        <p class="evapp-muted">Vista rápida de los últimos Flows. Para consultar todos los Flows creados, sus métricas y accesos de envío, usa <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a>.</p>
                     <?php if ( empty($flows) ) : ?>
                         <p>No hay Flows guardados todavía.</p>
                     <?php else : ?>
@@ -1756,7 +1905,7 @@ function eventosapp_whatsapp_flows_render_page() {
                             </tbody>
                         </table>
                     <?php endif; ?>
-                    <p><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>" class="button">Crear uno nuevo</a></p>
+                    <p class="evapp-actions"><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>" class="button">Crear uno nuevo</a> <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>" class="button">Gestionar todos</a> <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_bulk_send')); ?>" class="button">Envío masivo de Flows</a></p>
                 </div>
 
                 <?php if ( $flow_id ) : ?>
@@ -1796,7 +1945,7 @@ function eventosapp_whatsapp_flows_render_page() {
 
                     <div class="evapp-card">
                         <h2>Envío por lote controlado</h2>
-                        <p class="evapp-muted">Procesa máximo 100 tickets por lote para evitar carga excesiva. Para más asistentes, ejecuta por bloques usando el offset.</p>
+                        <p class="evapp-muted">Este envío rápido se conserva para pruebas. Para operación real por evento y selección de Flow, usa la nueva sección <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_bulk_send&bulk_flow_id=' . absint($flow_id))); ?>">Envío Masivo de Flows</a>.</p>
                         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                             <?php wp_nonce_field('eventosapp_whatsapp_flow_campaign_send'); ?>
                             <input type="hidden" name="action" value="eventosapp_whatsapp_flow_campaign_send">
@@ -1841,6 +1990,256 @@ function eventosapp_whatsapp_flows_render_page() {
         wrap.addEventListener('click', function(e){ if(e.target && e.target.classList.contains('evapp-remove-question')){ var q=e.target.closest('.evapp-question'); if(q) q.remove(); } });
     })();
     </script>
+    <?php
+}
+
+
+function eventosapp_whatsapp_flows_render_manage_page() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+
+    eventosapp_whatsapp_flows_maybe_install_tables();
+    $search = sanitize_text_field((string)($_GET['flow_search'] ?? ''));
+    $status_filter = sanitize_key((string)($_GET['flow_status'] ?? ''));
+    $items = eventosapp_whatsapp_flows_get_all_for_management([
+        'search' => $search,
+        'status' => $status_filter,
+    ]);
+    $status_options = [
+        '' => 'Todos los estados',
+        'local_draft' => 'Borrador local',
+        'draft_meta' => 'Borrador Meta',
+        'draft_meta_json_ready' => 'Meta con JSON local',
+        'json_uploaded' => 'JSON subido',
+        'published' => 'Publicado',
+        'meta_error' => 'Error Meta',
+    ];
+    ?>
+    <div class="wrap eventosapp-wa-flows eventosapp-wa-flows-manage">
+        <h1>Gestionar WhatsApp Flows</h1>
+        <?php eventosapp_whatsapp_flows_render_notices(); ?>
+        <style>
+            .eventosapp-wa-flows .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:16px}.eventosapp-wa-flows .evapp-muted{color:#646970}.eventosapp-wa-flows .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-toolbar{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-mini-stats{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-mini-stats span{background:#f6f7f7;border-radius:8px;padding:6px 8px;display:inline-block}.eventosapp-wa-flows .evapp-warning{border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0}
+        </style>
+
+        <div class="evapp-card">
+            <div class="evapp-toolbar">
+                <div>
+                    <h2 style="margin-top:0;">Flows guardados en EventosApp</h2>
+                    <p class="evapp-muted">Esta sección lista los Flows locales creados en EventosApp. Crear o recrear un Flow en Meta no debe borrar el Flow local; si necesitas una versión nueva, usa “Crear nuevo Flow” para generar otro registro local.</p>
+                </div>
+                <p><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear nuevo Flow</a></p>
+            </div>
+
+            <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" style="margin:12px 0;">
+                <input type="hidden" name="page" value="eventosapp_whatsapp_flows_manage">
+                <input type="search" name="flow_search" value="<?php echo esc_attr($search); ?>" placeholder="Buscar por nombre" class="regular-text">
+                <select name="flow_status">
+                    <?php foreach ( $status_options as $value => $label ) : ?>
+                        <option value="<?php echo esc_attr($value); ?>" <?php selected($status_filter, $value); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="submit" class="button">Filtrar</button>
+                <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Limpiar</a>
+            </form>
+
+            <?php if ( empty($items) ) : ?>
+                <p>No hay Flows guardados con esos filtros.</p>
+            <?php else : ?>
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th>Flow</th>
+                            <th>Estado</th>
+                            <th>Meta / pantalla</th>
+                            <th>Métricas</th>
+                            <th>Última actividad</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $items as $item ) : ?>
+                            <tr>
+                                <td>
+                                    <strong><?php echo esc_html($item['title']); ?></strong><br>
+                                    <small>ID local: #<?php echo esc_html($item['id']); ?> · Categoría: <?php echo esc_html($item['category']); ?></small>
+                                </td>
+                                <td><span class="evapp-pill"><?php echo esc_html($item['status'] ?: 'local_draft'); ?></span></td>
+                                <td>
+                                    <strong>Meta ID:</strong> <?php echo esc_html($item['meta_flow_id'] ?: '—'); ?><br>
+                                    <strong>Pantalla:</strong> <?php echo esc_html($item['screen_id'] ?: 'SURVEY'); ?>
+                                    <?php if ( ! empty($item['preview_url']) ) : ?><br><a target="_blank" href="<?php echo esc_url($item['preview_url']); ?>">Abrir preview</a><?php endif; ?>
+                                </td>
+                                <td>
+                                    <div class="evapp-mini-stats">
+                                        <span>Envíos: <strong><?php echo esc_html($item['stats']['sent']); ?></strong></span>
+                                        <span>Resp.: <strong><?php echo esc_html($item['stats']['answered']); ?></strong></span>
+                                        <span>Tasa: <strong><?php echo esc_html($item['stats']['rate']); ?>%</strong></span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <small>Creado: <?php echo esc_html($item['created_at']); ?></small><br>
+                                    <small>Editado: <?php echo esc_html($item['updated_at']); ?></small><br>
+                                    <small>Sync: <?php echo esc_html($item['last_sync_at'] ?: '—'); ?></small>
+                                </td>
+                                <td>
+                                    <div class="evapp-actions">
+                                        <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flows', 'flow_id' => $item['id']], admin_url('admin.php'))); ?>">Editar</a>
+                                        <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flows_bulk_send', 'bulk_flow_id' => $item['id']], admin_url('admin.php'))); ?>">Enviar masivo</a>
+                                        <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flow_templates', 'template_id' => 0, 'flow_post_id' => $item['id']], admin_url('admin.php'))); ?>">Crear plantilla Flow</a>
+                                        <a class="button button-small" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=eventosapp_whatsapp_flow_export_responses&flow_id=' . absint($item['id'])), 'eventosapp_whatsapp_flow_export_responses')); ?>">Exportar respuestas</a>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+
+        <div class="evapp-card">
+            <h2>Uso recomendado</h2>
+            <div class="evapp-warning">
+                <strong>Flow directo:</strong> útil para pruebas, conversaciones activas y envíos controlados desde EventosApp.<br>
+                <strong>Plantilla Flow:</strong> útil cuando necesitas iniciar conversaciones fuera de la ventana de atención de WhatsApp, porque la plantilla debe estar aprobada por Meta.
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+function eventosapp_whatsapp_flows_render_bulk_send_page() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+
+    eventosapp_whatsapp_flows_maybe_install_tables();
+    $flows = eventosapp_whatsapp_flows_get_all_for_select();
+    $events = eventosapp_whatsapp_flows_get_events_for_select(300);
+    $selected_flow_id = absint($_GET['bulk_flow_id'] ?? ($_GET['flow_id'] ?? 0));
+    $selected_event_id = absint($_GET['bulk_event_id'] ?? 0);
+    $limit = min(100, max(1, absint($_GET['campaign_limit'] ?? 25)));
+    $offset = max(0, absint($_GET['campaign_offset'] ?? 0));
+    $ticket_count = $selected_event_id ? eventosapp_whatsapp_flows_count_tickets_for_event($selected_event_id) : 0;
+    $last_result = get_option('eventosapp_whatsapp_flow_last_campaign_result', []);
+    $selected_flow = $selected_flow_id ? eventosapp_whatsapp_flows_get_flow_config($selected_flow_id) : [];
+    ?>
+    <div class="wrap eventosapp-wa-flows eventosapp-wa-flows-bulk">
+        <h1>Envío Masivo de WhatsApp Flows</h1>
+        <?php eventosapp_whatsapp_flows_render_notices(); ?>
+        <style>
+            .eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(420px,1fr) minmax(320px,.8fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:16px}.eventosapp-wa-flows .evapp-muted{color:#646970}.eventosapp-wa-flows .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flows .evapp-warning{border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0}.eventosapp-wa-flows .evapp-success{border-left:4px solid #00a32a;background:#edfaef;padding:10px;margin:10px 0}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:#f6f7f7;border-radius:8px;padding:10px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:22px}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}@media(max-width:1100px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-stat-grid{grid-template-columns:1fr}}
+        </style>
+
+        <div class="evapp-grid">
+            <div>
+                <div class="evapp-card">
+                    <h2>Seleccionar evento y Flow</h2>
+                    <p class="evapp-muted">Esta pantalla envía un Flow directo a los tickets del evento seleccionado. Procesa por lotes pequeños para no sobrecargar el servidor ni disparar demasiadas solicitudes a Meta al mismo tiempo.</p>
+
+                    <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>">
+                        <input type="hidden" name="page" value="eventosapp_whatsapp_flows_bulk_send">
+                        <table class="form-table" role="presentation">
+                            <tr>
+                                <th><label for="bulk_event_id">Evento</label></th>
+                                <td>
+                                    <select name="bulk_event_id" id="bulk_event_id" class="regular-text" required>
+                                        <option value="0">Seleccionar evento</option>
+                                        <?php foreach ( $events as $event ) : ?>
+                                            <option value="<?php echo esc_attr($event->ID); ?>" <?php selected($selected_event_id, $event->ID); ?>><?php echo esc_html(get_the_title($event)); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th><label for="bulk_flow_id">Flow a enviar</label></th>
+                                <td>
+                                    <select name="bulk_flow_id" id="bulk_flow_id" class="regular-text" required>
+                                        <option value="0">Seleccionar Flow</option>
+                                        <?php foreach ( $flows as $flow ) : ?>
+                                            <option value="<?php echo esc_attr($flow['id']); ?>" <?php selected($selected_flow_id, $flow['id']); ?>><?php echo esc_html($flow['title'] . ' — ' . ($flow['meta_flow_id'] ? 'Meta ID ' . $flow['meta_flow_id'] : 'sin Meta ID')); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <p class="description">Solo envía Flows que ya tengan Meta ID y estén publicados o listos para enviar.</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th>Lote</th>
+                                <td>
+                                    <label>Límite <input type="number" name="campaign_limit" value="<?php echo esc_attr($limit); ?>" min="1" max="100" class="small-text"></label>
+                                    <label style="margin-left:12px;">Offset <input type="number" name="campaign_offset" value="<?php echo esc_attr($offset); ?>" min="0" class="small-text"></label>
+                                </td>
+                            </tr>
+                        </table>
+                        <p><button type="submit" class="button">Actualizar vista</button></p>
+                    </form>
+                </div>
+
+                <?php if ( $selected_event_id && $selected_flow_id ) : ?>
+                    <div class="evapp-card">
+                        <h2>Enviar lote</h2>
+                        <div class="evapp-stat-grid">
+                            <div class="evapp-stat"><span>Tickets del evento</span><strong><?php echo esc_html($ticket_count); ?></strong></div>
+                            <div class="evapp-stat"><span>Límite del lote</span><strong><?php echo esc_html($limit); ?></strong></div>
+                            <div class="evapp-stat"><span>Offset</span><strong><?php echo esc_html($offset); ?></strong></div>
+                        </div>
+
+                        <?php if ( empty($selected_flow['meta_flow_id']) ) : ?>
+                            <div class="evapp-warning"><strong>No se puede enviar todavía.</strong> El Flow seleccionado no tiene Flow ID de Meta. Ábrelo en WhatsApp Flows, presiona “Crear/Recrear en Meta con JSON local”, revisa preview y publica.</div>
+                        <?php else : ?>
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:14px;">
+                                <?php wp_nonce_field('eventosapp_whatsapp_flow_campaign_send'); ?>
+                                <input type="hidden" name="action" value="eventosapp_whatsapp_flow_campaign_send">
+                                <input type="hidden" name="redirect_page" value="eventosapp_whatsapp_flows_bulk_send">
+                                <input type="hidden" name="flow_post_id" value="<?php echo esc_attr($selected_flow_id); ?>">
+                                <input type="hidden" name="campaign_event_id" value="<?php echo esc_attr($selected_event_id); ?>">
+                                <input type="hidden" name="campaign_limit" value="<?php echo esc_attr($limit); ?>">
+                                <input type="hidden" name="campaign_offset" value="<?php echo esc_attr($offset); ?>">
+                                <p><label><input type="checkbox" name="skip_existing_sends" value="1" checked> Omitir tickets que ya tengan un envío registrado para este mismo Flow y evento</label></p>
+                                <p class="evapp-warning"><strong>Confirmación:</strong> se enviará el Flow <strong><?php echo esc_html($selected_flow['title'] ?? ''); ?></strong> a un máximo de <?php echo esc_html($limit); ?> tickets del evento seleccionado, empezando en el offset <?php echo esc_html($offset); ?>.</p>
+                                <p><button type="submit" class="button button-primary">Enviar lote de Flows</button></p>
+                            </form>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <div>
+                <div class="evapp-card">
+                    <h2>Último resultado</h2>
+                    <?php if ( is_array($last_result) && ! empty($last_result['created_at']) ) : ?>
+                        <p><strong>Fecha:</strong> <?php echo esc_html($last_result['created_at']); ?></p>
+                        <p><strong>Flow:</strong> #<?php echo esc_html($last_result['flow_post_id'] ?? ''); ?></p>
+                        <p><strong>Evento:</strong> #<?php echo esc_html($last_result['event_id'] ?? ''); ?></p>
+                        <p><strong>Procesados:</strong> <?php echo esc_html($last_result['processed'] ?? 0); ?></p>
+                        <p><strong>Enviados:</strong> <?php echo esc_html($last_result['ok'] ?? 0); ?></p>
+                        <p><strong>Omitidos:</strong> <?php echo esc_html($last_result['skipped'] ?? 0); ?></p>
+                        <p><strong>Errores:</strong> <?php echo esc_html($last_result['errors'] ?? 0); ?></p>
+                    <?php else : ?>
+                        <p>No hay resultados de envío masivo todavía.</p>
+                    <?php endif; ?>
+                </div>
+
+                <div class="evapp-card">
+                    <h2>Guía rápida</h2>
+                    <p><strong>1.</strong> Crea y publica el Flow desde <em>WhatsApp Flows</em>.</p>
+                    <p><strong>2.</strong> En esta sección selecciona el evento y el Flow.</p>
+                    <p><strong>3.</strong> Envía por bloques de 25 a 100 tickets.</p>
+                    <p><strong>4.</strong> Revisa respuestas desde el Flow o exporta el CSV.</p>
+                    <div class="evapp-warning">Para iniciar conversaciones fuera de la ventana permitida por WhatsApp, usa una plantilla Flow aprobada. Esta pantalla usa envío directo de Flow y es ideal para pruebas, conversaciones activas o campañas controladas donde Meta acepte el mensaje interactivo directo.</div>
+                </div>
+
+                <div class="evapp-card">
+                    <h2>Accesos</h2>
+                    <p class="evapp-actions">
+                        <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a>
+                        <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear Flow</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
     <?php
 }
 
