@@ -162,8 +162,8 @@ add_action('admin_menu', function() {
         'Envío Masivo de Flows',
         'Envío Masivo de Flows',
         'manage_options',
-        'eventosapp_whatsapp_flows_bulk_send',
-        'eventosapp_whatsapp_flows_render_bulk_send_page',
+        'eventosapp_whatsapp_flows_campaign',
+        'eventosapp_whatsapp_flows_render_campaign_page',
         26
     );
 }, 22);
@@ -181,45 +181,148 @@ function eventosapp_whatsapp_flows_categories() {
     ];
 }
 
+/**
+ * Tipos de campo disponibles para construir encuestas con componentes soportados
+ * por WhatsApp Flows. Los tipos especiales (nps, rating5, yesno) se transforman
+ * en RadioButtonsGroup para facilitar encuestas tipo SurveyMonkey/Google Forms.
+ */
 function eventosapp_whatsapp_flows_question_types() {
     return [
-        'radio'    => 'Selección única',
-        'checkbox' => 'Selección múltiple',
-        'dropdown' => 'Lista desplegable',
-        'text'     => 'Texto corto',
-        'textarea' => 'Texto largo',
+        'heading'    => 'Título de sección',
+        'subheading' => 'Subtítulo',
+        'body'       => 'Texto informativo',
+        'caption'    => 'Nota pequeña',
+        'nps'        => 'Escala NPS 0 a 10',
+        'rating5'    => 'Escala satisfacción 1 a 5',
+        'radio'      => 'Selección única',
+        'checkbox'   => 'Selección múltiple',
+        'dropdown'   => 'Lista desplegable',
+        'yesno'      => 'Sí / No',
+        'text'       => 'Texto corto',
+        'textarea'   => 'Texto largo',
+        'email'      => 'Correo electrónico',
+        'number'     => 'Número',
+        'phone'      => 'Teléfono',
+        'date'       => 'Fecha',
+        'optin'      => 'Aceptación / consentimiento',
     ];
+}
+
+function eventosapp_whatsapp_flows_input_question_types() {
+    return [
+        'nps', 'rating5', 'radio', 'checkbox', 'dropdown', 'yesno', 'text', 'textarea', 'email', 'number', 'phone', 'date', 'optin'
+    ];
+}
+
+function eventosapp_whatsapp_flows_display_question_types() {
+    return ['heading', 'subheading', 'body', 'caption'];
+}
+
+function eventosapp_whatsapp_flows_type_help() {
+    return [
+        'heading'    => 'Úsalo para separar bloques como “Valoración del evento”, “Conferencista” o “Queremos conocerte más”. No guarda respuesta.',
+        'subheading' => 'Úsalo para subtítulos cortos dentro de una sección. No guarda respuesta.',
+        'body'       => 'Úsalo para instrucciones, contexto o textos legales cortos. No guarda respuesta.',
+        'caption'    => 'Úsalo para notas pequeñas, aclaraciones o ayuda visual. No guarda respuesta.',
+        'nps'        => 'Sirve para la pregunta “¿Qué tan probable es que nos recomiendes?” con escala 0 a 10.',
+        'rating5'    => 'Sirve para calificar satisfacción de 1 a 5. Para matrices, agrega una pregunta rating por cada fila.',
+        'radio'      => 'Sirve cuando el asistente debe escoger una sola respuesta entre varias opciones.',
+        'checkbox'   => 'Sirve cuando el asistente puede seleccionar varias respuestas al mismo tiempo.',
+        'dropdown'   => 'Sirve para listas largas; ocupa menos espacio que radio.',
+        'yesno'      => 'Sirve para preguntas cerradas de aceptación, recomendación o confirmación simple.',
+        'text'       => 'Sirve para nombres, empresa, cargo o respuestas cortas.',
+        'textarea'   => 'Sirve para comentarios, sugerencias y respuestas abiertas largas.',
+        'email'      => 'Sirve para pedir correo con teclado y validación de email.',
+        'number'     => 'Sirve para cédula, NIT, cantidad o calificaciones numéricas abiertas.',
+        'phone'      => 'Sirve para pedir celular o teléfono.',
+        'date'       => 'Sirve para fechas, reservas o disponibilidad.',
+        'optin'      => 'Sirve para autorizaciones, tratamiento de datos y aceptación de términos.',
+    ];
+}
+
+function eventosapp_whatsapp_flows_default_options_for_type($type) {
+    $type = sanitize_key((string) $type);
+    if ( $type === 'nps' ) {
+        $options = [];
+        for ( $i = 0; $i <= 10; $i++ ) {
+            $options[] = ['id' => (string) $i, 'title' => (string) $i];
+        }
+        return $options;
+    }
+    if ( $type === 'rating5' ) {
+        return [
+            ['id' => '1', 'title' => '1 - Muy insatisfecho'],
+            ['id' => '2', 'title' => '2'],
+            ['id' => '3', 'title' => '3 - Regular'],
+            ['id' => '4', 'title' => '4'],
+            ['id' => '5', 'title' => '5 - Muy satisfecho'],
+        ];
+    }
+    if ( $type === 'yesno' ) {
+        return [
+            ['id' => 'si', 'title' => 'Sí'],
+            ['id' => 'no', 'title' => 'No'],
+        ];
+    }
+    return [];
 }
 
 function eventosapp_whatsapp_flows_default_questions() {
     return [
         [
-            'slug'     => 'satisfaccion_general',
-            'label'    => '¿Cómo calificas tu experiencia general en el evento?',
-            'type'     => 'radio',
+            'slug'     => 'seccion_valoracion',
+            'label'    => 'Valoración del evento',
+            'help'     => '',
+            'type'     => 'heading',
+            'required' => '0',
+            'options'  => [],
+        ],
+        [
+            'slug'     => 'probabilidad_recomendar',
+            'label'    => '¿Qué tan probable es que recomiendes este evento a un amigo o familiar?',
+            'help'     => '0 es nada probable y 10 es muy probable.',
+            'type'     => 'nps',
             'required' => '1',
+            'options'  => eventosapp_whatsapp_flows_default_options_for_type('nps'),
+        ],
+        [
+            'slug'     => 'medio_conocimiento',
+            'label'    => '¿Cómo te enteraste de nuestro evento?',
+            'help'     => '',
+            'type'     => 'radio',
+            'required' => '0',
             'options'  => [
-                ['id' => 'excelente', 'title' => 'Excelente'],
-                ['id' => 'buena', 'title' => 'Buena'],
-                ['id' => 'regular', 'title' => 'Regular'],
-                ['id' => 'mala', 'title' => 'Mala'],
+                ['id' => 'correo', 'title' => 'Recibí un correo electrónico'],
+                ['id' => 'llamada', 'title' => 'Llamada de un agente comercial'],
+                ['id' => 'empresa', 'title' => 'Por medio de la empresa'],
+                ['id' => 'web', 'title' => 'Página web'],
+                ['id' => 'recomendacion', 'title' => 'Recomendación'],
+                ['id' => 'redes', 'title' => 'Redes sociales'],
+                ['id' => 'whatsapp', 'title' => 'WhatsApp'],
             ],
         ],
         [
-            'slug'     => 'recomendacion',
-            'label'    => '¿Recomendarías este evento?',
-            'type'     => 'radio',
+            'slug'     => 'satisfaccion_contenido',
+            'label'    => '¿Los temas desarrollados cumplieron tus expectativas?',
+            'help'     => '1 corresponde al mínimo grado de satisfacción y 5 al máximo.',
+            'type'     => 'rating5',
             'required' => '1',
-            'options'  => [
-                ['id' => 'si', 'title' => 'Sí'],
-                ['id' => 'no', 'title' => 'No'],
-            ],
+            'options'  => eventosapp_whatsapp_flows_default_options_for_type('rating5'),
         ],
         [
             'slug'     => 'comentarios',
-            'label'    => 'Cuéntanos algún comentario adicional',
+            'label'    => '¿Qué fue lo que más te gustó y qué podríamos mejorar?',
+            'help'     => '',
             'type'     => 'textarea',
             'required' => '0',
+            'options'  => [],
+        ],
+        [
+            'slug'     => 'acepta_tratamiento_datos',
+            'label'    => 'Acepto el tratamiento de mis datos personales para fines relacionados con el evento.',
+            'help'     => 'Usa este campo cuando necesites autorización expresa.',
+            'type'     => 'optin',
+            'required' => '1',
             'options'  => [],
         ],
     ];
@@ -268,13 +371,20 @@ function eventosapp_whatsapp_flows_normalize_options($raw_options) {
             if ( $line === '' ) {
                 continue;
             }
-            $id = sanitize_key(remove_accents($line));
+            $parts = array_map('trim', explode('|', $line, 2));
+            if ( count($parts) === 2 && $parts[0] !== '' && $parts[1] !== '' ) {
+                $id = sanitize_key(remove_accents($parts[0]));
+                $title = sanitize_text_field($parts[1]);
+            } else {
+                $title = sanitize_text_field($line);
+                $id = sanitize_key(remove_accents($line));
+            }
             if ( $id === '' ) {
                 $id = 'opcion_' . (count($options) + 1);
             }
             $options[] = [
-                'id'    => $id,
-                'title' => sanitize_text_field($line),
+                'id'    => eventosapp_whatsapp_flows_text_limit($id, 80),
+                'title' => eventosapp_whatsapp_flows_text_limit($title, 80),
             ];
         }
     } elseif ( is_array($raw_options) ) {
@@ -293,18 +403,20 @@ function eventosapp_whatsapp_flows_normalize_options($raw_options) {
                 $id = 'opcion_' . ((int) $idx + 1);
             }
             $options[] = [
-                'id'    => $id,
-                'title' => $title,
+                'id'    => eventosapp_whatsapp_flows_text_limit($id, 80),
+                'title' => eventosapp_whatsapp_flows_text_limit($title, 80),
             ];
         }
     }
 
-    return array_slice($options, 0, 20);
+    return array_slice($options, 0, 200);
 }
 
 function eventosapp_whatsapp_flows_normalize_questions($raw_questions) {
     $questions = [];
     $types = eventosapp_whatsapp_flows_question_types();
+    $input_types = eventosapp_whatsapp_flows_input_question_types();
+    $display_types = eventosapp_whatsapp_flows_display_question_types();
 
     if ( ! is_array($raw_questions) ) {
         return eventosapp_whatsapp_flows_default_questions();
@@ -326,7 +438,14 @@ function eventosapp_whatsapp_flows_normalize_questions($raw_questions) {
         }
 
         $slug = eventosapp_whatsapp_flows_sanitize_slug($question['slug'] ?? '', 'pregunta_' . ((int) $index + 1));
+        $help = sanitize_textarea_field((string)($question['help'] ?? ''));
+        $placeholder = sanitize_text_field((string)($question['placeholder'] ?? ''));
         $options = eventosapp_whatsapp_flows_normalize_options($question['options'] ?? []);
+
+        $default_options = eventosapp_whatsapp_flows_default_options_for_type($type);
+        if ( in_array($type, ['nps', 'rating5', 'yesno'], true) && empty($options) ) {
+            $options = $default_options;
+        }
 
         if ( in_array($type, ['radio', 'checkbox', 'dropdown'], true) && empty($options) ) {
             $options = [
@@ -335,17 +454,35 @@ function eventosapp_whatsapp_flows_normalize_questions($raw_questions) {
             ];
         }
 
+        if ( in_array($type, $display_types, true) ) {
+            $required = '0';
+            $options = [];
+        } else {
+            $required = ! empty($question['required']) && $question['required'] !== '0' ? '1' : '0';
+        }
+
+        $min_chars = isset($question['min_chars']) ? absint($question['min_chars']) : 0;
+        $max_chars = isset($question['max_chars']) ? absint($question['max_chars']) : 0;
+        if ( $max_chars && $min_chars && $min_chars > $max_chars ) {
+            $min_chars = 0;
+        }
+
         $questions[] = [
-            'slug'     => $slug,
-            'label'    => $label,
-            'type'     => $type,
-            'required' => ! empty($question['required']) && $question['required'] !== '0' ? '1' : '0',
-            'options'  => $options,
+            'slug'        => $slug,
+            'label'       => $label,
+            'help'        => $help,
+            'placeholder' => $placeholder,
+            'type'        => $type,
+            'required'    => $required,
+            'options'     => $options,
+            'min_chars'   => $min_chars,
+            'max_chars'   => $max_chars,
         ];
     }
 
-    return ! empty($questions) ? array_slice($questions, 0, 30) : eventosapp_whatsapp_flows_default_questions();
+    return ! empty($questions) ? array_slice($questions, 0, 60) : eventosapp_whatsapp_flows_default_questions();
 }
+
 
 function eventosapp_whatsapp_flows_get_all_for_select() {
     $posts = get_posts([
@@ -368,100 +505,6 @@ function eventosapp_whatsapp_flows_get_all_for_select() {
     return $items;
 }
 
-
-function eventosapp_whatsapp_flows_get_all_for_management($args = []) {
-    $args = is_array($args) ? $args : [];
-    $search = sanitize_text_field((string)($args['search'] ?? ''));
-    $status_filter = sanitize_key((string)($args['status'] ?? ''));
-
-    $query_args = [
-        'post_type'      => EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE,
-        'post_status'    => ['publish', 'draft', 'private'],
-        'posts_per_page' => 300,
-        'orderby'        => 'date',
-        'order'          => 'DESC',
-    ];
-
-    if ( $search !== '' ) {
-        $query_args['s'] = $search;
-    }
-
-    $posts = get_posts($query_args);
-    $items = [];
-    foreach ( $posts as $post ) {
-        $config = eventosapp_whatsapp_flows_get_flow_config($post->ID);
-        if ( $status_filter !== '' && sanitize_key((string)($config['status'] ?? '')) !== $status_filter ) {
-            continue;
-        }
-        $stats = eventosapp_whatsapp_flows_get_stats($post->ID);
-        $items[] = [
-            'id'           => $post->ID,
-            'title'        => get_the_title($post),
-            'status'       => $config['status'] ?? 'local_draft',
-            'category'     => $config['category'] ?? 'SURVEY',
-            'screen_id'    => $config['screen_id'] ?? 'SURVEY',
-            'meta_flow_id' => $config['meta_flow_id'] ?? '',
-            'preview_url'  => $config['preview_url'] ?? '',
-            'updated_at'   => get_post_modified_time('Y-m-d H:i:s', false, $post, true),
-            'created_at'   => get_post_time('Y-m-d H:i:s', false, $post, true),
-            'last_sync_at' => $config['last_sync_at'] ?? '',
-            'stats'        => $stats,
-        ];
-    }
-    return $items;
-}
-
-function eventosapp_whatsapp_flows_get_events_for_select($limit = 300) {
-    return get_posts([
-        'post_type'      => 'eventosapp_event',
-        'post_status'    => ['publish', 'draft', 'private'],
-        'posts_per_page' => min(500, max(1, absint($limit))),
-        'orderby'        => 'date',
-        'order'          => 'DESC',
-    ]);
-}
-
-function eventosapp_whatsapp_flows_count_tickets_for_event($event_id) {
-    $event_id = absint($event_id);
-    if ( ! $event_id ) {
-        return 0;
-    }
-    $q = new WP_Query([
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => ['publish', 'draft', 'private'],
-        'posts_per_page' => 1,
-        'fields'         => 'ids',
-        'no_found_rows'  => false,
-        'meta_query'     => [
-            [
-                'key'     => '_eventosapp_ticket_evento_id',
-                'value'   => $event_id,
-                'compare' => '=',
-            ],
-        ],
-    ]);
-    return (int) $q->found_posts;
-}
-
-function eventosapp_whatsapp_flows_ticket_has_existing_send($flow_post_id, $event_id, $ticket_id) {
-    global $wpdb;
-    eventosapp_whatsapp_flows_maybe_install_tables();
-    $flow_post_id = absint($flow_post_id);
-    $event_id = absint($event_id);
-    $ticket_id = absint($ticket_id);
-    if ( ! $flow_post_id || ! $event_id || ! $ticket_id ) {
-        return false;
-    }
-    $table = eventosapp_whatsapp_flows_sends_table_name();
-    $found = (int) $wpdb->get_var($wpdb->prepare(
-        "SELECT id FROM {$table} WHERE flow_post_id = %d AND event_id = %d AND ticket_id = %d AND status NOT IN ('failed_request','failed_webhook') LIMIT 1",
-        $flow_post_id,
-        $event_id,
-        $ticket_id
-    ));
-    return $found > 0;
-}
-
 function eventosapp_whatsapp_flows_get_flow_config($flow_post_id) {
     $flow_post_id = absint($flow_post_id);
     if ( ! $flow_post_id || get_post_type($flow_post_id) !== EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE ) {
@@ -481,6 +524,7 @@ function eventosapp_whatsapp_flows_get_flow_config($flow_post_id) {
         'cta'                    => get_post_meta($flow_post_id, '_eventosapp_wa_flow_cta', true) ?: 'Responder encuesta',
         'submit_label'           => get_post_meta($flow_post_id, '_eventosapp_wa_flow_submit_label', true) ?: 'Enviar respuestas',
         'screen_id'              => get_post_meta($flow_post_id, '_eventosapp_wa_flow_screen_id', true) ?: 'SURVEY',
+        'questions_per_screen'   => absint(get_post_meta($flow_post_id, '_eventosapp_wa_flow_questions_per_screen', true)) ?: 8,
         'status'                 => get_post_meta($flow_post_id, '_eventosapp_wa_flow_status', true) ?: 'local_draft',
         'meta_flow_id'           => get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_id', true),
         'waba_id'                => get_post_meta($flow_post_id, '_eventosapp_wa_flow_waba_id', true),
@@ -497,8 +541,97 @@ function eventosapp_whatsapp_flows_get_flow_config($flow_post_id) {
     $config['category'] = array_key_exists($config['category'], eventosapp_whatsapp_flows_categories()) ? $config['category'] : 'SURVEY';
     $config['screen_id'] = eventosapp_whatsapp_flows_sanitize_slug($config['screen_id'], 'SURVEY');
     $config['screen_id'] = strtoupper($config['screen_id']);
+    $config['questions_per_screen'] = min(15, max(3, absint($config['questions_per_screen'] ?? 8)));
 
     return $config;
+}
+
+function eventosapp_whatsapp_flows_question_answer_schema($question) {
+    $type = sanitize_key((string)($question['type'] ?? 'text'));
+    if ( $type === 'checkbox' ) {
+        return [
+            'type'        => 'array',
+            'items'       => ['type' => 'string'],
+            '__example__' => ['opcion_1'],
+        ];
+    }
+    if ( $type === 'optin' ) {
+        return [
+            'type'        => 'boolean',
+            '__example__' => true,
+        ];
+    }
+    return [
+        'type'        => 'string',
+        '__example__' => 'respuesta',
+    ];
+}
+
+function eventosapp_whatsapp_flows_question_to_component($question) {
+    $type = sanitize_key((string)($question['type'] ?? 'radio'));
+    $label = sanitize_text_field((string)($question['label'] ?? 'Pregunta'));
+    $slug = eventosapp_whatsapp_flows_sanitize_slug($question['slug'] ?? '', 'pregunta');
+    $required = ! empty($question['required']) && $question['required'] !== '0';
+    $options = eventosapp_whatsapp_flows_normalize_options($question['options'] ?? []);
+
+    if ( $type === 'heading' ) {
+        return ['type' => 'TextHeading', 'text' => eventosapp_whatsapp_flows_text_limit($label, 80)];
+    }
+    if ( $type === 'subheading' ) {
+        return ['type' => 'TextSubheading', 'text' => eventosapp_whatsapp_flows_text_limit($label, 80)];
+    }
+    if ( $type === 'body' ) {
+        return ['type' => 'TextBody', 'text' => eventosapp_whatsapp_flows_text_limit($label, 4096)];
+    }
+    if ( $type === 'caption' ) {
+        return ['type' => 'TextCaption', 'text' => eventosapp_whatsapp_flows_text_limit($label, 300)];
+    }
+
+    if ( in_array($type, ['nps', 'rating5', 'yesno'], true) && empty($options) ) {
+        $options = eventosapp_whatsapp_flows_default_options_for_type($type);
+    }
+
+    $component = [
+        'name'     => $slug,
+        'label'    => eventosapp_whatsapp_flows_text_limit($label, 120),
+        'required' => $required,
+    ];
+
+    if ( $type === 'textarea' ) {
+        $component = array_merge(['type' => 'TextArea'], $component);
+    } elseif ( $type === 'email' ) {
+        $component = array_merge(['type' => 'TextInput', 'input-type' => 'email'], $component);
+    } elseif ( $type === 'number' ) {
+        $component = array_merge(['type' => 'TextInput', 'input-type' => 'number'], $component);
+    } elseif ( $type === 'phone' ) {
+        $component = array_merge(['type' => 'TextInput', 'input-type' => 'phone'], $component);
+    } elseif ( $type === 'text' ) {
+        $component = array_merge(['type' => 'TextInput', 'input-type' => 'text'], $component);
+    } elseif ( $type === 'date' ) {
+        $component = array_merge(['type' => 'DatePicker'], $component);
+    } elseif ( $type === 'optin' ) {
+        $component = array_merge(['type' => 'OptIn'], $component);
+    } elseif ( $type === 'checkbox' ) {
+        $component = array_merge(['type' => 'CheckboxGroup'], $component);
+        $component['data-source'] = $options;
+    } elseif ( $type === 'dropdown' ) {
+        $component = array_merge(['type' => 'Dropdown'], $component);
+        $component['data-source'] = $options;
+    } else {
+        $component = array_merge(['type' => 'RadioButtonsGroup'], $component);
+        $component['data-source'] = $options;
+    }
+
+    $min_chars = absint($question['min_chars'] ?? 0);
+    $max_chars = absint($question['max_chars'] ?? 0);
+    if ( $min_chars > 0 && in_array($component['type'], ['TextInput', 'TextArea'], true) ) {
+        $component['min-chars'] = $min_chars;
+    }
+    if ( $max_chars > 0 && in_array($component['type'], ['TextInput', 'TextArea'], true) ) {
+        $component['max-chars'] = $max_chars;
+    }
+
+    return $component;
 }
 
 function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_config = []) {
@@ -511,81 +644,155 @@ function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_conf
     $screen_id    = eventosapp_whatsapp_flows_sanitize_slug($config['screen_id'] ?? 'SURVEY', 'SURVEY');
     $screen_id    = strtoupper($screen_id);
     $questions    = eventosapp_whatsapp_flows_normalize_questions($config['questions'] ?? []);
+    $per_screen   = min(15, max(3, absint($config['questions_per_screen'] ?? 8)));
 
-    $form_children = [];
-    $payload = [
-        'eventosapp_flow_post_id' => (string) absint($flow_post_id),
-    ];
+    $display_types = eventosapp_whatsapp_flows_display_question_types();
+    $input_types   = eventosapp_whatsapp_flows_input_question_types();
+    $screens_questions = [];
+    $current = [];
+    $current_inputs = 0;
 
-    foreach ( $questions as $index => $question ) {
-        $slug = eventosapp_whatsapp_flows_sanitize_slug($question['slug'] ?? '', 'pregunta_' . ((int) $index + 1));
-        $label = sanitize_text_field((string)($question['label'] ?? 'Pregunta'));
-        $required = ! empty($question['required']) && $question['required'] !== '0';
-        $type = sanitize_key((string)($question['type'] ?? 'radio'));
-        $component = [
-            'name'     => $slug,
-            'label'    => $label,
-            'required' => $required,
-        ];
+    foreach ( $questions as $question ) {
+        $qtype = sanitize_key((string)($question['type'] ?? 'radio'));
+        $is_input = in_array($qtype, $input_types, true);
+        if ( $is_input && $current_inputs >= $per_screen && ! empty($current) ) {
+            $screens_questions[] = $current;
+            $current = [];
+            $current_inputs = 0;
+        }
+        $current[] = $question;
+        if ( $is_input ) {
+            $current_inputs++;
+        }
+    }
+    if ( ! empty($current) ) {
+        $screens_questions[] = $current;
+    }
+    if ( empty($screens_questions) ) {
+        $screens_questions = [eventosapp_whatsapp_flows_default_questions()];
+    }
 
-        if ( $type === 'text' ) {
-            $component = array_merge(['type' => 'TextInput', 'input-type' => 'text'], $component);
-        } elseif ( $type === 'textarea' ) {
-            $component = array_merge(['type' => 'TextArea'], $component);
-        } elseif ( $type === 'checkbox' ) {
-            $component = array_merge(['type' => 'CheckboxGroup'], $component);
-            $component['data-source'] = $question['options'];
-        } elseif ( $type === 'dropdown' ) {
-            $component = array_merge(['type' => 'Dropdown'], $component);
-            $component['data-source'] = $question['options'];
+    $answer_questions = [];
+    foreach ( $questions as $question ) {
+        if ( in_array(sanitize_key((string)($question['type'] ?? '')), $input_types, true) ) {
+            $slug = eventosapp_whatsapp_flows_sanitize_slug($question['slug'] ?? '', 'pregunta_' . (count($answer_questions) + 1));
+            $answer_questions[$slug] = $question;
+        }
+    }
+
+    $screen_ids = [];
+    foreach ( $screens_questions as $idx => $_screen_questions ) {
+        $screen_ids[$idx] = $idx === 0 ? $screen_id : $screen_id . '_' . ($idx + 1);
+    }
+
+    $screens = [];
+    $previous_slugs = [];
+
+    foreach ( $screens_questions as $screen_index => $screen_questions ) {
+        $is_last_screen = $screen_index === (count($screens_questions) - 1);
+        $children = [];
+
+        if ( $screen_index === 0 ) {
+            if ( $title !== '' ) {
+                $children[] = ['type' => 'TextHeading', 'text' => eventosapp_whatsapp_flows_text_limit($title, 80)];
+            }
+            if ( $description !== '' ) {
+                $children[] = ['type' => 'TextBody', 'text' => eventosapp_whatsapp_flows_text_limit($description, 4096)];
+            }
         } else {
-            $component = array_merge(['type' => 'RadioButtonsGroup'], $component);
-            $component['data-source'] = $question['options'];
+            $children[] = ['type' => 'TextSubheading', 'text' => 'Continuemos con la encuesta'];
         }
 
-        $form_children[] = $component;
-        $payload[$slug] = '${form.' . $slug . '}';
-    }
+        $form_children = [];
+        $current_screen_slugs = [];
 
-    $form_children[] = [
-        'type'            => 'Footer',
-        'label'           => $submit_label !== '' ? $submit_label : 'Enviar respuestas',
-        'on-click-action' => [
-            'name'    => 'complete',
+        foreach ( $screen_questions as $index => $question ) {
+            $qtype = sanitize_key((string)($question['type'] ?? 'radio'));
+            $help = sanitize_textarea_field((string)($question['help'] ?? ''));
+            $component = eventosapp_whatsapp_flows_question_to_component($question);
+
+            if ( $help !== '' ) {
+                $form_children[] = [
+                    'type' => 'TextCaption',
+                    'text' => eventosapp_whatsapp_flows_text_limit($help, 300),
+                ];
+            }
+
+            $form_children[] = $component;
+
+            if ( in_array($qtype, $input_types, true) ) {
+                $current_screen_slugs[] = eventosapp_whatsapp_flows_sanitize_slug($question['slug'] ?? '', 'pregunta_' . ($index + 1));
+            }
+        }
+
+        $payload = [
+            'eventosapp_flow_post_id' => (string) absint($flow_post_id),
+        ];
+
+        foreach ( $previous_slugs as $slug ) {
+            $payload[$slug] = '${data.' . $slug . '}';
+        }
+        foreach ( $current_screen_slugs as $slug ) {
+            $payload[$slug] = '${form.' . $slug . '}';
+        }
+
+        $footer_action = [
+            'name'    => $is_last_screen ? 'complete' : 'navigate',
             'payload' => $payload,
-        ],
-    ];
+        ];
+        if ( ! $is_last_screen ) {
+            $footer_action['next'] = [
+                'type' => 'screen',
+                'name' => $screen_ids[$screen_index + 1],
+            ];
+        }
 
-    $children = [];
-    if ( $title !== '' ) {
-        $children[] = ['type' => 'TextHeading', 'text' => $title];
+        $form_children[] = [
+            'type'            => 'Footer',
+            'label'           => $is_last_screen ? ($submit_label !== '' ? $submit_label : 'Enviar respuestas') : 'Continuar',
+            'on-click-action' => $footer_action,
+        ];
+
+        $children[] = [
+            'type'     => 'Form',
+            'name'     => 'eventosapp_survey_form_' . ($screen_index + 1),
+            'children' => $form_children,
+        ];
+
+        $data_schema = new stdClass();
+        if ( ! empty($previous_slugs) ) {
+            $data_schema = [];
+            foreach ( $previous_slugs as $slug ) {
+                if ( isset($answer_questions[$slug]) ) {
+                    $data_schema[$slug] = eventosapp_whatsapp_flows_question_answer_schema($answer_questions[$slug]);
+                }
+            }
+        }
+
+        $screen = [
+            'id'       => $screen_ids[$screen_index],
+            'title'    => $title !== '' ? eventosapp_whatsapp_flows_text_limit($title, 35) : 'Encuesta',
+            'terminal' => $is_last_screen,
+            'data'     => $data_schema,
+            'layout'   => [
+                'type'     => 'SingleColumnLayout',
+                'children' => $children,
+            ],
+        ];
+        if ( $is_last_screen ) {
+            $screen['success'] = true;
+        }
+
+        $screens[] = $screen;
+        $previous_slugs = array_values(array_unique(array_merge($previous_slugs, $current_screen_slugs)));
     }
-    if ( $description !== '' ) {
-        $children[] = ['type' => 'TextBody', 'text' => $description];
-    }
-    $children[] = [
-        'type'     => 'Form',
-        'name'     => 'eventosapp_survey_form',
-        'children' => $form_children,
-    ];
 
     return [
         'version' => '7.3',
-        'screens' => [
-            [
-                'id'       => $screen_id,
-                'title'    => $title !== '' ? eventosapp_whatsapp_flows_text_limit($title, 35) : 'Encuesta',
-                'terminal' => true,
-                'success'  => true,
-                'data'     => new stdClass(),
-                'layout'   => [
-                    'type'     => 'SingleColumnLayout',
-                    'children' => $children,
-                ],
-            ],
-        ],
+        'screens' => $screens,
     ];
 }
+
 
 function eventosapp_whatsapp_flows_write_temp_flow_json($flow_post_id) {
     $upload_dir = wp_upload_dir();
@@ -1365,6 +1572,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_save', function() {
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_cta', sanitize_text_field((string)($_POST['flow_cta'] ?? 'Responder encuesta')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_submit_label', sanitize_text_field((string)($_POST['flow_submit_label'] ?? 'Enviar respuestas')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_screen_id', strtoupper(eventosapp_whatsapp_flows_sanitize_slug($_POST['flow_screen_id'] ?? 'SURVEY', 'SURVEY')));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_questions_per_screen', min(15, max(3, absint($_POST['flow_questions_per_screen'] ?? 8))));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_waba_id', function_exists('eventosapp_whatsapp_sanitize_waba_id') ? eventosapp_whatsapp_sanitize_waba_id($_POST['flow_waba_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['flow_waba_id'] ?? '')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_sender_phone_number_id', function_exists('eventosapp_whatsapp_sanitize_phone_number_id') ? eventosapp_whatsapp_sanitize_phone_number_id($_POST['flow_sender_phone_number_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['flow_sender_phone_number_id'] ?? '')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_questions', eventosapp_whatsapp_flows_normalize_questions($_POST['questions'] ?? []));
@@ -1618,33 +1826,15 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
     $event_id = absint($_POST['campaign_event_id'] ?? 0);
     $limit = min(100, max(1, absint($_POST['campaign_limit'] ?? 25)));
     $offset = max(0, absint($_POST['campaign_offset'] ?? 0));
-    $skip_existing = ! empty($_POST['skip_existing_sends']);
-    $redirect_page = sanitize_key((string)($_POST['redirect_page'] ?? 'eventosapp_whatsapp_flows'));
-    $allowed_redirect_pages = ['eventosapp_whatsapp_flows', 'eventosapp_whatsapp_flows_bulk_send'];
-    if ( ! in_array($redirect_page, $allowed_redirect_pages, true) ) {
-        $redirect_page = 'eventosapp_whatsapp_flows';
-    }
+    $skip_existing = ! empty($_POST['campaign_skip_existing']);
+    $return_page = sanitize_key((string)($_POST['return_page'] ?? 'editor'));
 
-    $redirect_base = [
-        'page'          => $redirect_page,
-        'flow_id'       => $flow_post_id,
-        'bulk_flow_id'  => $flow_post_id,
-        'bulk_event_id' => $event_id,
-    ];
+    $redirect_args = $return_page === 'campaign'
+        ? ['page' => 'eventosapp_whatsapp_flows_campaign', 'flow_id' => $flow_post_id]
+        : ['page' => 'eventosapp_whatsapp_flows', 'flow_id' => $flow_post_id];
 
     if ( ! $flow_post_id || ! $event_id ) {
-        eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_base, [
-            'flow_notice'  => 'error',
-            'flow_message' => rawurlencode('Debes seleccionar Flow y evento para el envío por lote.'),
-        ]));
-    }
-
-    $flow_config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
-    if ( empty($flow_config['meta_flow_id']) ) {
-        eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_base, [
-            'flow_notice'  => 'error',
-            'flow_message' => rawurlencode('El Flow seleccionado todavía no tiene Flow ID de Meta. Créalo y publícalo antes del envío masivo.'),
-        ]));
+        eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_args, ['flow_notice' => 'error', 'flow_message' => rawurlencode('Debes seleccionar Flow y evento para el envío por lote.')]));
     }
 
     $tickets = get_posts([
@@ -1653,8 +1843,6 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
         'posts_per_page' => $limit,
         'offset'         => $offset,
         'fields'         => 'ids',
-        'orderby'        => 'ID',
-        'order'          => 'ASC',
         'meta_query'     => [
             [
                 'key'     => '_eventosapp_ticket_evento_id',
@@ -1667,11 +1855,22 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
     $ok_count = 0;
     $error_count = 0;
     $skipped_count = 0;
+
     foreach ( $tickets as $ticket_id ) {
-        $ticket_id = absint($ticket_id);
-        if ( $skip_existing && eventosapp_whatsapp_flows_ticket_has_existing_send($flow_post_id, $event_id, $ticket_id) ) {
-            $skipped_count++;
-            continue;
+        if ( $skip_existing ) {
+            global $wpdb;
+            eventosapp_whatsapp_flows_maybe_install_tables();
+            $existing = (int) $wpdb->get_var($wpdb->prepare(
+                'SELECT COUNT(*) FROM ' . eventosapp_whatsapp_flows_sends_table_name() . ' WHERE flow_post_id = %d AND event_id = %d AND ticket_id = %d AND status NOT LIKE %s',
+                $flow_post_id,
+                $event_id,
+                absint($ticket_id),
+                'failed%'
+            ));
+            if ( $existing > 0 ) {
+                $skipped_count++;
+                continue;
+            }
         }
 
         $phone = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
@@ -1689,23 +1888,23 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
     }
 
     update_option('eventosapp_whatsapp_flow_last_campaign_result', [
-        'flow_post_id'  => $flow_post_id,
-        'event_id'      => $event_id,
-        'limit'         => $limit,
-        'offset'        => $offset,
-        'ok'            => $ok_count,
-        'errors'        => $error_count,
-        'skipped'       => $skipped_count,
-        'processed'     => count($tickets),
-        'skip_existing' => $skip_existing ? 1 : 0,
-        'created_at'    => current_time('mysql'),
+        'flow_post_id' => $flow_post_id,
+        'event_id'     => $event_id,
+        'limit'        => $limit,
+        'offset'       => $offset,
+        'ok'           => $ok_count,
+        'errors'       => $error_count,
+        'skipped'      => $skipped_count,
+        'processed'    => count($tickets),
+        'created_at'   => current_time('mysql'),
     ], false);
 
-    eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_base, [
+    eventosapp_whatsapp_flows_notice_redirect(array_merge($redirect_args, [
         'flow_notice'  => $error_count ? 'warning' : 'success',
         'flow_message' => rawurlencode('Lote procesado. Enviados: ' . $ok_count . '. Omitidos: ' . $skipped_count . '. Errores: ' . $error_count . '.'),
     ]));
 });
+
 
 add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
     if ( ! current_user_can('manage_options') ) {
@@ -1740,36 +1939,45 @@ add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
 /**
  * Render UI.
  */
+function eventosapp_whatsapp_flows_admin_styles() {
+    ?>
+    <style>
+        .eventosapp-wa-flows{--evapp-blue:#3454f4;--evapp-blue2:#eef2ff;--evapp-ink:#152234;--evapp-muted:#667085;--evapp-border:#d9e1ef;--evapp-bg:#f5f7fb;--evapp-card:#fff;--evapp-green:#0a9b67;--evapp-orange:#d97706}.eventosapp-wa-flows.wrap{background:var(--evapp-bg);padding:20px;margin:0 0 0 -20px;min-height:calc(100vh - 32px)}.eventosapp-wa-flows h1{font-size:28px;font-weight:800;color:var(--evapp-ink);margin:0 0 18px}.eventosapp-wa-flows .evapp-page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eventosapp-wa-flows .evapp-page-head p{margin:.35rem 0 0;color:var(--evapp-muted);font-size:14px}.eventosapp-wa-flows .evapp-top-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-card{background:var(--evapp-card);border:1px solid var(--evapp-border);border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:18px}.eventosapp-wa-flows .evapp-card h2{font-size:17px;margin:0 0 12px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-card h3{font-size:15px;margin:18px 0 10px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(520px,1.15fr) minmax(330px,.85fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-field{display:block;margin-bottom:12px}.eventosapp-wa-flows .evapp-field span,.eventosapp-wa-flows .evapp-label{display:block;font-weight:700;color:#26364a;margin-bottom:6px}.eventosapp-wa-flows input[type=text],.eventosapp-wa-flows input[type=number],.eventosapp-wa-flows select,.eventosapp-wa-flows textarea{border:1px solid #cfd8e6;border-radius:10px;min-height:38px;box-shadow:none}.eventosapp-wa-flows textarea{padding:8px 10px}.eventosapp-wa-flows .regular-text,.eventosapp-wa-flows .large-text{max-width:100%;width:100%}.eventosapp-wa-flows .evapp-muted,.eventosapp-wa-flows .description{color:var(--evapp-muted)}.eventosapp-wa-flows .evapp-pill{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-blue2);color:#203bc4;padding:4px 9px;font-size:12px;font-weight:800}.eventosapp-wa-flows .evapp-pill.green{background:#e9f9f1;color:#07724d}.eventosapp-wa-flows .evapp-pill.gray{background:#eef1f5;color:#4b5563}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:linear-gradient(180deg,#fff,#f7f9ff);border:1px solid #e3e9f6;border-radius:14px;padding:13px}.eventosapp-wa-flows .evapp-stat span{display:block;font-weight:700;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:24px;color:var(--evapp-ink);line-height:1.1;margin-top:4px}.eventosapp-wa-flows .evapp-builder-toolbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 14px}.eventosapp-wa-flows .evapp-builder-toolbar button{min-height:38px;border-radius:10px}.eventosapp-wa-flows .evapp-question{border:1px solid #d9e1ef;border-radius:16px;margin:12px 0;background:#fff;overflow:hidden}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8faff;padding:12px 14px;border-bottom:1px solid #e6edf8}.eventosapp-wa-flows .evapp-question-title{display:flex;align-items:center;gap:9px}.eventosapp-wa-flows .evapp-question-number{display:inline-flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:9px;background:var(--evapp-blue);color:#fff;font-weight:800}.eventosapp-wa-flows .evapp-question-body{padding:14px}.eventosapp-wa-flows .evapp-type-help{padding:9px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5edf7;color:#536071;margin:8px 0 0;font-size:12px}.eventosapp-wa-flows .evapp-options-wrap textarea{font-family:Menlo,Consolas,monospace;min-height:96px}.eventosapp-wa-flows .evapp-question.is-display .evapp-options-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-required-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-choice-auto .evapp-options-wrap{display:none}.eventosapp-wa-flows .evapp-question.is-choice .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-date .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-options-wrap{display:none}.eventosapp-wa-flows textarea.code{width:100%;min-height:310px;font-family:Menlo,Consolas,monospace;background:#0f172a;color:#d9e9ff;border-radius:14px;padding:14px}.eventosapp-wa-flows .widefat{border:1px solid #dce4f1;border-radius:12px;overflow:hidden}.eventosapp-wa-flows .widefat th{font-weight:800;color:#26364a}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:130px;overflow:auto;background:#f8fafc;border-radius:10px;padding:8px}.eventosapp-wa-flows .evapp-warning{border-left:4px solid var(--evapp-orange);background:#fff7ed;padding:12px;border-radius:12px;margin:12px 0;color:#7c2d12}.eventosapp-wa-flows .evapp-info{border-left:4px solid var(--evapp-blue);background:#eef2ff;padding:12px;border-radius:12px;margin:12px 0;color:#26364a}.eventosapp-wa-flows .evapp-success{border-left:4px solid var(--evapp-green);background:#ecfdf3;padding:12px;border-radius:12px;margin:12px 0}.eventosapp-wa-flows .button{border-radius:9px}.eventosapp-wa-flows .button-primary{background:var(--evapp-blue);border-color:var(--evapp-blue)}.eventosapp-wa-flows .evapp-empty{padding:22px;border:1px dashed #cfd8e6;border-radius:14px;background:#fafcff;color:var(--evapp-muted);text-align:center}.eventosapp-wa-flows .evapp-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.eventosapp-wa-flows .evapp-template-card{border:1px solid #dce4f1;border-radius:13px;padding:12px;background:#fbfdff}.eventosapp-wa-flows .evapp-template-card strong{display:block;color:var(--evapp-ink);margin-bottom:4px}.eventosapp-wa-flows .evapp-template-card p{margin:0;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-small{font-size:12px}.eventosapp-wa-flows .evapp-checkline{display:flex;gap:7px;align-items:center;margin:8px 0}.eventosapp-wa-flows .evapp-form-table{width:100%;border-collapse:separate;border-spacing:0 12px}.eventosapp-wa-flows .evapp-form-table th{width:170px;text-align:left;vertical-align:top;padding-top:8px;color:#26364a}.eventosapp-wa-flows .evapp-form-table td{vertical-align:top}@media(max-width:1200px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-builder-toolbar{grid-template-columns:repeat(2,1fr)}}@media(max-width:782px){.eventosapp-wa-flows.wrap{margin-left:-10px;padding:14px}.eventosapp-wa-flows .evapp-stat-grid,.eventosapp-wa-flows .evapp-grid-3,.eventosapp-wa-flows .evapp-row,.eventosapp-wa-flows .evapp-row-3,.eventosapp-wa-flows .evapp-template-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-page-head{display:block}.eventosapp-wa-flows .evapp-form-table th,.eventosapp-wa-flows .evapp-form-table td{display:block;width:100%}}
+    </style>
+    <?php
+}
+function eventosapp_whatsapp_flows_get_events_for_select() {
+    return get_posts([
+        'post_type'      => 'eventosapp_event',
+        'post_status'    => ['publish', 'draft', 'private'],
+        'posts_per_page' => 300,
+        'orderby'        => 'date',
+        'order'          => 'DESC',
+    ]);
+}
+
+function eventosapp_whatsapp_flows_get_default_meta_context() {
+    $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
+    $default_waba_id = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : ($settings['webhook_waba_id'] ?? '');
+    $phone_accounts = function_exists('eventosapp_whatsapp_get_phone_accounts') ? eventosapp_whatsapp_get_phone_accounts($settings) : [];
+    return [$settings, $default_waba_id, $phone_accounts];
+}
+
 function eventosapp_whatsapp_flows_render_page() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
     }
 
     eventosapp_whatsapp_flows_maybe_install_tables();
-    $has_flow_id_param = array_key_exists('flow_id', $_GET);
     $flow_id = absint($_GET['flow_id'] ?? 0);
-    $creating_new_flow = $has_flow_id_param && $flow_id === 0;
     $flows = eventosapp_whatsapp_flows_get_all_for_select();
     $selected = $flow_id ? eventosapp_whatsapp_flows_get_flow_config($flow_id) : [];
 
-    // Importante: cuando se entra con flow_id=0 se debe abrir un formulario limpio.
-    // Antes se seleccionaba automáticamente el último Flow y al guardar parecía que
-    // EventosApp sobrescribía el anterior.
-    if ( ! $creating_new_flow && empty($selected) && ! empty($flows) ) {
-        $first = reset($flows);
-        $selected = eventosapp_whatsapp_flows_get_flow_config($first['id']);
-        $flow_id = absint($first['id']);
-    }
-
-    $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
-    $default_waba_id = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : ($settings['webhook_waba_id'] ?? '');
-    $phone_accounts = function_exists('eventosapp_whatsapp_get_phone_accounts') ? eventosapp_whatsapp_get_phone_accounts($settings) : [];
+    list($settings, $default_waba_id, $phone_accounts) = eventosapp_whatsapp_flows_get_default_meta_context();
     $categories = eventosapp_whatsapp_flows_categories();
     $question_types = eventosapp_whatsapp_flows_question_types();
-    $stats = eventosapp_whatsapp_flows_get_stats($flow_id);
-    $recent_sends = eventosapp_whatsapp_flows_get_recent_sends($flow_id, 25);
-    $recent_responses = eventosapp_whatsapp_flows_get_recent_responses($flow_id, 25);
-    $events = eventosapp_whatsapp_flows_get_events_for_select(300);
+    $type_help = eventosapp_whatsapp_flows_type_help();
+    $events = eventosapp_whatsapp_flows_get_events_for_select();
 
     $new_config = [
         'id'                     => 0,
@@ -1779,6 +1987,7 @@ function eventosapp_whatsapp_flows_render_page() {
         'cta'                    => 'Responder encuesta',
         'submit_label'           => 'Enviar respuestas',
         'screen_id'              => 'SURVEY',
+        'questions_per_screen'   => 8,
         'status'                 => 'local_draft',
         'meta_flow_id'           => '',
         'waba_id'                => $default_waba_id,
@@ -1789,16 +1998,26 @@ function eventosapp_whatsapp_flows_render_page() {
         'validation_errors'      => [],
     ];
     $edit_config = ! empty($selected) ? wp_parse_args($selected, $new_config) : $new_config;
+    $flow_id = absint($edit_config['id']);
+    $stats = eventosapp_whatsapp_flows_get_stats($flow_id);
+    $recent_sends = eventosapp_whatsapp_flows_get_recent_sends($flow_id, 25);
+    $recent_responses = eventosapp_whatsapp_flows_get_recent_responses($flow_id, 25);
     $json_preview = eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($flow_id, $edit_config), true);
-
     ?>
     <div class="wrap eventosapp-wa-flows">
-        <h1>WhatsApp Flows</h1>
+        <?php eventosapp_whatsapp_flows_admin_styles(); ?>
+        <div class="evapp-page-head">
+            <div>
+                <h1><?php echo $flow_id ? 'Editar WhatsApp Flow' : 'Crear WhatsApp Flow'; ?></h1>
+                <p>Constructor independiente para encuestas y formularios nativos dentro de WhatsApp.</p>
+            </div>
+            <div class="evapp-top-actions">
+                <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a>
+                <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($flow_id))); ?>">Envío masivo</a>
+                <a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear nuevo</a>
+            </div>
+        </div>
         <?php eventosapp_whatsapp_flows_render_notices(); ?>
-
-        <style>
-            .eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(360px,1.2fr) minmax(320px,.8fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:16px}.eventosapp-wa-flows .evapp-card h2{margin-top:0}.eventosapp-wa-flows .evapp-muted{color:#646970}.eventosapp-wa-flows .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:#f6f7f7;border-radius:8px;padding:10px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:22px}.eventosapp-wa-flows .evapp-question{border:1px solid #dcdcde;border-radius:8px;padding:12px;margin:12px 0;background:#fbfbfc}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.eventosapp-wa-flows textarea.code{width:100%;min-height:280px;font-family:Menlo,Consolas,monospace}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:100px;overflow:auto}.eventosapp-wa-flows .evapp-warning{border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0}.eventosapp-wa-flows .evapp-success{border-left:4px solid #00a32a;background:#edfaef;padding:10px;margin:10px 0}@media(max-width:1100px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-stat-grid{grid-template-columns:repeat(2,1fr)}.eventosapp-wa-flows .evapp-row{grid-template-columns:1fr}}
-        </style>
 
         <div class="evapp-card">
             <div class="evapp-stat-grid">
@@ -1813,105 +2032,113 @@ function eventosapp_whatsapp_flows_render_page() {
         <div class="evapp-grid">
             <div>
                 <div class="evapp-card">
-                    <h2><?php echo $flow_id ? 'Editar Flow' : 'Crear Flow'; ?></h2>
+                    <h2>1. Datos generales del Flow</h2>
                     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="evapp-wa-flow-form">
                         <?php wp_nonce_field('eventosapp_whatsapp_flow_save'); ?>
                         <input type="hidden" name="action" value="eventosapp_whatsapp_flow_save">
                         <input type="hidden" name="flow_post_id" value="<?php echo esc_attr($edit_config['id']); ?>">
 
-                        <table class="form-table" role="presentation">
-                            <tr>
-                                <th><label for="flow_title">Nombre</label></th>
-                                <td><input type="text" class="regular-text" id="flow_title" name="flow_title" value="<?php echo esc_attr($edit_config['title']); ?>" placeholder="Encuesta post evento" required></td>
-                            </tr>
-                            <tr>
-                                <th><label for="flow_description">Mensaje / descripción</label></th>
-                                <td><textarea class="large-text" rows="3" id="flow_description" name="flow_description"><?php echo esc_textarea($edit_config['description']); ?></textarea><p class="description">Puedes usar variables como {{name}}, {{event_name}}, {{ticket_code}}, {{localidad}}.</p></td>
-                            </tr>
-                            <tr>
-                                <th>Categoría</th>
-                                <td><select name="flow_category">
-                                    <?php foreach ( $categories as $key => $label ) : ?>
-                                        <option value="<?php echo esc_attr($key); ?>" <?php selected($edit_config['category'], $key); ?>><?php echo esc_html($label . ' (' . $key . ')'); ?></option>
-                                    <?php endforeach; ?>
-                                </select></td>
-                            </tr>
-                            <tr>
-                                <th>Configuración Meta</th>
-                                <td>
-                                    <div class="evapp-row">
-                                        <label>WABA ID<br><input type="text" class="regular-text" name="flow_waba_id" value="<?php echo esc_attr($edit_config['waba_id'] ?: $default_waba_id); ?>"></label>
-                                        <label>Número emisor<br>
-                                            <select name="flow_sender_phone_number_id">
-                                                <option value="">Usar número por defecto</option>
-                                                <?php foreach ( $phone_accounts as $account ) : ?>
-                                                    <option value="<?php echo esc_attr($account['phone_number_id']); ?>" <?php selected($edit_config['sender_phone_number_id'], $account['phone_number_id']); ?>><?php echo esc_html($account['label']); ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                        </label>
-                                    </div>
-                                    <p class="description">El WABA ID se usa para crear y administrar el Flow. El número emisor se usa para pruebas y envíos directos.</p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th>CTA y pantalla</th>
-                                <td>
-                                    <div class="evapp-row">
-                                        <label>Texto del botón<br><input type="text" name="flow_cta" value="<?php echo esc_attr($edit_config['cta']); ?>" maxlength="30"></label>
-                                        <label>Botón final<br><input type="text" name="flow_submit_label" value="<?php echo esc_attr($edit_config['submit_label']); ?>" maxlength="30"></label>
-                                    </div>
-                                    <p><label>ID de pantalla inicial<br><input type="text" name="flow_screen_id" value="<?php echo esc_attr($edit_config['screen_id']); ?>" class="regular-text"></label></p>
-                                </td>
-                            </tr>
-                        </table>
+                        <div class="evapp-row">
+                            <label class="evapp-field"><span>Nombre del Flow</span><input type="text" id="flow_title" name="flow_title" value="<?php echo esc_attr($edit_config['title']); ?>" placeholder="Encuesta post evento" required></label>
+                            <label class="evapp-field"><span>Categoría</span><select name="flow_category">
+                                <?php foreach ( $categories as $key => $label ) : ?>
+                                    <option value="<?php echo esc_attr($key); ?>" <?php selected($edit_config['category'], $key); ?>><?php echo esc_html($label . ' (' . $key . ')'); ?></option>
+                                <?php endforeach; ?>
+                            </select></label>
+                        </div>
 
-                        <h3>Preguntas de la encuesta</h3>
+                        <label class="evapp-field"><span>Mensaje / descripción inicial</span><textarea rows="3" id="flow_description" name="flow_description"><?php echo esc_textarea($edit_config['description']); ?></textarea><span class="description">Puedes usar variables internas en envíos directos: {{name}}, {{event_name}}, {{ticket_code}}, {{localidad}}.</span></label>
+
+                        <div class="evapp-row-3">
+                            <label class="evapp-field"><span>Texto del botón</span><input type="text" name="flow_cta" value="<?php echo esc_attr($edit_config['cta']); ?>" maxlength="30"></label>
+                            <label class="evapp-field"><span>Botón final</span><input type="text" name="flow_submit_label" value="<?php echo esc_attr($edit_config['submit_label']); ?>" maxlength="30"></label>
+                            <label class="evapp-field"><span>ID pantalla inicial</span><input type="text" name="flow_screen_id" value="<?php echo esc_attr($edit_config['screen_id']); ?>"></label>
+                        </div>
+
+                        <div class="evapp-row-3">
+                            <label class="evapp-field"><span>Preguntas por pantalla</span><input type="number" name="flow_questions_per_screen" value="<?php echo esc_attr($edit_config['questions_per_screen']); ?>" min="3" max="15"><span class="description">Divide automáticamente encuestas largas en varias pantallas.</span></label>
+                            <label class="evapp-field"><span>WABA ID</span><input type="text" name="flow_waba_id" value="<?php echo esc_attr($edit_config['waba_id'] ?: $default_waba_id); ?>"></label>
+                            <label class="evapp-field"><span>Número emisor</span><select name="flow_sender_phone_number_id">
+                                <option value="">Usar número por defecto</option>
+                                <?php foreach ( $phone_accounts as $account ) : ?>
+                                    <option value="<?php echo esc_attr($account['phone_number_id']); ?>" <?php selected($edit_config['sender_phone_number_id'], $account['phone_number_id']); ?>><?php echo esc_html($account['label']); ?></option>
+                                <?php endforeach; ?>
+                            </select></label>
+                        </div>
+
+                        <div class="evapp-info">
+                            <strong>Cómo replicar una encuesta tipo SurveyMonkey:</strong> usa <strong>NPS 0 a 10</strong> para recomendación, <strong>Escala 1 a 5</strong> para satisfacción, <strong>Selección única/múltiple</strong> para fuentes o preferencias, <strong>Texto largo</strong> para comentarios, <strong>Texto corto/email/número/teléfono</strong> para datos personales y <strong>Aceptación</strong> para tratamiento de datos.
+                        </div>
+
+                        <h2>2. Preguntas y bloques de la encuesta</h2>
+                        <div class="evapp-builder-toolbar">
+                            <button type="button" class="button evapp-add-preset" data-preset="heading">+ Sección</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="nps">+ NPS 0-10</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="rating5">+ Satisfacción 1-5</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="source">+ Medio / fuente</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="comment">+ Comentario</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="personal">+ Datos personales</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="consent">+ Consentimiento</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="complete">+ Encuesta completa</button>
+                            <button type="button" class="button" id="evapp-wa-add-question">+ Campo en blanco</button>
+                        </div>
+
                         <div id="evapp-wa-flow-questions">
                             <?php foreach ( $edit_config['questions'] as $index => $question ) : ?>
                                 <?php eventosapp_whatsapp_flows_render_question_row($index, $question, $question_types); ?>
                             <?php endforeach; ?>
                         </div>
-                        <p><button type="button" class="button" id="evapp-wa-add-question">Agregar pregunta</button></p>
 
-                        <p class="submit"><button type="submit" class="button button-primary">Guardar Flow local</button></p>
+                        <p class="submit"><button type="submit" class="button button-primary button-hero">Guardar Flow local</button></p>
                     </form>
                 </div>
 
                 <div class="evapp-card">
                     <h2>JSON generado</h2>
-                    <p class="evapp-muted">Este JSON es el que EventosApp envía a Meta al presionar “Crear/Recrear en Meta con JSON local” o “Subir JSON”.</p>
+                    <p class="evapp-muted">Este JSON es el que EventosApp envía a Meta. Si la encuesta es larga, se divide en varias pantallas y conserva las respuestas hasta el envío final.</p>
                     <textarea class="code" readonly><?php echo esc_textarea($json_preview); ?></textarea>
                 </div>
             </div>
 
             <div>
                 <div class="evapp-card">
-                    <h2>Flows creados</h2>
-                        <p class="evapp-muted">Vista rápida de los últimos Flows. Para consultar todos los Flows creados, sus métricas y accesos de envío, usa <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a>.</p>
+                    <h2>Flows recientes</h2>
                     <?php if ( empty($flows) ) : ?>
-                        <p>No hay Flows guardados todavía.</p>
+                        <div class="evapp-empty">Todavía no hay Flows guardados.</div>
                     <?php else : ?>
                         <table class="widefat striped">
-                            <thead><tr><th>Flow</th><th>Estado</th><th>Meta ID</th><th>Acción</th></tr></thead>
+                            <thead><tr><th>Flow</th><th>Estado</th><th>Meta ID</th><th></th></tr></thead>
                             <tbody>
-                            <?php foreach ( $flows as $item ) : ?>
+                            <?php $shown = 0; foreach ( $flows as $item ) : if ( $shown >= 6 ) { break; } $shown++; ?>
                                 <tr>
                                     <td><strong><?php echo esc_html($item['title']); ?></strong></td>
-                                    <td><span class="evapp-pill"><?php echo esc_html($item['status'] ?: 'local'); ?></span></td>
-                                    <td><?php echo esc_html($item['meta_flow_id'] ?: '—'); ?></td>
+                                    <td><span class="evapp-pill <?php echo esc_attr(($item['status'] ?? '') === 'published' ? 'green' : ''); ?>"><?php echo esc_html($item['status'] ?: 'local'); ?></span></td>
+                                    <td><small><?php echo esc_html($item['meta_flow_id'] ?: '—'); ?></small></td>
                                     <td><a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flows', 'flow_id' => $item['id']], admin_url('admin.php'))); ?>">Abrir</a></td>
                                 </tr>
                             <?php endforeach; ?>
                             </tbody>
                         </table>
                     <?php endif; ?>
-                    <p class="evapp-actions"><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>" class="button">Crear uno nuevo</a> <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>" class="button">Gestionar todos</a> <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_bulk_send')); ?>" class="button">Envío masivo de Flows</a></p>
+                    <p class="evapp-actions"><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>" class="button">Crear uno nuevo</a><a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>" class="button">Gestionar todos</a></p>
+                </div>
+
+                <div class="evapp-card">
+                    <h2>Guía de campos</h2>
+                    <div class="evapp-template-grid">
+                        <div class="evapp-template-card"><strong>NPS 0-10</strong><p>Para medir recomendación general del evento.</p></div>
+                        <div class="evapp-template-card"><strong>Satisfacción 1-5</strong><p>Para matrices; agrega una fila como pregunta independiente.</p></div>
+                        <div class="evapp-template-card"><strong>Selección única</strong><p>Para fuente, preferencia principal o respuesta cerrada.</p></div>
+                        <div class="evapp-template-card"><strong>Selección múltiple</strong><p>Para escoger varios intereses, temas o canales.</p></div>
+                        <div class="evapp-template-card"><strong>Texto largo</strong><p>Para comentarios y sugerencias abiertas.</p></div>
+                        <div class="evapp-template-card"><strong>Aceptación</strong><p>Para tratamiento de datos y términos.</p></div>
+                    </div>
                 </div>
 
                 <?php if ( $flow_id ) : ?>
                     <div class="evapp-card">
                         <h2>Sincronización con Meta</h2>
-                        <p><strong>Estado:</strong> <span class="evapp-pill"><?php echo esc_html($edit_config['status']); ?></span></p>
+                        <p><strong>Estado:</strong> <span class="evapp-pill <?php echo esc_attr($edit_config['status'] === 'published' ? 'green' : ''); ?>"><?php echo esc_html($edit_config['status']); ?></span></p>
                         <p><strong>Flow ID Meta:</strong> <?php echo esc_html($edit_config['meta_flow_id'] ?: 'No creado'); ?></p>
                         <?php if ( ! empty($edit_config['preview_url']) ) : ?>
                             <p><a class="button" target="_blank" href="<?php echo esc_url($edit_config['preview_url']); ?>">Abrir vista previa</a></p>
@@ -1923,7 +2150,7 @@ function eventosapp_whatsapp_flows_render_page() {
                             <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_refresh', 'eventosapp_whatsapp_flow_refresh', 'Sincronizar estado', $flow_id); ?>
                             <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_publish', 'eventosapp_whatsapp_flow_publish', 'Publicar', $flow_id, 'button-primary'); ?>
                         </div>
-                        <div class="evapp-warning"><strong>Importante:</strong> si este Flow fue publicado y en WhatsApp Manager todavía ves el ejemplo “Hello World”, no intentes corregirlo sobre el mismo Flow publicado. Usa “Crear/Recrear en Meta con JSON local”, luego “Pedir preview” y solo publica cuando la vista previa muestre las preguntas creadas en EventosApp.</div>
+                        <div class="evapp-warning"><strong>Importante:</strong> si un Flow ya fue publicado, Meta no permite modificarlo como si fuera borrador. Para cambios grandes, recrea un nuevo Meta ID y revisa el preview antes de publicar.</div>
                         <?php if ( ! empty($edit_config['validation_errors']) && is_array($edit_config['validation_errors']) ) : ?>
                             <div class="evapp-warning"><strong>Errores de validación Meta:</strong><?php eventosapp_whatsapp_flows_render_debug($edit_config['validation_errors']); ?></div>
                         <?php endif; ?>
@@ -1936,23 +2163,12 @@ function eventosapp_whatsapp_flows_render_page() {
                             <?php wp_nonce_field('eventosapp_whatsapp_flow_test_send'); ?>
                             <input type="hidden" name="action" value="eventosapp_whatsapp_flow_test_send">
                             <input type="hidden" name="flow_post_id" value="<?php echo esc_attr($flow_id); ?>">
-                            <p><label>Teléfono destino<br><input type="text" name="test_phone" class="regular-text" placeholder="573001112233"></label></p>
-                            <p><label>Ticket ID opcional<br><input type="number" name="test_ticket_id" min="0" class="small-text"></label></p>
-                            <p><label>Evento opcional<br><select name="test_event_id"><option value="0">Sin evento</option><?php foreach ( $events as $event ) : ?><option value="<?php echo esc_attr($event->ID); ?>"><?php echo esc_html(get_the_title($event)); ?></option><?php endforeach; ?></select></label></p>
-                            <p><button type="submit" class="button button-primary">Enviar Flow de prueba</button></p>
-                        </form>
-                    </div>
-
-                    <div class="evapp-card">
-                        <h2>Envío por lote controlado</h2>
-                        <p class="evapp-muted">Este envío rápido se conserva para pruebas. Para operación real por evento y selección de Flow, usa la nueva sección <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_bulk_send&bulk_flow_id=' . absint($flow_id))); ?>">Envío Masivo de Flows</a>.</p>
-                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                            <?php wp_nonce_field('eventosapp_whatsapp_flow_campaign_send'); ?>
-                            <input type="hidden" name="action" value="eventosapp_whatsapp_flow_campaign_send">
-                            <input type="hidden" name="flow_post_id" value="<?php echo esc_attr($flow_id); ?>">
-                            <p><label>Evento<br><select name="campaign_event_id" required><option value="">Seleccionar evento</option><?php foreach ( $events as $event ) : ?><option value="<?php echo esc_attr($event->ID); ?>"><?php echo esc_html(get_the_title($event)); ?></option><?php endforeach; ?></select></label></p>
-                            <p><label>Límite <input type="number" name="campaign_limit" value="25" min="1" max="100" class="small-text"></label> <label>Offset <input type="number" name="campaign_offset" value="0" min="0" class="small-text"></label></p>
-                            <p><button type="submit" class="button">Enviar lote</button></p>
+                            <label class="evapp-field"><span>Teléfono destino</span><input type="text" name="test_phone" placeholder="573001112233"></label>
+                            <div class="evapp-row">
+                                <label class="evapp-field"><span>Ticket ID opcional</span><input type="number" name="test_ticket_id" min="0"></label>
+                                <label class="evapp-field"><span>Evento opcional</span><select name="test_event_id"><option value="0">Sin evento</option><?php foreach ( $events as $event ) : ?><option value="<?php echo esc_attr($event->ID); ?>"><?php echo esc_html(get_the_title($event)); ?></option><?php endforeach; ?></select></label>
+                            </div>
+                            <button type="submit" class="button button-primary">Enviar Flow de prueba</button>
                         </form>
                     </div>
                 <?php endif; ?>
@@ -1971,271 +2187,120 @@ function eventosapp_whatsapp_flows_render_page() {
         </div>
     </div>
 
-    <script>
-    (function(){
-        var wrap = document.getElementById('evapp-wa-flow-questions');
-        var add = document.getElementById('evapp-wa-add-question');
-        if (!wrap || !add) return;
-        function optionsTextFromBlock(block){ return ''; }
-        function nextIndex(){ return wrap.querySelectorAll('.evapp-question').length; }
-        function questionTemplate(i){
-            return '<div class="evapp-question" data-question-index="'+i+'">'+
-                '<div class="evapp-question-head"><strong>Pregunta '+(i+1)+'</strong><button type="button" class="button-link-delete evapp-remove-question">Quitar</button></div>'+
-                '<div class="evapp-row"><label>Etiqueta<br><input type="text" class="large-text" name="questions['+i+'][label]" value="Nueva pregunta"></label><label>Slug<br><input type="text" class="regular-text" name="questions['+i+'][slug]" value="pregunta_'+(i+1)+'"></label></div>'+
-                '<p><label>Tipo<br><select name="questions['+i+'][type]"><?php foreach ( $question_types as $key => $label ) : ?><option value="<?php echo esc_js($key); ?>"><?php echo esc_js($label); ?></option><?php endforeach; ?></select></label> <label style="margin-left:12px;"><input type="checkbox" name="questions['+i+'][required]" value="1" checked> Obligatoria</label></p>'+
-                '<p><label>Opciones, una por línea<br><textarea class="large-text" rows="4" name="questions['+i+'][options]">Opción 1\nOpción 2</textarea></label></p>'+
-            '</div>';
-        }
-        add.addEventListener('click', function(){ wrap.insertAdjacentHTML('beforeend', questionTemplate(nextIndex())); });
-        wrap.addEventListener('click', function(e){ if(e.target && e.target.classList.contains('evapp-remove-question')){ var q=e.target.closest('.evapp-question'); if(q) q.remove(); } });
-    })();
-    </script>
+    <?php eventosapp_whatsapp_flows_render_builder_script($question_types, $type_help); ?>
     <?php
 }
-
 
 function eventosapp_whatsapp_flows_render_manage_page() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
     }
-
     eventosapp_whatsapp_flows_maybe_install_tables();
-    $search = sanitize_text_field((string)($_GET['flow_search'] ?? ''));
+    $flows = eventosapp_whatsapp_flows_get_all_for_select();
+    $search = sanitize_text_field((string)($_GET['s'] ?? ''));
     $status_filter = sanitize_key((string)($_GET['flow_status'] ?? ''));
-    $items = eventosapp_whatsapp_flows_get_all_for_management([
-        'search' => $search,
-        'status' => $status_filter,
-    ]);
-    $status_options = [
-        '' => 'Todos los estados',
-        'local_draft' => 'Borrador local',
-        'draft_meta' => 'Borrador Meta',
-        'draft_meta_json_ready' => 'Meta con JSON local',
-        'json_uploaded' => 'JSON subido',
-        'published' => 'Publicado',
-        'meta_error' => 'Error Meta',
-    ];
     ?>
-    <div class="wrap eventosapp-wa-flows eventosapp-wa-flows-manage">
-        <h1>Gestionar WhatsApp Flows</h1>
+    <div class="wrap eventosapp-wa-flows">
+        <?php eventosapp_whatsapp_flows_admin_styles(); ?>
+        <div class="evapp-page-head">
+            <div><h1>Gestionar Flows</h1><p>Consulta, edita y reutiliza todos los Flows locales creados en EventosApp.</p></div>
+            <div class="evapp-top-actions"><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear Flow</a><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign')); ?>">Envío masivo</a></div>
+        </div>
         <?php eventosapp_whatsapp_flows_render_notices(); ?>
-        <style>
-            .eventosapp-wa-flows .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:16px}.eventosapp-wa-flows .evapp-muted{color:#646970}.eventosapp-wa-flows .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-toolbar{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-mini-stats{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-mini-stats span{background:#f6f7f7;border-radius:8px;padding:6px 8px;display:inline-block}.eventosapp-wa-flows .evapp-warning{border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0}
-        </style>
-
         <div class="evapp-card">
-            <div class="evapp-toolbar">
-                <div>
-                    <h2 style="margin-top:0;">Flows guardados en EventosApp</h2>
-                    <p class="evapp-muted">Esta sección lista los Flows locales creados en EventosApp. Crear o recrear un Flow en Meta no debe borrar el Flow local; si necesitas una versión nueva, usa “Crear nuevo Flow” para generar otro registro local.</p>
-                </div>
-                <p><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear nuevo Flow</a></p>
-            </div>
-
-            <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" style="margin:12px 0;">
+            <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" class="evapp-actions">
                 <input type="hidden" name="page" value="eventosapp_whatsapp_flows_manage">
-                <input type="search" name="flow_search" value="<?php echo esc_attr($search); ?>" placeholder="Buscar por nombre" class="regular-text">
-                <select name="flow_status">
-                    <?php foreach ( $status_options as $value => $label ) : ?>
-                        <option value="<?php echo esc_attr($value); ?>" <?php selected($status_filter, $value); ?>><?php echo esc_html($label); ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <button type="submit" class="button">Filtrar</button>
-                <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Limpiar</a>
+                <input type="search" name="s" value="<?php echo esc_attr($search); ?>" placeholder="Buscar por nombre">
+                <select name="flow_status"><option value="">Todos los estados</option><option value="published" <?php selected($status_filter, 'published'); ?>>published</option><option value="json_uploaded" <?php selected($status_filter, 'json_uploaded'); ?>>json_uploaded</option><option value="local_draft" <?php selected($status_filter, 'local_draft'); ?>>local_draft</option><option value="draft_meta_json_ready" <?php selected($status_filter, 'draft_meta_json_ready'); ?>>draft_meta_json_ready</option></select>
+                <button class="button">Filtrar</button>
             </form>
-
-            <?php if ( empty($items) ) : ?>
-                <p>No hay Flows guardados con esos filtros.</p>
+        </div>
+        <div class="evapp-card">
+            <?php if ( empty($flows) ) : ?>
+                <div class="evapp-empty">No hay Flows todavía.</div>
             <?php else : ?>
                 <table class="widefat striped">
-                    <thead>
+                    <thead><tr><th>Flow</th><th>Estado</th><th>Meta ID</th><th>Pantalla</th><th>Métricas</th><th>Acciones</th></tr></thead><tbody>
+                    <?php foreach ( $flows as $item ) :
+                        if ( $search !== '' && stripos($item['title'], $search) === false ) { continue; }
+                        if ( $status_filter !== '' && sanitize_key($item['status']) !== $status_filter ) { continue; }
+                        $config = eventosapp_whatsapp_flows_get_flow_config($item['id']);
+                        $stats = eventosapp_whatsapp_flows_get_stats($item['id']);
+                    ?>
                         <tr>
-                            <th>Flow</th>
-                            <th>Estado</th>
-                            <th>Meta / pantalla</th>
-                            <th>Métricas</th>
-                            <th>Última actividad</th>
-                            <th>Acciones</th>
+                            <td><strong><?php echo esc_html($item['title']); ?></strong><br><small>ID local #<?php echo esc_html($item['id']); ?></small></td>
+                            <td><span class="evapp-pill <?php echo esc_attr(($item['status'] ?? '') === 'published' ? 'green' : ''); ?>"><?php echo esc_html($item['status'] ?: 'local'); ?></span></td>
+                            <td><small><?php echo esc_html($item['meta_flow_id'] ?: '—'); ?></small></td>
+                            <td><?php echo esc_html($config['screen_id'] ?? 'SURVEY'); ?></td>
+                            <td><?php echo esc_html($stats['answered']); ?> respuestas / <?php echo esc_html($stats['sent']); ?> envíos<br><small>Tasa <?php echo esc_html($stats['rate']); ?>%</small></td>
+                            <td class="evapp-actions"><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=' . absint($item['id']))); ?>">Editar</a><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($item['id']))); ?>">Enviar</a><a class="button button-small" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=eventosapp_whatsapp_flow_export_responses&flow_id=' . absint($item['id'])), 'eventosapp_whatsapp_flow_export_responses')); ?>">CSV</a></td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ( $items as $item ) : ?>
-                            <tr>
-                                <td>
-                                    <strong><?php echo esc_html($item['title']); ?></strong><br>
-                                    <small>ID local: #<?php echo esc_html($item['id']); ?> · Categoría: <?php echo esc_html($item['category']); ?></small>
-                                </td>
-                                <td><span class="evapp-pill"><?php echo esc_html($item['status'] ?: 'local_draft'); ?></span></td>
-                                <td>
-                                    <strong>Meta ID:</strong> <?php echo esc_html($item['meta_flow_id'] ?: '—'); ?><br>
-                                    <strong>Pantalla:</strong> <?php echo esc_html($item['screen_id'] ?: 'SURVEY'); ?>
-                                    <?php if ( ! empty($item['preview_url']) ) : ?><br><a target="_blank" href="<?php echo esc_url($item['preview_url']); ?>">Abrir preview</a><?php endif; ?>
-                                </td>
-                                <td>
-                                    <div class="evapp-mini-stats">
-                                        <span>Envíos: <strong><?php echo esc_html($item['stats']['sent']); ?></strong></span>
-                                        <span>Resp.: <strong><?php echo esc_html($item['stats']['answered']); ?></strong></span>
-                                        <span>Tasa: <strong><?php echo esc_html($item['stats']['rate']); ?>%</strong></span>
-                                    </div>
-                                </td>
-                                <td>
-                                    <small>Creado: <?php echo esc_html($item['created_at']); ?></small><br>
-                                    <small>Editado: <?php echo esc_html($item['updated_at']); ?></small><br>
-                                    <small>Sync: <?php echo esc_html($item['last_sync_at'] ?: '—'); ?></small>
-                                </td>
-                                <td>
-                                    <div class="evapp-actions">
-                                        <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flows', 'flow_id' => $item['id']], admin_url('admin.php'))); ?>">Editar</a>
-                                        <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flows_bulk_send', 'bulk_flow_id' => $item['id']], admin_url('admin.php'))); ?>">Enviar masivo</a>
-                                        <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flow_templates', 'template_id' => 0, 'flow_post_id' => $item['id']], admin_url('admin.php'))); ?>">Crear plantilla Flow</a>
-                                        <a class="button button-small" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=eventosapp_whatsapp_flow_export_responses&flow_id=' . absint($item['id'])), 'eventosapp_whatsapp_flow_export_responses')); ?>">Exportar respuestas</a>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
+                    <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php endif; ?>
-        </div>
-
-        <div class="evapp-card">
-            <h2>Uso recomendado</h2>
-            <div class="evapp-warning">
-                <strong>Flow directo:</strong> útil para pruebas, conversaciones activas y envíos controlados desde EventosApp.<br>
-                <strong>Plantilla Flow:</strong> útil cuando necesitas iniciar conversaciones fuera de la ventana de atención de WhatsApp, porque la plantilla debe estar aprobada por Meta.
-            </div>
         </div>
     </div>
     <?php
 }
 
-function eventosapp_whatsapp_flows_render_bulk_send_page() {
+function eventosapp_whatsapp_flows_render_campaign_page() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
     }
-
     eventosapp_whatsapp_flows_maybe_install_tables();
     $flows = eventosapp_whatsapp_flows_get_all_for_select();
-    $events = eventosapp_whatsapp_flows_get_events_for_select(300);
-    $selected_flow_id = absint($_GET['bulk_flow_id'] ?? ($_GET['flow_id'] ?? 0));
-    $selected_event_id = absint($_GET['bulk_event_id'] ?? 0);
-    $limit = min(100, max(1, absint($_GET['campaign_limit'] ?? 25)));
-    $offset = max(0, absint($_GET['campaign_offset'] ?? 0));
-    $ticket_count = $selected_event_id ? eventosapp_whatsapp_flows_count_tickets_for_event($selected_event_id) : 0;
-    $last_result = get_option('eventosapp_whatsapp_flow_last_campaign_result', []);
-    $selected_flow = $selected_flow_id ? eventosapp_whatsapp_flows_get_flow_config($selected_flow_id) : [];
+    $events = eventosapp_whatsapp_flows_get_events_for_select();
+    $selected_flow_id = absint($_GET['flow_id'] ?? 0);
+    $last = get_option('eventosapp_whatsapp_flow_last_campaign_result', []);
     ?>
-    <div class="wrap eventosapp-wa-flows eventosapp-wa-flows-bulk">
-        <h1>Envío Masivo de WhatsApp Flows</h1>
+    <div class="wrap eventosapp-wa-flows">
+        <?php eventosapp_whatsapp_flows_admin_styles(); ?>
+        <div class="evapp-page-head">
+            <div><h1>Envío Masivo de Flows</h1><p>Envía una encuesta Flow a los asistentes de un evento por lotes controlados.</p></div>
+            <div class="evapp-top-actions"><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear Flow</a></div>
+        </div>
         <?php eventosapp_whatsapp_flows_render_notices(); ?>
-        <style>
-            .eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(420px,1fr) minmax(320px,.8fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:16px}.eventosapp-wa-flows .evapp-muted{color:#646970}.eventosapp-wa-flows .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flows .evapp-warning{border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0}.eventosapp-wa-flows .evapp-success{border-left:4px solid #00a32a;background:#edfaef;padding:10px;margin:10px 0}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:#f6f7f7;border-radius:8px;padding:10px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:22px}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}@media(max-width:1100px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-stat-grid{grid-template-columns:1fr}}
-        </style>
-
         <div class="evapp-grid">
-            <div>
-                <div class="evapp-card">
-                    <h2>Seleccionar evento y Flow</h2>
-                    <p class="evapp-muted">Esta pantalla envía un Flow directo a los tickets del evento seleccionado. Procesa por lotes pequeños para no sobrecargar el servidor ni disparar demasiadas solicitudes a Meta al mismo tiempo.</p>
-
-                    <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>">
-                        <input type="hidden" name="page" value="eventosapp_whatsapp_flows_bulk_send">
-                        <table class="form-table" role="presentation">
-                            <tr>
-                                <th><label for="bulk_event_id">Evento</label></th>
-                                <td>
-                                    <select name="bulk_event_id" id="bulk_event_id" class="regular-text" required>
-                                        <option value="0">Seleccionar evento</option>
-                                        <?php foreach ( $events as $event ) : ?>
-                                            <option value="<?php echo esc_attr($event->ID); ?>" <?php selected($selected_event_id, $event->ID); ?>><?php echo esc_html(get_the_title($event)); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th><label for="bulk_flow_id">Flow a enviar</label></th>
-                                <td>
-                                    <select name="bulk_flow_id" id="bulk_flow_id" class="regular-text" required>
-                                        <option value="0">Seleccionar Flow</option>
-                                        <?php foreach ( $flows as $flow ) : ?>
-                                            <option value="<?php echo esc_attr($flow['id']); ?>" <?php selected($selected_flow_id, $flow['id']); ?>><?php echo esc_html($flow['title'] . ' — ' . ($flow['meta_flow_id'] ? 'Meta ID ' . $flow['meta_flow_id'] : 'sin Meta ID')); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                    <p class="description">Solo envía Flows que ya tengan Meta ID y estén publicados o listos para enviar.</p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th>Lote</th>
-                                <td>
-                                    <label>Límite <input type="number" name="campaign_limit" value="<?php echo esc_attr($limit); ?>" min="1" max="100" class="small-text"></label>
-                                    <label style="margin-left:12px;">Offset <input type="number" name="campaign_offset" value="<?php echo esc_attr($offset); ?>" min="0" class="small-text"></label>
-                                </td>
-                            </tr>
-                        </table>
-                        <p><button type="submit" class="button">Actualizar vista</button></p>
-                    </form>
-                </div>
-
-                <?php if ( $selected_event_id && $selected_flow_id ) : ?>
-                    <div class="evapp-card">
-                        <h2>Enviar lote</h2>
-                        <div class="evapp-stat-grid">
-                            <div class="evapp-stat"><span>Tickets del evento</span><strong><?php echo esc_html($ticket_count); ?></strong></div>
-                            <div class="evapp-stat"><span>Límite del lote</span><strong><?php echo esc_html($limit); ?></strong></div>
-                            <div class="evapp-stat"><span>Offset</span><strong><?php echo esc_html($offset); ?></strong></div>
-                        </div>
-
-                        <?php if ( empty($selected_flow['meta_flow_id']) ) : ?>
-                            <div class="evapp-warning"><strong>No se puede enviar todavía.</strong> El Flow seleccionado no tiene Flow ID de Meta. Ábrelo en WhatsApp Flows, presiona “Crear/Recrear en Meta con JSON local”, revisa preview y publica.</div>
-                        <?php else : ?>
-                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:14px;">
-                                <?php wp_nonce_field('eventosapp_whatsapp_flow_campaign_send'); ?>
-                                <input type="hidden" name="action" value="eventosapp_whatsapp_flow_campaign_send">
-                                <input type="hidden" name="redirect_page" value="eventosapp_whatsapp_flows_bulk_send">
-                                <input type="hidden" name="flow_post_id" value="<?php echo esc_attr($selected_flow_id); ?>">
-                                <input type="hidden" name="campaign_event_id" value="<?php echo esc_attr($selected_event_id); ?>">
-                                <input type="hidden" name="campaign_limit" value="<?php echo esc_attr($limit); ?>">
-                                <input type="hidden" name="campaign_offset" value="<?php echo esc_attr($offset); ?>">
-                                <p><label><input type="checkbox" name="skip_existing_sends" value="1" checked> Omitir tickets que ya tengan un envío registrado para este mismo Flow y evento</label></p>
-                                <p class="evapp-warning"><strong>Confirmación:</strong> se enviará el Flow <strong><?php echo esc_html($selected_flow['title'] ?? ''); ?></strong> a un máximo de <?php echo esc_html($limit); ?> tickets del evento seleccionado, empezando en el offset <?php echo esc_html($offset); ?>.</p>
-                                <p><button type="submit" class="button button-primary">Enviar lote de Flows</button></p>
-                            </form>
-                        <?php endif; ?>
+            <div class="evapp-card">
+                <h2>Configurar envío</h2>
+                <div class="evapp-warning"><strong>Uso recomendado:</strong> el envío directo de Flow sirve para pruebas o conversaciones activas. Para campañas fuera de la ventana de conversación, usa una plantilla Flow aprobada por Meta.</div>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                    <?php wp_nonce_field('eventosapp_whatsapp_flow_campaign_send'); ?>
+                    <input type="hidden" name="action" value="eventosapp_whatsapp_flow_campaign_send">
+                    <input type="hidden" name="return_page" value="campaign">
+                    <label class="evapp-field"><span>Evento</span><select name="campaign_event_id" required><option value="">Seleccionar evento</option><?php foreach ( $events as $event ) : ?><option value="<?php echo esc_attr($event->ID); ?>"><?php echo esc_html(get_the_title($event)); ?></option><?php endforeach; ?></select></label>
+                    <label class="evapp-field"><span>Flow a enviar</span><select name="flow_post_id" required><option value="">Seleccionar Flow</option><?php foreach ( $flows as $item ) : ?><option value="<?php echo esc_attr($item['id']); ?>" <?php selected($selected_flow_id, $item['id']); ?>><?php echo esc_html($item['title'] . ($item['meta_flow_id'] ? ' — Meta ID ' . $item['meta_flow_id'] : ' — sin Meta ID')); ?></option><?php endforeach; ?></select></label>
+                    <div class="evapp-row">
+                        <label class="evapp-field"><span>Límite por lote</span><input type="number" name="campaign_limit" value="25" min="1" max="100"></label>
+                        <label class="evapp-field"><span>Offset</span><input type="number" name="campaign_offset" value="0" min="0"></label>
                     </div>
-                <?php endif; ?>
+                    <label class="evapp-checkline"><input type="checkbox" name="campaign_skip_existing" value="1" checked> Omitir tickets que ya recibieron este mismo Flow para este evento</label>
+                    <button type="submit" class="button button-primary button-hero">Enviar lote de Flows</button>
+                </form>
             </div>
-
             <div>
                 <div class="evapp-card">
                     <h2>Último resultado</h2>
-                    <?php if ( is_array($last_result) && ! empty($last_result['created_at']) ) : ?>
-                        <p><strong>Fecha:</strong> <?php echo esc_html($last_result['created_at']); ?></p>
-                        <p><strong>Flow:</strong> #<?php echo esc_html($last_result['flow_post_id'] ?? ''); ?></p>
-                        <p><strong>Evento:</strong> #<?php echo esc_html($last_result['event_id'] ?? ''); ?></p>
-                        <p><strong>Procesados:</strong> <?php echo esc_html($last_result['processed'] ?? 0); ?></p>
-                        <p><strong>Enviados:</strong> <?php echo esc_html($last_result['ok'] ?? 0); ?></p>
-                        <p><strong>Omitidos:</strong> <?php echo esc_html($last_result['skipped'] ?? 0); ?></p>
-                        <p><strong>Errores:</strong> <?php echo esc_html($last_result['errors'] ?? 0); ?></p>
+                    <?php if ( is_array($last) && ! empty($last['created_at']) ) : ?>
+                        <p><strong>Fecha:</strong> <?php echo esc_html($last['created_at']); ?></p>
+                        <p><strong>Procesados:</strong> <?php echo esc_html($last['processed'] ?? 0); ?></p>
+                        <p><strong>Enviados:</strong> <?php echo esc_html($last['ok'] ?? 0); ?></p>
+                        <p><strong>Errores:</strong> <?php echo esc_html($last['errors'] ?? 0); ?></p>
+                        <p><strong>Omitidos:</strong> <?php echo esc_html($last['skipped'] ?? 0); ?></p>
                     <?php else : ?>
-                        <p>No hay resultados de envío masivo todavía.</p>
+                        <div class="evapp-empty">No hay resultados de envío masivo todavía.</div>
                     <?php endif; ?>
                 </div>
-
                 <div class="evapp-card">
-                    <h2>Guía rápida</h2>
-                    <p><strong>1.</strong> Crea y publica el Flow desde <em>WhatsApp Flows</em>.</p>
-                    <p><strong>2.</strong> En esta sección selecciona el evento y el Flow.</p>
-                    <p><strong>3.</strong> Envía por bloques de 25 a 100 tickets.</p>
-                    <p><strong>4.</strong> Revisa respuestas desde el Flow o exporta el CSV.</p>
-                    <div class="evapp-warning">Para iniciar conversaciones fuera de la ventana permitida por WhatsApp, usa una plantilla Flow aprobada. Esta pantalla usa envío directo de Flow y es ideal para pruebas, conversaciones activas o campañas controladas donde Meta acepte el mensaje interactivo directo.</div>
-                </div>
-
-                <div class="evapp-card">
-                    <h2>Accesos</h2>
-                    <p class="evapp-actions">
-                        <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a>
-                        <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear Flow</a>
-                    </p>
+                    <h2>Proceso sugerido</h2>
+                    <ol>
+                        <li>Crea y prueba el Flow.</li>
+                        <li>Confirma que el preview en Meta muestra tus preguntas.</li>
+                        <li>Publica el Flow.</li>
+                        <li>Selecciona evento y Flow.</li>
+                        <li>Envía en lotes de 25 a 100 asistentes.</li>
+                    </ol>
                 </div>
             </div>
         </div>
@@ -2275,33 +2340,179 @@ function eventosapp_whatsapp_flows_render_small_post_button($action, $nonce_acti
     <?php
 }
 
+function eventosapp_whatsapp_flows_options_to_text($options) {
+    if ( empty($options) || ! is_array($options) ) {
+        return '';
+    }
+    $lines = [];
+    foreach ( $options as $option ) {
+        if ( is_array($option) ) {
+            $id = sanitize_key((string)($option['id'] ?? ''));
+            $title = sanitize_text_field((string)($option['title'] ?? ''));
+            if ( $title === '' ) {
+                continue;
+            }
+            $lines[] = $id !== '' && $id !== sanitize_key(remove_accents($title)) ? $id . '|' . $title : $title;
+        } else {
+            $lines[] = sanitize_text_field((string) $option);
+        }
+    }
+    return implode("\n", array_filter($lines));
+}
+
 function eventosapp_whatsapp_flows_render_question_row($index, $question, $question_types) {
     $index = is_numeric($index) ? absint($index) : 0;
     $question = is_array($question) ? $question : [];
-    $options_text = '';
-    if ( ! empty($question['options']) && is_array($question['options']) ) {
-        $lines = [];
-        foreach ( $question['options'] as $option ) {
-            $lines[] = is_array($option) ? (string)($option['title'] ?? '') : (string) $option;
-        }
-        $options_text = implode("\n", array_filter($lines));
-    }
+    $type = sanitize_key((string)($question['type'] ?? 'radio'));
+    $type_help = eventosapp_whatsapp_flows_type_help();
+    $display_types = eventosapp_whatsapp_flows_display_question_types();
+    $auto_choice_types = ['nps', 'rating5', 'yesno'];
+    $choice_types = ['radio', 'checkbox', 'dropdown', 'nps', 'rating5', 'yesno'];
+    $classes = ['evapp-question'];
+    if ( in_array($type, $display_types, true) ) { $classes[] = 'is-display'; }
+    if ( in_array($type, $auto_choice_types, true) ) { $classes[] = 'is-choice-auto'; }
+    if ( in_array($type, $choice_types, true) ) { $classes[] = 'is-choice'; }
+    if ( $type === 'date' ) { $classes[] = 'is-date'; }
+    if ( $type === 'optin' ) { $classes[] = 'is-optin'; }
+    $options_text = eventosapp_whatsapp_flows_options_to_text($question['options'] ?? []);
     ?>
-    <div class="evapp-question" data-question-index="<?php echo esc_attr($index); ?>">
-        <div class="evapp-question-head"><strong>Pregunta <?php echo esc_html($index + 1); ?></strong><button type="button" class="button-link-delete evapp-remove-question">Quitar</button></div>
-        <div class="evapp-row">
-            <label>Etiqueta<br><input type="text" class="large-text" name="questions[<?php echo esc_attr($index); ?>][label]" value="<?php echo esc_attr($question['label'] ?? ''); ?>"></label>
-            <label>Slug<br><input type="text" class="regular-text" name="questions[<?php echo esc_attr($index); ?>][slug]" value="<?php echo esc_attr($question['slug'] ?? ''); ?>"></label>
+    <div class="<?php echo esc_attr(implode(' ', $classes)); ?>" data-question-index="<?php echo esc_attr($index); ?>">
+        <div class="evapp-question-head">
+            <div class="evapp-question-title"><span class="evapp-question-number"><?php echo esc_html($index + 1); ?></span><strong><?php echo esc_html($question_types[$type] ?? 'Campo'); ?></strong></div>
+            <button type="button" class="button-link-delete evapp-remove-question">Quitar</button>
         </div>
-        <p><label>Tipo<br><select name="questions[<?php echo esc_attr($index); ?>][type]">
-            <?php foreach ( $question_types as $key => $label ) : ?>
-                <option value="<?php echo esc_attr($key); ?>" <?php selected($question['type'] ?? '', $key); ?>><?php echo esc_html($label); ?></option>
-            <?php endforeach; ?>
-        </select></label> <label style="margin-left:12px;"><input type="checkbox" name="questions[<?php echo esc_attr($index); ?>][required]" value="1" <?php checked(($question['required'] ?? '0'), '1'); ?>> Obligatoria</label></p>
-        <p><label>Opciones, una por línea<br><textarea class="large-text" rows="4" name="questions[<?php echo esc_attr($index); ?>][options]"><?php echo esc_textarea($options_text); ?></textarea></label></p>
+        <div class="evapp-question-body">
+            <div class="evapp-row">
+                <label class="evapp-field"><span>Texto visible</span><input type="text" class="large-text" name="questions[<?php echo esc_attr($index); ?>][label]" value="<?php echo esc_attr($question['label'] ?? ''); ?>" placeholder="Pregunta o texto de sección"></label>
+                <label class="evapp-field"><span>Slug / nombre interno</span><input type="text" class="regular-text" name="questions[<?php echo esc_attr($index); ?>][slug]" value="<?php echo esc_attr($question['slug'] ?? ''); ?>" placeholder="campo_respuesta"></label>
+            </div>
+            <div class="evapp-row-3">
+                <label class="evapp-field"><span>Tipo de campo</span><select class="evapp-question-type" name="questions[<?php echo esc_attr($index); ?>][type]">
+                    <?php foreach ( $question_types as $key => $label ) : ?>
+                        <option value="<?php echo esc_attr($key); ?>" <?php selected($type, $key); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select></label>
+                <label class="evapp-field evapp-placeholder-wrap"><span>Placeholder opcional</span><input type="text" name="questions[<?php echo esc_attr($index); ?>][placeholder]" value="<?php echo esc_attr($question['placeholder'] ?? ''); ?>" placeholder="Ej: Escribe tu respuesta"></label>
+                <label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions[<?php echo esc_attr($index); ?>][required]" value="1" <?php checked(($question['required'] ?? '0'), '1'); ?>> Obligatoria</label></label>
+            </div>
+            <label class="evapp-field"><span>Ayuda / instrucción opcional</span><textarea rows="2" name="questions[<?php echo esc_attr($index); ?>][help]" placeholder="Ej: 1 es el mínimo y 5 el máximo"><?php echo esc_textarea($question['help'] ?? ''); ?></textarea></label>
+            <div class="evapp-row evapp-text-limits-wrap">
+                <label class="evapp-field"><span>Mínimo de caracteres</span><input type="number" name="questions[<?php echo esc_attr($index); ?>][min_chars]" value="<?php echo esc_attr(absint($question['min_chars'] ?? 0)); ?>" min="0"></label>
+                <label class="evapp-field"><span>Máximo de caracteres</span><input type="number" name="questions[<?php echo esc_attr($index); ?>][max_chars]" value="<?php echo esc_attr(absint($question['max_chars'] ?? 0)); ?>" min="0"></label>
+            </div>
+            <label class="evapp-field evapp-options-wrap"><span>Opciones, una por línea</span><textarea rows="5" name="questions[<?php echo esc_attr($index); ?>][options]" placeholder="Excelente&#10;Buena&#10;Regular&#10;Mala"><?php echo esc_textarea($options_text); ?></textarea><span class="description">También puedes usar id|Texto visible si necesitas controlar el valor interno.</span></label>
+            <div class="evapp-type-help" data-help-for="<?php echo esc_attr($type); ?>"><?php echo esc_html($type_help[$type] ?? ''); ?></div>
+        </div>
     </div>
     <?php
 }
+
+function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_help) {
+    $types_json = wp_json_encode($question_types, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $help_json = wp_json_encode($type_help, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    ?>
+    <script>
+    (function(){
+        var wrap = document.getElementById('evapp-wa-flow-questions');
+        if (!wrap) return;
+        var questionTypes = <?php echo $types_json ? $types_json : '{}'; ?>;
+        var typeHelp = <?php echo $help_json ? $help_json : '{}'; ?>;
+        var displayTypes = ['heading','subheading','body','caption'];
+        var autoChoiceTypes = ['nps','rating5','yesno'];
+        var choiceTypes = ['radio','checkbox','dropdown','nps','rating5','yesno'];
+        var textLimitTypes = ['text','textarea','email','number','phone'];
+        var presetMap = {
+            heading: [{type:'heading', label:'Nueva sección', slug:'seccion', help:'', options:'', required:false}],
+            nps: [{type:'nps', label:'¿Qué tan probable es que recomiendes este evento a un amigo o familiar?', slug:'probabilidad_recomendar', help:'0 es nada probable y 10 es muy probable.', options:'', required:true}],
+            rating5: [{type:'rating5', label:'Califica tu grado de satisfacción', slug:'satisfaccion', help:'1 corresponde al mínimo grado de satisfacción y 5 al máximo.', options:'', required:true}],
+            source: [{type:'radio', label:'¿Cómo te enteraste de nuestro evento?', slug:'medio_conocimiento', help:'', options:'Recibí un correo electrónico\nLlamada de un agente comercial\nPor medio de la empresa\nPágina web\nRecomendación\nRedes sociales\nWhatsApp', required:false}],
+            comment: [{type:'textarea', label:'¿Qué fue lo que más te gustó y qué podríamos mejorar?', slug:'comentarios', help:'', options:'', required:false}],
+            personal: [
+                {type:'heading', label:'Queremos conocerte más', slug:'seccion_datos_personales', help:'', options:'', required:false},
+                {type:'text', label:'Nombres', slug:'nombres', help:'', options:'', required:true},
+                {type:'text', label:'Apellidos', slug:'apellidos', help:'', options:'', required:true},
+                {type:'text', label:'Nombre de la empresa', slug:'empresa', help:'', options:'', required:false},
+                {type:'email', label:'Correo electrónico', slug:'correo', help:'', options:'', required:false},
+                {type:'phone', label:'Celular', slug:'celular', help:'', options:'', required:false}
+            ],
+            consent: [{type:'optin', label:'Acepto el tratamiento de mis datos personales para fines relacionados con el evento.', slug:'acepta_tratamiento_datos', help:'Usa este campo para autorización expresa de datos personales.', options:'', required:true}],
+            complete: [
+                {type:'heading', label:'Valoración del evento', slug:'seccion_valoracion_evento', help:'', options:'', required:false},
+                {type:'nps', label:'¿Qué tan probable es que recomiendes este espacio a un amigo o familiar?', slug:'probabilidad_recomendar', help:'0 es nada probable y 10 es muy probable.', options:'', required:true},
+                {type:'radio', label:'¿Cómo te enteraste de nuestro evento?', slug:'medio_conocimiento', help:'', options:'Recibí un correo electrónico\nLlamada de un agente comercial\nPor medio de la empresa\nPágina web\nRecomendación\nRedes sociales\nWhatsApp', required:false},
+                {type:'heading', label:'Temáticas del evento', slug:'seccion_tematicas', help:'', options:'', required:false},
+                {type:'rating5', label:'¿Los temas desarrollados cumplieron tus expectativas?', slug:'temas_cumplieron_expectativas', help:'1 corresponde al mínimo grado de satisfacción y 5 al máximo.', options:'', required:true},
+                {type:'rating5', label:'¿Contribuyeron en tu ocupación actual?', slug:'contribucion_ocupacion', help:'', options:'', required:true},
+                {type:'heading', label:'Conferencista', slug:'seccion_conferencista', help:'', options:'', required:false},
+                {type:'rating5', label:'Despertaron y mantuvieron el interés', slug:'conferencista_interes', help:'', options:'', required:true},
+                {type:'rating5', label:'Expusieron información clara y concreta', slug:'conferencista_claridad', help:'', options:'', required:true},
+                {type:'textarea', label:'¿Te gustaría complementar tus respuestas?', slug:'comentarios_conferencista', help:'', options:'', required:false},
+                {type:'heading', label:'Facilidad para participar en el evento', slug:'seccion_facilidad', help:'', options:'', required:false},
+                {type:'rating5', label:'Inscripción al evento', slug:'facilidad_inscripcion', help:'1 es muy difícil y 5 es muy fácil.', options:'', required:true},
+                {type:'rating5', label:'Acceso al lugar del evento', slug:'facilidad_acceso', help:'', options:'', required:true},
+                {type:'textarea', label:'¿Qué fue lo que más te gustó del evento?', slug:'lo_que_mas_gusto', help:'', options:'', required:false},
+                {type:'textarea', label:'¿Qué aspectos podríamos mejorar?', slug:'aspectos_mejorar', help:'', options:'', required:false},
+                {type:'yesno', label:'¿Estarías dispuesto a pagar por formaciones como esta?', slug:'dispuesto_pagar', help:'', options:'', required:false},
+                {type:'heading', label:'Queremos conocerte más', slug:'seccion_datos', help:'', options:'', required:false},
+                {type:'text', label:'Nombres', slug:'nombres', help:'', options:'', required:true},
+                {type:'text', label:'Apellidos', slug:'apellidos', help:'', options:'', required:true},
+                {type:'text', label:'Nombre de la empresa', slug:'empresa', help:'', options:'', required:false},
+                {type:'number', label:'NIT', slug:'nit', help:'Sin puntos ni dígito de verificación.', options:'', required:false},
+                {type:'optin', label:'Acepto expresamente el tratamiento de mis datos personales.', slug:'acepta_datos', help:'Incluye aquí la autorización legal resumida o enlaza la política en el mensaje previo.', options:'', required:true}
+            ]
+        };
+        function esc(v){ return String(v || '').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]; }); }
+        function nextIndex(){ return wrap.querySelectorAll('.evapp-question').length; }
+        function typeOptions(selected){
+            var html='';
+            Object.keys(questionTypes).forEach(function(key){ html += '<option value="'+esc(key)+'"'+(key===selected?' selected':'')+'>'+esc(questionTypes[key])+'</option>'; });
+            return html;
+        }
+        function questionTemplate(i, data){
+            data = data || {};
+            var type = data.type || 'radio';
+            var required = data.required !== false;
+            return '<div class="evapp-question" data-question-index="'+i+'">'+
+                '<div class="evapp-question-head"><div class="evapp-question-title"><span class="evapp-question-number">'+(i+1)+'</span><strong>'+esc(questionTypes[type] || 'Campo')+'</strong></div><button type="button" class="button-link-delete evapp-remove-question">Quitar</button></div>'+ 
+                '<div class="evapp-question-body">'+
+                '<div class="evapp-row"><label class="evapp-field"><span>Texto visible</span><input type="text" class="large-text" name="questions['+i+'][label]" value="'+esc(data.label || 'Nueva pregunta')+'" placeholder="Pregunta o texto de sección"></label><label class="evapp-field"><span>Slug / nombre interno</span><input type="text" class="regular-text" name="questions['+i+'][slug]" value="'+esc(data.slug || ('pregunta_'+(i+1)))+'" placeholder="campo_respuesta"></label></div>'+ 
+                '<div class="evapp-row-3"><label class="evapp-field"><span>Tipo de campo</span><select class="evapp-question-type" name="questions['+i+'][type]">'+typeOptions(type)+'</select></label><label class="evapp-field evapp-placeholder-wrap"><span>Placeholder opcional</span><input type="text" name="questions['+i+'][placeholder]" value="'+esc(data.placeholder || '')+'" placeholder="Ej: Escribe tu respuesta"></label><label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions['+i+'][required]" value="1" '+(required?'checked':'')+'> Obligatoria</label></label></div>'+ 
+                '<label class="evapp-field"><span>Ayuda / instrucción opcional</span><textarea rows="2" name="questions['+i+'][help]" placeholder="Ej: 1 es el mínimo y 5 el máximo">'+esc(data.help || '')+'</textarea></label>'+ 
+                '<div class="evapp-row evapp-text-limits-wrap"><label class="evapp-field"><span>Mínimo de caracteres</span><input type="number" name="questions['+i+'][min_chars]" value="0" min="0"></label><label class="evapp-field"><span>Máximo de caracteres</span><input type="number" name="questions['+i+'][max_chars]" value="0" min="0"></label></div>'+ 
+                '<label class="evapp-field evapp-options-wrap"><span>Opciones, una por línea</span><textarea rows="5" name="questions['+i+'][options]" placeholder="Excelente&#10;Buena&#10;Regular&#10;Mala">'+esc(data.options || 'Opción 1\nOpción 2')+'</textarea><span class="description">También puedes usar id|Texto visible si necesitas controlar el valor interno.</span></label>'+ 
+                '<div class="evapp-type-help">'+esc(typeHelp[type] || '')+'</div>'+ 
+                '</div></div>';
+        }
+        function refreshBlock(block){
+            if(!block) return;
+            var select = block.querySelector('.evapp-question-type');
+            var type = select ? select.value : 'radio';
+            block.classList.toggle('is-display', displayTypes.indexOf(type) !== -1);
+            block.classList.toggle('is-choice-auto', autoChoiceTypes.indexOf(type) !== -1);
+            block.classList.toggle('is-choice', choiceTypes.indexOf(type) !== -1);
+            block.classList.toggle('is-date', type === 'date');
+            block.classList.toggle('is-optin', type === 'optin');
+            var limits = block.querySelector('.evapp-text-limits-wrap');
+            if(limits) limits.style.display = textLimitTypes.indexOf(type) !== -1 ? '' : 'none';
+            var title = block.querySelector('.evapp-question-title strong');
+            if(title) title.textContent = questionTypes[type] || 'Campo';
+            var help = block.querySelector('.evapp-type-help');
+            if(help) help.textContent = typeHelp[type] || '';
+        }
+        function refreshAll(){ Array.prototype.forEach.call(wrap.querySelectorAll('.evapp-question'), refreshBlock); }
+        var add = document.getElementById('evapp-wa-add-question');
+        if(add){ add.addEventListener('click', function(){ var i=nextIndex(); wrap.insertAdjacentHTML('beforeend', questionTemplate(i, {type:'radio', label:'Nueva pregunta', slug:'pregunta_'+(i+1), options:'Opción 1\nOpción 2', required:true})); refreshAll(); }); }
+        document.addEventListener('click', function(e){
+            if(e.target && e.target.classList.contains('evapp-remove-question')){ var q=e.target.closest('.evapp-question'); if(q) q.remove(); }
+            if(e.target && e.target.classList.contains('evapp-add-preset')){ var preset=e.target.getAttribute('data-preset'); var items=presetMap[preset] || []; items.forEach(function(item){ var i=nextIndex(); wrap.insertAdjacentHTML('beforeend', questionTemplate(i, item)); }); refreshAll(); }
+        });
+        wrap.addEventListener('change', function(e){ if(e.target && e.target.classList.contains('evapp-question-type')) refreshBlock(e.target.closest('.evapp-question')); });
+        refreshAll();
+    })();
+    </script>
+    <?php
+}
+
 
 function eventosapp_whatsapp_flows_render_responses_table($rows) {
     if ( empty($rows) ) {
