@@ -182,35 +182,31 @@ function eventosapp_whatsapp_flows_categories() {
 }
 
 /**
- * Tipos de campo disponibles para construir encuestas con componentes soportados
- * por WhatsApp Flows. Los tipos especiales (nps, rating5, yesno) se transforman
- * en RadioButtonsGroup para facilitar encuestas tipo SurveyMonkey/Google Forms.
+ * Tipos de campo disponibles para construir encuestas usando únicamente
+ * componentes reales soportados por WhatsApp Flows.
+ *
+ * Importante: NPS, escala 1 a 5 y Sí/No no son componentes propios de Meta.
+ * En EventosApp se agregan como presets, pero se generan como RadioButtonsGroup.
  */
 function eventosapp_whatsapp_flows_question_types() {
     return [
-        'heading'    => 'Título de sección',
-        'subheading' => 'Subtítulo',
-        'body'       => 'Texto informativo',
-        'caption'    => 'Nota pequeña',
-        'nps'        => 'Escala NPS 0 a 10',
-        'rating5'    => 'Escala satisfacción 1 a 5',
-        'radio'      => 'Selección única',
-        'checkbox'   => 'Selección múltiple',
-        'dropdown'   => 'Lista desplegable',
-        'yesno'      => 'Sí / No',
-        'text'       => 'Texto corto',
-        'textarea'   => 'Texto largo',
-        'email'      => 'Correo electrónico',
-        'number'     => 'Número',
-        'phone'      => 'Teléfono',
-        'date'       => 'Fecha',
-        'optin'      => 'Aceptación / consentimiento',
+        'heading'    => 'TextHeading — Título de sección',
+        'subheading' => 'TextSubheading — Subtítulo',
+        'body'       => 'TextBody — Texto informativo',
+        'caption'    => 'TextCaption — Nota pequeña',
+        'radio'      => 'RadioButtonsGroup — Selección única',
+        'checkbox'   => 'CheckboxGroup — Selección múltiple',
+        'dropdown'   => 'Dropdown — Lista desplegable',
+        'text'       => 'TextInput — Campo de texto',
+        'textarea'   => 'TextArea — Comentario largo',
+        'date'       => 'DatePicker — Fecha',
+        'optin'      => 'OptIn — Aceptación / consentimiento',
     ];
 }
 
 function eventosapp_whatsapp_flows_input_question_types() {
     return [
-        'nps', 'rating5', 'radio', 'checkbox', 'dropdown', 'yesno', 'text', 'textarea', 'email', 'number', 'phone', 'date', 'optin'
+        'radio', 'checkbox', 'dropdown', 'text', 'textarea', 'date', 'optin'
     ];
 }
 
@@ -218,25 +214,28 @@ function eventosapp_whatsapp_flows_display_question_types() {
     return ['heading', 'subheading', 'body', 'caption'];
 }
 
+function eventosapp_whatsapp_flows_text_input_types() {
+    return [
+        'text'   => 'Texto general',
+        'email'  => 'Correo electrónico',
+        'number' => 'Número',
+        'phone'  => 'Teléfono',
+    ];
+}
+
 function eventosapp_whatsapp_flows_type_help() {
     return [
-        'heading'    => 'Úsalo para separar bloques como “Valoración del evento”, “Conferencista” o “Queremos conocerte más”. No guarda respuesta.',
-        'subheading' => 'Úsalo para subtítulos cortos dentro de una sección. No guarda respuesta.',
-        'body'       => 'Úsalo para instrucciones, contexto o textos legales cortos. No guarda respuesta.',
-        'caption'    => 'Úsalo para notas pequeñas, aclaraciones o ayuda visual. No guarda respuesta.',
-        'nps'        => 'Sirve para la pregunta “¿Qué tan probable es que nos recomiendes?” con escala 0 a 10.',
-        'rating5'    => 'Sirve para calificar satisfacción de 1 a 5. Para matrices, agrega una pregunta rating por cada fila.',
-        'radio'      => 'Sirve cuando el asistente debe escoger una sola respuesta entre varias opciones.',
-        'checkbox'   => 'Sirve cuando el asistente puede seleccionar varias respuestas al mismo tiempo.',
-        'dropdown'   => 'Sirve para listas largas; ocupa menos espacio que radio.',
-        'yesno'      => 'Sirve para preguntas cerradas de aceptación, recomendación o confirmación simple.',
-        'text'       => 'Sirve para nombres, empresa, cargo o respuestas cortas.',
-        'textarea'   => 'Sirve para comentarios, sugerencias y respuestas abiertas largas.',
-        'email'      => 'Sirve para pedir correo con teclado y validación de email.',
-        'number'     => 'Sirve para cédula, NIT, cantidad o calificaciones numéricas abiertas.',
-        'phone'      => 'Sirve para pedir celular o teléfono.',
-        'date'       => 'Sirve para fechas, reservas o disponibilidad.',
-        'optin'      => 'Sirve para autorizaciones, tratamiento de datos y aceptación de términos.',
+        'heading'    => 'Componente real: TextHeading. Úsalo para separar bloques como “Valoración del evento”, “Conferencista” o “Queremos conocerte más”. No guarda respuesta.',
+        'subheading' => 'Componente real: TextSubheading. Úsalo para subtítulos cortos dentro de una sección. No guarda respuesta.',
+        'body'       => 'Componente real: TextBody. Úsalo para instrucciones, contexto o textos legales cortos. No guarda respuesta.',
+        'caption'    => 'Componente real: TextCaption. Úsalo para notas pequeñas, aclaraciones o ayudas visuales. No guarda respuesta.',
+        'radio'      => 'Componente real: RadioButtonsGroup. Úsalo para una sola respuesta. NPS 0-10, satisfacción 1-5 y Sí/No se hacen con este componente y opciones predefinidas.',
+        'checkbox'   => 'Componente real: CheckboxGroup. Úsalo cuando el asistente pueda seleccionar varias respuestas al mismo tiempo.',
+        'dropdown'   => 'Componente real: Dropdown. Úsalo para listas largas; ocupa menos espacio que RadioButtonsGroup.',
+        'text'       => 'Componente real: TextInput. Úsalo para datos cortos. El formato interno puede ser texto, email, número o teléfono.',
+        'textarea'   => 'Componente real: TextArea. Úsalo para comentarios, sugerencias y respuestas abiertas largas.',
+        'date'       => 'Componente real: DatePicker. Úsalo para fechas, reservas o disponibilidad.',
+        'optin'      => 'Componente real: OptIn. Úsalo para autorizaciones, tratamiento de datos y aceptación de términos.',
     ];
 }
 
@@ -281,7 +280,7 @@ function eventosapp_whatsapp_flows_default_questions() {
             'slug'     => 'probabilidad_recomendar',
             'label'    => '¿Qué tan probable es que recomiendes este evento a un amigo o familiar?',
             'help'     => '0 es nada probable y 10 es muy probable.',
-            'type'     => 'nps',
+            'type'     => 'radio',
             'required' => '1',
             'options'  => eventosapp_whatsapp_flows_default_options_for_type('nps'),
         ],
@@ -305,7 +304,7 @@ function eventosapp_whatsapp_flows_default_questions() {
             'slug'     => 'satisfaccion_contenido',
             'label'    => '¿Los temas desarrollados cumplieron tus expectativas?',
             'help'     => '1 corresponde al mínimo grado de satisfacción y 5 al máximo.',
-            'type'     => 'rating5',
+            'type'     => 'radio',
             'required' => '1',
             'options'  => eventosapp_whatsapp_flows_default_options_for_type('rating5'),
         ],
@@ -415,8 +414,8 @@ function eventosapp_whatsapp_flows_normalize_options($raw_options) {
 function eventosapp_whatsapp_flows_normalize_questions($raw_questions) {
     $questions = [];
     $types = eventosapp_whatsapp_flows_question_types();
-    $input_types = eventosapp_whatsapp_flows_input_question_types();
     $display_types = eventosapp_whatsapp_flows_display_question_types();
+    $text_input_types = eventosapp_whatsapp_flows_text_input_types();
 
     if ( ! is_array($raw_questions) ) {
         return eventosapp_whatsapp_flows_default_questions();
@@ -433,6 +432,24 @@ function eventosapp_whatsapp_flows_normalize_questions($raw_questions) {
         }
 
         $type = sanitize_key((string)($question['type'] ?? 'radio'));
+        $legacy_type = $type;
+        $input_type = sanitize_key((string)($question['input_type'] ?? 'text'));
+        if ( ! isset($text_input_types[$input_type]) ) {
+            $input_type = 'text';
+        }
+
+        // Migración segura desde la versión anterior del constructor:
+        // nps, rating5 y yesno NO son componentes reales de Meta. Se convierten en RadioButtonsGroup.
+        if ( in_array($legacy_type, ['nps', 'rating5', 'yesno'], true) ) {
+            $type = 'radio';
+        }
+
+        // email, number y phone NO son componentes separados; son variantes de TextInput.
+        if ( in_array($legacy_type, ['email', 'number', 'phone'], true) ) {
+            $type = 'text';
+            $input_type = $legacy_type;
+        }
+
         if ( ! isset($types[$type]) ) {
             $type = 'radio';
         }
@@ -442,9 +459,8 @@ function eventosapp_whatsapp_flows_normalize_questions($raw_questions) {
         $placeholder = sanitize_text_field((string)($question['placeholder'] ?? ''));
         $options = eventosapp_whatsapp_flows_normalize_options($question['options'] ?? []);
 
-        $default_options = eventosapp_whatsapp_flows_default_options_for_type($type);
-        if ( in_array($type, ['nps', 'rating5', 'yesno'], true) && empty($options) ) {
-            $options = $default_options;
+        if ( in_array($legacy_type, ['nps', 'rating5', 'yesno'], true) && empty($options) ) {
+            $options = eventosapp_whatsapp_flows_default_options_for_type($legacy_type);
         }
 
         if ( in_array($type, ['radio', 'checkbox', 'dropdown'], true) && empty($options) ) {
@@ -473,6 +489,7 @@ function eventosapp_whatsapp_flows_normalize_questions($raw_questions) {
             'help'        => $help,
             'placeholder' => $placeholder,
             'type'        => $type,
+            'input_type'  => $input_type,
             'required'    => $required,
             'options'     => $options,
             'min_chars'   => $min_chars,
@@ -587,10 +604,6 @@ function eventosapp_whatsapp_flows_question_to_component($question) {
         return ['type' => 'TextCaption', 'text' => eventosapp_whatsapp_flows_text_limit($label, 300)];
     }
 
-    if ( in_array($type, ['nps', 'rating5', 'yesno'], true) && empty($options) ) {
-        $options = eventosapp_whatsapp_flows_default_options_for_type($type);
-    }
-
     $component = [
         'name'     => $slug,
         'label'    => eventosapp_whatsapp_flows_text_limit($label, 120),
@@ -599,14 +612,13 @@ function eventosapp_whatsapp_flows_question_to_component($question) {
 
     if ( $type === 'textarea' ) {
         $component = array_merge(['type' => 'TextArea'], $component);
-    } elseif ( $type === 'email' ) {
-        $component = array_merge(['type' => 'TextInput', 'input-type' => 'email'], $component);
-    } elseif ( $type === 'number' ) {
-        $component = array_merge(['type' => 'TextInput', 'input-type' => 'number'], $component);
-    } elseif ( $type === 'phone' ) {
-        $component = array_merge(['type' => 'TextInput', 'input-type' => 'phone'], $component);
     } elseif ( $type === 'text' ) {
-        $component = array_merge(['type' => 'TextInput', 'input-type' => 'text'], $component);
+        $text_input_types = eventosapp_whatsapp_flows_text_input_types();
+        $input_type = sanitize_key((string)($question['input_type'] ?? 'text'));
+        if ( ! isset($text_input_types[$input_type]) ) {
+            $input_type = 'text';
+        }
+        $component = array_merge(['type' => 'TextInput', 'input-type' => $input_type], $component);
     } elseif ( $type === 'date' ) {
         $component = array_merge(['type' => 'DatePicker'], $component);
     } elseif ( $type === 'optin' ) {
@@ -622,6 +634,11 @@ function eventosapp_whatsapp_flows_question_to_component($question) {
         $component['data-source'] = $options;
     }
 
+    $placeholder = sanitize_text_field((string)($question['placeholder'] ?? ''));
+    if ( $placeholder !== '' && in_array($component['type'], ['TextInput', 'TextArea'], true) ) {
+        $component['placeholder'] = eventosapp_whatsapp_flows_text_limit($placeholder, 80);
+    }
+
     $min_chars = absint($question['min_chars'] ?? 0);
     $max_chars = absint($question['max_chars'] ?? 0);
     if ( $min_chars > 0 && in_array($component['type'], ['TextInput', 'TextArea'], true) ) {
@@ -633,6 +650,7 @@ function eventosapp_whatsapp_flows_question_to_component($question) {
 
     return $component;
 }
+
 
 function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_config = []) {
     $config = $flow_post_id ? eventosapp_whatsapp_flows_get_flow_config($flow_post_id) : [];
@@ -1942,7 +1960,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
 function eventosapp_whatsapp_flows_admin_styles() {
     ?>
     <style>
-        .eventosapp-wa-flows{--evapp-blue:#3454f4;--evapp-blue2:#eef2ff;--evapp-ink:#152234;--evapp-muted:#667085;--evapp-border:#d9e1ef;--evapp-bg:#f5f7fb;--evapp-card:#fff;--evapp-green:#0a9b67;--evapp-orange:#d97706}.eventosapp-wa-flows.wrap{background:var(--evapp-bg);padding:20px;margin:0 0 0 -20px;min-height:calc(100vh - 32px)}.eventosapp-wa-flows h1{font-size:28px;font-weight:800;color:var(--evapp-ink);margin:0 0 18px}.eventosapp-wa-flows .evapp-page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eventosapp-wa-flows .evapp-page-head p{margin:.35rem 0 0;color:var(--evapp-muted);font-size:14px}.eventosapp-wa-flows .evapp-top-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-card{background:var(--evapp-card);border:1px solid var(--evapp-border);border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:18px}.eventosapp-wa-flows .evapp-card h2{font-size:17px;margin:0 0 12px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-card h3{font-size:15px;margin:18px 0 10px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(520px,1.15fr) minmax(330px,.85fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-field{display:block;margin-bottom:12px}.eventosapp-wa-flows .evapp-field span,.eventosapp-wa-flows .evapp-label{display:block;font-weight:700;color:#26364a;margin-bottom:6px}.eventosapp-wa-flows input[type=text],.eventosapp-wa-flows input[type=number],.eventosapp-wa-flows select,.eventosapp-wa-flows textarea{border:1px solid #cfd8e6;border-radius:10px;min-height:38px;box-shadow:none}.eventosapp-wa-flows textarea{padding:8px 10px}.eventosapp-wa-flows .regular-text,.eventosapp-wa-flows .large-text{max-width:100%;width:100%}.eventosapp-wa-flows .evapp-muted,.eventosapp-wa-flows .description{color:var(--evapp-muted)}.eventosapp-wa-flows .evapp-pill{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-blue2);color:#203bc4;padding:4px 9px;font-size:12px;font-weight:800}.eventosapp-wa-flows .evapp-pill.green{background:#e9f9f1;color:#07724d}.eventosapp-wa-flows .evapp-pill.gray{background:#eef1f5;color:#4b5563}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:linear-gradient(180deg,#fff,#f7f9ff);border:1px solid #e3e9f6;border-radius:14px;padding:13px}.eventosapp-wa-flows .evapp-stat span{display:block;font-weight:700;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:24px;color:var(--evapp-ink);line-height:1.1;margin-top:4px}.eventosapp-wa-flows .evapp-builder-toolbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 14px}.eventosapp-wa-flows .evapp-builder-toolbar button{min-height:38px;border-radius:10px}.eventosapp-wa-flows .evapp-question{border:1px solid #d9e1ef;border-radius:16px;margin:12px 0;background:#fff;overflow:hidden}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8faff;padding:12px 14px;border-bottom:1px solid #e6edf8}.eventosapp-wa-flows .evapp-question-title{display:flex;align-items:center;gap:9px}.eventosapp-wa-flows .evapp-question-number{display:inline-flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:9px;background:var(--evapp-blue);color:#fff;font-weight:800}.eventosapp-wa-flows .evapp-question-body{padding:14px}.eventosapp-wa-flows .evapp-type-help{padding:9px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5edf7;color:#536071;margin:8px 0 0;font-size:12px}.eventosapp-wa-flows .evapp-options-wrap textarea{font-family:Menlo,Consolas,monospace;min-height:96px}.eventosapp-wa-flows .evapp-question.is-display .evapp-options-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-required-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-choice-auto .evapp-options-wrap{display:none}.eventosapp-wa-flows .evapp-question.is-choice .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-date .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-options-wrap{display:none}.eventosapp-wa-flows textarea.code{width:100%;min-height:310px;font-family:Menlo,Consolas,monospace;background:#0f172a;color:#d9e9ff;border-radius:14px;padding:14px}.eventosapp-wa-flows .widefat{border:1px solid #dce4f1;border-radius:12px;overflow:hidden}.eventosapp-wa-flows .widefat th{font-weight:800;color:#26364a}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:130px;overflow:auto;background:#f8fafc;border-radius:10px;padding:8px}.eventosapp-wa-flows .evapp-warning{border-left:4px solid var(--evapp-orange);background:#fff7ed;padding:12px;border-radius:12px;margin:12px 0;color:#7c2d12}.eventosapp-wa-flows .evapp-info{border-left:4px solid var(--evapp-blue);background:#eef2ff;padding:12px;border-radius:12px;margin:12px 0;color:#26364a}.eventosapp-wa-flows .evapp-success{border-left:4px solid var(--evapp-green);background:#ecfdf3;padding:12px;border-radius:12px;margin:12px 0}.eventosapp-wa-flows .button{border-radius:9px}.eventosapp-wa-flows .button-primary{background:var(--evapp-blue);border-color:var(--evapp-blue)}.eventosapp-wa-flows .evapp-empty{padding:22px;border:1px dashed #cfd8e6;border-radius:14px;background:#fafcff;color:var(--evapp-muted);text-align:center}.eventosapp-wa-flows .evapp-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.eventosapp-wa-flows .evapp-template-card{border:1px solid #dce4f1;border-radius:13px;padding:12px;background:#fbfdff}.eventosapp-wa-flows .evapp-template-card strong{display:block;color:var(--evapp-ink);margin-bottom:4px}.eventosapp-wa-flows .evapp-template-card p{margin:0;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-small{font-size:12px}.eventosapp-wa-flows .evapp-checkline{display:flex;gap:7px;align-items:center;margin:8px 0}.eventosapp-wa-flows .evapp-form-table{width:100%;border-collapse:separate;border-spacing:0 12px}.eventosapp-wa-flows .evapp-form-table th{width:170px;text-align:left;vertical-align:top;padding-top:8px;color:#26364a}.eventosapp-wa-flows .evapp-form-table td{vertical-align:top}@media(max-width:1200px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-builder-toolbar{grid-template-columns:repeat(2,1fr)}}@media(max-width:782px){.eventosapp-wa-flows.wrap{margin-left:-10px;padding:14px}.eventosapp-wa-flows .evapp-stat-grid,.eventosapp-wa-flows .evapp-grid-3,.eventosapp-wa-flows .evapp-row,.eventosapp-wa-flows .evapp-row-3,.eventosapp-wa-flows .evapp-template-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-page-head{display:block}.eventosapp-wa-flows .evapp-form-table th,.eventosapp-wa-flows .evapp-form-table td{display:block;width:100%}}
+        .eventosapp-wa-flows{--evapp-blue:#3454f4;--evapp-blue2:#eef2ff;--evapp-ink:#152234;--evapp-muted:#667085;--evapp-border:#d9e1ef;--evapp-bg:#f5f7fb;--evapp-card:#fff;--evapp-green:#0a9b67;--evapp-orange:#d97706}.eventosapp-wa-flows.wrap{background:var(--evapp-bg);padding:20px;margin:0 0 0 -20px;min-height:calc(100vh - 32px)}.eventosapp-wa-flows h1{font-size:28px;font-weight:800;color:var(--evapp-ink);margin:0 0 18px}.eventosapp-wa-flows .evapp-page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eventosapp-wa-flows .evapp-page-head p{margin:.35rem 0 0;color:var(--evapp-muted);font-size:14px}.eventosapp-wa-flows .evapp-top-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-card{background:var(--evapp-card);border:1px solid var(--evapp-border);border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:18px}.eventosapp-wa-flows .evapp-card h2{font-size:17px;margin:0 0 12px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-card h3{font-size:15px;margin:18px 0 10px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(520px,1.15fr) minmax(330px,.85fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-field{display:block;margin-bottom:12px}.eventosapp-wa-flows .evapp-field span,.eventosapp-wa-flows .evapp-label{display:block;font-weight:700;color:#26364a;margin-bottom:6px}.eventosapp-wa-flows input[type=text],.eventosapp-wa-flows input[type=number],.eventosapp-wa-flows select,.eventosapp-wa-flows textarea{border:1px solid #cfd8e6;border-radius:10px;min-height:38px;box-shadow:none}.eventosapp-wa-flows textarea{padding:8px 10px}.eventosapp-wa-flows .regular-text,.eventosapp-wa-flows .large-text{max-width:100%;width:100%}.eventosapp-wa-flows .evapp-muted,.eventosapp-wa-flows .description{color:var(--evapp-muted)}.eventosapp-wa-flows .evapp-pill{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-blue2);color:#203bc4;padding:4px 9px;font-size:12px;font-weight:800}.eventosapp-wa-flows .evapp-pill.green{background:#e9f9f1;color:#07724d}.eventosapp-wa-flows .evapp-pill.gray{background:#eef1f5;color:#4b5563}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:linear-gradient(180deg,#fff,#f7f9ff);border:1px solid #e3e9f6;border-radius:14px;padding:13px}.eventosapp-wa-flows .evapp-stat span{display:block;font-weight:700;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:24px;color:var(--evapp-ink);line-height:1.1;margin-top:4px}.eventosapp-wa-flows .evapp-builder-toolbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 14px}.eventosapp-wa-flows .evapp-builder-toolbar button{min-height:38px;border-radius:10px}.eventosapp-wa-flows .evapp-question{border:1px solid #d9e1ef;border-radius:16px;margin:12px 0;background:#fff;overflow:hidden}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8faff;padding:12px 14px;border-bottom:1px solid #e6edf8}.eventosapp-wa-flows .evapp-question-title{display:flex;align-items:center;gap:9px}.eventosapp-wa-flows .evapp-question-number{display:inline-flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:9px;background:var(--evapp-blue);color:#fff;font-weight:800}.eventosapp-wa-flows .evapp-question-body{padding:14px}.eventosapp-wa-flows .evapp-type-help{padding:9px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5edf7;color:#536071;margin:8px 0 0;font-size:12px}.eventosapp-wa-flows .evapp-options-wrap textarea{font-family:Menlo,Consolas,monospace;min-height:96px}.eventosapp-wa-flows .evapp-question.is-display .evapp-options-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-required-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-placeholder-wrap{display:none}.eventosapp-wa-flows .evapp-question.is-choice .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-date .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-options-wrap,.eventosapp-wa-flows .evapp-question:not(.is-text-input) .evapp-text-input-type-wrap{display:none}.eventosapp-wa-flows textarea.code{width:100%;min-height:310px;font-family:Menlo,Consolas,monospace;background:#0f172a;color:#d9e9ff;border-radius:14px;padding:14px}.eventosapp-wa-flows .widefat{border:1px solid #dce4f1;border-radius:12px;overflow:hidden}.eventosapp-wa-flows .widefat th{font-weight:800;color:#26364a}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:130px;overflow:auto;background:#f8fafc;border-radius:10px;padding:8px}.eventosapp-wa-flows .evapp-warning{border-left:4px solid var(--evapp-orange);background:#fff7ed;padding:12px;border-radius:12px;margin:12px 0;color:#7c2d12}.eventosapp-wa-flows .evapp-info{border-left:4px solid var(--evapp-blue);background:#eef2ff;padding:12px;border-radius:12px;margin:12px 0;color:#26364a}.eventosapp-wa-flows .evapp-success{border-left:4px solid var(--evapp-green);background:#ecfdf3;padding:12px;border-radius:12px;margin:12px 0}.eventosapp-wa-flows .button{border-radius:9px}.eventosapp-wa-flows .button-primary{background:var(--evapp-blue);border-color:var(--evapp-blue)}.eventosapp-wa-flows .evapp-empty{padding:22px;border:1px dashed #cfd8e6;border-radius:14px;background:#fafcff;color:var(--evapp-muted);text-align:center}.eventosapp-wa-flows .evapp-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.eventosapp-wa-flows .evapp-template-card{border:1px solid #dce4f1;border-radius:13px;padding:12px;background:#fbfdff}.eventosapp-wa-flows .evapp-template-card strong{display:block;color:var(--evapp-ink);margin-bottom:4px}.eventosapp-wa-flows .evapp-template-card p{margin:0;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-small{font-size:12px}.eventosapp-wa-flows .evapp-checkline{display:flex;gap:7px;align-items:center;margin:8px 0}.eventosapp-wa-flows .evapp-form-table{width:100%;border-collapse:separate;border-spacing:0 12px}.eventosapp-wa-flows .evapp-form-table th{width:170px;text-align:left;vertical-align:top;padding-top:8px;color:#26364a}.eventosapp-wa-flows .evapp-form-table td{vertical-align:top}@media(max-width:1200px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-builder-toolbar{grid-template-columns:repeat(2,1fr)}}@media(max-width:782px){.eventosapp-wa-flows.wrap{margin-left:-10px;padding:14px}.eventosapp-wa-flows .evapp-stat-grid,.eventosapp-wa-flows .evapp-grid-3,.eventosapp-wa-flows .evapp-row,.eventosapp-wa-flows .evapp-row-3,.eventosapp-wa-flows .evapp-template-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-page-head{display:block}.eventosapp-wa-flows .evapp-form-table th,.eventosapp-wa-flows .evapp-form-table td{display:block;width:100%}}
     </style>
     <?php
 }
@@ -2067,14 +2085,14 @@ function eventosapp_whatsapp_flows_render_page() {
                         </div>
 
                         <div class="evapp-info">
-                            <strong>Cómo replicar una encuesta tipo SurveyMonkey:</strong> usa <strong>NPS 0 a 10</strong> para recomendación, <strong>Escala 1 a 5</strong> para satisfacción, <strong>Selección única/múltiple</strong> para fuentes o preferencias, <strong>Texto largo</strong> para comentarios, <strong>Texto corto/email/número/teléfono</strong> para datos personales y <strong>Aceptación</strong> para tratamiento de datos.
+                            <strong>Componentes reales de WhatsApp Flows:</strong> este constructor solo genera componentes soportados: <strong>TextHeading, TextSubheading, TextBody, TextCaption, TextInput, TextArea, RadioButtonsGroup, CheckboxGroup, Dropdown, DatePicker, OptIn y Footer</strong>. NPS, satisfacción 1 a 5 y Sí/No son presets que se crean como <strong>RadioButtonsGroup</strong>, no como componentes inventados.
                         </div>
 
                         <h2>2. Preguntas y bloques de la encuesta</h2>
                         <div class="evapp-builder-toolbar">
                             <button type="button" class="button evapp-add-preset" data-preset="heading">+ Sección</button>
-                            <button type="button" class="button evapp-add-preset" data-preset="nps">+ NPS 0-10</button>
-                            <button type="button" class="button evapp-add-preset" data-preset="rating5">+ Satisfacción 1-5</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="nps">+ NPS como RadioButtons</button>
+                            <button type="button" class="button evapp-add-preset" data-preset="rating5">+ Escala 1-5 como RadioButtons</button>
                             <button type="button" class="button evapp-add-preset" data-preset="source">+ Medio / fuente</button>
                             <button type="button" class="button evapp-add-preset" data-preset="comment">+ Comentario</button>
                             <button type="button" class="button evapp-add-preset" data-preset="personal">+ Datos personales</button>
@@ -2126,12 +2144,12 @@ function eventosapp_whatsapp_flows_render_page() {
                 <div class="evapp-card">
                     <h2>Guía de campos</h2>
                     <div class="evapp-template-grid">
-                        <div class="evapp-template-card"><strong>NPS 0-10</strong><p>Para medir recomendación general del evento.</p></div>
-                        <div class="evapp-template-card"><strong>Satisfacción 1-5</strong><p>Para matrices; agrega una fila como pregunta independiente.</p></div>
-                        <div class="evapp-template-card"><strong>Selección única</strong><p>Para fuente, preferencia principal o respuesta cerrada.</p></div>
-                        <div class="evapp-template-card"><strong>Selección múltiple</strong><p>Para escoger varios intereses, temas o canales.</p></div>
-                        <div class="evapp-template-card"><strong>Texto largo</strong><p>Para comentarios y sugerencias abiertas.</p></div>
-                        <div class="evapp-template-card"><strong>Aceptación</strong><p>Para tratamiento de datos y términos.</p></div>
+                        <div class="evapp-template-card"><strong>RadioButtonsGroup</strong><p>Selección única. Sirve para NPS 0-10, satisfacción 1-5, Sí/No y respuestas cerradas.</p></div>
+                        <div class="evapp-template-card"><strong>CheckboxGroup</strong><p>Selección múltiple. Sirve para intereses, temas o canales.</p></div>
+                        <div class="evapp-template-card"><strong>Dropdown</strong><p>Selección única en lista. Úsalo cuando hay muchas opciones.</p></div>
+                        <div class="evapp-template-card"><strong>TextInput / TextArea</strong><p>Datos cortos o comentarios largos. TextInput permite formato texto, email, número o teléfono.</p></div>
+                        <div class="evapp-template-card"><strong>DatePicker</strong><p>Fechas con selector nativo dentro del Flow.</p></div>
+                        <div class="evapp-template-card"><strong>OptIn</strong><p>Aceptación de términos, consentimiento o tratamiento de datos.</p></div>
                     </div>
                 </div>
 
@@ -2364,14 +2382,21 @@ function eventosapp_whatsapp_flows_render_question_row($index, $question, $quest
     $index = is_numeric($index) ? absint($index) : 0;
     $question = is_array($question) ? $question : [];
     $type = sanitize_key((string)($question['type'] ?? 'radio'));
+    if ( ! isset($question_types[$type]) ) {
+        $type = 'radio';
+    }
     $type_help = eventosapp_whatsapp_flows_type_help();
     $display_types = eventosapp_whatsapp_flows_display_question_types();
-    $auto_choice_types = ['nps', 'rating5', 'yesno'];
-    $choice_types = ['radio', 'checkbox', 'dropdown', 'nps', 'rating5', 'yesno'];
+    $choice_types = ['radio', 'checkbox', 'dropdown'];
+    $text_input_types = eventosapp_whatsapp_flows_text_input_types();
+    $input_type = sanitize_key((string)($question['input_type'] ?? 'text'));
+    if ( ! isset($text_input_types[$input_type]) ) {
+        $input_type = 'text';
+    }
     $classes = ['evapp-question'];
     if ( in_array($type, $display_types, true) ) { $classes[] = 'is-display'; }
-    if ( in_array($type, $auto_choice_types, true) ) { $classes[] = 'is-choice-auto'; }
     if ( in_array($type, $choice_types, true) ) { $classes[] = 'is-choice'; }
+    if ( $type === 'text' ) { $classes[] = 'is-text-input'; }
     if ( $type === 'date' ) { $classes[] = 'is-date'; }
     if ( $type === 'optin' ) { $classes[] = 'is-optin'; }
     $options_text = eventosapp_whatsapp_flows_options_to_text($question['options'] ?? []);
@@ -2387,7 +2412,7 @@ function eventosapp_whatsapp_flows_render_question_row($index, $question, $quest
                 <label class="evapp-field"><span>Slug / nombre interno</span><input type="text" class="regular-text" name="questions[<?php echo esc_attr($index); ?>][slug]" value="<?php echo esc_attr($question['slug'] ?? ''); ?>" placeholder="campo_respuesta"></label>
             </div>
             <div class="evapp-row-3">
-                <label class="evapp-field"><span>Tipo de campo</span><select class="evapp-question-type" name="questions[<?php echo esc_attr($index); ?>][type]">
+                <label class="evapp-field"><span>Componente WhatsApp Flow</span><select class="evapp-question-type" name="questions[<?php echo esc_attr($index); ?>][type]">
                     <?php foreach ( $question_types as $key => $label ) : ?>
                         <option value="<?php echo esc_attr($key); ?>" <?php selected($type, $key); ?>><?php echo esc_html($label); ?></option>
                     <?php endforeach; ?>
@@ -2395,21 +2420,30 @@ function eventosapp_whatsapp_flows_render_question_row($index, $question, $quest
                 <label class="evapp-field evapp-placeholder-wrap"><span>Placeholder opcional</span><input type="text" name="questions[<?php echo esc_attr($index); ?>][placeholder]" value="<?php echo esc_attr($question['placeholder'] ?? ''); ?>" placeholder="Ej: Escribe tu respuesta"></label>
                 <label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions[<?php echo esc_attr($index); ?>][required]" value="1" <?php checked(($question['required'] ?? '0'), '1'); ?>> Obligatoria</label></label>
             </div>
+            <div class="evapp-row evapp-text-input-type-wrap">
+                <label class="evapp-field"><span>Formato de TextInput</span><select name="questions[<?php echo esc_attr($index); ?>][input_type]">
+                    <?php foreach ( $text_input_types as $key => $label ) : ?>
+                        <option value="<?php echo esc_attr($key); ?>" <?php selected($input_type, $key); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select><span class="description">No crea otro componente: solo cambia el formato interno de TextInput.</span></label>
+            </div>
             <label class="evapp-field"><span>Ayuda / instrucción opcional</span><textarea rows="2" name="questions[<?php echo esc_attr($index); ?>][help]" placeholder="Ej: 1 es el mínimo y 5 el máximo"><?php echo esc_textarea($question['help'] ?? ''); ?></textarea></label>
             <div class="evapp-row evapp-text-limits-wrap">
                 <label class="evapp-field"><span>Mínimo de caracteres</span><input type="number" name="questions[<?php echo esc_attr($index); ?>][min_chars]" value="<?php echo esc_attr(absint($question['min_chars'] ?? 0)); ?>" min="0"></label>
                 <label class="evapp-field"><span>Máximo de caracteres</span><input type="number" name="questions[<?php echo esc_attr($index); ?>][max_chars]" value="<?php echo esc_attr(absint($question['max_chars'] ?? 0)); ?>" min="0"></label>
             </div>
-            <label class="evapp-field evapp-options-wrap"><span>Opciones, una por línea</span><textarea rows="5" name="questions[<?php echo esc_attr($index); ?>][options]" placeholder="Excelente&#10;Buena&#10;Regular&#10;Mala"><?php echo esc_textarea($options_text); ?></textarea><span class="description">También puedes usar id|Texto visible si necesitas controlar el valor interno.</span></label>
+            <label class="evapp-field evapp-options-wrap"><span>Opciones, una por línea</span><textarea rows="5" name="questions[<?php echo esc_attr($index); ?>][options]" placeholder="Excelente&#10;Buena&#10;Regular&#10;Mala"><?php echo esc_textarea($options_text); ?></textarea><span class="description">También puedes usar id|Texto visible si necesitas controlar el valor interno. Para NPS usa opciones 0 a 10; para satisfacción usa 1 a 5.</span></label>
             <div class="evapp-type-help" data-help-for="<?php echo esc_attr($type); ?>"><?php echo esc_html($type_help[$type] ?? ''); ?></div>
         </div>
     </div>
     <?php
 }
 
+
 function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_help) {
     $types_json = wp_json_encode($question_types, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     $help_json = wp_json_encode($type_help, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $input_types_json = wp_json_encode(eventosapp_whatsapp_flows_text_input_types(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     ?>
     <script>
     (function(){
@@ -2417,47 +2451,51 @@ function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_
         if (!wrap) return;
         var questionTypes = <?php echo $types_json ? $types_json : '{}'; ?>;
         var typeHelp = <?php echo $help_json ? $help_json : '{}'; ?>;
+        var textInputTypes = <?php echo $input_types_json ? $input_types_json : '{}'; ?>;
         var displayTypes = ['heading','subheading','body','caption'];
-        var autoChoiceTypes = ['nps','rating5','yesno'];
-        var choiceTypes = ['radio','checkbox','dropdown','nps','rating5','yesno'];
-        var textLimitTypes = ['text','textarea','email','number','phone'];
+        var choiceTypes = ['radio','checkbox','dropdown'];
+        var textLimitTypes = ['text','textarea'];
+        var rating5Options = '1|1 - Muy insatisfecho\n2|2\n3|3 - Regular\n4|4\n5|5 - Muy satisfecho';
+        var npsOptions = '0|0\n1|1\n2|2\n3|3\n4|4\n5|5\n6|6\n7|7\n8|8\n9|9\n10|10';
+        var yesNoOptions = 'si|Sí\nno|No';
         var presetMap = {
             heading: [{type:'heading', label:'Nueva sección', slug:'seccion', help:'', options:'', required:false}],
-            nps: [{type:'nps', label:'¿Qué tan probable es que recomiendes este evento a un amigo o familiar?', slug:'probabilidad_recomendar', help:'0 es nada probable y 10 es muy probable.', options:'', required:true}],
-            rating5: [{type:'rating5', label:'Califica tu grado de satisfacción', slug:'satisfaccion', help:'1 corresponde al mínimo grado de satisfacción y 5 al máximo.', options:'', required:true}],
-            source: [{type:'radio', label:'¿Cómo te enteraste de nuestro evento?', slug:'medio_conocimiento', help:'', options:'Recibí un correo electrónico\nLlamada de un agente comercial\nPor medio de la empresa\nPágina web\nRecomendación\nRedes sociales\nWhatsApp', required:false}],
+            nps: [{type:'radio', label:'¿Qué tan probable es que recomiendes este evento a un amigo o familiar?', slug:'probabilidad_recomendar', help:'0 es nada probable y 10 es muy probable. Este preset usa RadioButtonsGroup.', options:npsOptions, required:true}],
+            rating5: [{type:'radio', label:'Califica tu grado de satisfacción', slug:'satisfaccion', help:'1 corresponde al mínimo grado de satisfacción y 5 al máximo. Este preset usa RadioButtonsGroup.', options:rating5Options, required:true}],
+            yesno: [{type:'radio', label:'¿Deseas continuar?', slug:'confirmacion', help:'Este preset usa RadioButtonsGroup.', options:yesNoOptions, required:true}],
+            source: [{type:'radio', label:'¿Cómo te enteraste de nuestro evento?', slug:'medio_conocimiento', help:'', options:'correo|Recibí un correo electrónico\nllamada|Llamada de un agente comercial\nempresa|Por medio de la empresa\nweb|Página web\nrecomendacion|Recomendación\nredes|Redes sociales\nwhatsapp|WhatsApp', required:false}],
             comment: [{type:'textarea', label:'¿Qué fue lo que más te gustó y qué podríamos mejorar?', slug:'comentarios', help:'', options:'', required:false}],
             personal: [
                 {type:'heading', label:'Queremos conocerte más', slug:'seccion_datos_personales', help:'', options:'', required:false},
-                {type:'text', label:'Nombres', slug:'nombres', help:'', options:'', required:true},
-                {type:'text', label:'Apellidos', slug:'apellidos', help:'', options:'', required:true},
-                {type:'text', label:'Nombre de la empresa', slug:'empresa', help:'', options:'', required:false},
-                {type:'email', label:'Correo electrónico', slug:'correo', help:'', options:'', required:false},
-                {type:'phone', label:'Celular', slug:'celular', help:'', options:'', required:false}
+                {type:'text', input_type:'text', label:'Nombres', slug:'nombres', help:'', options:'', required:true},
+                {type:'text', input_type:'text', label:'Apellidos', slug:'apellidos', help:'', options:'', required:true},
+                {type:'text', input_type:'text', label:'Nombre de la empresa', slug:'empresa', help:'', options:'', required:false},
+                {type:'text', input_type:'email', label:'Correo electrónico', slug:'correo', help:'', options:'', required:false},
+                {type:'text', input_type:'phone', label:'Celular', slug:'celular', help:'', options:'', required:false}
             ],
             consent: [{type:'optin', label:'Acepto el tratamiento de mis datos personales para fines relacionados con el evento.', slug:'acepta_tratamiento_datos', help:'Usa este campo para autorización expresa de datos personales.', options:'', required:true}],
             complete: [
                 {type:'heading', label:'Valoración del evento', slug:'seccion_valoracion_evento', help:'', options:'', required:false},
-                {type:'nps', label:'¿Qué tan probable es que recomiendes este espacio a un amigo o familiar?', slug:'probabilidad_recomendar', help:'0 es nada probable y 10 es muy probable.', options:'', required:true},
-                {type:'radio', label:'¿Cómo te enteraste de nuestro evento?', slug:'medio_conocimiento', help:'', options:'Recibí un correo electrónico\nLlamada de un agente comercial\nPor medio de la empresa\nPágina web\nRecomendación\nRedes sociales\nWhatsApp', required:false},
+                {type:'radio', label:'¿Qué tan probable es que recomiendes este espacio a un amigo o familiar?', slug:'probabilidad_recomendar', help:'0 es nada probable y 10 es muy probable. Usa RadioButtonsGroup.', options:npsOptions, required:true},
+                {type:'radio', label:'¿Cómo te enteraste de nuestro evento?', slug:'medio_conocimiento', help:'', options:'correo|Recibí un correo electrónico\nllamada|Llamada de un agente comercial\nempresa|Por medio de la empresa\nweb|Página web\nrecomendacion|Recomendación\nredes|Redes sociales\nwhatsapp|WhatsApp', required:false},
                 {type:'heading', label:'Temáticas del evento', slug:'seccion_tematicas', help:'', options:'', required:false},
-                {type:'rating5', label:'¿Los temas desarrollados cumplieron tus expectativas?', slug:'temas_cumplieron_expectativas', help:'1 corresponde al mínimo grado de satisfacción y 5 al máximo.', options:'', required:true},
-                {type:'rating5', label:'¿Contribuyeron en tu ocupación actual?', slug:'contribucion_ocupacion', help:'', options:'', required:true},
+                {type:'radio', label:'¿Los temas desarrollados cumplieron tus expectativas?', slug:'temas_cumplieron_expectativas', help:'1 corresponde al mínimo grado de satisfacción y 5 al máximo. Usa RadioButtonsGroup.', options:rating5Options, required:true},
+                {type:'radio', label:'¿Contribuyeron en tu ocupación actual?', slug:'contribucion_ocupacion', help:'Usa RadioButtonsGroup.', options:rating5Options, required:true},
                 {type:'heading', label:'Conferencista', slug:'seccion_conferencista', help:'', options:'', required:false},
-                {type:'rating5', label:'Despertaron y mantuvieron el interés', slug:'conferencista_interes', help:'', options:'', required:true},
-                {type:'rating5', label:'Expusieron información clara y concreta', slug:'conferencista_claridad', help:'', options:'', required:true},
+                {type:'radio', label:'Despertaron y mantuvieron el interés', slug:'conferencista_interes', help:'Usa RadioButtonsGroup.', options:rating5Options, required:true},
+                {type:'radio', label:'Expusieron información clara y concreta', slug:'conferencista_claridad', help:'Usa RadioButtonsGroup.', options:rating5Options, required:true},
                 {type:'textarea', label:'¿Te gustaría complementar tus respuestas?', slug:'comentarios_conferencista', help:'', options:'', required:false},
                 {type:'heading', label:'Facilidad para participar en el evento', slug:'seccion_facilidad', help:'', options:'', required:false},
-                {type:'rating5', label:'Inscripción al evento', slug:'facilidad_inscripcion', help:'1 es muy difícil y 5 es muy fácil.', options:'', required:true},
-                {type:'rating5', label:'Acceso al lugar del evento', slug:'facilidad_acceso', help:'', options:'', required:true},
+                {type:'radio', label:'Inscripción al evento', slug:'facilidad_inscripcion', help:'1 es muy difícil y 5 es muy fácil. Usa RadioButtonsGroup.', options:rating5Options, required:true},
+                {type:'radio', label:'Acceso al lugar del evento', slug:'facilidad_acceso', help:'Usa RadioButtonsGroup.', options:rating5Options, required:true},
                 {type:'textarea', label:'¿Qué fue lo que más te gustó del evento?', slug:'lo_que_mas_gusto', help:'', options:'', required:false},
                 {type:'textarea', label:'¿Qué aspectos podríamos mejorar?', slug:'aspectos_mejorar', help:'', options:'', required:false},
-                {type:'yesno', label:'¿Estarías dispuesto a pagar por formaciones como esta?', slug:'dispuesto_pagar', help:'', options:'', required:false},
+                {type:'radio', label:'¿Estarías dispuesto a pagar por formaciones como esta?', slug:'dispuesto_pagar', help:'Usa RadioButtonsGroup.', options:yesNoOptions, required:false},
                 {type:'heading', label:'Queremos conocerte más', slug:'seccion_datos', help:'', options:'', required:false},
-                {type:'text', label:'Nombres', slug:'nombres', help:'', options:'', required:true},
-                {type:'text', label:'Apellidos', slug:'apellidos', help:'', options:'', required:true},
-                {type:'text', label:'Nombre de la empresa', slug:'empresa', help:'', options:'', required:false},
-                {type:'number', label:'NIT', slug:'nit', help:'Sin puntos ni dígito de verificación.', options:'', required:false},
+                {type:'text', input_type:'text', label:'Nombres', slug:'nombres', help:'', options:'', required:true},
+                {type:'text', input_type:'text', label:'Apellidos', slug:'apellidos', help:'', options:'', required:true},
+                {type:'text', input_type:'text', label:'Nombre de la empresa', slug:'empresa', help:'', options:'', required:false},
+                {type:'text', input_type:'number', label:'NIT', slug:'nit', help:'Sin puntos ni dígito de verificación.', options:'', required:false},
                 {type:'optin', label:'Acepto expresamente el tratamiento de mis datos personales.', slug:'acepta_datos', help:'Incluye aquí la autorización legal resumida o enlaza la política en el mensaje previo.', options:'', required:true}
             ]
         };
@@ -2468,18 +2506,26 @@ function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_
             Object.keys(questionTypes).forEach(function(key){ html += '<option value="'+esc(key)+'"'+(key===selected?' selected':'')+'>'+esc(questionTypes[key])+'</option>'; });
             return html;
         }
+        function inputTypeOptions(selected){
+            var html='';
+            selected = selected || 'text';
+            Object.keys(textInputTypes).forEach(function(key){ html += '<option value="'+esc(key)+'"'+(key===selected?' selected':'')+'>'+esc(textInputTypes[key])+'</option>'; });
+            return html;
+        }
         function questionTemplate(i, data){
             data = data || {};
             var type = data.type || 'radio';
             var required = data.required !== false;
+            var inputType = data.input_type || 'text';
             return '<div class="evapp-question" data-question-index="'+i+'">'+
                 '<div class="evapp-question-head"><div class="evapp-question-title"><span class="evapp-question-number">'+(i+1)+'</span><strong>'+esc(questionTypes[type] || 'Campo')+'</strong></div><button type="button" class="button-link-delete evapp-remove-question">Quitar</button></div>'+ 
                 '<div class="evapp-question-body">'+
                 '<div class="evapp-row"><label class="evapp-field"><span>Texto visible</span><input type="text" class="large-text" name="questions['+i+'][label]" value="'+esc(data.label || 'Nueva pregunta')+'" placeholder="Pregunta o texto de sección"></label><label class="evapp-field"><span>Slug / nombre interno</span><input type="text" class="regular-text" name="questions['+i+'][slug]" value="'+esc(data.slug || ('pregunta_'+(i+1)))+'" placeholder="campo_respuesta"></label></div>'+ 
-                '<div class="evapp-row-3"><label class="evapp-field"><span>Tipo de campo</span><select class="evapp-question-type" name="questions['+i+'][type]">'+typeOptions(type)+'</select></label><label class="evapp-field evapp-placeholder-wrap"><span>Placeholder opcional</span><input type="text" name="questions['+i+'][placeholder]" value="'+esc(data.placeholder || '')+'" placeholder="Ej: Escribe tu respuesta"></label><label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions['+i+'][required]" value="1" '+(required?'checked':'')+'> Obligatoria</label></label></div>'+ 
+                '<div class="evapp-row-3"><label class="evapp-field"><span>Componente WhatsApp Flow</span><select class="evapp-question-type" name="questions['+i+'][type]">'+typeOptions(type)+'</select></label><label class="evapp-field evapp-placeholder-wrap"><span>Placeholder opcional</span><input type="text" name="questions['+i+'][placeholder]" value="'+esc(data.placeholder || '')+'" placeholder="Ej: Escribe tu respuesta"></label><label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions['+i+'][required]" value="1" '+(required?'checked':'')+'> Obligatoria</label></label></div>'+ 
+                '<div class="evapp-row evapp-text-input-type-wrap"><label class="evapp-field"><span>Formato de TextInput</span><select name="questions['+i+'][input_type]">'+inputTypeOptions(inputType)+'</select><span class="description">No crea otro componente: solo cambia el formato interno de TextInput.</span></label></div>'+ 
                 '<label class="evapp-field"><span>Ayuda / instrucción opcional</span><textarea rows="2" name="questions['+i+'][help]" placeholder="Ej: 1 es el mínimo y 5 el máximo">'+esc(data.help || '')+'</textarea></label>'+ 
                 '<div class="evapp-row evapp-text-limits-wrap"><label class="evapp-field"><span>Mínimo de caracteres</span><input type="number" name="questions['+i+'][min_chars]" value="0" min="0"></label><label class="evapp-field"><span>Máximo de caracteres</span><input type="number" name="questions['+i+'][max_chars]" value="0" min="0"></label></div>'+ 
-                '<label class="evapp-field evapp-options-wrap"><span>Opciones, una por línea</span><textarea rows="5" name="questions['+i+'][options]" placeholder="Excelente&#10;Buena&#10;Regular&#10;Mala">'+esc(data.options || 'Opción 1\nOpción 2')+'</textarea><span class="description">También puedes usar id|Texto visible si necesitas controlar el valor interno.</span></label>'+ 
+                '<label class="evapp-field evapp-options-wrap"><span>Opciones, una por línea</span><textarea rows="5" name="questions['+i+'][options]" placeholder="Excelente&#10;Buena&#10;Regular&#10;Mala">'+esc(data.options || 'Opción 1\nOpción 2')+'</textarea><span class="description">También puedes usar id|Texto visible si necesitas controlar el valor interno. Para NPS usa opciones 0 a 10; para satisfacción usa 1 a 5.</span></label>'+ 
                 '<div class="evapp-type-help">'+esc(typeHelp[type] || '')+'</div>'+ 
                 '</div></div>';
         }
@@ -2488,8 +2534,8 @@ function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_
             var select = block.querySelector('.evapp-question-type');
             var type = select ? select.value : 'radio';
             block.classList.toggle('is-display', displayTypes.indexOf(type) !== -1);
-            block.classList.toggle('is-choice-auto', autoChoiceTypes.indexOf(type) !== -1);
             block.classList.toggle('is-choice', choiceTypes.indexOf(type) !== -1);
+            block.classList.toggle('is-text-input', type === 'text');
             block.classList.toggle('is-date', type === 'date');
             block.classList.toggle('is-optin', type === 'optin');
             var limits = block.querySelector('.evapp-text-limits-wrap');
