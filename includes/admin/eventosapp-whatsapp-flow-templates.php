@@ -82,35 +82,6 @@ function eventosapp_whatsapp_flow_templates_template_name($raw) {
     return substr($name, 0, 512);
 }
 
-function eventosapp_whatsapp_flow_templates_categories() {
-    return [
-        'UTILITY'   => 'Utility',
-        'MARKETING' => 'Marketing',
-    ];
-}
-
-function eventosapp_whatsapp_flow_templates_normalize_category($category) {
-    $category = strtoupper(preg_replace('/[^A-Z_]+/', '', strtoupper((string) $category)));
-    $allowed = eventosapp_whatsapp_flow_templates_categories();
-    return isset($allowed[$category]) ? $category : 'UTILITY';
-}
-
-function eventosapp_whatsapp_flow_templates_normalize_language($language) {
-    $language = trim((string) $language);
-    $language = preg_replace('/[^a-zA-Z_\-]+/', '', $language);
-    return $language !== '' ? $language : 'es_CO';
-}
-
-function eventosapp_whatsapp_flow_templates_resolve_screen($template) {
-    $template = is_array($template) ? $template : [];
-    $screen = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', strtoupper((string)($template['navigate_screen'] ?? ''))));
-    if ( $screen === '' && ! empty($template['flow_post_id']) && function_exists('eventosapp_whatsapp_flows_get_flow_config') ) {
-        $flow_config = eventosapp_whatsapp_flows_get_flow_config(absint($template['flow_post_id']));
-        $screen = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', strtoupper((string)($flow_config['screen_id'] ?? ''))));
-    }
-    return $screen !== '' ? $screen : 'SURVEY';
-}
-
 function eventosapp_whatsapp_flow_templates_build_meta_payload($template) {
     $template = wp_parse_args(is_array($template) ? $template : [], eventosapp_whatsapp_flow_templates_default_item());
     $flow_id = preg_replace('/\D+/', '', (string)($template['meta_flow_id'] ?? ''));
@@ -125,9 +96,11 @@ function eventosapp_whatsapp_flow_templates_build_meta_payload($template) {
         'flow_id'=> $flow_id,
     ];
 
-    $screen = eventosapp_whatsapp_flow_templates_resolve_screen($template);
-    $button['navigate_screen'] = $screen;
-    $button['flow_action'] = 'navigate';
+    $screen = sanitize_key((string)($template['navigate_screen'] ?? ''));
+    if ( $screen !== '' ) {
+        $button['navigate_screen'] = strtoupper($screen);
+        $button['flow_action'] = 'navigate';
+    }
 
     $example_body = [];
     if ( strpos((string)($template['body'] ?? ''), '{{1}}') !== false ) {
@@ -149,8 +122,8 @@ function eventosapp_whatsapp_flow_templates_build_meta_payload($template) {
 
     return [
         'name'       => eventosapp_whatsapp_flow_templates_template_name($template['name'] ?? ''),
-        'language'   => eventosapp_whatsapp_flow_templates_normalize_language($template['language'] ?? 'es_CO'),
-        'category'   => eventosapp_whatsapp_flow_templates_normalize_category($template['category'] ?? 'UTILITY'),
+        'language'   => sanitize_text_field((string)($template['language'] ?? 'es_CO')),
+        'category'   => sanitize_key((string)($template['category'] ?? 'UTILITY')),
         'components' => [
             $body_component,
             [
@@ -214,7 +187,7 @@ function eventosapp_whatsapp_flow_templates_build_send_payload($template, $flow_
         'template' => [
             'name' => eventosapp_whatsapp_flow_templates_template_name($template['name'] ?? ''),
             'language' => [
-                'code' => eventosapp_whatsapp_flow_templates_normalize_language($template['language'] ?? 'es_CO'),
+                'code' => sanitize_text_field((string)($template['language'] ?? 'es_CO')),
             ],
             'components' => $components,
         ],
@@ -237,7 +210,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_save', function() {
     $existing = isset($items[$template_id]) && is_array($items[$template_id]) ? $items[$template_id] : [];
     $flow_post_id = absint($_POST['flow_post_id'] ?? 0);
     $meta_flow_id = preg_replace('/\D+/', '', (string)($_POST['meta_flow_id'] ?? ''));
-    $screen = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', strtoupper((string)($_POST['navigate_screen'] ?? 'SURVEY'))));
+    $screen = sanitize_key((string)($_POST['navigate_screen'] ?? 'SURVEY'));
 
     if ( $flow_post_id && function_exists('eventosapp_whatsapp_flows_get_flow_config') ) {
         $flow_config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
@@ -245,7 +218,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_save', function() {
             $meta_flow_id = preg_replace('/\D+/', '', (string)($flow_config['meta_flow_id'] ?? ''));
         }
         if ( $screen === '' && ! empty($flow_config['screen_id']) ) {
-            $screen = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', strtoupper((string)($flow_config['screen_id'] ?? ''))));
+            $screen = sanitize_key($flow_config['screen_id']);
         }
     }
 
@@ -253,15 +226,15 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_save', function() {
         'id'                     => $template_id,
         'name'                   => eventosapp_whatsapp_flow_templates_template_name($_POST['template_name'] ?? ''),
         'display_name'           => sanitize_text_field((string)($_POST['display_name'] ?? '')),
-        'language'               => eventosapp_whatsapp_flow_templates_normalize_language($_POST['language'] ?? 'es_CO'),
-        'category'               => eventosapp_whatsapp_flow_templates_normalize_category($_POST['category'] ?? 'UTILITY'),
+        'language'               => sanitize_text_field((string)($_POST['language'] ?? 'es_CO')),
+        'category'               => sanitize_key((string)($_POST['category'] ?? 'UTILITY')),
         'body'                   => sanitize_textarea_field((string)($_POST['body'] ?? '')),
         'sample_1'               => sanitize_text_field((string)($_POST['sample_1'] ?? '')),
         'sample_2'               => sanitize_text_field((string)($_POST['sample_2'] ?? '')),
         'button_text'            => sanitize_text_field((string)($_POST['button_text'] ?? 'Responder encuesta')),
         'flow_post_id'           => $flow_post_id,
         'meta_flow_id'           => $meta_flow_id,
-        'navigate_screen'        => $screen !== '' ? $screen : 'SURVEY',
+        'navigate_screen'        => strtoupper($screen !== '' ? $screen : 'SURVEY'),
         'waba_id'                => function_exists('eventosapp_whatsapp_sanitize_waba_id') ? eventosapp_whatsapp_sanitize_waba_id($_POST['waba_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['waba_id'] ?? '')),
         'sender_phone_number_id' => function_exists('eventosapp_whatsapp_sanitize_phone_number_id') ? eventosapp_whatsapp_sanitize_phone_number_id($_POST['sender_phone_number_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['sender_phone_number_id'] ?? '')),
         'updated_at'             => current_time('mysql'),
@@ -313,9 +286,6 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_submit_meta', function(
     $payload = eventosapp_whatsapp_flow_templates_build_meta_payload($template);
     if ( empty($payload['components'][1]['buttons'][0]['flow_id']) ) {
         eventosapp_whatsapp_flow_templates_notice_redirect(['template_id' => $template_id, 'flow_tpl_notice' => 'error', 'flow_tpl_message' => rawurlencode('La plantilla necesita un Flow ID de Meta publicado o al menos creado.')]);
-    }
-    if ( empty($payload['components'][1]['buttons'][0]['navigate_screen']) ) {
-        eventosapp_whatsapp_flow_templates_notice_redirect(['template_id' => $template_id, 'flow_tpl_notice' => 'error', 'flow_tpl_message' => rawurlencode('La plantilla necesita una pantalla inicial válida. Debe coincidir con el ID de pantalla del JSON del Flow, por ejemplo SURVEY.')]);
     }
 
     $settings = function_exists('eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id') ? eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id($template['sender_phone_number_id'] ?? '') : (function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : []);
@@ -466,11 +436,9 @@ function eventosapp_whatsapp_flow_templates_render_page() {
     }
 
     $items = eventosapp_whatsapp_flow_templates_get_all();
-    $has_template_id_param = array_key_exists('template_id', $_GET);
     $template_id = sanitize_key((string)($_GET['template_id'] ?? ''));
-    $creating_new_template = $has_template_id_param && ($template_id === '' || $template_id === '0');
-    $selected = ($template_id && $template_id !== '0') ? eventosapp_whatsapp_flow_templates_get($template_id) : [];
-    if ( ! $creating_new_template && empty($selected) && ! empty($items) ) {
+    $selected = $template_id ? eventosapp_whatsapp_flow_templates_get($template_id) : [];
+    if ( empty($selected) && ! empty($items) ) {
         $first = reset($items);
         $selected = wp_parse_args($first, eventosapp_whatsapp_flow_templates_default_item());
         $template_id = $selected['id'];
@@ -480,42 +448,18 @@ function eventosapp_whatsapp_flow_templates_render_page() {
     $default_waba_id = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : ($settings['webhook_waba_id'] ?? '');
     $phone_accounts = function_exists('eventosapp_whatsapp_get_phone_accounts') ? eventosapp_whatsapp_get_phone_accounts($settings) : [];
     $flows = function_exists('eventosapp_whatsapp_flows_get_all_for_select') ? eventosapp_whatsapp_flows_get_all_for_select() : [];
-    $prefill_flow_post_id = absint($_GET['flow_post_id'] ?? 0);
-    $prefill_meta_flow_id = '';
-    $prefill_screen = 'SURVEY';
-    if ( $prefill_flow_post_id && function_exists('eventosapp_whatsapp_flows_get_flow_config') ) {
-        $prefill_flow = eventosapp_whatsapp_flows_get_flow_config($prefill_flow_post_id);
-        $prefill_meta_flow_id = preg_replace('/\D+/', '', (string)($prefill_flow['meta_flow_id'] ?? ''));
-        $prefill_screen = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', strtoupper((string)($prefill_flow['screen_id'] ?? 'SURVEY'))));
-    }
-
     $edit = ! empty($selected) ? wp_parse_args($selected, eventosapp_whatsapp_flow_templates_default_item()) : wp_parse_args([
         'waba_id' => $default_waba_id,
         'sender_phone_number_id' => $settings['phone_number_id'] ?? '',
-        'flow_post_id' => $prefill_flow_post_id,
-        'meta_flow_id' => $prefill_meta_flow_id,
-        'navigate_screen' => $prefill_screen ?: 'SURVEY',
     ], eventosapp_whatsapp_flow_templates_default_item());
-    $edit['category'] = eventosapp_whatsapp_flow_templates_normalize_category($edit['category'] ?? 'UTILITY');
-    $edit['language'] = eventosapp_whatsapp_flow_templates_normalize_language($edit['language'] ?? 'es_CO');
-    $edit['navigate_screen'] = eventosapp_whatsapp_flow_templates_resolve_screen($edit);
 
     ?>
     <div class="wrap eventosapp-wa-flow-templates">
         <h1>Plantillas Flow WhatsApp</h1>
         <?php eventosapp_whatsapp_flow_templates_render_notices(); ?>
         <style>
-            .eventosapp-wa-flow-templates .evapp-grid{display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,.8fr);gap:18px;align-items:start}.eventosapp-wa-flow-templates .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}.eventosapp-wa-flow-templates .evapp-card h2{margin-top:0}.eventosapp-wa-flow-templates .evapp-muted{color:#646970}.eventosapp-wa-flow-templates .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flow-templates .evapp-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flow-templates textarea.code{width:100%;min-height:260px;font-family:Menlo,Consolas,monospace}.eventosapp-wa-flow-templates .evapp-info{border-left:4px solid #2271b1;background:#f0f6fc;padding:10px;margin:10px 0}.eventosapp-wa-flow-templates .evapp-warning{border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0}@media(max-width:1100px){.eventosapp-wa-flow-templates .evapp-grid{grid-template-columns:1fr}}
+            .eventosapp-wa-flow-templates .evapp-grid{display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,.8fr);gap:18px;align-items:start}.eventosapp-wa-flow-templates .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}.eventosapp-wa-flow-templates .evapp-card h2{margin-top:0}.eventosapp-wa-flow-templates .evapp-muted{color:#646970}.eventosapp-wa-flow-templates .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flow-templates .evapp-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flow-templates textarea.code{width:100%;min-height:260px;font-family:Menlo,Consolas,monospace}@media(max-width:1100px){.eventosapp-wa-flow-templates .evapp-grid{grid-template-columns:1fr}}
         </style>
-
-        <div class="evapp-card">
-            <h2>¿Para qué sirve esta sección?</h2>
-            <div class="evapp-info">
-                <strong>WhatsApp Flows</strong> crea el formulario que el asistente responde dentro de WhatsApp.
-                <strong>Plantillas Flow WhatsApp</strong> crea el mensaje aprobado por Meta que abre ese formulario con un botón.
-                Si el asistente ya está en una conversación activa, puedes enviar el Flow directo. Si EventosApp necesita iniciar la conversación o enviar fuera de la ventana de atención de WhatsApp, usa una plantilla Flow aprobada.
-            </div>
-        </div>
 
         <div class="evapp-grid">
             <div>
@@ -576,7 +520,6 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                     <div class="evapp-card">
                         <h2>Acciones Meta</h2>
                         <p><strong>Estado Meta:</strong> <span class="evapp-pill"><?php echo esc_html($edit['meta_status']); ?></span></p>
-                        <div class="evapp-muted" style="border-left:4px solid #dba617;background:#fff8e5;padding:10px;margin:10px 0;">La pantalla inicial debe existir exactamente en el JSON del Flow publicado. Para el constructor actual de EventosApp normalmente debe ser <code>SURVEY</code>. Si Meta todavía muestra “Hello World”, recrea primero el Flow desde la sección WhatsApp Flows.</div>
                         <div class="evapp-actions">
                             <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_submit_meta', 'eventosapp_whatsapp_flow_template_submit_meta', 'Enviar a aprobación', $edit['id'], 'button-primary'); ?>
                             <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_sync_status', 'eventosapp_whatsapp_flow_template_sync_status', 'Consultar estado', $edit['id']); ?>
