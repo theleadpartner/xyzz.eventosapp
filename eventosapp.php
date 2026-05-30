@@ -849,6 +849,10 @@ require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-public-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-registration-status-embed.php'; // NUEVO: consulta pública/externa de estado de inscripción
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-checkin.php';
+eventosapp_require_first_existing_file([
+    'includes/frontend/eventosapp-support-assistance.php',
+    'eventosapp-support-assistance.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-face-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'eventosapp-qr-manager.php';
 eventosapp_require_first_existing_file([
@@ -1007,6 +1011,11 @@ register_activation_hook(__FILE__, function () {
     // Prepara la tabla independiente del Inbox de WhatsApp.
     if ( function_exists('eventosapp_whatsapp_inbox_install_tables') ) {
         eventosapp_whatsapp_inbox_install_tables();
+    }
+
+    // Prepara la tabla de atenciones del módulo Asistencia / Equipo de apoyo.
+    if ( function_exists('eventosapp_support_assistance_install_table') ) {
+        eventosapp_support_assistance_install_table();
     }
 });
 
