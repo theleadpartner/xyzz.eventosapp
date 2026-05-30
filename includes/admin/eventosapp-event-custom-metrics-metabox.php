@@ -548,6 +548,275 @@ if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_custom_metrics_maybe_unserialize') ) {
+    function eventosapp_custom_metrics_maybe_unserialize($value){
+        if ( is_string($value) ) {
+            if ( function_exists('maybe_unserialize') ) {
+                return maybe_unserialize($value);
+            }
+            $maybe = @unserialize($value);
+            if ( $maybe !== false || $value === 'b:0;' ) return $maybe;
+        }
+        return $value;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_array_value') ) {
+    function eventosapp_custom_metrics_array_value($value){
+        $value = eventosapp_custom_metrics_maybe_unserialize($value);
+        return is_array($value) ? $value : [];
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_meta_value_from_map') ) {
+    function eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, $meta_key, $default = ''){
+        $ticket_id = (int) $ticket_id;
+        $meta_key = (string) $meta_key;
+        if ( isset($meta_map[$ticket_id]) && array_key_exists($meta_key, $meta_map[$ticket_id]) ) {
+            return $meta_map[$ticket_id][$meta_key];
+        }
+        return $default;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_field_requires_meta_keys') ) {
+    function eventosapp_custom_metrics_field_requires_meta_keys($fields){
+        $meta_keys = ['_eventosapp_ticket_evento_id'];
+        foreach ( (array) $fields as $field ) {
+            $key = eventosapp_custom_metrics_normalize_field_key(isset($field['key']) ? (string) $field['key'] : '');
+            if ( $key === 'modalidad' ) {
+                $meta_keys[] = '_eventosapp_ticket_modalidad';
+                continue;
+            }
+            if ( $key === 'checked_in_any' ) {
+                $meta_keys[] = '_eventosapp_checkin_status';
+                continue;
+            }
+            if ( $key === 'medio_checkin' ) {
+                $meta_keys[] = '_eventosapp_checkin_log';
+                continue;
+            }
+            $meta_key = isset($field['meta_key']) ? (string) $field['meta_key'] : '';
+            if ( $meta_key !== '' ) $meta_keys[] = $meta_key;
+        }
+        return array_values(array_unique(array_filter($meta_keys)));
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_ticket_ids_batch') ) {
+    function eventosapp_custom_metrics_get_ticket_ids_batch($event_id, $after_id = 0, $limit = 400){
+        global $wpdb;
+
+        $event_id = absint($event_id);
+        $after_id = absint($after_id);
+        $limit    = max(50, min(1000, (int) $limit));
+        if ( ! $event_id || ! $wpdb ) return [];
+
+        $sql = $wpdb->prepare(
+            "SELECT DISTINCT p.ID
+             FROM {$wpdb->posts} p
+             INNER JOIN {$wpdb->postmeta} pm
+                ON pm.post_id = p.ID
+               AND pm.meta_key = %s
+             WHERE p.post_type = %s
+               AND p.post_status NOT IN ('trash', 'auto-draft')
+               AND pm.meta_value = %s
+               AND p.ID > %d
+             ORDER BY p.ID ASC
+             LIMIT %d",
+            '_eventosapp_ticket_evento_id',
+            'eventosapp_ticket',
+            (string) $event_id,
+            $after_id,
+            $limit
+        );
+
+        $ids = $wpdb->get_col($sql);
+        if ( ! empty($wpdb->last_error) ) {
+            if ( function_exists('eventosapp_metrics_log_debug') ) {
+                eventosapp_metrics_log_debug('custom_metrics_ticket_batch_db_error', [
+                    'event_id' => $event_id,
+                    'after_id' => $after_id,
+                    'error'    => $wpdb->last_error,
+                ]);
+            }
+            throw new RuntimeException('Error consultando tickets por lotes para métricas personalizadas.');
+        }
+
+        return array_map('intval', (array) $ids);
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_ticket_post_dates') ) {
+    function eventosapp_custom_metrics_get_ticket_post_dates(array $ticket_ids){
+        global $wpdb;
+
+        $ticket_ids = array_values(array_unique(array_filter(array_map('intval', $ticket_ids))));
+        if ( empty($ticket_ids) || ! $wpdb ) return [];
+
+        $placeholders = implode(',', array_fill(0, count($ticket_ids), '%d'));
+        $query = $wpdb->prepare(
+            "SELECT ID, post_date_gmt, post_date
+             FROM {$wpdb->posts}
+             WHERE ID IN ($placeholders)",
+            $ticket_ids
+        );
+
+        $rows = $wpdb->get_results($query, ARRAY_A);
+        if ( ! empty($wpdb->last_error) ) {
+            if ( function_exists('eventosapp_metrics_log_debug') ) {
+                eventosapp_metrics_log_debug('custom_metrics_post_dates_db_error', [
+                    'error' => $wpdb->last_error,
+                ]);
+            }
+            throw new RuntimeException('Error consultando fechas de creación para métricas personalizadas.');
+        }
+
+        $map = [];
+        foreach ( (array) $rows as $row ) {
+            $id = isset($row['ID']) ? (int) $row['ID'] : 0;
+            if ( ! $id ) continue;
+            $date = ! empty($row['post_date_gmt']) && $row['post_date_gmt'] !== '0000-00-00 00:00:00'
+                ? (string) $row['post_date_gmt']
+                : (isset($row['post_date']) ? (string) $row['post_date'] : '');
+            $map[$id] = $date;
+        }
+
+        return $map;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_ticket_meta_map') ) {
+    function eventosapp_custom_metrics_get_ticket_meta_map(array $ticket_ids, array $meta_keys){
+        global $wpdb;
+
+        $ticket_ids = array_values(array_unique(array_filter(array_map('intval', $ticket_ids))));
+        $meta_keys  = array_values(array_unique(array_filter(array_map('strval', $meta_keys))));
+        $map = [];
+        foreach ( $ticket_ids as $ticket_id ) $map[$ticket_id] = [];
+
+        if ( empty($ticket_ids) || empty($meta_keys) || ! $wpdb ) return $map;
+
+        $id_placeholders  = implode(',', array_fill(0, count($ticket_ids), '%d'));
+        $key_placeholders = implode(',', array_fill(0, count($meta_keys), '%s'));
+
+        $query = $wpdb->prepare(
+            "SELECT post_id, meta_key, meta_value
+             FROM {$wpdb->postmeta}
+             WHERE post_id IN ($id_placeholders)
+               AND meta_key IN ($key_placeholders)
+             ORDER BY post_id ASC, meta_id ASC",
+            array_merge($ticket_ids, $meta_keys)
+        );
+
+        $rows = $wpdb->get_results($query, ARRAY_A);
+        if ( ! empty($wpdb->last_error) ) {
+            if ( function_exists('eventosapp_metrics_log_debug') ) {
+                eventosapp_metrics_log_debug('custom_metrics_meta_batch_db_error', [
+                    'error' => $wpdb->last_error,
+                ]);
+            }
+            throw new RuntimeException('Error consultando metadatos por lotes para métricas personalizadas.');
+        }
+
+        foreach ( (array) $rows as $row ) {
+            $ticket_id = isset($row['post_id']) ? (int) $row['post_id'] : 0;
+            $meta_key = isset($row['meta_key']) ? (string) $row['meta_key'] : '';
+            if ( ! $ticket_id || $meta_key === '' || ! isset($map[$ticket_id]) ) continue;
+            if ( ! array_key_exists($meta_key, $map[$ticket_id]) ) {
+                $map[$ticket_id][$meta_key] = eventosapp_custom_metrics_maybe_unserialize($row['meta_value']);
+            }
+        }
+
+        return $map;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_ticket_checked_in_any_from_meta') ) {
+    function eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr){
+        // Conserva el comportamiento histórico de métricas personalizadas:
+        // este campo evalúa el check-in presencial principal guardado en _eventosapp_checkin_status.
+        $status_arr = eventosapp_custom_metrics_array_value($status_arr);
+        $has_presencial = in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true);
+        return $has_presencial ? 'Sí' : 'No';
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_ticket_first_qr_label_from_meta') ) {
+    function eventosapp_custom_metrics_ticket_first_qr_label_from_meta($log){
+        $log = eventosapp_custom_metrics_array_value($log);
+        foreach ( $log as $entry ) {
+            if ( ! is_array($entry) ) continue;
+            $status = isset($entry['status']) ? (string) $entry['status'] : '';
+            if ( $status === 'checked_in' || $status === 'checked-in' || $status === 'virtual_checked_in' ) {
+                if ( isset($entry['qr_type_label']) && is_scalar($entry['qr_type_label']) && trim((string) $entry['qr_type_label']) !== '' ) {
+                    return sanitize_text_field((string) $entry['qr_type_label']);
+                }
+                if ( isset($entry['qr_type']) && is_scalar($entry['qr_type']) && trim((string) $entry['qr_type']) !== '' ) {
+                    return sanitize_text_field((string) $entry['qr_type']);
+                }
+                return ($status === 'virtual_checked_in') ? 'Acceso virtual' : 'Sin clasificar';
+            }
+        }
+        return '';
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_ticket_modalidad_display_from_meta') ) {
+    function eventosapp_custom_metrics_ticket_modalidad_display_from_meta($raw, $event_id = 0){
+        $event_id = (int) $event_id;
+        $raw = is_scalar($raw) ? (string) $raw : '';
+
+        if ( function_exists('eventosapp_resolve_ticket_modalidad') ) {
+            $raw = eventosapp_resolve_ticket_modalidad($event_id, $raw, $raw);
+        } elseif ( function_exists('eventosapp_normalize_ticket_modalidad') ) {
+            $raw = eventosapp_normalize_ticket_modalidad($raw);
+        } else {
+            $raw = sanitize_key($raw);
+            $raw = in_array($raw, ['presencial', 'virtual'], true) ? $raw : '';
+        }
+
+        $options = function_exists('eventosapp_ticket_modalidad_options')
+            ? eventosapp_ticket_modalidad_options()
+            : [ 'presencial' => 'Presencial', 'virtual' => 'Virtual' ];
+
+        if ( isset($options[$raw]) ) return sanitize_text_field($options[$raw]);
+        return $raw !== '' ? ucwords(str_replace(['_', '-'], ' ', sanitize_text_field($raw))) : '';
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value_from_batch') ) {
+    function eventosapp_custom_metrics_extract_ticket_value_from_batch($ticket_id, $event_id, $field, $meta_map, $post_dates){
+        $key = eventosapp_custom_metrics_normalize_field_key(isset($field['key']) ? (string) $field['key'] : '');
+
+        if ( $key === 'ticket_post_id' ) return (string) $ticket_id;
+        if ( $key === 'modalidad' ) {
+            return eventosapp_custom_metrics_ticket_modalidad_display_from_meta(
+                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_ticket_modalidad', ''),
+                $event_id
+            );
+        }
+        if ( $key === 'checked_in_any' ) {
+            return eventosapp_custom_metrics_ticket_checked_in_any_from_meta(
+                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_checkin_status', [])
+            );
+        }
+        if ( $key === 'medio_checkin' ) {
+            return eventosapp_custom_metrics_ticket_first_qr_label_from_meta(
+                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_checkin_log', [])
+            );
+        }
+        if ( $key === 'fecha_creacion' ) {
+            return isset($post_dates[$ticket_id]) ? (string) $post_dates[$ticket_id] : '';
+        }
+
+        $meta_key = isset($field['meta_key']) ? (string) $field['meta_key'] : '';
+        if ( $meta_key !== '' ) return eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, $meta_key, '');
+        return '';
+    }
+}
+
 if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
     function eventosapp_custom_metrics_get_ticket_records($event_id, $field_keys = null){
         $event_id = (int) $event_id;
@@ -564,49 +833,51 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
             }
             $fields = [];
             foreach ( $all_fields as $field ) {
-                $key = isset($field['key']) ? (string) $field['key'] : '';
+                $key = isset($field['key']) ? eventosapp_custom_metrics_normalize_field_key((string) $field['key']) : '';
                 if ( isset($wanted[$key]) ) $fields[] = $field;
             }
         }
 
-        $cache_key = 'evapp_metrics_records_' . md5($event_id . '|' . wp_json_encode(array_map(function($f){ return isset($f['key']) ? $f['key'] : ''; }, $fields)));
-        $cached_records = get_transient($cache_key);
-        if ( is_array($cached_records) ) {
-            return $cached_records;
-        }
-
-        $query = new WP_Query([
-            'post_type'              => 'eventosapp_ticket',
-            'post_status'            => 'any',
-            'posts_per_page'         => -1,
-            'fields'                 => 'ids',
-            'no_found_rows'          => true,
-            'update_post_meta_cache' => true,
-            'update_post_term_cache' => false,
-            'meta_query'             => [
-                [
-                    'key'     => '_eventosapp_ticket_evento_id',
-                    'value'   => $event_id,
-                    'compare' => '=',
-                ],
-            ],
-        ]);
-
-        $ticket_ids = array_map('intval', (array) $query->posts);
-        if ( ! empty($ticket_ids) ) {
-            update_meta_cache('post', $ticket_ids);
-        }
+        if ( empty($fields) ) return [];
 
         $records = [];
-        foreach ( $ticket_ids as $ticket_id ) {
-            $record = [];
-            foreach ( $fields as $field ) {
-                $record[$field['key']] = eventosapp_custom_metrics_extract_ticket_value($ticket_id, $event_id, $field);
+        $meta_keys = eventosapp_custom_metrics_field_requires_meta_keys($fields);
+        $batch_size = (int) apply_filters('eventosapp_custom_metrics_ticket_batch_size', 350, $event_id);
+        $batch_size = max(100, min(700, $batch_size));
+        $last_id = 0;
+        $processed = 0;
+
+        do {
+            $ticket_ids = eventosapp_custom_metrics_get_ticket_ids_batch($event_id, $last_id, $batch_size);
+            if ( empty($ticket_ids) ) break;
+
+            $last_id = max($ticket_ids);
+            $meta_map = eventosapp_custom_metrics_get_ticket_meta_map($ticket_ids, $meta_keys);
+            $post_dates = eventosapp_custom_metrics_get_ticket_post_dates($ticket_ids);
+
+            foreach ( $ticket_ids as $ticket_id ) {
+                $record = [];
+                foreach ( $fields as $field ) {
+                    $field_key = isset($field['key']) ? eventosapp_custom_metrics_normalize_field_key((string) $field['key']) : '';
+                    if ( $field_key === '' ) continue;
+                    $record[$field_key] = eventosapp_custom_metrics_extract_ticket_value_from_batch($ticket_id, $event_id, $field, $meta_map, $post_dates);
+                }
+                $records[] = $record;
+                $processed++;
             }
-            $records[] = $record;
+
+            unset($meta_map, $post_dates, $ticket_ids);
+        } while ( true );
+
+        if ( function_exists('eventosapp_metrics_log_debug') ) {
+            eventosapp_metrics_log_debug('custom_metrics_records_built', [
+                'event_id'  => $event_id,
+                'records'   => $processed,
+                'fields'    => count($fields),
+                'batchSize' => $batch_size,
+            ]);
         }
 
-        set_transient($cache_key, $records, 2 * MINUTE_IN_SECONDS);
         return $records;
     }
 }
@@ -970,6 +1241,12 @@ if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
             ];
         }
 
+        $payload_cache_key = 'evapp_cmetrics_payload_' . md5($event_id . '|' . wp_json_encode($layout));
+        $cached_payload = get_transient($payload_cache_key);
+        if ( is_array($cached_payload) ) {
+            return $cached_payload;
+        }
+
         $field_map = eventosapp_custom_metrics_get_field_map($event_id);
         $required_field_keys = eventosapp_custom_metrics_get_required_field_keys_from_layout($layout);
         $records = null;
@@ -992,11 +1269,16 @@ if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
             if ( ! empty($row_slots) ) $rows_out[] = ['slots' => $row_slots];
         }
 
-        return [
+        $payload = [
             'settings'    => isset($layout['settings']) ? $layout['settings'] : eventosapp_custom_metrics_default_settings(),
             'rows'        => $rows_out,
             'has_metrics' => $has_metrics,
         ];
+
+        $ttl = (int) apply_filters('eventosapp_custom_metrics_payload_cache_ttl', 20, $event_id);
+        set_transient($payload_cache_key, $payload, max(5, min(120, $ttl)));
+
+        return $payload;
     }
 }
 
