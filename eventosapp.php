@@ -843,16 +843,16 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-configuracio
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-co-gestion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-access-staff-control-event.php'; // Control de acceso dashboard por evento
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-helpers.php';
+eventosapp_require_first_existing_file([
+    'includes/frontend/eventosapp-support-assistance.php',
+    'eventosapp-support-assistance.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-dashboard.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-search.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-public-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-registration-status-embed.php'; // NUEVO: consulta pública/externa de estado de inscripción
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-checkin.php';
-eventosapp_require_first_existing_file([
-    'includes/frontend/eventosapp-support-assistance.php',
-    'eventosapp-support-assistance.php',
-]);
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-face-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'eventosapp-qr-manager.php';
 eventosapp_require_first_existing_file([
@@ -1013,7 +1013,7 @@ register_activation_hook(__FILE__, function () {
         eventosapp_whatsapp_inbox_install_tables();
     }
 
-    // Prepara la tabla de atenciones del módulo Asistencia / Equipo de apoyo.
+    // Prepara la tabla del módulo Asistencia / Equipo de apoyo.
     if ( function_exists('eventosapp_support_assistance_install_table') ) {
         eventosapp_support_assistance_install_table();
     }
