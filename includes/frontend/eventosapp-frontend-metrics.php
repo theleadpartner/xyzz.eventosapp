@@ -445,6 +445,480 @@ if ( ! function_exists('eventosapp_metrics_ticket_meta_value') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_metrics_meta_to_array') ) {
+    function eventosapp_metrics_meta_to_array($value) {
+        if ( is_string($value) ) {
+            if ( function_exists('maybe_unserialize') ) {
+                $value = maybe_unserialize($value);
+            } else {
+                $maybe = @unserialize($value);
+                if ( $maybe !== false || $value === 'b:0;' ) {
+                    $value = $maybe;
+                }
+            }
+        }
+
+        return is_array($value) ? $value : [];
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_get_tickets_count_for_event') ) {
+    function eventosapp_metrics_get_tickets_count_for_event($event_id) {
+        global $wpdb;
+
+        $event_id = absint($event_id);
+        if ( ! $event_id || ! $wpdb ) {
+            return 0;
+        }
+
+        $cache_key = 'evapp_metrics_ticket_count_' . $event_id;
+        $cached = wp_cache_get($cache_key, 'eventosapp_metrics');
+        if ( $cached !== false ) {
+            return max(0, (int) $cached);
+        }
+
+        $sql = $wpdb->prepare(
+            "SELECT COUNT(DISTINCT p.ID)
+             FROM {$wpdb->posts} p
+             INNER JOIN {$wpdb->postmeta} pm
+                ON pm.post_id = p.ID
+               AND pm.meta_key = %s
+             WHERE p.post_type = %s
+               AND p.post_status NOT IN ('trash', 'auto-draft')
+               AND pm.meta_value = %s",
+            '_eventosapp_ticket_evento_id',
+            'eventosapp_ticket',
+            (string) $event_id
+        );
+
+        $count = (int) $wpdb->get_var($sql);
+        if ( ! empty($wpdb->last_error) ) {
+            eventosapp_metrics_log_debug('ticket_count_query_db_error', [
+                'event_id' => $event_id,
+                'error'    => $wpdb->last_error,
+            ]);
+            throw new RuntimeException('Error contando tickets del evento para métricas.');
+        }
+
+        wp_cache_set($cache_key, $count, 'eventosapp_metrics', 30);
+        return max(0, $count);
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_get_ticket_ids_batch_for_event') ) {
+    function eventosapp_metrics_get_ticket_ids_batch_for_event($event_id, $after_id = 0, $limit = 400) {
+        global $wpdb;
+
+        $event_id = absint($event_id);
+        $after_id = absint($after_id);
+        $limit    = max(50, min(1000, (int) $limit));
+
+        if ( ! $event_id || ! $wpdb ) {
+            return [];
+        }
+
+        $sql = $wpdb->prepare(
+            "SELECT DISTINCT p.ID
+             FROM {$wpdb->posts} p
+             INNER JOIN {$wpdb->postmeta} pm
+                ON pm.post_id = p.ID
+               AND pm.meta_key = %s
+             WHERE p.post_type = %s
+               AND p.post_status NOT IN ('trash', 'auto-draft')
+               AND pm.meta_value = %s
+               AND p.ID > %d
+             ORDER BY p.ID ASC
+             LIMIT %d",
+            '_eventosapp_ticket_evento_id',
+            'eventosapp_ticket',
+            (string) $event_id,
+            $after_id,
+            $limit
+        );
+
+        $ids = $wpdb->get_col($sql);
+        if ( ! empty($wpdb->last_error) ) {
+            eventosapp_metrics_log_debug('ticket_ids_batch_query_db_error', [
+                'event_id' => $event_id,
+                'after_id' => $after_id,
+                'limit'    => $limit,
+                'error'    => $wpdb->last_error,
+            ]);
+            throw new RuntimeException('Error consultando tickets del evento por lotes para métricas.');
+        }
+
+        return array_map('intval', (array) $ids);
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_default_payload_cache_key') ) {
+    function eventosapp_metrics_default_payload_cache_key($event_id, array $request) {
+        $parts = [
+            'event_id'     => absint($event_id),
+            'mode'         => isset($request['mode']) ? sanitize_key((string) $request['mode']) : '',
+            'day'          => isset($request['day']) ? sanitize_text_field((string) $request['day']) : '',
+            'from'         => isset($request['from']) ? sanitize_text_field((string) $request['from']) : '',
+            'to'           => isset($request['to']) ? sanitize_text_field((string) $request['to']) : '',
+            'checkin_type' => isset($request['checkin_type']) ? sanitize_key((string) $request['checkin_type']) : '',
+        ];
+
+        return 'evapp_metrics_payload_' . md5(wp_json_encode($parts));
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_build_default_payload') ) {
+    function eventosapp_metrics_build_default_payload($event_id, array $request = []) {
+        $event_id = absint($event_id);
+        if ( ! $event_id ) {
+            throw new RuntimeException('No hay evento activo para construir métricas.');
+        }
+
+        $event_modalidad = function_exists('eventosapp_get_event_modalidad')
+            ? eventosapp_get_event_modalidad($event_id)
+            : (get_post_meta($event_id, '_eventosapp_event_modalidad', true) ?: 'presencial');
+        if ( function_exists('eventosapp_normalize_event_modalidad') ) {
+            $event_modalidad = eventosapp_normalize_event_modalidad($event_modalidad);
+        } else {
+            $event_modalidad = in_array($event_modalidad, ['presencial','virtual','presencial_virtual'], true) ? $event_modalidad : 'presencial';
+        }
+
+        $event_has_presencial = in_array($event_modalidad, ['presencial','presencial_virtual'], true);
+        $event_has_virtual    = in_array($event_modalidad, ['virtual','presencial_virtual'], true);
+
+        $checkin_type = isset($request['checkin_type']) ? sanitize_text_field((string) $request['checkin_type']) : 'all';
+        if ( ! in_array($checkin_type, ['all','presencial','virtual'], true) ) $checkin_type = 'all';
+        if ( ! $event_has_virtual && $checkin_type === 'virtual' ) $checkin_type = 'presencial';
+        if ( ! $event_has_presencial && $checkin_type === 'presencial' ) $checkin_type = 'virtual';
+        if ( $event_modalidad === 'virtual' && $checkin_type === 'all' ) $checkin_type = 'virtual';
+        if ( $event_modalidad === 'presencial' && $checkin_type === 'all' ) $checkin_type = 'presencial';
+
+        $checkin_filter_label = [
+            'all'        => 'Todos',
+            'presencial' => 'Presencial',
+            'virtual'    => 'Virtual',
+        ][$checkin_type] ?? 'Todos';
+
+        $event_tz = get_post_meta($event_id, '_eventosapp_zona_horaria', true);
+        if ( ! $event_tz ) {
+            $event_tz = wp_timezone_string();
+            if ( ! $event_tz || $event_tz === 'UTC' ) {
+                $offset = get_option('gmt_offset');
+                $event_tz = $offset ? timezone_name_from_abbr('', $offset * 3600, 0) ?: 'UTC' : 'UTC';
+            }
+        }
+        try {
+            $now = new DateTime('now', new DateTimeZone($event_tz));
+        } catch (Exception $e) {
+            $now = new DateTime('now', wp_timezone());
+        }
+        $today = $now->format('Y-m-d');
+
+        $mode = isset($request['mode']) ? sanitize_text_field((string) $request['mode']) : 'day';
+        if ( $mode !== 'sum' && $mode !== 'day' ) $mode = 'day';
+
+        $is_date = function($s){
+            return is_string($s) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $s);
+        };
+
+        $req_day  = isset($request['day'])  ? sanitize_text_field((string) $request['day'])  : '';
+        $req_from = isset($request['from']) ? sanitize_text_field((string) $request['from']) : '';
+        $req_to   = isset($request['to'])   ? sanitize_text_field((string) $request['to'])   : '';
+
+        $day  = $today;
+        $from = $today;
+        $to   = $today;
+
+        if ( $mode === 'day' ) {
+            if ( $is_date($req_day) ) $day = $req_day;
+        } else {
+            if ( $is_date($req_from) ) $from = $req_from;
+            if ( $is_date($req_to) )   $to   = $req_to;
+            if ( $to < $from ) { $tmp = $from; $from = $to; $to = $tmp; }
+        }
+
+        $event_days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($event_id) : [];
+        $event_days = array_values(array_filter($event_days, function($d) use ($is_date){ return $is_date($d); }));
+        $event_days_lookup = array_fill_keys($event_days, true);
+
+        $date_is_current_event_day = function($fecha) use ($event_days_lookup) {
+            if ( empty($event_days_lookup) ) return true;
+            return is_string($fecha) && isset($event_days_lookup[$fecha]);
+        };
+
+        $ticket_has_valid_status = function($status_arr) use ($event_days_lookup) {
+            if ( ! is_array($status_arr) ) return false;
+            if ( empty($event_days_lookup) ) {
+                return in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true);
+            }
+            foreach ( $status_arr as $status_day => $status_value ) {
+                if ( ($status_value === 'checked_in' || $status_value === 'checked-in') && isset($event_days_lookup[$status_day]) ) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        $in_filter = function($fecha) use ($mode, $day, $from, $to){
+            if ( ! $fecha ) return false;
+            if ( $mode === 'day' ) return $fecha === $day;
+            return ($fecha >= $from && $fecha <= $to);
+        };
+
+        $type_is_enabled = function($type) use ($checkin_type) {
+            return $checkin_type === 'all' || $checkin_type === $type;
+        };
+
+        $total                    = eventosapp_metrics_get_tickets_count_for_event($event_id);
+        $checked_total            = 0;
+        $checked_presencial_total = 0;
+        $checked_virtual_total    = 0;
+        $checked_unique_total     = 0;
+        $hourly_main              = array_fill(0, 24, 0);
+        $hourly_virtual           = array_fill(0, 24, 0);
+        $hourly_ses               = [];
+        $loc_totals               = [];
+        $loc_checked              = [];
+        $loc_checked_presencial   = [];
+        $loc_checked_virtual      = [];
+        $loc_ses_uniques          = [];
+
+        $qr_types_count = [
+            'Email'              => 0,
+            'Google Wallet'      => 0,
+            'Apple Wallet'       => 0,
+            'PDF Impreso'        => 0,
+            'WhatsApp'           => 0,
+            'Escarapela Impresa' => 0,
+            'Acceso virtual'     => 0,
+            'QR Legacy'          => 0,
+            'QR Preimpreso'      => 0,
+        ];
+
+        $all_localidades = eventosapp_metrics_normalize_localidades_list(get_post_meta($event_id, '_eventosapp_localidades', true));
+        foreach ( $all_localidades as $L ) {
+            $loc_totals[$L]             = 0;
+            $loc_checked[$L]            = 0;
+            $loc_checked_presencial[$L] = 0;
+            $loc_checked_virtual[$L]    = 0;
+            $loc_ses_uniques[$L]        = [];
+        }
+
+        $batch_size = (int) apply_filters('eventosapp_metrics_ticket_batch_size', 350, $event_id);
+        $batch_size = max(100, min(700, $batch_size));
+        $last_id    = 0;
+        $processed  = 0;
+        $meta_keys  = [
+            '_eventosapp_asistente_localidad',
+            '_eventosapp_checkin_status',
+            '_eventosapp_virtual_checkin_status',
+            '_eventosapp_checkin_log',
+        ];
+
+        do {
+            $ids = eventosapp_metrics_get_ticket_ids_batch_for_event($event_id, $last_id, $batch_size);
+            if ( empty($ids) ) {
+                break;
+            }
+
+            $last_id = max($ids);
+            $ticket_meta = eventosapp_metrics_get_ticket_meta_map($ids, $meta_keys);
+
+            foreach ( $ids as $tid ) {
+                $processed++;
+
+                $loc = eventosapp_metrics_normalize_scalar_label(
+                    eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_asistente_localidad', ''),
+                    '(Sin localidad)'
+                );
+                if ( ! array_key_exists($loc, $loc_totals) ) {
+                    $loc_totals[$loc]             = 0;
+                    $loc_checked[$loc]            = 0;
+                    $loc_checked_presencial[$loc] = 0;
+                    $loc_checked_virtual[$loc]    = 0;
+                    $loc_ses_uniques[$loc]        = [];
+                }
+                $loc_totals[$loc]++;
+
+                $status_arr         = eventosapp_metrics_meta_to_array(eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_checkin_status', []));
+                $virtual_status_arr = eventosapp_metrics_meta_to_array(eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_virtual_checkin_status', []));
+                $pres_checked       = $ticket_has_valid_status($status_arr);
+                $virt_checked       = $ticket_has_valid_status($virtual_status_arr);
+                $unique_checked     = ($pres_checked || $virt_checked);
+
+                if ( $pres_checked ) {
+                    $checked_presencial_total++;
+                    $loc_checked_presencial[$loc]++;
+                }
+                if ( $virt_checked ) {
+                    $checked_virtual_total++;
+                    $loc_checked_virtual[$loc]++;
+                }
+                if ( $unique_checked ) {
+                    $checked_unique_total++;
+                }
+
+                if ( $checkin_type === 'virtual' ) {
+                    $selected_checked = $virt_checked;
+                } elseif ( $checkin_type === 'presencial' ) {
+                    $selected_checked = $pres_checked;
+                } else {
+                    $selected_checked = $unique_checked;
+                }
+
+                if ( $selected_checked ) {
+                    $checked_total++;
+                    $loc_checked[$loc]++;
+                }
+
+                $log = eventosapp_metrics_meta_to_array(eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_checkin_log', []));
+                $qr_presencial_contado = false;
+                $qr_virtual_contado    = false;
+
+                foreach ( $log as $row ) {
+                    if ( ! is_array($row) ) continue;
+
+                    $fecha = isset($row['fecha']) ? (string) $row['fecha'] : '';
+                    $hora  = isset($row['hora'])  ? (string) $row['hora']  : '';
+                    $status= isset($row['status'])? (string) $row['status']: '';
+                    $ses   = isset($row['sesion'])? (string) $row['sesion']: '';
+                    $checkin_log_type = isset($row['checkin_type']) ? (string)$row['checkin_type'] : '';
+                    $entry_event_date = ! empty($row['dia']) ? (string)$row['dia'] : $fecha;
+                    $entry_is_valid_event_day = $date_is_current_event_day($entry_event_date);
+                    $H = ($hora && preg_match('/^\d{2}/', $hora)) ? intval(substr($hora,0,2)) : null;
+                    if ( $H === null || $H < 0 || $H > 23 ) $H = null;
+
+                    $is_presencial_log = ($status === 'checked_in' || $status === 'checked-in') && $checkin_log_type !== 'virtual';
+                    $is_virtual_log    = ($status === 'virtual_checked_in') || $checkin_log_type === 'virtual';
+
+                    if ( $entry_is_valid_event_day && $in_filter($fecha) && $H !== null ) {
+                        if ( $is_presencial_log ) {
+                            $hourly_main[$H] = (isset($hourly_main[$H]) ? $hourly_main[$H] : 0) + 1;
+                        } elseif ( $is_virtual_log ) {
+                            $hourly_virtual[$H] = (isset($hourly_virtual[$H]) ? $hourly_virtual[$H] : 0) + 1;
+                        } elseif ( $status === 'session_checked_in' && $ses ) {
+                            if ( ! isset($hourly_ses[$ses]) ) $hourly_ses[$ses] = array_fill(0,24,0);
+                            $hourly_ses[$ses][$H] = (isset($hourly_ses[$ses][$H]) ? $hourly_ses[$ses][$H] : 0) + 1;
+                        }
+                    }
+
+                    if ( $status === 'session_checked_in' && $entry_is_valid_event_day ) {
+                        $loc_ses_uniques[$loc][$tid] = true;
+                    }
+
+                    if ( $entry_is_valid_event_day && $is_presencial_log && ! $qr_presencial_contado && $type_is_enabled('presencial') ) {
+                        $qr_presencial_contado = true;
+                        $qr_label = eventosapp_metrics_qr_label_from_log_entry($row, 'Sin clasificar');
+                        $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
+                    }
+
+                    if ( $entry_is_valid_event_day && $is_virtual_log && ! $qr_virtual_contado && $type_is_enabled('virtual') ) {
+                        $qr_virtual_contado = true;
+                        $qr_label = eventosapp_metrics_qr_label_from_log_entry($row, 'Acceso virtual');
+                        $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
+                    }
+                }
+
+                if ( $pres_checked && ! $qr_presencial_contado && $type_is_enabled('presencial') ) {
+                    $qr_types_count['Sin clasificar'] = isset($qr_types_count['Sin clasificar']) ? $qr_types_count['Sin clasificar'] + 1 : 1;
+                }
+                if ( $virt_checked && ! $qr_virtual_contado && $type_is_enabled('virtual') ) {
+                    $qr_types_count['Acceso virtual'] = isset($qr_types_count['Acceso virtual']) ? $qr_types_count['Acceso virtual'] + 1 : 1;
+                }
+            }
+
+            unset($ticket_meta, $ids);
+        } while ( true );
+
+        if ( $processed !== $total ) {
+            eventosapp_metrics_log_debug('ticket_count_processed_mismatch', [
+                'event_id'  => $event_id,
+                'total'     => $total,
+                'processed' => $processed,
+            ]);
+            if ( $processed > 0 ) {
+                $total = $processed;
+            }
+        }
+
+        $rows = [];
+        foreach ( $loc_totals as $L => $tot ) {
+            $chk  = $loc_checked[$L] ?? 0;
+            $not  = max($tot - $chk, 0);
+            $pctA = $tot ? ($chk * 100 / $tot) : 0;
+            $sesUniq = isset($loc_ses_uniques[$L]) ? count($loc_ses_uniques[$L]) : 0;
+            $pctSes  = $tot ? ($sesUniq * 100 / $tot) : 0;
+
+            $rows[] = [
+                'localidad'                => $L,
+                'total'                    => (int)$tot,
+                'checkins'                 => (int)$chk,
+                'checkins_presencial'      => (int)($loc_checked_presencial[$L] ?? 0),
+                'checkins_virtual'         => (int)($loc_checked_virtual[$L] ?? 0),
+                'not_checkins'             => (int)$not,
+                'pct_asistencia'           => round($pctA, 2),
+                'checkins_sesiones_unicos' => (int)$sesUniq,
+                'pct_sesiones'             => round($pctSes, 2),
+            ];
+        }
+        usort($rows, function($a,$b){ return $b['checkins'] <=> $a['checkins']; });
+
+        $bar_meta = [
+            'labels'       => array_map(function($h){ return str_pad((string)$h, 2, '0', STR_PAD_LEFT); }, range(0,23)),
+            'main'         => array_values($hourly_main),
+            'virtual'      => array_values($hourly_virtual),
+            'sessions'     => $hourly_ses,
+            'mode'         => $mode,
+            'checkin_type' => $checkin_type,
+        ];
+        if ( $mode === 'day' ) {
+            $bar_meta['day']  = $day;
+            $bar_meta['from'] = $day;
+            $bar_meta['to']   = $day;
+        } else {
+            $bar_meta['from'] = $from;
+            $bar_meta['to']   = $to;
+            $bar_meta['day']  = $today;
+        }
+
+        $qr_stats_filtered = [];
+        $qr_total = 0;
+        foreach ( $qr_types_count as $type => $count ) {
+            if ( $count > 0 ) {
+                $qr_stats_filtered[$type] = $count;
+                $qr_total += $count;
+            }
+        }
+
+        return [
+            'total_tickets'               => $total,
+            'checked_in_total'            => $checked_total,
+            'checked_in_presencial_total' => $checked_presencial_total,
+            'checked_in_virtual_total'    => $checked_virtual_total,
+            'checked_in_unique_total'     => $checked_unique_total,
+            'not_checked_in_total'        => max($total - $checked_total, 0),
+            'event_modalidad'             => $event_modalidad,
+            'show_presencial_metrics'     => $event_has_presencial,
+            'show_virtual_metrics'        => $event_has_virtual,
+            'checkin_type'                => $checkin_type,
+            'checkin_filter_label'        => $checkin_filter_label,
+            'bar'                         => $bar_meta,
+            'table'                       => [ 'rows' => $rows ],
+            'qr_stats'                    => [
+                'types' => $qr_stats_filtered,
+                'total' => $qr_total,
+            ],
+            'custom_metrics_available' => eventosapp_metrics_safe_custom_metrics_available($event_id),
+            'custom_metrics' => null,
+            'performance' => [
+                'processed_tickets' => $processed,
+                'batch_size'        => $batch_size,
+                'cached'            => false,
+            ],
+        ];
+    }
+}
+
 // === Shortcode ===
 add_shortcode('eventosapp_front_metrics', function(){
     if ( function_exists('eventosapp_require_feature') ) eventosapp_require_feature('metrics');
@@ -1630,6 +2104,7 @@ JS;
 //
 // === AJAX: datos de métricas en tiempo real ===
 //
+
 add_action('wp_ajax_eventosapp_metrics_data', function(){
     try {
         // CSRF. Se valida sin wp_die para que admin-ajax responda siempre JSON.
@@ -1637,347 +2112,31 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             wp_send_json_error(['error'=>'Sesión expirada o token inválido. Recarga la página e intenta nuevamente.'], 403);
         }
 
-    if ( ! is_user_logged_in() ) wp_send_json_error(['error'=>'No autorizado']);
-    if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('metrics') ) {
-        wp_send_json_error(['error'=>'Permisos insuficientes']);
-    }
-
-    // Evento activo
-    $event_id = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
-    if ( ! $event_id ) wp_send_json_error(['error'=>'No hay evento activo.']);
-
-    $event_modalidad = function_exists('eventosapp_get_event_modalidad')
-        ? eventosapp_get_event_modalidad($event_id)
-        : (get_post_meta($event_id, '_eventosapp_event_modalidad', true) ?: 'presencial');
-    if (function_exists('eventosapp_normalize_event_modalidad')) {
-        $event_modalidad = eventosapp_normalize_event_modalidad($event_modalidad);
-    } else {
-        $event_modalidad = in_array($event_modalidad, ['presencial','virtual','presencial_virtual'], true) ? $event_modalidad : 'presencial';
-    }
-    $event_has_presencial = in_array($event_modalidad, ['presencial','presencial_virtual'], true);
-    $event_has_virtual    = in_array($event_modalidad, ['virtual','presencial_virtual'], true);
-
-    $checkin_type = isset($_POST['checkin_type']) ? sanitize_text_field($_POST['checkin_type']) : 'all';
-    if (!in_array($checkin_type, ['all','presencial','virtual'], true)) $checkin_type = 'all';
-    if (!$event_has_virtual && $checkin_type === 'virtual') $checkin_type = 'presencial';
-    if (!$event_has_presencial && $checkin_type === 'presencial') $checkin_type = 'virtual';
-    if ($event_modalidad === 'virtual' && $checkin_type === 'all') $checkin_type = 'virtual';
-    if ($event_modalidad === 'presencial' && $checkin_type === 'all') $checkin_type = 'presencial';
-
-    $checkin_filter_label = [
-        'all'        => 'Todos',
-        'presencial' => 'Presencial',
-        'virtual'    => 'Virtual',
-    ][$checkin_type] ?? 'Todos';
-
-    // TZ del evento (o del sitio)
-    $event_tz = get_post_meta($event_id, '_eventosapp_zona_horaria', true);
-    if (!$event_tz) {
-        $event_tz = wp_timezone_string();
-        if (!$event_tz || $event_tz === 'UTC') {
-            $offset = get_option('gmt_offset');
-            $event_tz = $offset ? timezone_name_from_abbr('', $offset * 3600, 0) ?: 'UTC' : 'UTC';
+        if ( ! is_user_logged_in() ) wp_send_json_error(['error'=>'No autorizado']);
+        if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('metrics') ) {
+            wp_send_json_error(['error'=>'Permisos insuficientes']);
         }
-    }
-    try { $now = new DateTime('now', new DateTimeZone($event_tz)); }
-    catch(Exception $e){ $now = new DateTime('now', wp_timezone()); }
-    $today = $now->format('Y-m-d');
 
-    // --- Filtros ---
-    $mode = isset($_POST['mode']) ? sanitize_text_field($_POST['mode']) : 'day';
-    if ($mode !== 'sum' && $mode !== 'day') $mode = 'day';
+        $event_id = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
+        if ( ! $event_id ) wp_send_json_error(['error'=>'No hay evento activo.']);
 
-    // Normalizador fecha
-    $is_date = function($s){
-        return is_string($s) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $s);
-    };
-
-    $req_day  = isset($_POST['day'])  ? sanitize_text_field($_POST['day'])  : '';
-    $req_from = isset($_POST['from']) ? sanitize_text_field($_POST['from']) : '';
-    $req_to   = isset($_POST['to'])   ? sanitize_text_field($_POST['to'])   : '';
-
-    // Inicializa SIEMPRE
-    $day  = $today;
-    $from = $today;
-    $to   = $today;
-
-    if ($mode === 'day') {
-        if ($is_date($req_day)) $day = $req_day;
-    } else {
-        if ($is_date($req_from)) $from = $req_from;
-        if ($is_date($req_to))   $to   = $req_to;
-        if ($to < $from) { $tmp = $from; $from = $to; $to = $tmp; }
-    }
-
-    // Tickets del evento.
-    // Se evita WP_Query con posts_per_page=-1 + update_post_meta_cache=true porque,
-    // cuando el evento tiene muchos asistentes o metas pesadas, admin-ajax puede morir
-    // con error crítico antes de responder JSON.
-    $ids = eventosapp_metrics_get_ticket_ids_for_event($event_id);
-    $total = count($ids);
-    $ticket_meta = eventosapp_metrics_get_ticket_meta_map($ids, [
-        '_eventosapp_asistente_localidad',
-        '_eventosapp_checkin_status',
-        '_eventosapp_virtual_checkin_status',
-        '_eventosapp_checkin_log',
-    ]);
-
-    // Fechas válidas del evento activo.
-    // Evita que un check-in heredado de otro evento o de una fecha incorrecta contamine métricas.
-    $event_days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($event_id) : [];
-    $event_days = array_values(array_filter($event_days, function($d) use ($is_date){ return $is_date($d); }));
-    $event_days_lookup = array_fill_keys($event_days, true);
-
-    $date_is_current_event_day = function($fecha) use ($event_days_lookup) {
-        if (empty($event_days_lookup)) return true; // fallback legacy si el evento no expone fechas
-        return is_string($fecha) && isset($event_days_lookup[$fecha]);
-    };
-
-    $status_array = function($ticket_id, $meta_key) use ($ticket_meta) {
-        $arr = eventosapp_metrics_ticket_meta_value($ticket_meta, $ticket_id, $meta_key, []);
-        if (is_string($arr)) $arr = maybe_unserialize($arr);
-        return is_array($arr) ? $arr : [];
-    };
-
-    $ticket_has_valid_status = function($status_arr) use ($event_days_lookup) {
-        if (!is_array($status_arr)) return false;
-        if (empty($event_days_lookup)) {
-            return in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true);
-        }
-        foreach ($status_arr as $status_day => $status_value) {
-            if (($status_value === 'checked_in' || $status_value === 'checked-in') && isset($event_days_lookup[$status_day])) {
-                return true;
+        $cache_key = eventosapp_metrics_default_payload_cache_key($event_id, $_POST);
+        $cached = get_transient($cache_key);
+        if ( is_array($cached) ) {
+            if ( isset($cached['performance']) && is_array($cached['performance']) ) {
+                $cached['performance']['cached'] = true;
             }
-        }
-        return false;
-    };
-
-    $in_filter = function($fecha) use ($mode, $day, $from, $to){
-        if (!$fecha) return false;
-        if ($mode === 'day') return $fecha === $day;
-        return ($fecha >= $from && $fecha <= $to);
-    };
-
-    $type_is_enabled = function($type) use ($checkin_type) {
-        return $checkin_type === 'all' || $checkin_type === $type;
-    };
-
-    // Agregadores
-    $checked_total             = 0; // según filtro: presencial, virtual o unión de ambos
-    $checked_presencial_total  = 0;
-    $checked_virtual_total     = 0;
-    $checked_unique_total      = 0;
-    $hourly_main              = array_fill(0, 24, 0);
-    $hourly_virtual           = array_fill(0, 24, 0);
-    $hourly_ses               = []; // nombre_sesion => [24]
-    $loc_totals               = []; // localidad => total
-    $loc_checked              = []; // localidad => checked según filtro
-    $loc_checked_presencial   = [];
-    $loc_checked_virtual      = [];
-    $loc_ses_uniques          = []; // localidad => set(ticket_id => true)
-
-    // Agregador para medios de check-in
-    $qr_types_count = [
-        'Email'              => 0,
-        'Google Wallet'      => 0,
-        'Apple Wallet'       => 0,
-        'PDF Impreso'        => 0,
-        'WhatsApp'          => 0,
-        'Escarapela Impresa' => 0,
-        'Acceso virtual'     => 0,
-        'QR Legacy'          => 0,
-        'QR Preimpreso'      => 0,
-    ];
-
-    $all_localidades = eventosapp_metrics_normalize_localidades_list(get_post_meta($event_id, '_eventosapp_localidades', true));
-
-    foreach ($all_localidades as $L) {
-        $loc_totals[$L]             = 0;
-        $loc_checked[$L]            = 0;
-        $loc_checked_presencial[$L] = 0;
-        $loc_checked_virtual[$L]    = 0;
-        $loc_ses_uniques[$L]        = [];
-    }
-
-    foreach ($ids as $tid) {
-        $loc = eventosapp_metrics_normalize_scalar_label(
-            eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_asistente_localidad', ''),
-            '(Sin localidad)'
-        );
-        if (!array_key_exists($loc, $loc_totals)) {
-            $loc_totals[$loc]             = 0;
-            $loc_checked[$loc]            = 0;
-            $loc_checked_presencial[$loc] = 0;
-            $loc_checked_virtual[$loc]    = 0;
-            $loc_ses_uniques[$loc]        = [];
-        }
-        $loc_totals[$loc]++;
-
-        $status_arr         = $status_array($tid, '_eventosapp_checkin_status');
-        $virtual_status_arr = $status_array($tid, '_eventosapp_virtual_checkin_status');
-        $pres_checked       = $ticket_has_valid_status($status_arr);
-        $virt_checked       = $ticket_has_valid_status($virtual_status_arr);
-        $unique_checked     = ($pres_checked || $virt_checked);
-
-        if ($pres_checked) {
-            $checked_presencial_total++;
-            $loc_checked_presencial[$loc]++;
-        }
-        if ($virt_checked) {
-            $checked_virtual_total++;
-            $loc_checked_virtual[$loc]++;
-        }
-        if ($unique_checked) {
-            $checked_unique_total++;
+            wp_send_json_success($cached);
         }
 
-        if ($checkin_type === 'virtual') {
-            $selected_checked = $virt_checked;
-        } elseif ($checkin_type === 'presencial') {
-            $selected_checked = $pres_checked;
-        } else {
-            $selected_checked = $unique_checked;
-        }
+        $out = eventosapp_metrics_build_default_payload($event_id, $_POST);
 
-        if ($selected_checked) {
-            $checked_total++;
-            $loc_checked[$loc]++;
-        }
+        // Caché corta para evitar que el refresco automático o doble clic lance varias lecturas pesadas simultáneas.
+        // No sacrifica la información: se recalcula con frecuencia y conserva las mismas gráficas/datos.
+        $ttl = (int) apply_filters('eventosapp_metrics_default_payload_cache_ttl', 12, $event_id);
+        set_transient($cache_key, $out, max(5, min(60, $ttl)));
 
-        $log = eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_checkin_log', []);
-        if (is_string($log)) $log = maybe_unserialize($log);
-        if (!is_array($log)) $log = [];
-
-        $qr_presencial_contado = false;
-        $qr_virtual_contado    = false;
-
-        foreach ($log as $row) {
-            $fecha = isset($row['fecha']) ? $row['fecha'] : '';
-            $hora  = isset($row['hora'])  ? $row['hora']  : '';
-            $status= isset($row['status'])? $row['status']: '';
-            $ses   = isset($row['sesion'])? $row['sesion']: '';
-            $checkin_log_type = isset($row['checkin_type']) ? (string)$row['checkin_type'] : '';
-            $entry_event_date = !empty($row['dia']) ? (string)$row['dia'] : $fecha;
-            $entry_is_valid_event_day = $date_is_current_event_day($entry_event_date);
-            $H = ($hora && preg_match('/^\d{2}/', $hora)) ? intval(substr($hora,0,2)) : null;
-            if ($H === null || $H < 0 || $H > 23) $H = null;
-
-            $is_presencial_log = ($status === 'checked_in' || $status === 'checked-in') && $checkin_log_type !== 'virtual';
-            $is_virtual_log    = ($status === 'virtual_checked_in') || $checkin_log_type === 'virtual';
-
-            if ($entry_is_valid_event_day && $in_filter($fecha) && $H !== null) {
-                if ($is_presencial_log) {
-                    $hourly_main[$H] = (isset($hourly_main[$H]) ? $hourly_main[$H] : 0) + 1;
-                } elseif ($is_virtual_log) {
-                    $hourly_virtual[$H] = (isset($hourly_virtual[$H]) ? $hourly_virtual[$H] : 0) + 1;
-                } elseif ($status === 'session_checked_in' && $ses) {
-                    if (!isset($hourly_ses[$ses])) $hourly_ses[$ses] = array_fill(0,24,0);
-                    $hourly_ses[$ses][$H] = (isset($hourly_ses[$ses][$H]) ? $hourly_ses[$ses][$H] : 0) + 1;
-                }
-            }
-
-            // Un asistente cuenta 1 sola vez para sesiones (en cualquier fecha)
-            if ($status === 'session_checked_in' && $entry_is_valid_event_day) {
-                $loc_ses_uniques[$loc][$tid] = true;
-            }
-
-            // Mezcla de medios: contar una vez por ticket y por tipo de check-in.
-            if ($entry_is_valid_event_day && $is_presencial_log && !$qr_presencial_contado && $type_is_enabled('presencial')) {
-                $qr_presencial_contado = true;
-                $qr_label = eventosapp_metrics_qr_label_from_log_entry($row, 'Sin clasificar');
-                $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
-            }
-
-            if ($entry_is_valid_event_day && $is_virtual_log && !$qr_virtual_contado && $type_is_enabled('virtual')) {
-                $qr_virtual_contado = true;
-                $qr_label = eventosapp_metrics_qr_label_from_log_entry($row, 'Acceso virtual');
-                $qr_types_count[$qr_label] = isset($qr_types_count[$qr_label]) ? $qr_types_count[$qr_label] + 1 : 1;
-            }
-        }
-
-        // Fallbacks para tickets migrados o con log vacío.
-        if ($pres_checked && !$qr_presencial_contado && $type_is_enabled('presencial')) {
-            $qr_types_count['Sin clasificar'] = isset($qr_types_count['Sin clasificar']) ? $qr_types_count['Sin clasificar'] + 1 : 1;
-        }
-        if ($virt_checked && !$qr_virtual_contado && $type_is_enabled('virtual')) {
-            $qr_types_count['Acceso virtual'] = isset($qr_types_count['Acceso virtual']) ? $qr_types_count['Acceso virtual'] + 1 : 1;
-        }
-    }
-
-    // Tabla por localidad (totales del evento)
-    $rows = [];
-    foreach ($loc_totals as $L => $tot) {
-        $chk  = $loc_checked[$L] ?? 0;
-        $not  = max($tot - $chk, 0);
-        $pctA = $tot ? ($chk * 100 / $tot) : 0;
-
-        $sesUniq = isset($loc_ses_uniques[$L]) ? count($loc_ses_uniques[$L]) : 0;
-        $pctSes  = $tot ? ($sesUniq * 100 / $tot) : 0;
-
-        $rows[] = [
-            'localidad'                => $L,
-            'total'                    => (int)$tot,
-            'checkins'                 => (int)$chk,
-            'checkins_presencial'      => (int)($loc_checked_presencial[$L] ?? 0),
-            'checkins_virtual'         => (int)($loc_checked_virtual[$L] ?? 0),
-            'not_checkins'             => (int)$not,
-            'pct_asistencia'           => round($pctA, 2),
-            'checkins_sesiones_unicos' => (int)$sesUniq,
-            'pct_sesiones'             => round($pctSes, 2),
-        ];
-    }
-    usort($rows, function($a,$b){ return $b['checkins'] <=> $a['checkins']; });
-
-    $bar_meta = [
-        'labels'       => array_map(function($h){ return str_pad((string)$h, 2, '0', STR_PAD_LEFT); }, range(0,23)),
-        'main'         => array_values($hourly_main),
-        'virtual'      => array_values($hourly_virtual),
-        'sessions'     => $hourly_ses,
-        'mode'         => $mode,
-        'checkin_type' => $checkin_type,
-    ];
-    if ($mode === 'day') {
-        $bar_meta['day']  = $day;
-        $bar_meta['from'] = $day;
-        $bar_meta['to']   = $day;
-    } else {
-        $bar_meta['from'] = $from;
-        $bar_meta['to']   = $to;
-        $bar_meta['day']  = $today;
-    }
-
-    $qr_stats_filtered = [];
-    $qr_total = 0;
-    foreach ($qr_types_count as $type => $count) {
-        if ($count > 0) {
-            $qr_stats_filtered[$type] = $count;
-            $qr_total += $count;
-        }
-    }
-
-    $out = [
-        'total_tickets'              => $total,
-        'checked_in_total'           => $checked_total,
-        'checked_in_presencial_total'=> $checked_presencial_total,
-        'checked_in_virtual_total'   => $checked_virtual_total,
-        'checked_in_unique_total'    => $checked_unique_total,
-        'not_checked_in_total'       => max($total - $checked_total, 0),
-        'event_modalidad'            => $event_modalidad,
-        'show_presencial_metrics'    => $event_has_presencial,
-        'show_virtual_metrics'       => $event_has_virtual,
-        'checkin_type'               => $checkin_type,
-        'checkin_filter_label'       => $checkin_filter_label,
-        'bar'                        => $bar_meta,
-        'table'                      => [ 'rows' => $rows ],
-        'qr_stats'                   => [
-            'types' => $qr_stats_filtered,
-            'total' => $qr_total,
-        ],
-        'custom_metrics_available' => eventosapp_metrics_safe_custom_metrics_available($event_id),
-        'custom_metrics' => null,
-    ];
-
-    wp_send_json_success($out);
+        wp_send_json_success($out);
     } catch (\Throwable $e) {
         eventosapp_metrics_log_debug('metrics_data_ajax_error', [
             'message' => $e->getMessage(),
