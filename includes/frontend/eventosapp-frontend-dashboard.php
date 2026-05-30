@@ -73,6 +73,23 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<path d="M8 18c.8-2.3 2.2-3.5 4-3.5s3.2 1.2 4 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
+			case 'support-assistance': // NUEVO: Asistencia / Equipo de apoyo
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M5 12a7 7 0 0 1 14 0v4a3 3 0 0 1-3 3h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<rect x="3" y="11" width="4" height="6" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+					<rect x="17" y="11" width="4" height="6" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+					<path d="M9 9h6M9 13h4M12 19h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+				</svg>';
+
+			case 'support-metrics': // NUEVO: Métrica de equipo de apoyo
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M4 20V4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<path d="M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<rect x="7" y="11" width="3" height="6" rx="1"/>
+					<rect x="12" y="7" width="3" height="10" rx="1"/>
+					<rect x="17" y="9" width="3" height="8" rx="1"/>
+				</svg>';
+
 			default:
 				return '';
 		}
@@ -240,6 +257,8 @@ add_shortcode('eventosapp_dashboard', function(){
 		$url_net_ranking    = function_exists('eventosapp_get_networking_ranking_url')    ? eventosapp_get_networking_ranking_url()    : '#';
 		$url_qr_double_auth = function_exists('eventosapp_get_qr_double_auth_url')        ? eventosapp_get_qr_double_auth_url()        : '#';
 		$url_face_checkin   = function_exists('eventosapp_get_face_checkin_url')          ? eventosapp_get_face_checkin_url()          : '#';
+		$url_support_assist = function_exists('eventosapp_get_support_assistance_url')    ? eventosapp_get_support_assistance_url()    : '#';
+		$url_support_stats  = function_exists('eventosapp_get_support_team_metrics_url')  ? eventosapp_get_support_team_metrics_url()  : '#';
 
 		?>
 		<div class="evapp-grid" role="navigation" aria-label="Panel de acciones del evento">
@@ -320,6 +339,20 @@ add_shortcode('eventosapp_dashboard', function(){
     </a>
 <?php endif; ?>
 
+			<?php if (eventosapp_role_can('support_assistance')): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_support_assist); ?>" aria-label="Asistencia">
+					<?php echo eventosapp_dashboard_icon('support-assistance'); ?>
+					<span class="evapp-title">Asistencia</span>
+				</a>
+			<?php endif; ?>
+
+			<?php if (eventosapp_role_can('support_team_metrics')): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_support_stats); ?>" aria-label="Métrica de equipo de apoyo">
+					<?php echo eventosapp_dashboard_icon('support-metrics'); ?>
+					<span class="evapp-title">Métrica de equipo de apoyo</span>
+				</a>
+			<?php endif; ?>
+
 		</div>
 		<?php
 
@@ -337,8 +370,11 @@ add_shortcode('eventosapp_dashboard', function(){
 		$all_events = get_posts($query_args);
 
 		$events = array_values(array_filter($all_events, function($ev){
-			if ( function_exists('eventosapp_user_can_manage_event') ) {
-				return eventosapp_user_can_manage_event($ev->ID);
+			if ( function_exists('eventosapp_user_can_manage_event') && eventosapp_user_can_manage_event($ev->ID) ) {
+				return true;
+			}
+			if ( function_exists('eventosapp_support_user_is_assigned_to_event') && eventosapp_support_user_is_assigned_to_event($ev->ID) ) {
+				return true;
 			}
 			return current_user_can('manage_options') || (int)$ev->post_author === get_current_user_id();
 		}));
