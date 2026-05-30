@@ -2,12 +2,45 @@
 // includes/frontend/eventosapp-frontend-metrics.php
 if ( ! defined('ABSPATH') ) exit;
 
+if ( ! function_exists('eventosapp_metrics_log_debug') ) {
+    function eventosapp_metrics_log_debug($message, $context = []) {
+        if ( ! defined('WP_DEBUG') || ! WP_DEBUG ) {
+            return;
+        }
+
+        $message = is_scalar($message) ? (string) $message : 'debug';
+        $line = 'EVENTOSAPP METRICS | ' . $message;
+
+        if ( ! empty($context) ) {
+            if ( function_exists('wp_json_encode') ) {
+                $encoded = wp_json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            } else {
+                $encoded = json_encode($context);
+            }
+            if ( $encoded ) {
+                $line .= ' | ' . $encoded;
+            }
+        }
+
+        error_log($line);
+    }
+}
+
 // Cargar helper de métricas personalizadas si está disponible.
 // Ruta esperada del nuevo archivo: includes/admin/eventosapp-event-custom-metrics-metabox.php
 if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
     $evapp_custom_metrics_file = dirname(__DIR__) . '/admin/eventosapp-event-custom-metrics-metabox.php';
     if ( file_exists($evapp_custom_metrics_file) ) {
-        require_once $evapp_custom_metrics_file;
+        try {
+            require_once $evapp_custom_metrics_file;
+        } catch (\Throwable $e) {
+            eventosapp_metrics_log_debug('custom_metrics_include_error', [
+                'file'    => $evapp_custom_metrics_file,
+                'message' => $e->getMessage(),
+                'file_at' => $e->getFile(),
+                'line'    => $e->getLine(),
+            ]);
+        }
     }
 }
 
@@ -42,36 +75,137 @@ if ( ! function_exists('eventosapp_user_can_view_metrics') ) {
 
 if ( ! function_exists('eventosapp_metrics_qr_label_from_log_entry') ) {
     function eventosapp_metrics_qr_label_from_log_entry($entry, $fallback = 'Sin clasificar') {
-        if (is_array($entry) && isset($entry['qr_type_label']) && $entry['qr_type_label'] !== '') {
-            return (string) $entry['qr_type_label'];
+        $fallback = is_scalar($fallback) && (string) $fallback !== '' ? (string) $fallback : 'Sin clasificar';
+
+        if (is_array($entry) && isset($entry['qr_type_label']) && is_scalar($entry['qr_type_label'])) {
+            $stored_label = trim((string) $entry['qr_type_label']);
+            if ($stored_label !== '') {
+                return function_exists('sanitize_text_field') ? sanitize_text_field($stored_label) : $stored_label;
+            }
         }
 
-        $type = is_array($entry) && isset($entry['qr_type']) ? sanitize_key((string) $entry['qr_type']) : '';
-        if ($type !== '') {
-            if (class_exists('EventosApp_QR_Manager') && method_exists('EventosApp_QR_Manager', 'get_qr_type_label')) {
-                $label = EventosApp_QR_Manager::get_qr_type_label($type);
-                if ($label !== '') {
-                    return $label;
-                }
-            }
+        $type = is_array($entry) && isset($entry['qr_type']) && is_scalar($entry['qr_type'])
+            ? sanitize_key((string) $entry['qr_type'])
+            : '';
 
+        if ($type !== '') {
             $labels = [
-                'email'         => 'Email',
-                'google_wallet' => 'Google Wallet',
-                'apple_wallet'  => 'Apple Wallet',
-                'pdf'           => 'PDF Impreso',
-                'whatsapp'      => 'WhatsApp',
-                'badge'         => 'Escarapela Impresa',
-                'legacy'        => 'QR Legacy',
-                'preprinted'    => 'QR Preimpreso',
+                'email'          => 'Email',
+                'google_wallet'  => 'Google Wallet',
+                'apple_wallet'   => 'Apple Wallet',
+                'pdf'            => 'PDF Impreso',
+                'whatsapp'       => 'WhatsApp',
+                'badge'          => 'Escarapela Impresa',
+                'legacy'         => 'QR Legacy',
+                'preprinted'     => 'QR Preimpreso',
+                'counter'        => 'Counter',
+                'manual'         => 'Manual',
+                'front'          => 'Frontend',
+                'frontend'       => 'Frontend',
+                'virtual'        => 'Acceso virtual',
+                'virtual_access' => 'Acceso virtual',
+                'face'           => 'Reconocimiento facial',
+                'face_checkin'   => 'Reconocimiento facial',
             ];
 
             if (isset($labels[$type])) {
                 return $labels[$type];
             }
+
+            /*
+             * Evita un 500 crítico cuando EventosApp_QR_Manager::get_qr_type_label()
+             * existe como método de instancia. En PHP 8 llamar estáticamente un método
+             * no estático dispara fatal error y rompe la respuesta JSON de admin-ajax.
+             */
+            if (class_exists('EventosApp_QR_Manager') && method_exists('EventosApp_QR_Manager', 'get_qr_type_label')) {
+                try {
+                    $reflection = new ReflectionMethod('EventosApp_QR_Manager', 'get_qr_type_label');
+                    if ($reflection->isStatic()) {
+                        $label = EventosApp_QR_Manager::get_qr_type_label($type);
+                        if (is_scalar($label) && trim((string) $label) !== '') {
+                            $label = trim((string) $label);
+                            return function_exists('sanitize_text_field') ? sanitize_text_field($label) : $label;
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    eventosapp_metrics_log_debug('qr_label_resolver_error', [
+                        'qr_type' => $type,
+                        'message' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            return ucwords(str_replace('_', ' ', $type));
         }
 
         return $fallback;
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_safe_custom_metrics_available') ) {
+    function eventosapp_metrics_safe_custom_metrics_available($event_id) {
+        if ( ! function_exists('eventosapp_custom_metrics_has_enabled_slots') ) {
+            return false;
+        }
+
+        try {
+            return (bool) eventosapp_custom_metrics_has_enabled_slots(absint($event_id));
+        } catch (\Throwable $e) {
+            eventosapp_metrics_log_debug('custom_metrics_available_error', [
+                'event_id' => absint($event_id),
+                'message'  => $e->getMessage(),
+                'file'     => $e->getFile(),
+                'line'     => $e->getLine(),
+            ]);
+            return false;
+        }
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_safe_custom_metrics_payload') ) {
+    function eventosapp_metrics_safe_custom_metrics_payload($event_id) {
+        $fallback = [
+            'settings'    => [
+                'show_header'  => true,
+                'header_text'  => 'Métricas personalizadas',
+                'header_color' => '#eaf1ff',
+            ],
+            'rows'        => [],
+            'has_metrics' => false,
+        ];
+
+        if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
+            return $fallback;
+        }
+
+        try {
+            $payload = eventosapp_custom_metrics_get_payload(absint($event_id));
+            return is_array($payload) ? $payload : $fallback;
+        } catch (\Throwable $e) {
+            eventosapp_metrics_log_debug('custom_metrics_payload_error', [
+                'event_id' => absint($event_id),
+                'message'  => $e->getMessage(),
+                'file'     => $e->getFile(),
+                'line'     => $e->getLine(),
+            ]);
+            return $fallback;
+        }
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_send_json_exception') ) {
+    function eventosapp_metrics_send_json_exception($e, $public_message = 'No se pudieron cargar las métricas. Revisa el log de EventosApp para ver el detalle técnico.') {
+        $payload = [
+            'error' => $public_message,
+        ];
+
+        if ( defined('WP_DEBUG') && WP_DEBUG && $e instanceof \Throwable ) {
+            $payload['debug_message'] = $e->getMessage();
+            $payload['debug_file']    = basename($e->getFile());
+            $payload['debug_line']    = $e->getLine();
+        }
+
+        wp_send_json_error($payload, 500);
     }
 }
 
@@ -563,6 +697,45 @@ $js = <<<'JS'
                 .replace(/'/g,'&#039;');
         }
 
+        function plainTextFromHTML(raw){
+            raw = String(raw || '');
+            if (!raw) return '';
+
+            const tmp = document.createElement('div');
+            tmp.innerHTML = raw;
+            return (tmp.textContent || tmp.innerText || raw)
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        async function readAjaxJSON(resp){
+            const raw = await resp.text();
+            let payload = null;
+
+            if (raw) {
+                try {
+                    payload = JSON.parse(raw);
+                } catch (parseError) {
+                    const clean = plainTextFromHTML(raw);
+                    const msg = clean
+                        ? clean.substring(0, 220)
+                        : 'El servidor devolvió una respuesta vacía o no válida.';
+                    throw new Error('Respuesta no JSON de admin-ajax (' + resp.status + '): ' + msg);
+                }
+            }
+
+            if (!resp.ok) {
+                const serverMsg = payload && payload.data && payload.data.error ? payload.data.error : '';
+                throw new Error(serverMsg || ('Error HTTP ' + resp.status + ' al cargar métricas.'));
+            }
+
+            if (!payload) {
+                throw new Error('admin-ajax no devolvió datos.');
+            }
+
+            return payload;
+        }
+
         function renderTable(rows, data){
             data = data || {};
             const selectedType = data.checkin_type || 'all';
@@ -1044,8 +1217,11 @@ $js = <<<'JS'
                     }
 
                     const resp = await fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' });
-                    const j = await resp.json();
-                    if (!j || !j.success) throw new Error((j && j.data && j.data.error) ? j.data.error : 'Error');
+                    const j = await readAjaxJSON(resp);
+                    if (!j || !j.success) {
+                        const serverMsg = j && j.data && j.data.error ? j.data.error : 'Error al cargar métricas.';
+                        throw new Error(serverMsg);
+                    }
 
                     const d = j.data;
 
@@ -1068,14 +1244,15 @@ $js = <<<'JS'
                     return d;
                 } catch(e){
                     console.error(e);
-                    tableBody.innerHTML = '<tr><td colspan="6" class="evapp-bad">No se pudieron cargar las métricas.</td></tr>';
+                    const message = e && e.message ? e.message : 'No se pudieron cargar las métricas.';
+                    tableBody.innerHTML = '<tr><td colspan="6" class="evapp-bad">' + escapeHTML(message) + '</td></tr>';
                     qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-bad">Error al cargar datos de medios de check-in.</td></tr>';
                     if (customMetricsAvailable) {
                         setCustomPanelVisible(true);
                         setCustomStatus('No se recargaron las personalizadas porque falló la carga de métricas por defecto.', 'error');
                         setCustomButton(false, 'Recargar personalizadas');
                     }
-                    throw e;
+                    return null;
                 } finally {
                     defaultFetchInProgress = false;
                     defaultFetchPromise = null;
@@ -1144,8 +1321,11 @@ $js = <<<'JS'
                 }
 
                 const resp = await fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' });
-                const j = await resp.json();
-                if (!j || !j.success) throw new Error((j && j.data && j.data.error) ? j.data.error : 'Error');
+                const j = await readAjaxJSON(resp);
+                if (!j || !j.success) {
+                    const serverMsg = j && j.data && j.data.error ? j.data.error : 'Error al cargar métricas personalizadas.';
+                    throw new Error(serverMsg);
+                }
 
                 renderCustomMetrics(j.data ? j.data.custom_metrics : null);
                 customHasLoaded = true;
@@ -1215,8 +1395,11 @@ JS;
 // === AJAX: datos de métricas en tiempo real ===
 //
 add_action('wp_ajax_eventosapp_metrics_data', function(){
-    // CSRF
-    check_ajax_referer('eventosapp_metrics_data', 'security');
+    try {
+        // CSRF. Se valida sin wp_die para que admin-ajax responda siempre JSON.
+        if ( ! check_ajax_referer('eventosapp_metrics_data', 'security', false) ) {
+            wp_send_json_error(['error'=>'Sesión expirada o token inválido. Recarga la página e intenta nuevamente.'], 403);
+        }
 
     if ( ! is_user_logged_in() ) wp_send_json_error(['error'=>'No autorizado']);
     if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('metrics') ) {
@@ -1559,17 +1742,26 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             'types' => $qr_stats_filtered,
             'total' => $qr_total,
         ],
-        'custom_metrics_available' => function_exists('eventosapp_custom_metrics_has_enabled_slots')
-            ? eventosapp_custom_metrics_has_enabled_slots($event_id)
-            : false,
+        'custom_metrics_available' => eventosapp_metrics_safe_custom_metrics_available($event_id),
         'custom_metrics' => null,
     ];
 
     wp_send_json_success($out);
+    } catch (\Throwable $e) {
+        eventosapp_metrics_log_debug('metrics_data_ajax_error', [
+            'message' => $e->getMessage(),
+            'file'    => $e->getFile(),
+            'line'    => $e->getLine(),
+        ]);
+        eventosapp_metrics_send_json_exception($e);
+    }
 });
 
 add_action('wp_ajax_eventosapp_custom_metrics_data', function(){
-    check_ajax_referer('eventosapp_metrics_data', 'security');
+    try {
+        if ( ! check_ajax_referer('eventosapp_metrics_data', 'security', false) ) {
+            wp_send_json_error(['error'=>'Sesión expirada o token inválido. Recarga la página e intenta nuevamente.'], 403);
+        }
 
     if ( ! is_user_logged_in() ) wp_send_json_error(['error'=>'No autorizado']);
     if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('metrics') ) {
@@ -1579,13 +1771,19 @@ add_action('wp_ajax_eventosapp_custom_metrics_data', function(){
     $event_id = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
     if ( ! $event_id ) wp_send_json_error(['error'=>'No hay evento activo.']);
 
-    $payload = function_exists('eventosapp_custom_metrics_get_payload')
-        ? eventosapp_custom_metrics_get_payload($event_id)
-        : ['settings' => ['show_header' => true, 'header_text' => 'Métricas personalizadas', 'header_color' => '#eaf1ff'], 'rows' => [], 'has_metrics' => false];
+    $payload = eventosapp_metrics_safe_custom_metrics_payload($event_id);
 
     wp_send_json_success([
         'custom_metrics' => $payload,
     ]);
+    } catch (\Throwable $e) {
+        eventosapp_metrics_log_debug('custom_metrics_ajax_error', [
+            'message' => $e->getMessage(),
+            'file'    => $e->getFile(),
+            'line'    => $e->getLine(),
+        ]);
+        eventosapp_metrics_send_json_exception($e, 'No se pudieron cargar las métricas personalizadas. Revisa el log de EventosApp para ver el detalle técnico.');
+    }
 });
 
 
