@@ -842,6 +842,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-sesiones.php
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-configuracion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-co-gestion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-access-staff-control-event.php'; // Control de acceso dashboard por evento
+require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-admin-metabox-sticky-menu.php'; // Menú sticky de metaboxes del editor de eventos
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-helpers.php';
 eventosapp_require_first_existing_file([
     'includes/frontend/eventosapp-support-assistance.php',
