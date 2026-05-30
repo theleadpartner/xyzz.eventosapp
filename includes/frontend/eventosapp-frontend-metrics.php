@@ -209,6 +209,242 @@ if ( ! function_exists('eventosapp_metrics_send_json_exception') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_metrics_is_metrics_ajax_request') ) {
+    function eventosapp_metrics_is_metrics_ajax_request() {
+        if ( ! function_exists('wp_doing_ajax') || ! wp_doing_ajax() ) {
+            return false;
+        }
+
+        $action = isset($_REQUEST['action']) ? sanitize_key((string) $_REQUEST['action']) : '';
+        return in_array($action, [
+            'eventosapp_metrics_data',
+            'eventosapp_custom_metrics_data',
+            'eventosapp_export_tickets',
+        ], true);
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_register_ajax_fatal_guard') ) {
+    function eventosapp_metrics_register_ajax_fatal_guard() {
+        if ( ! eventosapp_metrics_is_metrics_ajax_request() ) {
+            return;
+        }
+
+        if ( ! isset($GLOBALS['eventosapp_metrics_shutdown_reserve']) ) {
+            $GLOBALS['eventosapp_metrics_shutdown_reserve'] = str_repeat('E', 262144);
+        }
+
+        add_filter('wp_fatal_error_handler_enabled', function($enabled){
+            return eventosapp_metrics_is_metrics_ajax_request() ? false : $enabled;
+        }, 0);
+
+        register_shutdown_function(function(){
+            if ( ! eventosapp_metrics_is_metrics_ajax_request() ) {
+                return;
+            }
+
+            $GLOBALS['eventosapp_metrics_shutdown_reserve'] = null;
+            $error = error_get_last();
+            if ( ! is_array($error) || empty($error['type']) ) {
+                return;
+            }
+
+            $fatal_types = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR];
+            if ( ! in_array((int) $error['type'], $fatal_types, true) ) {
+                return;
+            }
+
+            eventosapp_metrics_log_debug('fatal_shutdown_ajax_error', [
+                'type'    => (int) $error['type'],
+                'message' => isset($error['message']) ? (string) $error['message'] : '',
+                'file'    => isset($error['file']) ? (string) $error['file'] : '',
+                'line'    => isset($error['line']) ? (int) $error['line'] : 0,
+                'action'  => isset($_REQUEST['action']) ? sanitize_key((string) $_REQUEST['action']) : '',
+            ]);
+
+            while ( ob_get_level() > 0 ) {
+                @ob_end_clean();
+            }
+
+            if ( ! headers_sent() ) {
+                status_header(500);
+                nocache_headers();
+                header('Content-Type: application/json; charset=' . get_option('blog_charset'));
+            }
+
+            $payload = [
+                'success' => false,
+                'data'    => [
+                    'error' => 'No se pudieron cargar las métricas por un error crítico del servidor. Revisa el log de PHP/WordPress con el prefijo EVENTOSAPP METRICS para ver el archivo y la línea exacta.',
+                ],
+            ];
+
+            if ( defined('WP_DEBUG') && WP_DEBUG ) {
+                $payload['data']['debug_message'] = isset($error['message']) ? (string) $error['message'] : '';
+                $payload['data']['debug_file']    = isset($error['file']) ? basename((string) $error['file']) : '';
+                $payload['data']['debug_line']    = isset($error['line']) ? (int) $error['line'] : 0;
+            }
+
+            echo wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            exit;
+        });
+    }
+}
+
+eventosapp_metrics_register_ajax_fatal_guard();
+
+if ( ! function_exists('eventosapp_metrics_normalize_scalar_label') ) {
+    function eventosapp_metrics_normalize_scalar_label($value, $fallback = '(Sin dato)') {
+        if ( is_scalar($value) ) {
+            $value = trim(wp_strip_all_tags((string) $value));
+            return $value !== '' ? sanitize_text_field($value) : $fallback;
+        }
+
+        if ( is_array($value) ) {
+            foreach (['label', 'nombre', 'name', 'title', 'value', 'localidad'] as $candidate_key) {
+                if ( isset($value[$candidate_key]) && is_scalar($value[$candidate_key]) ) {
+                    $candidate = trim(wp_strip_all_tags((string) $value[$candidate_key]));
+                    if ( $candidate !== '' ) {
+                        return sanitize_text_field($candidate);
+                    }
+                }
+            }
+        }
+
+        return $fallback;
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_normalize_localidades_list') ) {
+    function eventosapp_metrics_normalize_localidades_list($raw) {
+        $fallback = ['General', 'VIP', 'Platino'];
+        if ( ! is_array($raw) || empty($raw) ) {
+            return $fallback;
+        }
+
+        $out = [];
+        foreach ( $raw as $item ) {
+            $label = eventosapp_metrics_normalize_scalar_label($item, '');
+            if ( $label !== '' && ! in_array($label, $out, true) ) {
+                $out[] = $label;
+            }
+        }
+
+        return ! empty($out) ? $out : $fallback;
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_get_ticket_ids_for_event') ) {
+    function eventosapp_metrics_get_ticket_ids_for_event($event_id) {
+        global $wpdb;
+
+        $event_id = absint($event_id);
+        if ( ! $event_id || ! $wpdb ) {
+            return [];
+        }
+
+        $cache_key = 'evapp_metrics_ticket_ids_' . $event_id;
+        $cached = wp_cache_get($cache_key, 'eventosapp_metrics');
+        if ( is_array($cached) ) {
+            return array_map('intval', $cached);
+        }
+
+        $sql = $wpdb->prepare(
+            "SELECT DISTINCT p.ID
+             FROM {$wpdb->posts} p
+             INNER JOIN {$wpdb->postmeta} pm
+                ON pm.post_id = p.ID
+               AND pm.meta_key = %s
+             WHERE p.post_type = %s
+               AND p.post_status NOT IN ('trash', 'auto-draft')
+               AND pm.meta_value = %s
+             ORDER BY p.ID ASC",
+            '_eventosapp_ticket_evento_id',
+            'eventosapp_ticket',
+            (string) $event_id
+        );
+
+        $ids = $wpdb->get_col($sql);
+        if ( ! empty($wpdb->last_error) ) {
+            eventosapp_metrics_log_debug('ticket_ids_query_db_error', [
+                'event_id' => $event_id,
+                'error'    => $wpdb->last_error,
+            ]);
+            throw new RuntimeException('Error consultando tickets del evento para métricas.');
+        }
+
+        $ids = array_map('intval', (array) $ids);
+        wp_cache_set($cache_key, $ids, 'eventosapp_metrics', 30);
+        return $ids;
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_get_ticket_meta_map') ) {
+    function eventosapp_metrics_get_ticket_meta_map(array $ticket_ids, array $meta_keys) {
+        global $wpdb;
+
+        $ticket_ids = array_values(array_unique(array_filter(array_map('intval', $ticket_ids))));
+        $meta_keys = array_values(array_unique(array_filter(array_map('strval', $meta_keys))));
+
+        $map = [];
+        foreach ( $ticket_ids as $ticket_id ) {
+            $map[$ticket_id] = [];
+        }
+
+        if ( empty($ticket_ids) || empty($meta_keys) || ! $wpdb ) {
+            return $map;
+        }
+
+        foreach ( array_chunk($ticket_ids, 500) as $chunk ) {
+            $id_placeholders = implode(',', array_fill(0, count($chunk), '%d'));
+            $key_placeholders = implode(',', array_fill(0, count($meta_keys), '%s'));
+
+            $query = $wpdb->prepare(
+                "SELECT post_id, meta_key, meta_value
+                 FROM {$wpdb->postmeta}
+                 WHERE post_id IN ($id_placeholders)
+                   AND meta_key IN ($key_placeholders)
+                 ORDER BY post_id ASC, meta_id ASC",
+                array_merge($chunk, $meta_keys)
+            );
+
+            $rows = $wpdb->get_results($query, ARRAY_A);
+            if ( ! empty($wpdb->last_error) ) {
+                eventosapp_metrics_log_debug('ticket_meta_query_db_error', [
+                    'error' => $wpdb->last_error,
+                ]);
+                throw new RuntimeException('Error consultando metadatos de tickets para métricas.');
+            }
+
+            foreach ( (array) $rows as $row ) {
+                $ticket_id = isset($row['post_id']) ? (int) $row['post_id'] : 0;
+                $meta_key = isset($row['meta_key']) ? (string) $row['meta_key'] : '';
+                if ( ! $ticket_id || $meta_key === '' || ! isset($map[$ticket_id]) ) {
+                    continue;
+                }
+
+                if ( ! array_key_exists($meta_key, $map[$ticket_id]) ) {
+                    $map[$ticket_id][$meta_key] = maybe_unserialize($row['meta_value']);
+                }
+            }
+        }
+
+        return $map;
+    }
+}
+
+if ( ! function_exists('eventosapp_metrics_ticket_meta_value') ) {
+    function eventosapp_metrics_ticket_meta_value(array $ticket_meta, $ticket_id, $meta_key, $default = '') {
+        $ticket_id = (int) $ticket_id;
+        $meta_key = (string) $meta_key;
+        if ( isset($ticket_meta[$ticket_id]) && array_key_exists($meta_key, $ticket_meta[$ticket_id]) ) {
+            return $ticket_meta[$ticket_id][$meta_key];
+        }
+        return $default;
+    }
+}
+
 // === Shortcode ===
 add_shortcode('eventosapp_front_metrics', function(){
     if ( function_exists('eventosapp_require_feature') ) eventosapp_require_feature('metrics');
@@ -1473,24 +1709,18 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         if ($to < $from) { $tmp = $from; $from = $to; $to = $tmp; }
     }
 
-    // Tickets del evento
-    $q = new WP_Query([
-        'post_type'              => 'eventosapp_ticket',
-        'post_status'            => 'any',
-        'posts_per_page'         => -1,
-        'fields'                 => 'ids',
-        'no_found_rows'          => true,
-        'update_post_meta_cache' => true,
-        'update_post_term_cache' => false,
-        'meta_query'             => [
-            ['key'=>'_eventosapp_ticket_evento_id', 'value'=>$event_id, 'compare'=>'='],
-        ],
-    ]);
-    $ids = array_map('intval', (array) $q->posts);
-    if ( ! empty($ids) ) {
-        update_meta_cache('post', $ids);
-    }
+    // Tickets del evento.
+    // Se evita WP_Query con posts_per_page=-1 + update_post_meta_cache=true porque,
+    // cuando el evento tiene muchos asistentes o metas pesadas, admin-ajax puede morir
+    // con error crítico antes de responder JSON.
+    $ids = eventosapp_metrics_get_ticket_ids_for_event($event_id);
     $total = count($ids);
+    $ticket_meta = eventosapp_metrics_get_ticket_meta_map($ids, [
+        '_eventosapp_asistente_localidad',
+        '_eventosapp_checkin_status',
+        '_eventosapp_virtual_checkin_status',
+        '_eventosapp_checkin_log',
+    ]);
 
     // Fechas válidas del evento activo.
     // Evita que un check-in heredado de otro evento o de una fecha incorrecta contamine métricas.
@@ -1503,9 +1733,9 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         return is_string($fecha) && isset($event_days_lookup[$fecha]);
     };
 
-    $status_array = function($ticket_id, $meta_key){
-        $arr = get_post_meta($ticket_id, $meta_key, true);
-        if (is_string($arr)) $arr = @unserialize($arr);
+    $status_array = function($ticket_id, $meta_key) use ($ticket_meta) {
+        $arr = eventosapp_metrics_ticket_meta_value($ticket_meta, $ticket_id, $meta_key, []);
+        if (is_string($arr)) $arr = maybe_unserialize($arr);
         return is_array($arr) ? $arr : [];
     };
 
@@ -1559,8 +1789,7 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
         'QR Preimpreso'      => 0,
     ];
 
-    $all_localidades = get_post_meta($event_id, '_eventosapp_localidades', true);
-    if (!is_array($all_localidades)) $all_localidades = ['General','VIP','Platino'];
+    $all_localidades = eventosapp_metrics_normalize_localidades_list(get_post_meta($event_id, '_eventosapp_localidades', true));
 
     foreach ($all_localidades as $L) {
         $loc_totals[$L]             = 0;
@@ -1571,8 +1800,10 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
     }
 
     foreach ($ids as $tid) {
-        $loc = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
-        if ($loc === '' || $loc === null) $loc = '(Sin localidad)';
+        $loc = eventosapp_metrics_normalize_scalar_label(
+            eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_asistente_localidad', ''),
+            '(Sin localidad)'
+        );
         if (!array_key_exists($loc, $loc_totals)) {
             $loc_totals[$loc]             = 0;
             $loc_checked[$loc]            = 0;
@@ -1613,8 +1844,8 @@ add_action('wp_ajax_eventosapp_metrics_data', function(){
             $loc_checked[$loc]++;
         }
 
-        $log = get_post_meta($tid, '_eventosapp_checkin_log', true);
-        if (is_string($log)) $log = @unserialize($log);
+        $log = eventosapp_metrics_ticket_meta_value($ticket_meta, $tid, '_eventosapp_checkin_log', []);
+        if (is_string($log)) $log = maybe_unserialize($log);
         if (!is_array($log)) $log = [];
 
         $qr_presencial_contado = false;
