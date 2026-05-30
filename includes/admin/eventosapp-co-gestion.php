@@ -135,6 +135,12 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
       }
     }
 
+    // 5. Staff de apoyo asignado al módulo Asistencia.
+    // El acceso real a secciones se limita después por eventosapp_role_can().
+    if ( function_exists('eventosapp_support_user_is_assigned_to_event') && eventosapp_support_user_is_assigned_to_event($event_id, $user_id) ) {
+      return true;
+    }
+
     // No cumple ninguna condición
     return false;
   }
@@ -359,6 +365,7 @@ function eventosapp_render_metabox_co_gestion($post){
   
   // NUEVO: Obtener todos los usuarios staff para el select
   $all_staff = eventosapp_get_all_staff_users();
+  $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids') ? eventosapp_support_get_event_staff_user_ids($event_id) : [];
 
   ?>
   <style>
@@ -452,10 +459,11 @@ function eventosapp_render_metabox_co_gestion($post){
   <select name="evapp_staff_add_manual_user" id="evapp_staff_manual_select" style="width:100%; margin-bottom:6px;">
     <option value="">— Buscar y seleccionar staff —</option>
     <?php foreach ($all_staff as $s): 
-      // Verificar si ya está asignado a este evento
+      // Verificar si ya está asignado a este evento o reservado en Asistencia
       $already_assigned = isset($assigned[$s->ID]);
-      $disabled = $already_assigned ? 'disabled' : '';
-      $suffix = $already_assigned ? ' (ya asignado)' : '';
+      $already_support  = in_array((int)$s->ID, array_map('intval', (array)$support_staff_ids), true);
+      $disabled = ($already_assigned || $already_support) ? 'disabled' : '';
+      $suffix = $already_assigned ? ' (ya asignado)' : ($already_support ? ' (asignado en Asistencia)' : '');
       ?>
       <option value="<?php echo (int)$s->ID; ?>" <?php echo $disabled; ?>>
         <?php echo esc_html($s->display_name . ' - ' . $s->user_login . ' (' . $s->user_email . ')' . $suffix); ?>
@@ -551,9 +559,10 @@ add_action('save_post_eventosapp_event', function($post_id){
       // Verificar que el usuario existe y tiene rol staff
       $manual_user = get_userdata($manual_staff_id);
       if ($manual_user && in_array('staff', $manual_user->roles, true)) {
-        // Verificar que no esté ya asignado a este evento
+        // Verificar que no esté ya asignado a este evento ni al módulo Asistencia
         $assigned_refresh = eventosapp_get_event_staff_assigned($post_id);
-        if (!isset($assigned_refresh[$manual_staff_id])) {
+        $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids') ? eventosapp_support_get_event_staff_user_ids($post_id) : [];
+        if (!isset($assigned_refresh[$manual_staff_id]) && !in_array($manual_staff_id, array_map('intval', (array)$support_staff_ids), true)) {
           $manual_until_ts = $manual_until ? strtotime($manual_until.' 23:59:59') : $release_ts;
           eventosapp_assign_staff_to_event($post_id, [$manual_staff_id], $manual_until_ts);
         }
@@ -574,8 +583,9 @@ add_action('save_post_eventosapp_event', function($post_id){
       $need = $required - $current;
       
       $existing_ids = array_map('intval', array_keys($assigned_refresh));
-      // Evitar re-asignar inmediatamente a los que se eliminaron
-      $exclude = array_unique(array_merge($existing_ids, $rem_staff));
+      $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids') ? eventosapp_support_get_event_staff_user_ids($post_id) : [];
+      // Evitar re-asignar inmediatamente a los que se eliminaron y bloquear los reservados en Asistencia
+      $exclude = array_unique(array_merge($existing_ids, $rem_staff, array_map('intval', (array)$support_staff_ids)));
 
       // 1) Buscar staff disponible (ahora pueden estar en otros eventos)
       $free = eventosapp_find_free_staff($need, $exclude);
