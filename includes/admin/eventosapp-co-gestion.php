@@ -74,13 +74,13 @@ if ( ! function_exists('eventosapp_get_staff_release_ts') ) {
 if ( ! function_exists('eventosapp_user_can_manage_event') ) {
   /**
    * NUEVA: Verifica si un usuario puede gestionar/ver un evento específico
-   * 
+   *
    * Retorna true si el usuario cumple alguna de estas condiciones:
    * 1. Es administrador (manage_options)
    * 2. Es el autor del evento (post_author)
    * 3. Es co-gestor temporal (_evapp_temp_authors) y no ha expirado
    * 4. Es staff asignado (_evapp_event_staff_assigned) y no ha expirado
-   * 
+   *
    * @param int $event_id ID del evento
    * @param int|null $user_id ID del usuario (null = usuario actual)
    * @return bool
@@ -116,7 +116,7 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
         if (!is_array($row)) continue;
         if (empty($row['user_id'])) continue;
         if ((int)$row['user_id'] !== $user_id) continue;
-        
+
         // Verificar expiración
         $until = isset($row['until']) ? (int)$row['until'] : 0;
         if ($until === 0 || $until >= $now) {
@@ -260,11 +260,11 @@ if ( ! function_exists('eventosapp_assign_staff_to_event') ) {
     foreach ($user_ids as $uid) {
       $uid = (int)$uid;
       $assigned[$uid] = ['user_id'=>$uid, 'until'=>$release_ts];
-      
+
       // 2. Actualizar usermeta del usuario (ahora es un array de eventos)
       $user_assignments = get_user_meta($uid, '_evapp_event_assignment', true);
       if (!is_array($user_assignments)) $user_assignments = [];
-      
+
       // Agregar o actualizar este evento en el array del usuario
       $user_assignments[$event_id] = ['event_id'=>$event_id, 'until'=>$release_ts];
       update_user_meta($uid, '_evapp_event_assignment', $user_assignments);
@@ -280,14 +280,14 @@ if ( ! function_exists('eventosapp_remove_staff_from_event') ) {
   function eventosapp_remove_staff_from_event($event_id, $user_id){
     $event_id = (int)$event_id;
     $user_id  = (int)$user_id;
-    
+
     // 1. Remover del postmeta del evento
     $assigned = get_post_meta($event_id, '_evapp_event_staff_assigned', true);
     if (is_array($assigned) && isset($assigned[$user_id])) {
       unset($assigned[$user_id]);
       update_post_meta($event_id, '_evapp_event_staff_assigned', $assigned);
     }
-    
+
     // 2. Remover del usermeta del usuario
     $user_assignments = get_user_meta($user_id, '_evapp_event_assignment', true);
     if (is_array($user_assignments) && isset($user_assignments[$event_id])) {
@@ -311,7 +311,7 @@ if ( ! function_exists('eventosapp_get_event_staff_assigned') ) {
     if (!is_array($assigned)) $assigned = [];
     $now = time();
     $changed = false;
-    
+
     foreach ($assigned as $uid => $row) {
       $u = (int)$uid;
       $until = isset($row['until']) ? (int)$row['until'] : 0;
@@ -322,9 +322,37 @@ if ( ! function_exists('eventosapp_get_event_staff_assigned') ) {
         $changed = true;
       }
     }
-    
+
     if ($changed) update_post_meta($event_id, '_evapp_event_staff_assigned', $assigned);
     return $assigned;
+  }
+}
+
+if ( ! function_exists('eventosapp_sanitize_absint_list') ) {
+  /**
+   * Normaliza una lista de IDs recibida por POST, quitando valores vacíos, repetidos o inválidos.
+   *
+   * @param mixed $raw Valor recibido desde POST.
+   * @return int[]
+   */
+  function eventosapp_sanitize_absint_list($raw){
+    if (!is_array($raw)) {
+      $raw = [$raw];
+    }
+
+    $ids = [];
+    foreach ($raw as $value) {
+      if (is_array($value)) {
+        continue;
+      }
+
+      $id = absint($value);
+      if ($id > 0) {
+        $ids[] = $id;
+      }
+    }
+
+    return array_values(array_unique($ids));
   }
 }
 
@@ -362,8 +390,8 @@ function eventosapp_render_metabox_co_gestion($post){
   $required = get_post_meta($event_id, '_evapp_event_staff_required', true);
   $required = max(0, (int)$required);
   $assigned = eventosapp_get_event_staff_assigned($event_id);
-  
-  // NUEVO: Obtener todos los usuarios staff para el select
+
+  // Obtener todos los usuarios staff para el selector múltiple.
   $all_staff = eventosapp_get_all_staff_users();
   $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids') ? eventosapp_support_get_event_staff_user_ids($event_id) : [];
 
@@ -375,9 +403,16 @@ function eventosapp_render_metabox_co_gestion($post){
     .evapp-table th{ background:#f6f7f7; }
     .evapp-badge{ display:inline-block; background:#f0f0f1; border:1px solid #ddd; padding:2px 6px; border-radius:3px; font-size:11px; }
     .evapp-danger{ color:#d63638; font-weight:600; }
+    .evapp-staff-multi-select{ width:100%; min-height:170px; margin-bottom:6px; }
+    .evapp-staff-tools{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+    .evapp-staff-tools .button{ min-height:26px; line-height:24px; padding:0 8px; font-size:11px; }
+    .evapp-staff-count{ display:inline-block; color:#2271b1; font-weight:600; font-size:11px; }
+    .evapp-staff-remove-head{ display:flex; align-items:center; justify-content:flex-end; gap:4px; }
+    .evapp-staff-bulk-box{ margin-top:12px; border:1px solid #ddd; padding:8px; border-radius:4px; background:#f9f9f9; }
+    .evapp-staff-bulk-box label.evapp-main-label{ display:block; margin-bottom:4px; font-weight:600; }
   </style>
 
-  <div>
+  <div id="evapp-co-gestion-wrap">
     <strong>Co-gestores temporales</strong>
     <div class="evapp-mini">Usuarios que pueden gestionar este evento por tiempo limitado.</div>
 
@@ -434,7 +469,19 @@ function eventosapp_render_metabox_co_gestion($post){
 
 <?php if ($assigned): ?>
   <table class="evapp-table">
-    <thead><tr><th>Usuario</th><th>Correo</th><th>Pass</th><th></th></tr></thead>
+    <thead>
+      <tr>
+        <th>Usuario</th>
+        <th>Correo</th>
+        <th>Pass</th>
+        <th>
+          <span class="evapp-staff-remove-head">
+            <input type="checkbox" id="evapp_staff_remove_all" title="Marcar o desmarcar todos">
+            <span>Quitar</span>
+          </span>
+        </th>
+      </tr>
+    </thead>
     <tbody>
       <?php foreach ($assigned as $uid=>$row):
         $u = get_userdata((int)$uid); ?>
@@ -443,22 +490,24 @@ function eventosapp_render_metabox_co_gestion($post){
           <td><?php echo $u ? esc_html($u->user_email) : '—'; ?></td>
           <td><code>_123456_</code></td>
           <td style="text-align:right">
-            <label><input type="checkbox" name="evapp_staff_remove[]" value="<?php echo (int)$uid; ?>"> Eliminar</label>
+            <label><input type="checkbox" class="evapp-staff-remove-check" name="evapp_staff_remove[]" value="<?php echo (int)$uid; ?>"> Eliminar</label>
           </td>
         </tr>
       <?php endforeach; ?>
     </tbody>
   </table>
+  <div class="evapp-staff-tools" style="justify-content:flex-end;">
+    <span id="evapp_staff_remove_count" class="evapp-staff-count">0 seleccionados para quitar</span>
+  </div>
 <?php else: ?>
   <div class="evapp-mini">Sin staff asignado.</div>
 <?php endif; ?>
 
-<!-- SECCIÓN 1: Agregar staff manualmente desde select -->
-<div style="margin-top:12px; border:1px solid #ddd; padding:8px; border-radius:4px; background:#f9f9f9;">
-  <label style="display:block; margin-bottom:4px; font-weight:600;">Agregar staff manualmente</label>
-  <select name="evapp_staff_add_manual_user" id="evapp_staff_manual_select" style="width:100%; margin-bottom:6px;">
-    <option value="">— Buscar y seleccionar staff —</option>
-    <?php foreach ($all_staff as $s): 
+<!-- SECCIÓN 1: Agregar staff manualmente desde selector múltiple -->
+<div class="evapp-staff-bulk-box">
+  <label class="evapp-main-label">Agregar staff manualmente</label>
+  <select name="evapp_staff_add_manual_users[]" id="evapp_staff_manual_select" class="evapp-staff-multi-select" multiple size="8">
+    <?php foreach ($all_staff as $s):
       // Verificar si ya está asignado a este evento o reservado en Asistencia
       $already_assigned = isset($assigned[$s->ID]);
       $already_support  = in_array((int)$s->ID, array_map('intval', (array)$support_staff_ids), true);
@@ -470,12 +519,18 @@ function eventosapp_render_metabox_co_gestion($post){
       </option>
     <?php endforeach; ?>
   </select>
-  
+
+  <div class="evapp-staff-tools">
+    <button type="button" class="button" id="evapp_staff_select_all_available">Seleccionar disponibles</button>
+    <button type="button" class="button" id="evapp_staff_clear_selection">Limpiar selección</button>
+    <span id="evapp_staff_add_count" class="evapp-staff-count">0 seleccionados para agregar</span>
+  </div>
+
   <label style="display:block; margin-bottom:2px; font-size:11px;">Expira el:</label>
   <input type="date" name="evapp_staff_add_manual_until" value="<?php echo esc_attr( gmdate('Y-m-d', $release_ts) ); ?>" style="width:100%; margin-bottom:6px;">
-  
-  <input type="submit" class="button button-primary" name="evapp_staff_btn_add_manual" value="➕ Agregar staff seleccionado" style="width:100%;">
-  <div class="evapp-mini" style="margin-top:4px;">Selecciona un usuario del listado y haz clic para agregarlo.</div>
+
+  <input type="submit" class="button button-primary" name="evapp_staff_btn_add_manual" value="➕ Agregar staff seleccionados" style="width:100%;">
+  <div class="evapp-mini" style="margin-top:4px;">Puedes seleccionar varios usuarios con Ctrl/Cmd + clic, Shift + clic o usando el botón “Seleccionar disponibles”.</div>
 </div>
 
 <!-- SECCIÓN 2: Autocompletar staff según cantidad requerida -->
@@ -494,6 +549,81 @@ function eventosapp_render_metabox_co_gestion($post){
   * La contraseña por defecto para staff creado automáticamente es <code>_123456_</code> (débil a propósito).
 </div>
   </div>
+
+  <script>
+  (function(){
+    var manualSelect = document.getElementById('evapp_staff_manual_select');
+    var selectAllBtn = document.getElementById('evapp_staff_select_all_available');
+    var clearBtn = document.getElementById('evapp_staff_clear_selection');
+    var addCount = document.getElementById('evapp_staff_add_count');
+    var removeAll = document.getElementById('evapp_staff_remove_all');
+    var removeCount = document.getElementById('evapp_staff_remove_count');
+
+    function updateAddCount(){
+      if (!manualSelect || !addCount) return;
+      var count = 0;
+      Array.prototype.forEach.call(manualSelect.options, function(option){
+        if (option.selected && !option.disabled && option.value) count++;
+      });
+      addCount.textContent = count + (count === 1 ? ' seleccionado para agregar' : ' seleccionados para agregar');
+    }
+
+    function getRemoveChecks(){
+      return Array.prototype.slice.call(document.querySelectorAll('.evapp-staff-remove-check'));
+    }
+
+    function updateRemoveCount(){
+      var checks = getRemoveChecks();
+      var checked = checks.filter(function(input){ return input.checked; }).length;
+      if (removeCount) {
+        removeCount.textContent = checked + (checked === 1 ? ' seleccionado para quitar' : ' seleccionados para quitar');
+      }
+      if (removeAll) {
+        removeAll.checked = checks.length > 0 && checked === checks.length;
+        removeAll.indeterminate = checked > 0 && checked < checks.length;
+      }
+    }
+
+    if (manualSelect) {
+      manualSelect.addEventListener('change', updateAddCount);
+      updateAddCount();
+    }
+
+    if (selectAllBtn && manualSelect) {
+      selectAllBtn.addEventListener('click', function(event){
+        event.preventDefault();
+        Array.prototype.forEach.call(manualSelect.options, function(option){
+          if (!option.disabled && option.value) option.selected = true;
+        });
+        updateAddCount();
+      });
+    }
+
+    if (clearBtn && manualSelect) {
+      clearBtn.addEventListener('click', function(event){
+        event.preventDefault();
+        Array.prototype.forEach.call(manualSelect.options, function(option){
+          option.selected = false;
+        });
+        updateAddCount();
+      });
+    }
+
+    getRemoveChecks().forEach(function(input){
+      input.addEventListener('change', updateRemoveCount);
+    });
+
+    if (removeAll) {
+      removeAll.addEventListener('change', function(){
+        var checked = removeAll.checked;
+        getRemoveChecks().forEach(function(input){ input.checked = checked; });
+        updateRemoveCount();
+      });
+    }
+
+    updateRemoveCount();
+  })();
+  </script>
   <?php
 }
 
@@ -510,7 +640,7 @@ add_action('save_post_eventosapp_event', function($post_id){
   // ---- 1) Co-gestores: eliminar seleccionados
   $co = get_post_meta($post_id, '_evapp_temp_authors', true);
   if (!is_array($co)) $co = [];
-  $remove = isset($_POST['evapp_co_remove']) ? array_map('intval',(array)$_POST['evapp_co_remove']) : [];
+  $remove = isset($_POST['evapp_co_remove']) ? eventosapp_sanitize_absint_list(wp_unslash($_POST['evapp_co_remove'])) : [];
   if ($remove) {
     $co = array_values(array_filter($co, function($row) use ($remove){
       return empty($row['user_id']) || ! in_array( (int)$row['user_id'], $remove, true );
@@ -520,7 +650,7 @@ add_action('save_post_eventosapp_event', function($post_id){
 
   // ---- 2) Co-gestores: agregar uno (opcional)
   $add_user  = isset($_POST['evapp_co_add_user']) ? absint($_POST['evapp_co_add_user']) : 0;
-  $add_until = isset($_POST['evapp_co_add_until']) ? sanitize_text_field($_POST['evapp_co_add_until']) : '';
+  $add_until = isset($_POST['evapp_co_add_until']) ? sanitize_text_field(wp_unslash($_POST['evapp_co_add_until'])) : '';
   if ($add_user) {
     $until_ts = $add_until ? strtotime($add_until.' 23:59:59') : $release_ts;
     $co[] = [
@@ -539,7 +669,7 @@ add_action('save_post_eventosapp_event', function($post_id){
   $assigned = eventosapp_get_event_staff_assigned($post_id);
 
   // ---- 4) Eliminar staff marcados (se ejecuta siempre si hay checkboxes marcados)
-  $rem_staff = isset($_POST['evapp_staff_remove']) ? array_map('intval',(array)$_POST['evapp_staff_remove']) : [];
+  $rem_staff = isset($_POST['evapp_staff_remove']) ? eventosapp_sanitize_absint_list(wp_unslash($_POST['evapp_staff_remove'])) : [];
   if ($rem_staff) {
     foreach ($rem_staff as $uid) {
       eventosapp_remove_staff_from_event($post_id, $uid);
@@ -550,38 +680,61 @@ add_action('save_post_eventosapp_event', function($post_id){
 
   // ========== BOTÓN 1: AGREGAR STAFF MANUAL ==========
   $btn_add_manual = !empty($_POST['evapp_staff_btn_add_manual']);
-  
+
   if ($btn_add_manual) {
-    $manual_staff_id = isset($_POST['evapp_staff_add_manual_user']) ? absint($_POST['evapp_staff_add_manual_user']) : 0;
-    $manual_until = isset($_POST['evapp_staff_add_manual_until']) ? sanitize_text_field($_POST['evapp_staff_add_manual_until']) : '';
-    
-    if ($manual_staff_id) {
-      // Verificar que el usuario existe y tiene rol staff
-      $manual_user = get_userdata($manual_staff_id);
-      if ($manual_user && in_array('staff', $manual_user->roles, true)) {
-        // Verificar que no esté ya asignado a este evento ni al módulo Asistencia
-        $assigned_refresh = eventosapp_get_event_staff_assigned($post_id);
-        $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids') ? eventosapp_support_get_event_staff_user_ids($post_id) : [];
-        if (!isset($assigned_refresh[$manual_staff_id]) && !in_array($manual_staff_id, array_map('intval', (array)$support_staff_ids), true)) {
-          $manual_until_ts = $manual_until ? strtotime($manual_until.' 23:59:59') : $release_ts;
-          eventosapp_assign_staff_to_event($post_id, [$manual_staff_id], $manual_until_ts);
+    $manual_staff_ids = isset($_POST['evapp_staff_add_manual_users'])
+      ? eventosapp_sanitize_absint_list(wp_unslash($_POST['evapp_staff_add_manual_users']))
+      : [];
+
+    // Compatibilidad con versiones anteriores del metabox, donde el campo era de selección única.
+    $legacy_manual_staff_id = isset($_POST['evapp_staff_add_manual_user']) ? absint($_POST['evapp_staff_add_manual_user']) : 0;
+    if ($legacy_manual_staff_id && !in_array($legacy_manual_staff_id, $manual_staff_ids, true)) {
+      $manual_staff_ids[] = $legacy_manual_staff_id;
+    }
+
+    $manual_until = isset($_POST['evapp_staff_add_manual_until']) ? sanitize_text_field(wp_unslash($_POST['evapp_staff_add_manual_until'])) : '';
+
+    if ($manual_staff_ids) {
+      $manual_until_ts = $manual_until ? strtotime($manual_until.' 23:59:59') : $release_ts;
+      $assigned_refresh = eventosapp_get_event_staff_assigned($post_id);
+      $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids') ? eventosapp_support_get_event_staff_user_ids($post_id) : [];
+      $support_staff_ids = array_map('intval', (array)$support_staff_ids);
+      $staff_to_add = [];
+
+      foreach ($manual_staff_ids as $manual_staff_id) {
+        // Verificar que el usuario existe y tiene rol staff
+        $manual_user = get_userdata($manual_staff_id);
+        if (!$manual_user || !in_array('staff', (array)$manual_user->roles, true)) {
+          continue;
         }
+
+        // Verificar que no esté ya asignado a este evento ni al módulo Asistencia
+        if (isset($assigned_refresh[$manual_staff_id]) || in_array($manual_staff_id, $support_staff_ids, true)) {
+          continue;
+        }
+
+        $staff_to_add[] = $manual_staff_id;
+        $assigned_refresh[$manual_staff_id] = ['user_id' => $manual_staff_id, 'until' => (int)$manual_until_ts];
+      }
+
+      if ($staff_to_add) {
+        eventosapp_assign_staff_to_event($post_id, $staff_to_add, $manual_until_ts);
       }
     }
   }
 
   // ========== BOTÓN 2: AUTOCOMPLETAR STAFF REQUERIDO ==========
   $btn_autocomplete = !empty($_POST['evapp_staff_btn_autocomplete']);
-  
+
   if ($btn_autocomplete) {
     // Refrescar assigned después de posibles cambios manuales
     $assigned_refresh = eventosapp_get_event_staff_assigned($post_id);
     $current = count($assigned_refresh);
-    
+
     // Determinar cuántos faltan para llegar a la cantidad requerida
     if ($required > $current) {
       $need = $required - $current;
-      
+
       $existing_ids = array_map('intval', array_keys($assigned_refresh));
       $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids') ? eventosapp_support_get_event_staff_user_ids($post_id) : [];
       // Evitar re-asignar inmediatamente a los que se eliminaron y bloquear los reservados en Asistencia
@@ -622,7 +775,7 @@ add_action('evapp_daily_staff_release', function(){
   // 1) MODIFICADO: Liberar staff expirado considerando múltiples eventos
   $staff = get_users(['role'=>'staff', 'fields'=>['ID']]);
   $now = time();
-  
+
   foreach ($staff as $u) {
     $assignments = get_user_meta($u->ID, '_evapp_event_assignment', true);
     if (is_array($assignments) && !empty($assignments)) {
@@ -658,11 +811,11 @@ add_action('evapp_daily_staff_release', function(){
       $changed = false;
       foreach ($assigned as $uid=>$row) {
         $until = isset($row['until']) ? (int)$row['until'] : 0;
-        if ($until && $until < $now) { 
+        if ($until && $until < $now) {
           // Liberar usando la nueva función
           eventosapp_remove_staff_from_event($eid, $uid);
-          unset($assigned[$uid]); 
-          $changed=true; 
+          unset($assigned[$uid]);
+          $changed=true;
         }
       }
       if ($changed) update_post_meta($eid, '_evapp_event_staff_assigned', $assigned);
