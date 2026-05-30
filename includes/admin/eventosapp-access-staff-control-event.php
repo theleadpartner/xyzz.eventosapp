@@ -14,6 +14,12 @@
 
 if (!defined('ABSPATH')) exit;
 
+if (!function_exists('eventosapp_staff_access_excluded_support_features')) {
+    function eventosapp_staff_access_excluded_support_features() {
+        return ['support_assistance', 'support_team_metrics'];
+    }
+}
+
 // ========================================
 // METABOX: Control de Acceso por Evento
 // ========================================
@@ -55,6 +61,9 @@ function eventosapp_render_staff_access_control_metabox($post) {
     $features = function_exists('eventosapp_dashboard_features') 
         ? eventosapp_dashboard_features() 
         : [];
+    foreach (eventosapp_staff_access_excluded_support_features() as $excluded_feature) {
+        unset($features[$excluded_feature]);
+    }
     
     // Roles que queremos controlar por evento (SIN prefijo eventosapp_)
     $controlled_roles = [
@@ -69,6 +78,9 @@ function eventosapp_render_staff_access_control_metabox($post) {
             <strong>Importante:</strong> Este control funciona <em>sobre</em> los permisos globales configurados en 
             <a href="<?php echo admin_url('admin.php?page=eventosapp_configuracion'); ?>" target="_blank">Configuración</a>. 
             Solo puedes <strong>restringir</strong> lo que ya está habilitado globalmente, no puedes habilitar lo que está bloqueado.
+        </p>
+        <p class="description" style="margin-bottom: 15px; padding: 10px; border-left: 4px solid #2271b1; background: #f0f6fc;">
+            <strong>Asistencia y Métrica de equipo de apoyo:</strong> estas dos secciones no se controlan desde esta matriz. Su acceso final se define únicamente en el metabox <strong>Equipo de apoyo / Asistencia</strong>.
         </p>
         
         <style>
@@ -242,6 +254,9 @@ function eventosapp_save_staff_access_control_metabox($post_id, $post) {
     $features = function_exists('eventosapp_dashboard_features') 
         ? eventosapp_dashboard_features() 
         : [];
+    foreach (eventosapp_staff_access_excluded_support_features() as $excluded_feature) {
+        unset($features[$excluded_feature]);
+    }
     
     // Roles que controlamos (SIN prefijo eventosapp_)
     $controlled_roles = [
