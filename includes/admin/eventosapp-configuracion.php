@@ -14,8 +14,6 @@ if ( ! defined('ABSPATH') ) exit;
  *   'edit_page_id'         => (int),
  *   'qr_localidad_page_id' => (int), // Validador de Localidad (solo lectura)
  *   'qr_sesion_page_id'    => (int), // NUEVO: Control por sesión
- *   'support_assistance_page_id'   => (int), // Asistencia / equipo de apoyo
- *   'support_team_metrics_page_id' => (int), // Métricas equipo de apoyo
  * ]
  */
 
@@ -36,8 +34,8 @@ function eventosapp_get_pages_config() {
         'networking_ranking_page_id' => 0,
         'qr_double_auth_page_id'    => 0,
         'face_checkin_page_id'      => 0, // NUEVO
-        'support_assistance_page_id'   => 0, // NUEVO: Asistencia / Equipo de apoyo
-        'support_team_metrics_page_id' => 0, // NUEVO: Métricas equipo de apoyo
+        'support_assistance_page_id'   => 0, // Asistencia / Equipo de apoyo
+        'support_team_metrics_page_id' => 0, // Métricas equipo de apoyo
     ]);
 }
 
@@ -97,12 +95,10 @@ function eventosapp_get_face_checkin_url() {
     return eventosapp_get_configured_page_url('face_checkin_page_id', '#');
 }
 
-// NUEVO: Getter para Asistencia / Equipo de apoyo
 function eventosapp_get_support_assistance_url() {
     return eventosapp_get_configured_page_url('support_assistance_page_id', '#');
 }
 
-// NUEVO: Getter para Métricas de equipo de apoyo
 function eventosapp_get_support_team_metrics_url() {
     return eventosapp_get_configured_page_url('support_team_metrics_page_id', '#');
 }
@@ -252,26 +248,23 @@ add_settings_field(
     ['key'=>'face_checkin_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_face_checkin]</code>']
 );
 
-// NUEVO: Página de Asistencia / Equipo de apoyo
-add_settings_field(
-    'support_assistance_page_id',
-    'Página de Asistencia',
-    'eventosapp_render_pages_field',
-    'eventosapp_configuracion',
-    'eventosapp_pages_section',
-    ['key'=>'support_assistance_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_support_assistance]</code>']
-);
+    add_settings_field(
+        'support_assistance_page_id',
+        'Página de Asistencia',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'support_assistance_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_support_assistance]</code>']
+    );
 
-// NUEVO: Página de Métricas de Equipo de Apoyo
-add_settings_field(
-    'support_team_metrics_page_id',
-    'Página de Métricas de Equipo de Apoyo',
-    'eventosapp_render_pages_field',
-    'eventosapp_configuracion',
-    'eventosapp_pages_section',
-    ['key'=>'support_team_metrics_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_support_team_metrics]</code>']
-);
-
+    add_settings_field(
+        'support_team_metrics_page_id',
+        'Página de Métrica de equipo de apoyo',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'support_team_metrics_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_support_team_metrics]</code>']
+    );
 
 });
 
@@ -290,8 +283,8 @@ function eventosapp_sanitize_pages_option($input){
         'networking_ranking_page_id',
         'qr_double_auth_page_id',
         'face_checkin_page_id', // NUEVO
-        'support_assistance_page_id', // NUEVO
-        'support_team_metrics_page_id', // NUEVO
+        'support_assistance_page_id',
+        'support_team_metrics_page_id',
     ];
     foreach ($keys as $k) {
         $out[$k] = isset($input[$k]) ? absint($input[$k]) : 0;
@@ -349,6 +342,8 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_networking_ranking]</code> — Ranking Networking (Top lectores y leídos del día).</li>
             <li><code>[qr_checkin_doble_auth]</code> — Check-In con QR y Doble Autenticación.</li>
             <li><code>[eventosapp_face_checkin]</code> — Check-In por Reconocimiento Facial.</li>
+            <li><code>[eventosapp_support_assistance]</code> — Asistencia / Equipo de apoyo.</li>
+            <li><code>[eventosapp_support_team_metrics]</code> — Métricas del equipo de apoyo.</li>
         </ul>
     </div>
 <?php }
@@ -372,8 +367,8 @@ function eventosapp_dashboard_features() {
         'networking_ranking' => 'Ranking Networking',
         'qr_double_auth'     => 'Check-In QR Doble Autenticación',
         'face_checkin'       => 'Check-In Facial', // NUEVO
-        'support_assistance'   => 'Asistencia', // NUEVO
-        'support_team_metrics' => 'Métrica de equipo de apoyo', // NUEVO
+        'support_assistance'   => 'Asistencia',
+        'support_team_metrics' => 'Métrica de equipo de apoyo',
     ];
 }
 }
@@ -421,8 +416,6 @@ function eventosapp_default_dashboard_visibility() {
         $defaults['staff']['qr']            = 1;
         $defaults['staff']['qr_localidad']  = 1;
         $defaults['staff']['qr_sesion']     = 1;
-        $defaults['staff']['support_assistance'] = 1;
-        // support_team_metrics: OFF por defecto para staff; el coordinador de grupo se habilita por evento
         // checklist: OFF por defecto para staff
         // networking_ranking: OFF por defecto para staff (ajústalo si lo deseas ON)
     }
@@ -442,8 +435,6 @@ function eventosapp_default_dashboard_visibility() {
         $defaults['coordinador']['dashboard']          = 1;
         $defaults['coordinador']['checklist']          = 1;
         $defaults['coordinador']['networking_ranking'] = 1;
-        $defaults['coordinador']['support_assistance'] = 1;
-        $defaults['coordinador']['support_team_metrics'] = 1;
     }
 
     return $defaults;
@@ -600,8 +591,8 @@ function eventosapp_feature_page_map() {
         'networking_ranking' => 'networking_ranking_page_id',
         'qr_double_auth'     => 'qr_double_auth_page_id',
         'face_checkin'       => 'face_checkin_page_id', // NUEVO
-        'support_assistance'   => 'support_assistance_page_id', // NUEVO
-        'support_team_metrics' => 'support_team_metrics_page_id', // NUEVO
+        'support_assistance'   => 'support_assistance_page_id',
+        'support_team_metrics' => 'support_team_metrics_page_id',
     ];
 }
 }
