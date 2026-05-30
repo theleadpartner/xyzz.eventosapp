@@ -73,21 +73,18 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<path d="M8 18c.8-2.3 2.2-3.5 4-3.5s3.2 1.2 4 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
-			case 'support-assistance': // NUEVO: Asistencia / Equipo de apoyo
+			case 'support-assistance':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
-					<path d="M5 12a7 7 0 0 1 14 0v4a3 3 0 0 1-3 3h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-					<rect x="3" y="11" width="4" height="6" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
-					<rect x="17" y="11" width="4" height="6" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
-					<path d="M9 9h6M9 13h4M12 19h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<path d="M4 5h16v14H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+					<path d="M8 9h8M8 13h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<path d="M16 15l1.5 1.5L21 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>';
 
-			case 'support-metrics': // NUEVO: Métrica de equipo de apoyo
+			case 'support-metrics':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
-					<path d="M4 20V4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-					<path d="M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-					<rect x="7" y="11" width="3" height="6" rx="1"/>
-					<rect x="12" y="7" width="3" height="10" rx="1"/>
-					<rect x="17" y="9" width="3" height="8" rx="1"/>
+					<circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+					<circle cx="17" cy="7" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/>
+					<path d="M3 20c.8-3.2 2.5-5 5-5s4.2 1.8 5 5M13 19c.5-2.3 1.8-3.7 4-3.7 1.8 0 3.1 1 4 3.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
 			default:
@@ -339,19 +336,19 @@ add_shortcode('eventosapp_dashboard', function(){
     </a>
 <?php endif; ?>
 
-			<?php if (eventosapp_role_can('support_assistance')): ?>
-				<a class="evapp-card" href="<?php echo esc_url($url_support_assist); ?>" aria-label="Asistencia">
-					<?php echo eventosapp_dashboard_icon('support-assistance'); ?>
-					<span class="evapp-title">Asistencia</span>
-				</a>
-			<?php endif; ?>
+            <?php if (eventosapp_role_can('support_assistance')): ?>
+                <a class="evapp-card" href="<?php echo esc_url($url_support_assist); ?>" aria-label="Asistencia">
+                    <?php echo eventosapp_dashboard_icon('support-assistance'); ?>
+                    <span class="evapp-title">Asistencia</span>
+                </a>
+            <?php endif; ?>
 
-			<?php if (eventosapp_role_can('support_team_metrics')): ?>
-				<a class="evapp-card" href="<?php echo esc_url($url_support_stats); ?>" aria-label="Métrica de equipo de apoyo">
-					<?php echo eventosapp_dashboard_icon('support-metrics'); ?>
-					<span class="evapp-title">Métrica de equipo de apoyo</span>
-				</a>
-			<?php endif; ?>
+            <?php if (eventosapp_role_can('support_team_metrics')): ?>
+                <a class="evapp-card" href="<?php echo esc_url($url_support_stats); ?>" aria-label="Métrica de equipo de apoyo">
+                    <?php echo eventosapp_dashboard_icon('support-metrics'); ?>
+                    <span class="evapp-title">Métrica de equipo de apoyo</span>
+                </a>
+            <?php endif; ?>
 
 		</div>
 		<?php
@@ -370,13 +367,16 @@ add_shortcode('eventosapp_dashboard', function(){
 		$all_events = get_posts($query_args);
 
 		$events = array_values(array_filter($all_events, function($ev){
-			if ( function_exists('eventosapp_user_can_manage_event') && eventosapp_user_can_manage_event($ev->ID) ) {
+			$user_id = get_current_user_id();
+
+			if ( function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event($ev->ID, $user_id) ) {
 				return true;
 			}
-			if ( function_exists('eventosapp_support_user_is_assigned_to_event') && eventosapp_support_user_is_assigned_to_event($ev->ID) ) {
-				return true;
+
+			if ( function_exists('eventosapp_user_can_manage_event') ) {
+				return eventosapp_user_can_manage_event($ev->ID);
 			}
-			return current_user_can('manage_options') || (int)$ev->post_author === get_current_user_id();
+			return current_user_can('manage_options') || (int)$ev->post_author === $user_id;
 		}));
 
 		echo '<div style="background:#f6f7f7;border:1px solid #e1e1e1;padding:14px;border-radius:8px;">';
