@@ -146,6 +146,66 @@ if ( ! function_exists('eventosapp_support_save_groups') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_support_normalize_organizer_team_ids') ) {
+    function eventosapp_support_normalize_organizer_team_ids( $ids ) {
+        if ( ! is_array($ids) ) {
+            $ids = $ids ? [$ids] : [];
+        }
+        return array_values(array_unique(array_filter(array_map('absint', $ids))));
+    }
+}
+
+if ( ! function_exists('eventosapp_support_get_organizer_team_user_ids') ) {
+    function eventosapp_support_get_organizer_team_user_ids( $event_id ) {
+        $ids = get_post_meta( absint($event_id), '_eventosapp_support_organizer_team_ids', true );
+        return eventosapp_support_normalize_organizer_team_ids($ids);
+    }
+}
+
+if ( ! function_exists('eventosapp_support_save_organizer_team_user_ids') ) {
+    function eventosapp_support_save_organizer_team_user_ids( $event_id, $ids ) {
+        update_post_meta( absint($event_id), '_eventosapp_support_organizer_team_ids', eventosapp_support_normalize_organizer_team_ids($ids) );
+    }
+}
+
+if ( ! function_exists('eventosapp_support_user_is_super_admin') ) {
+    function eventosapp_support_user_is_super_admin( $user_id = null ) {
+        $user_id = $user_id === null ? get_current_user_id() : absint($user_id);
+        if ( ! $user_id ) return false;
+
+        if ( function_exists('is_super_admin') && is_super_admin($user_id) ) {
+            return true;
+        }
+
+        return user_can($user_id, 'manage_options');
+    }
+}
+
+if ( ! function_exists('eventosapp_support_user_is_organizer_team') ) {
+    function eventosapp_support_user_is_organizer_team( $event_id, $user_id = null ) {
+        $user_id = $user_id === null ? get_current_user_id() : absint($user_id);
+        return $user_id && in_array($user_id, eventosapp_support_get_organizer_team_user_ids($event_id), true);
+    }
+}
+
+if ( ! function_exists('eventosapp_support_get_all_assigned_user_ids') ) {
+    function eventosapp_support_get_all_assigned_user_ids( $event_id ) {
+        $ids = eventosapp_support_get_event_staff_user_ids($event_id);
+        foreach ( eventosapp_support_get_organizer_team_user_ids($event_id) as $uid ) {
+            $ids[] = absint($uid);
+        }
+        return array_values(array_unique(array_filter($ids)));
+    }
+}
+
+if ( ! function_exists('eventosapp_support_user_has_assignment_in_event') ) {
+    function eventosapp_support_user_has_assignment_in_event( $event_id, $user_id = null ) {
+        $user_id = $user_id === null ? get_current_user_id() : absint($user_id);
+        if ( ! $event_id || ! $user_id ) return false;
+        return eventosapp_support_user_is_assigned_to_event($event_id, $user_id) || eventosapp_support_user_is_organizer_team($event_id, $user_id);
+    }
+}
+
 if ( ! function_exists('eventosapp_support_get_event_staff_user_ids') ) {
     function eventosapp_support_get_event_staff_user_ids( $event_id ) {
         $ids = [];
@@ -209,14 +269,21 @@ if ( ! function_exists('eventosapp_support_user_has_any_event') ) {
             'post_status'    => ['publish', 'draft', 'pending', 'private'],
             'posts_per_page' => 500,
             'fields'         => 'ids',
-            'meta_query'     => [[
-                'key'     => '_eventosapp_support_staff_groups',
-                'compare' => 'EXISTS',
-            ]],
+            'meta_query'     => [
+                'relation' => 'OR',
+                [
+                    'key'     => '_eventosapp_support_staff_groups',
+                    'compare' => 'EXISTS',
+                ],
+                [
+                    'key'     => '_eventosapp_support_organizer_team_ids',
+                    'compare' => 'EXISTS',
+                ],
+            ],
         ]);
 
         foreach ( $events as $event_id ) {
-            if ( eventosapp_support_user_is_assigned_to_event($event_id, $user_id) ) {
+            if ( eventosapp_support_user_has_assignment_in_event($event_id, $user_id) ) {
                 return true;
             }
         }
@@ -260,19 +327,28 @@ if ( ! function_exists('eventosapp_support_user_can_feature_for_event') ) {
         $user_id  = $user_id === null ? get_current_user_id() : absint($user_id);
         if ( ! $event_id || ! $user_id ) return false;
 
-        if ( eventosapp_support_user_can_admin_event_without_support($event_id, $user_id) ) {
+        // El bypass de estas secciones queda reservado al superadministrador.
+        // Los permisos por rol y el metabox "Control de Acceso Dashboard Staff" no habilitan por sí solos estas secciones.
+        if ( eventosapp_support_user_is_super_admin($user_id) ) {
             return true;
         }
 
-        $is_support = eventosapp_support_user_is_assigned_to_event($event_id, $user_id);
-        if ( ! $is_support ) return false;
+        $is_group_member      = eventosapp_support_user_is_assigned_to_event($event_id, $user_id);
+        $is_group_coordinator = eventosapp_support_user_is_group_coordinator($event_id, $user_id);
+        $is_organizer_team    = eventosapp_support_user_is_organizer_team($event_id, $user_id);
 
-        if ( $feature === 'support_assistance' || $feature === 'dashboard' ) {
-            return true;
+        if ( $feature === 'dashboard' ) {
+            return $is_group_member || $is_organizer_team;
+        }
+
+        if ( $feature === 'support_assistance' ) {
+            // Los coordinadores y el Equipo del Organizador no registran atenciones desde esta sección.
+            return $is_group_member && ! $is_group_coordinator && ! $is_organizer_team;
         }
 
         if ( $feature === 'support_team_metrics' ) {
-            return eventosapp_support_user_is_group_coordinator($event_id, $user_id);
+            // Coordinador: métricas de su grupo. Equipo del Organizador: métricas globales del evento.
+            return $is_group_coordinator || $is_organizer_team;
         }
 
         return false;
@@ -280,9 +356,9 @@ if ( ! function_exists('eventosapp_support_user_can_feature_for_event') ) {
 }
 
 /**
- * Permisos dinámicos para staff de apoyo:
- * - Staff asignado como apoyo: solo Dashboard + Asistencia.
- * - Coordinador de grupo: Dashboard + Asistencia + Métricas de equipo de apoyo.
+ * Permisos dinámicos para el metabox Equipo de apoyo / Asistencia.
+ * Este filtro se ejecuta después del control por rol y por evento para que estas dos secciones
+ * dependan finalmente del metabox de apoyo y no de la matriz global de permisos.
  */
 add_filter('eventosapp_role_can', function($has_permission, $feature, $user){
     if ( ! $user || ! $user instanceof WP_User || ! $user->exists() ) {
@@ -300,34 +376,38 @@ add_filter('eventosapp_role_can', function($has_permission, $feature, $user){
         if ( $feature === 'dashboard' && eventosapp_support_user_has_any_event($user->ID) ) {
             return true;
         }
+
+        if ( in_array($feature, $support_features, true) ) {
+            return false;
+        }
+
         return $has_permission;
     }
 
-    $is_support = eventosapp_support_user_is_assigned_to_event($active_event, $user->ID);
+    if ( eventosapp_support_user_is_super_admin($user->ID) ) {
+        if ( in_array($feature, $support_features, true) ) {
+            return true;
+        }
+        return $has_permission;
+    }
 
-    // Las nuevas secciones solo se muestran si el usuario administra el evento
-    // o si fue asignado en este metabox de apoyo.
+    $has_support_assignment = eventosapp_support_user_has_assignment_in_event($active_event, $user->ID);
+
+    // Asistencia y métricas quedan gobernadas exclusivamente por el metabox de apoyo.
     if ( in_array($feature, $support_features, true) ) {
         return eventosapp_support_user_can_feature_for_event($active_event, $feature, $user->ID);
     }
 
-    if ( ! $is_support ) {
+    if ( ! $has_support_assignment ) {
         return $has_permission;
     }
 
-    if ( eventosapp_support_user_can_admin_event_without_support($active_event, $user->ID) ) {
-        return $has_permission;
-    }
-
-    if ( $feature === 'dashboard' || $feature === 'support_assistance' ) {
+    if ( $feature === 'dashboard' ) {
         return true;
     }
 
-    if ( $feature === 'support_team_metrics' ) {
-        return eventosapp_support_user_is_group_coordinator($active_event, $user->ID);
-    }
-
-    // Un staff de apoyo no debe ver el resto de secciones de este evento.
+    // Si el usuario está asignado en el metabox de apoyo, no debe ver otros botones del dashboard
+    // aunque el rol o el control por evento los tengan habilitados.
     return false;
 }, 20, 3);
 
@@ -441,6 +521,8 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
         $event_id       = absint($post->ID);
         $groups         = eventosapp_support_get_groups($event_id);
         $support_ids    = eventosapp_support_get_event_staff_user_ids($event_id);
+        $organizer_team_ids = eventosapp_support_get_organizer_team_user_ids($event_id);
+        $all_support_ids    = eventosapp_support_get_all_assigned_user_ids($event_id);
         $cogestion_ids  = eventosapp_support_get_cogestion_staff_user_ids($event_id);
         $next_group     = 1;
         foreach ( $groups as $group ) {
@@ -473,6 +555,7 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
             .evapp-support-muted{color:#646970;font-size:12px;line-height:1.4;}
             .evapp-support-danger{color:#b32d2e;font-weight:600;}
             .evapp-support-pill{display:inline-block;background:#eef6ff;border:1px solid #b8dcff;border-radius:999px;padding:2px 8px;margin:2px 3px 2px 0;font-size:12px;}
+            .evapp-support-pill.org{background:#fef3c7;border-color:#f59e0b;color:#78350f;}
             .evapp-support-select{width:100%;min-height:130px;}
             .evapp-support-full{width:100%;}
             @media(max-width:900px){.evapp-support-grid{grid-template-columns:1fr;}}
@@ -537,6 +620,51 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
         </div>
 
         <div class="evapp-support-box">
+            <h4>Equipo del Organizador</h4>
+            <p class="evapp-support-muted">
+                Los usuarios seleccionados aquí solo podrán acceder a <strong>Métrica de equipo de apoyo</strong> y verán las métricas totales de todos los grupos del evento. No tendrán acceso al botón de Asistencia.
+            </p>
+
+            <?php if ( $organizer_team_ids ) : ?>
+                <p>
+                    <?php foreach ( $organizer_team_ids as $org_uid ) : ?>
+                        <?php $org_user = get_userdata($org_uid); ?>
+                        <?php if ( $org_user ) : ?>
+                            <span class="evapp-support-pill org">
+                                <?php echo esc_html($org_user->display_name . ' · Equipo del Organizador'); ?>
+                            </span>
+                        <?php endif; ?>
+                    <?php endforeach; ?>
+                </p>
+            <?php else : ?>
+                <p class="evapp-support-muted">Todavía no hay usuarios asignados como Equipo del Organizador para este evento.</p>
+            <?php endif; ?>
+
+            <label for="evapp_support_organizer_team_ids"><strong>Usuarios Equipo del Organizador</strong></label>
+            <select id="evapp_support_organizer_team_ids" name="evapp_support_organizer_team_ids[]" class="evapp-support-select" multiple>
+                <?php foreach ( $staff_users as $staff ) : ?>
+                    <?php
+                    $uid = absint($staff->ID);
+                    $selected = in_array($uid, $organizer_team_ids, true);
+                    $already_group = in_array($uid, $support_ids, true);
+                    $already_cogestion = in_array($uid, $cogestion_ids, true);
+                    $disabled = ! $selected && ( $already_group || $already_cogestion );
+                    $label_suffix = '';
+                    if ( $already_group ) {
+                        $label_suffix = ' — bloqueado por grupo de apoyo';
+                    } elseif ( $already_cogestion ) {
+                        $label_suffix = ' — bloqueado por co-gestión';
+                    }
+                    ?>
+                    <option value="<?php echo esc_attr($uid); ?>" <?php selected($selected); ?> <?php disabled($disabled); ?>>
+                        <?php echo esc_html($staff->display_name . ' - ' . $staff->user_login . ' (' . $staff->user_email . ')' . $label_suffix); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <p class="evapp-support-muted">Mantén presionada la tecla Ctrl/Cmd para seleccionar uno o varios usuarios. Para quitar un usuario del Equipo del Organizador, desmárcalo y actualiza el evento.</p>
+        </div>
+
+        <div class="evapp-support-box">
             <h4>Agregar Grupo <?php echo esc_html($next_group); ?></h4>
             <div class="evapp-support-grid">
                 <div>
@@ -545,7 +673,7 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
                         <?php foreach ( $staff_users as $staff ) : ?>
                             <?php
                             $uid = absint($staff->ID);
-                            $already_support   = in_array($uid, $support_ids, true);
+                            $already_support   = in_array($uid, $all_support_ids, true);
                             $already_cogestion = in_array($uid, $cogestion_ids, true);
                             $disabled = $already_support || $already_cogestion;
                             $label_suffix = '';
@@ -569,7 +697,7 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
                         <?php foreach ( $staff_users as $staff ) : ?>
                             <?php
                             $uid = absint($staff->ID);
-                            $already_support   = in_array($uid, $support_ids, true);
+                            $already_support   = in_array($uid, $all_support_ids, true);
                             $already_cogestion = in_array($uid, $cogestion_ids, true);
                             $disabled = $already_support || $already_cogestion;
                             $label_suffix = '';
@@ -643,13 +771,26 @@ add_action('save_post_eventosapp_event', function($post_id, $post){
     }
 
     $co_staff_ids = eventosapp_support_get_cogestion_staff_user_ids($post_id);
-    $existing_support_ids = [];
+    $group_support_ids = [];
     foreach ( $groups as $group ) {
         foreach ( (array) ($group['members'] ?? []) as $uid ) {
-            $existing_support_ids[] = absint($uid);
+            $group_support_ids[] = absint($uid);
         }
     }
-    $existing_support_ids = array_values(array_unique(array_filter($existing_support_ids)));
+    $group_support_ids = array_values(array_unique(array_filter($group_support_ids)));
+
+    $organizer_team_ids = isset($_POST['evapp_support_organizer_team_ids']) ? array_map('absint', (array) $_POST['evapp_support_organizer_team_ids']) : [];
+    $organizer_team_ids = array_values(array_unique(array_filter($organizer_team_ids)));
+    $organizer_team_ids = array_values(array_filter($organizer_team_ids, function($uid) use ($co_staff_ids, $group_support_ids){
+        if ( ! $uid ) return false;
+        if ( in_array($uid, $co_staff_ids, true) ) return false;
+        if ( in_array($uid, $group_support_ids, true) ) return false;
+        $user = get_userdata($uid);
+        return $user && in_array('staff', (array) $user->roles, true);
+    }));
+    eventosapp_support_save_organizer_team_user_ids($post_id, $organizer_team_ids);
+
+    $existing_support_ids = array_values(array_unique(array_filter(array_merge($group_support_ids, $organizer_team_ids))));
 
     $new_members = isset($_POST['evapp_support_new_members']) ? array_map('absint', (array) $_POST['evapp_support_new_members']) : [];
     $new_members = array_values(array_unique(array_filter($new_members)));
@@ -694,7 +835,7 @@ add_action('save_post_eventosapp_event', function($post_id){
     if ( defined('DOING_AUTOSAVE') && DOING_AUTOSAVE ) return;
     if ( ! current_user_can('edit_post', $post_id) ) return;
 
-    $support_ids = eventosapp_support_get_event_staff_user_ids($post_id);
+    $support_ids = eventosapp_support_get_all_assigned_user_ids($post_id);
     if ( ! $support_ids ) return;
 
     $assigned = get_post_meta($post_id, '_evapp_event_staff_assigned', true);
@@ -728,6 +869,56 @@ if ( ! function_exists('eventosapp_support_get_latest_attentions') ) {
             $event_id,
             $limit
         ) );
+    }
+}
+
+if ( ! function_exists('eventosapp_support_get_metrics_scope') ) {
+    function eventosapp_support_get_metrics_scope( $event_id, $user_id = null ) {
+        $event_id = absint($event_id);
+        $user_id  = $user_id === null ? get_current_user_id() : absint($user_id);
+        if ( ! $event_id || ! $user_id ) return null;
+
+        if ( eventosapp_support_user_is_super_admin($user_id) || eventosapp_support_user_is_organizer_team($event_id, $user_id) ) {
+            return [
+                'type'         => 'all',
+                'group_number' => 0,
+                'label'        => 'Vista total del evento',
+            ];
+        }
+
+        if ( eventosapp_support_user_is_group_coordinator($event_id, $user_id) ) {
+            $group = eventosapp_support_get_user_group($event_id, $user_id);
+            $group_number = $group ? absint($group['group_number'] ?? 0) : 0;
+            if ( $group_number ) {
+                return [
+                    'type'         => 'group',
+                    'group_number' => $group_number,
+                    'label'        => 'Vista limitada al Grupo ' . $group_number,
+                ];
+            }
+        }
+
+        return null;
+    }
+}
+
+if ( ! function_exists('eventosapp_support_prepare_query') ) {
+    function eventosapp_support_prepare_query( $query, array $params ) {
+        global $wpdb;
+        array_unshift($params, $query);
+        return call_user_func_array([$wpdb, 'prepare'], $params);
+    }
+}
+
+if ( ! function_exists('eventosapp_support_metrics_where_sql') ) {
+    function eventosapp_support_metrics_where_sql( $event_id, $scope, &$params ) {
+        $params = [absint($event_id)];
+        $where = 'event_id = %d';
+        if ( is_array($scope) && ($scope['type'] ?? '') === 'group' ) {
+            $where .= ' AND support_group_number = %d';
+            $params[] = absint($scope['group_number'] ?? 0);
+        }
+        return $where;
     }
 }
 
@@ -877,10 +1068,6 @@ add_action('wp_ajax_eventosapp_support_register_attention', function(){
 // Shortcode: Asistencia
 // =====================================================
 add_shortcode('eventosapp_support_assistance', function($atts){
-    if ( function_exists('eventosapp_require_feature') ) {
-        eventosapp_require_feature('support_assistance');
-    }
-
     $atts = shortcode_atts(['event_id' => 0], $atts);
     $event_id = eventosapp_support_current_event_from_request($atts['event_id']);
 
@@ -1208,10 +1395,6 @@ add_shortcode('eventosapp_support_assistance', function($atts){
 // Shortcode: Métricas equipo de apoyo
 // =====================================================
 add_shortcode('eventosapp_support_team_metrics', function($atts){
-    if ( function_exists('eventosapp_require_feature') ) {
-        eventosapp_require_feature('support_team_metrics');
-    }
-
     $atts = shortcode_atts(['event_id' => 0], $atts);
     $event_id = eventosapp_support_current_event_from_request($atts['event_id']);
 
@@ -1224,29 +1407,36 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
         return '<div class="evapp-support-notice evapp-support-notice-error">No tienes permisos para ver las métricas del equipo de apoyo.</div>';
     }
 
+    $scope = eventosapp_support_get_metrics_scope($event_id, get_current_user_id());
+    if ( ! $scope ) {
+        return '<div class="evapp-support-notice evapp-support-notice-error">No tienes permisos para ver las métricas del equipo de apoyo.</div>';
+    }
+
     global $wpdb;
     $table = eventosapp_support_table_name();
+    $where_params = [];
+    $where_sql = eventosapp_support_metrics_where_sql($event_id, $scope, $where_params);
 
-    $by_hour = $wpdb->get_results( $wpdb->prepare(
+    $by_hour = $wpdb->get_results( eventosapp_support_prepare_query(
         "SELECT created_hour, COUNT(*) AS total
            FROM {$table}
-          WHERE event_id = %d
+          WHERE {$where_sql}
           GROUP BY created_hour
           ORDER BY created_hour ASC",
-        $event_id
+        $where_params
     ) );
 
-    $top_users = $wpdb->get_results( $wpdb->prepare(
+    $top_users = $wpdb->get_results( eventosapp_support_prepare_query(
         "SELECT staff_user_id, staff_name, staff_email, COUNT(*) AS total
            FROM {$table}
-          WHERE event_id = %d
+          WHERE {$where_sql}
           GROUP BY staff_user_id, staff_name, staff_email
           ORDER BY total DESC, staff_name ASC
           LIMIT 10",
-        $event_id
+        $where_params
     ) );
 
-    $total = (int) $wpdb->get_var( $wpdb->prepare("SELECT COUNT(*) FROM {$table} WHERE event_id = %d", $event_id) );
+    $total = (int) $wpdb->get_var( eventosapp_support_prepare_query("SELECT COUNT(*) FROM {$table} WHERE {$where_sql}", $where_params) );
     $max_hour = 0;
     foreach ( $by_hour as $row ) {
         $max_hour = max($max_hour, (int) $row->total);
@@ -1275,6 +1465,7 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
     <div class="evapp-support-metrics">
         <div class="evapp-support-metrics-card">
             <h2>Métrica de equipo de apoyo</h2>
+            <p class="evapp-support-muted" style="margin-top:0;"><?php echo esc_html($scope['label'] ?? ''); ?></p>
             <div class="evapp-support-kpi">Total de atenciones: <?php echo esc_html($total); ?></div>
 
             <h3>Atenciones realizadas por hora</h3>
@@ -1335,16 +1526,23 @@ add_action('admin_post_eventosapp_support_download_csv', function(){
 
     check_admin_referer('eventosapp_support_download_csv_' . $event_id);
 
-    if ( ! eventosapp_support_user_can_feature_for_event($event_id, 'support_team_metrics') && ! current_user_can('edit_post', $event_id) ) {
+    $can_download_all = current_user_can('edit_post', $event_id) || eventosapp_support_user_is_super_admin();
+    $scope = $can_download_all
+        ? ['type' => 'all', 'group_number' => 0, 'label' => 'Vista total del evento']
+        : eventosapp_support_get_metrics_scope($event_id, get_current_user_id());
+
+    if ( ! $scope ) {
         wp_die('No tienes permisos para descargar esta base de consultas.', '', 403);
     }
 
     global $wpdb;
     $table = eventosapp_support_table_name();
+    $where_params = [];
+    $where_sql = eventosapp_support_metrics_where_sql($event_id, $scope, $where_params);
 
-    $rows = $wpdb->get_results( $wpdb->prepare(
-        "SELECT * FROM {$table} WHERE event_id = %d ORDER BY id ASC",
-        $event_id
+    $rows = $wpdb->get_results( eventosapp_support_prepare_query(
+        "SELECT * FROM {$table} WHERE {$where_sql} ORDER BY id ASC",
+        $where_params
     ), ARRAY_A );
 
     $filename = 'eventosapp-consultas-evento-' . $event_id . '-' . gmdate('Ymd-His') . '.csv';
