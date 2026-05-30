@@ -501,6 +501,109 @@ if ( ! function_exists('eventosapp_support_require_event_feature') ) {
 }
 
 // =====================================================
+// Helpers de guardado del metabox Equipo de apoyo / Asistencia
+// =====================================================
+if ( ! function_exists('eventosapp_support_process_assignment_update') ) {
+    function eventosapp_support_process_assignment_update( $event_id, array $args = [] ) {
+        $event_id = absint($event_id);
+
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return new WP_Error('invalid_event', 'Evento inválido.');
+        }
+
+        if ( ! current_user_can('edit_post', $event_id) ) {
+            return new WP_Error('permission_denied', 'No tienes permisos para editar este evento.');
+        }
+
+        $groups = eventosapp_support_get_groups($event_id);
+
+        $remove_numbers = isset($args['remove_numbers']) ? (array) $args['remove_numbers'] : [];
+        $remove_numbers = array_values(array_unique(array_filter(array_map('absint', $remove_numbers))));
+        if ( $remove_numbers ) {
+            $groups = array_values(array_filter($groups, function($group) use ($remove_numbers){
+                return ! in_array(absint($group['group_number'] ?? 0), $remove_numbers, true);
+            }));
+        }
+
+        $co_staff_ids = eventosapp_support_get_cogestion_staff_user_ids($event_id);
+
+        $group_support_ids = [];
+        foreach ( $groups as $group ) {
+            foreach ( (array) ($group['members'] ?? []) as $uid ) {
+                $group_support_ids[] = absint($uid);
+            }
+        }
+        $group_support_ids = array_values(array_unique(array_filter($group_support_ids)));
+
+        if ( array_key_exists('organizer_team_ids', $args) ) {
+            $organizer_team_ids = eventosapp_support_normalize_organizer_team_ids($args['organizer_team_ids']);
+        } else {
+            $organizer_team_ids = eventosapp_support_get_organizer_team_user_ids($event_id);
+        }
+
+        $organizer_team_ids = array_values(array_filter($organizer_team_ids, function($uid) use ($co_staff_ids, $group_support_ids){
+            if ( ! $uid ) return false;
+            if ( in_array($uid, $co_staff_ids, true) ) return false;
+            if ( in_array($uid, $group_support_ids, true) ) return false;
+            $user = get_userdata($uid);
+            return $user && in_array('staff', (array) $user->roles, true);
+        }));
+
+        eventosapp_support_save_organizer_team_user_ids($event_id, $organizer_team_ids);
+
+        $existing_support_ids = array_values(array_unique(array_filter(array_merge($group_support_ids, $organizer_team_ids))));
+
+        $new_members = isset($args['new_members']) ? (array) $args['new_members'] : [];
+        $new_members = array_values(array_unique(array_filter(array_map('absint', $new_members))));
+
+        $new_coordinator = isset($args['new_coordinator']) ? absint($args['new_coordinator']) : 0;
+        if ( $new_coordinator && ! in_array($new_coordinator, $new_members, true) ) {
+            $new_members[] = $new_coordinator;
+        }
+
+        $new_members = array_values(array_filter($new_members, function($uid) use ($co_staff_ids, $existing_support_ids){
+            if ( ! $uid ) return false;
+            if ( in_array($uid, $co_staff_ids, true) ) return false;
+            if ( in_array($uid, $existing_support_ids, true) ) return false;
+            $user = get_userdata($uid);
+            return $user && in_array('staff', (array) $user->roles, true);
+        }));
+
+        $created_group_number = 0;
+        if ( $new_members ) {
+            if ( $new_coordinator && ! in_array($new_coordinator, $new_members, true) ) {
+                $new_coordinator = 0;
+            }
+
+            $next_group = 1;
+            foreach ( $groups as $group ) {
+                $next_group = max($next_group, absint($group['group_number'] ?? 0) + 1);
+            }
+
+            $groups[] = [
+                'group_number'   => $next_group,
+                'coordinator_id' => $new_coordinator,
+                'members'        => $new_members,
+                'created_at'     => current_time('mysql'),
+                'created_by'     => get_current_user_id(),
+            ];
+
+            $created_group_number = $next_group;
+        }
+
+        eventosapp_support_save_groups($event_id, $groups);
+
+        return [
+            'created_group_number' => absint($created_group_number),
+            'created_members'      => count($new_members),
+            'removed_groups'       => count($remove_numbers),
+            'organizer_team_count' => count($organizer_team_ids),
+            'groups_count'         => count(eventosapp_support_get_groups($event_id)),
+        ];
+    }
+}
+
+// =====================================================
 // Metabox de grupos de apoyo
 // =====================================================
 add_action('add_meta_boxes', function(){
@@ -558,6 +661,10 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
             .evapp-support-pill.org{background:#fef3c7;border-color:#f59e0b;color:#78350f;}
             .evapp-support-select{width:100%;min-height:130px;}
             .evapp-support-full{width:100%;}
+            .evapp-support-ajax-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;}
+            .evapp-support-ajax-status{font-size:12px;font-weight:600;}
+            .evapp-support-ajax-status.ok{color:#008a20;}
+            .evapp-support-ajax-status.error{color:#b32d2e;}
             @media(max-width:900px){.evapp-support-grid{grid-template-columns:1fr;}}
         </style>
 
@@ -661,7 +768,7 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
                     </option>
                 <?php endforeach; ?>
             </select>
-            <p class="evapp-support-muted">Mantén presionada la tecla Ctrl/Cmd para seleccionar uno o varios usuarios. Para quitar un usuario del Equipo del Organizador, desmárcalo y actualiza el evento.</p>
+            <p class="evapp-support-muted">Mantén presionada la tecla Ctrl/Cmd para seleccionar uno o varios usuarios. Para quitar un usuario del Equipo del Organizador, desmárcalo y presiona <strong>Agregar usuarios y actualizar pantalla</strong>.</p>
         </div>
 
         <div class="evapp-support-box">
@@ -715,7 +822,98 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
                     <p class="evapp-support-muted">Si eliges un coordinador que no estaba en la lista de integrantes, se agregará automáticamente al grupo.</p>
                 </div>
             </div>
+            <div class="evapp-support-ajax-actions">
+                <button type="button" class="button button-primary" id="evappSupportAjaxSaveBtn" data-event-id="<?php echo esc_attr($event_id); ?>">Agregar usuarios y actualizar pantalla</button>
+                <span class="evapp-support-ajax-status" id="evappSupportAjaxSaveStatus"></span>
+            </div>
+            <p class="evapp-support-muted">Este botón guarda los usuarios seleccionados en este metabox sin depender del botón <strong>Actualizar</strong> del evento. Al finalizar, la pantalla se recarga automáticamente para mostrar el grupo creado y limpiar la selección.</p>
         </div>
+
+        <script>
+        (function(){
+            const btn = document.getElementById('evappSupportAjaxSaveBtn');
+            const status = document.getElementById('evappSupportAjaxSaveStatus');
+            if (!btn || !status) return;
+
+            const savedMessage = window.sessionStorage ? window.sessionStorage.getItem('evappSupportAjaxSaved') : '';
+            if (savedMessage) {
+                status.textContent = savedMessage;
+                status.className = 'evapp-support-ajax-status ok';
+                window.sessionStorage.removeItem('evappSupportAjaxSaved');
+            }
+
+            function selectedValues(selector){
+                const el = document.querySelector(selector);
+                if (!el) return [];
+                return Array.from(el.selectedOptions || []).map(function(option){
+                    return option.value;
+                }).filter(Boolean);
+            }
+
+            function checkedValues(selector){
+                return Array.from(document.querySelectorAll(selector)).map(function(input){
+                    return input.value;
+                }).filter(Boolean);
+            }
+
+            btn.addEventListener('click', function(){
+                const nonceInput = document.getElementById('eventosapp_support_groups_nonce');
+                const coordinator = document.getElementById('evapp_support_new_coordinator');
+
+                if (!window.ajaxurl || !nonceInput) {
+                    status.textContent = 'No se pudo iniciar el guardado AJAX. Recarga la pantalla e intenta nuevamente.';
+                    status.className = 'evapp-support-ajax-status error';
+                    return;
+                }
+
+                const fd = new FormData();
+                fd.append('action', 'eventosapp_support_save_metabox_assignments');
+                fd.append('event_id', btn.dataset.eventId || '0');
+                fd.append('security', nonceInput.value || '');
+
+                selectedValues('#evapp_support_organizer_team_ids').forEach(function(value){
+                    fd.append('evapp_support_organizer_team_ids[]', value);
+                });
+
+                selectedValues('#evapp_support_new_members').forEach(function(value){
+                    fd.append('evapp_support_new_members[]', value);
+                });
+
+                checkedValues('input[name="evapp_support_remove_groups[]"]:checked').forEach(function(value){
+                    fd.append('evapp_support_remove_groups[]', value);
+                });
+
+                fd.append('evapp_support_new_coordinator', coordinator ? coordinator.value : '0');
+
+                btn.disabled = true;
+                status.textContent = 'Guardando asignaciones…';
+                status.className = 'evapp-support-ajax-status';
+
+                fetch(window.ajaxurl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: fd
+                }).then(function(response){
+                    return response.json();
+                }).then(function(resp){
+                    if (!resp || !resp.success) {
+                        const msg = resp && resp.data && resp.data.message ? resp.data.message : 'No se pudieron guardar las asignaciones.';
+                        throw new Error(msg);
+                    }
+
+                    const msg = resp.data && resp.data.message ? resp.data.message : 'Asignaciones guardadas correctamente.';
+                    if (window.sessionStorage) {
+                        window.sessionStorage.setItem('evappSupportAjaxSaved', msg);
+                    }
+                    window.location.reload();
+                }).catch(function(error){
+                    status.textContent = error && error.message ? error.message : 'Error guardando asignaciones.';
+                    status.className = 'evapp-support-ajax-status error';
+                    btn.disabled = false;
+                });
+            });
+        })();
+        </script>
 
         <div class="evapp-support-box">
             <h4>Atenciones registradas en este evento</h4>
@@ -761,74 +959,49 @@ add_action('save_post_eventosapp_event', function($post_id, $post){
     if ( empty($_POST['eventosapp_support_groups_nonce']) || ! wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['eventosapp_support_groups_nonce'])), 'eventosapp_support_groups_save') ) return;
     if ( ! current_user_can('edit_post', $post_id) ) return;
 
-    $groups = eventosapp_support_get_groups($post_id);
-
-    $remove_numbers = isset($_POST['evapp_support_remove_groups']) ? array_map('absint', (array) $_POST['evapp_support_remove_groups']) : [];
-    if ( $remove_numbers ) {
-        $groups = array_values(array_filter($groups, function($group) use ($remove_numbers){
-            return ! in_array(absint($group['group_number'] ?? 0), $remove_numbers, true);
-        }));
-    }
-
-    $co_staff_ids = eventosapp_support_get_cogestion_staff_user_ids($post_id);
-    $group_support_ids = [];
-    foreach ( $groups as $group ) {
-        foreach ( (array) ($group['members'] ?? []) as $uid ) {
-            $group_support_ids[] = absint($uid);
-        }
-    }
-    $group_support_ids = array_values(array_unique(array_filter($group_support_ids)));
-
-    $organizer_team_ids = isset($_POST['evapp_support_organizer_team_ids']) ? array_map('absint', (array) $_POST['evapp_support_organizer_team_ids']) : [];
-    $organizer_team_ids = array_values(array_unique(array_filter($organizer_team_ids)));
-    $organizer_team_ids = array_values(array_filter($organizer_team_ids, function($uid) use ($co_staff_ids, $group_support_ids){
-        if ( ! $uid ) return false;
-        if ( in_array($uid, $co_staff_ids, true) ) return false;
-        if ( in_array($uid, $group_support_ids, true) ) return false;
-        $user = get_userdata($uid);
-        return $user && in_array('staff', (array) $user->roles, true);
-    }));
-    eventosapp_support_save_organizer_team_user_ids($post_id, $organizer_team_ids);
-
-    $existing_support_ids = array_values(array_unique(array_filter(array_merge($group_support_ids, $organizer_team_ids))));
-
-    $new_members = isset($_POST['evapp_support_new_members']) ? array_map('absint', (array) $_POST['evapp_support_new_members']) : [];
-    $new_members = array_values(array_unique(array_filter($new_members)));
-
-    $new_coordinator = isset($_POST['evapp_support_new_coordinator']) ? absint($_POST['evapp_support_new_coordinator']) : 0;
-    if ( $new_coordinator && ! in_array($new_coordinator, $new_members, true) ) {
-        $new_members[] = $new_coordinator;
-    }
-
-    $new_members = array_values(array_filter($new_members, function($uid) use ($co_staff_ids, $existing_support_ids){
-        if ( ! $uid ) return false;
-        if ( in_array($uid, $co_staff_ids, true) ) return false;
-        if ( in_array($uid, $existing_support_ids, true) ) return false;
-        $user = get_userdata($uid);
-        return $user && in_array('staff', (array) $user->roles, true);
-    }));
-
-    if ( $new_members ) {
-        if ( $new_coordinator && ! in_array($new_coordinator, $new_members, true) ) {
-            $new_coordinator = 0;
-        }
-
-        $next_group = 1;
-        foreach ( $groups as $group ) {
-            $next_group = max($next_group, absint($group['group_number'] ?? 0) + 1);
-        }
-
-        $groups[] = [
-            'group_number'   => $next_group,
-            'coordinator_id' => $new_coordinator,
-            'members'        => $new_members,
-            'created_at'     => current_time('mysql'),
-            'created_by'     => get_current_user_id(),
-        ];
-    }
-
-    eventosapp_support_save_groups($post_id, $groups);
+    eventosapp_support_process_assignment_update($post_id, [
+        'remove_numbers'     => isset($_POST['evapp_support_remove_groups']) ? array_map('absint', (array) $_POST['evapp_support_remove_groups']) : [],
+        'organizer_team_ids' => isset($_POST['evapp_support_organizer_team_ids']) ? array_map('absint', (array) $_POST['evapp_support_organizer_team_ids']) : [],
+        'new_members'        => isset($_POST['evapp_support_new_members']) ? array_map('absint', (array) $_POST['evapp_support_new_members']) : [],
+        'new_coordinator'    => isset($_POST['evapp_support_new_coordinator']) ? absint($_POST['evapp_support_new_coordinator']) : 0,
+    ]);
 }, 40, 2);
+
+add_action('wp_ajax_eventosapp_support_save_metabox_assignments', function(){
+    check_ajax_referer('eventosapp_support_groups_save', 'security');
+
+    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+        wp_send_json_error(['message' => 'Evento inválido.'], 400);
+    }
+
+    if ( ! current_user_can('edit_post', $event_id) ) {
+        wp_send_json_error(['message' => 'No tienes permisos para editar este evento.'], 403);
+    }
+
+    $result = eventosapp_support_process_assignment_update($event_id, [
+        'remove_numbers'     => isset($_POST['evapp_support_remove_groups']) ? array_map('absint', (array) $_POST['evapp_support_remove_groups']) : [],
+        'organizer_team_ids' => isset($_POST['evapp_support_organizer_team_ids']) ? array_map('absint', (array) $_POST['evapp_support_organizer_team_ids']) : [],
+        'new_members'        => isset($_POST['evapp_support_new_members']) ? array_map('absint', (array) $_POST['evapp_support_new_members']) : [],
+        'new_coordinator'    => isset($_POST['evapp_support_new_coordinator']) ? absint($_POST['evapp_support_new_coordinator']) : 0,
+    ]);
+
+    if ( is_wp_error($result) ) {
+        wp_send_json_error(['message' => $result->get_error_message()], 400);
+    }
+
+    $message = 'Asignaciones guardadas correctamente.';
+    if ( ! empty($result['created_group_number']) ) {
+        $message = 'Grupo ' . absint($result['created_group_number']) . ' agregado correctamente. Actualizando pantalla…';
+    } elseif ( ! empty($result['removed_groups']) ) {
+        $message = 'Grupos eliminados correctamente. Actualizando pantalla…';
+    }
+
+    wp_send_json_success([
+        'message' => $message,
+        'summary' => $result,
+    ]);
+});
 
 // Enforce extra: si alguien intenta asignar en co-gestión a un staff de apoyo, se remueve de co-gestión.
 add_action('save_post_eventosapp_event', function($post_id){
