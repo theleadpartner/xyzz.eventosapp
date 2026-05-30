@@ -188,6 +188,25 @@ if ( ! function_exists('eventosapp_support_user_is_organizer_team') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_support_user_can_download_csv') ) {
+    function eventosapp_support_user_can_download_csv( $event_id, $user_id = null ) {
+        $event_id = absint($event_id);
+        $user_id  = $user_id === null ? get_current_user_id() : absint($user_id);
+
+        if ( ! $event_id || ! $user_id ) {
+            return false;
+        }
+
+        // La descarga completa del CSV queda reservada a administradores
+        // y a usuarios marcados en el metabox como Equipo del Organizador.
+        if ( eventosapp_support_user_is_super_admin($user_id) ) {
+            return true;
+        }
+
+        return eventosapp_support_user_is_organizer_team($event_id, $user_id);
+    }
+}
+
 if ( ! function_exists('eventosapp_support_get_all_assigned_user_ids') ) {
     function eventosapp_support_get_all_assigned_user_ids( $event_id ) {
         $ids = eventosapp_support_get_event_staff_user_ids($event_id);
@@ -647,6 +666,7 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
             ], admin_url('admin-post.php')),
             'eventosapp_support_download_csv_' . $event_id
         );
+        $can_download_csv = eventosapp_support_user_can_download_csv($event_id);
         ?>
         <style>
             .evapp-support-box{border:1px solid #dcdcde;background:#fff;border-radius:10px;padding:14px;margin:12px 0;}
@@ -917,9 +937,13 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
 
         <div class="evapp-support-box">
             <h4>Atenciones registradas en este evento</h4>
-            <p>
-                <a class="button button-secondary" href="<?php echo esc_url($download_url); ?>">Descargar base de consultas CSV</a>
-            </p>
+            <?php if ( $can_download_csv ) : ?>
+                <p>
+                    <a class="button button-secondary" href="<?php echo esc_url($download_url); ?>">Descargar base de consultas CSV</a>
+                </p>
+            <?php else : ?>
+                <p class="evapp-support-muted">La descarga CSV solo está disponible para administradores y usuarios del Equipo del Organizador.</p>
+            <?php endif; ?>
             <?php if ( $latest ) : ?>
                 <table class="evapp-support-table">
                     <thead>
@@ -1616,6 +1640,18 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
     }
     if ( $max_hour < 1 ) $max_hour = 1;
 
+    $can_download_csv = eventosapp_support_user_can_download_csv($event_id);
+    $download_url = '';
+    if ( $can_download_csv ) {
+        $download_url = wp_nonce_url(
+            add_query_arg([
+                'action'   => 'eventosapp_support_download_csv',
+                'event_id' => $event_id,
+            ], admin_url('admin-post.php')),
+            'eventosapp_support_download_csv_' . $event_id
+        );
+    }
+
     ob_start();
     if ( function_exists('eventosapp_active_event_bar') ) {
         eventosapp_active_event_bar();
@@ -1626,6 +1662,9 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
         .evapp-support-metrics-card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:18px;box-shadow:0 8px 26px rgba(15,23,42,.08);margin-bottom:16px;}
         .evapp-support-metrics h2{margin:0 0 6px;font-size:26px;color:#10233f;}
         .evapp-support-kpi{display:inline-flex;gap:8px;align-items:center;background:#eef6ff;border:1px solid #bfdbfe;border-radius:999px;padding:8px 12px;font-weight:800;color:#1e3a8a;margin:8px 0 16px;}
+        .evapp-support-download-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0 18px;}
+        .evapp-support-download-btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border-radius:12px;background:#10233f;color:#fff;font-weight:800;padding:11px 14px;box-shadow:0 4px 12px rgba(15,35,63,.18);}
+        .evapp-support-download-btn:hover{color:#fff;filter:brightness(.96);}
         .evapp-support-bar-row{display:grid;grid-template-columns:70px 1fr 60px;gap:10px;align-items:center;margin:8px 0;}
         .evapp-support-bar-track{height:24px;background:#f1f5f9;border-radius:999px;overflow:hidden;border:1px solid #e2e8f0;}
         .evapp-support-bar{height:100%;background:#2F73B5;border-radius:999px;min-width:4px;}
@@ -1640,6 +1679,13 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
             <h2>Métrica de equipo de apoyo</h2>
             <p class="evapp-support-muted" style="margin-top:0;"><?php echo esc_html($scope['label'] ?? ''); ?></p>
             <div class="evapp-support-kpi">Total de atenciones: <?php echo esc_html($total); ?></div>
+
+            <?php if ( $can_download_csv && $download_url ) : ?>
+                <div class="evapp-support-download-row">
+                    <a class="evapp-support-download-btn" href="<?php echo esc_url($download_url); ?>">Descargar base de consultas CSV</a>
+                    <span class="evapp-support-muted">Disponible solo para administradores y Equipo del Organizador.</span>
+                </div>
+            <?php endif; ?>
 
             <h3>Atenciones realizadas por hora</h3>
             <?php if ( $by_hour ) : ?>
@@ -1699,14 +1745,11 @@ add_action('admin_post_eventosapp_support_download_csv', function(){
 
     check_admin_referer('eventosapp_support_download_csv_' . $event_id);
 
-    $can_download_all = current_user_can('edit_post', $event_id) || eventosapp_support_user_is_super_admin();
-    $scope = $can_download_all
-        ? ['type' => 'all', 'group_number' => 0, 'label' => 'Vista total del evento']
-        : eventosapp_support_get_metrics_scope($event_id, get_current_user_id());
-
-    if ( ! $scope ) {
+    if ( ! eventosapp_support_user_can_download_csv($event_id) ) {
         wp_die('No tienes permisos para descargar esta base de consultas.', '', 403);
     }
+
+    $scope = ['type' => 'all', 'group_number' => 0, 'label' => 'Vista total del evento'];
 
     global $wpdb;
     $table = eventosapp_support_table_name();
