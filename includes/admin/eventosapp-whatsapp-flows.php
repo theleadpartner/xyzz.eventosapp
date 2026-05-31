@@ -2067,6 +2067,288 @@ function eventosapp_whatsapp_flows_capture_shutdown_webhook_payload() {
 }
 add_action('shutdown', 'eventosapp_whatsapp_flows_capture_shutdown_webhook_payload', 1);
 
+
+/**
+ * Busca de forma segura un valor dentro de la respuesta del Flow.
+ *
+ * Meta entrega las respuestas en interactive.nfm_reply.response_json como JSON.
+ * Según el Flow, los campos internos pueden estar en la raíz o dentro de un
+ * objeto anidado, por eso se permite una búsqueda recursiva limitada.
+ */
+function eventosapp_whatsapp_flows_find_response_value($value, $keys, $depth = 0) {
+    if ( $depth > 5 || ! is_array($value) ) {
+        return '';
+    }
+
+    $keys = is_array($keys) ? $keys : [$keys];
+    foreach ( $keys as $key ) {
+        if ( array_key_exists($key, $value) && is_scalar($value[$key]) ) {
+            return sanitize_text_field((string) $value[$key]);
+        }
+    }
+
+    foreach ( $value as $item ) {
+        if ( is_array($item) ) {
+            $found = eventosapp_whatsapp_flows_find_response_value($item, $keys, $depth + 1);
+            if ( $found !== '' ) {
+                return $found;
+            }
+        }
+    }
+
+    return '';
+}
+
+function eventosapp_whatsapp_flows_response_exists($wa_message_id) {
+    global $wpdb;
+
+    eventosapp_whatsapp_flows_maybe_install_tables();
+    $wa_message_id = sanitize_text_field((string) $wa_message_id);
+    if ( $wa_message_id === '' ) {
+        return 0;
+    }
+
+    return absint($wpdb->get_var($wpdb->prepare(
+        'SELECT id FROM ' . eventosapp_whatsapp_flows_responses_table_name() . ' WHERE wa_message_id = %s LIMIT 1',
+        $wa_message_id
+    )));
+}
+
+/**
+ * Procesa una respuesta inbound de WhatsApp Flow recibida por webhook.
+ *
+ * Este handler es intencionalmente idempotente: puede ser invocado desde el
+ * hook del mensaje individual y también desde el puente del payload completo
+ * sin duplicar registros, gracias al wa_message_id de Meta.
+ */
+function eventosapp_whatsapp_flows_handle_inbound_response($message, $value = [], $entry = [], $change = [], $payload = []) {
+    global $wpdb;
+
+    if ( ! is_array($message) ) {
+        return;
+    }
+
+    $nfm = eventosapp_whatsapp_flows_extract_nfm_response($message);
+    if ( ! is_array($nfm) ) {
+        return;
+    }
+
+    eventosapp_whatsapp_flows_maybe_install_tables();
+
+    $decoded = isset($nfm['response_json']) && is_array($nfm['response_json']) ? $nfm['response_json'] : [];
+    $response_raw = isset($nfm['response_raw']) ? (string) $nfm['response_raw'] : eventosapp_whatsapp_flows_json_encode($decoded, false);
+    $from_phone = eventosapp_whatsapp_flows_clean_phone($message['from'] ?? '');
+    $wa_message_id = sanitize_text_field((string)($message['id'] ?? ''));
+    $reply_to_message_id = sanitize_text_field((string)($message['context']['id'] ?? ''));
+    $timestamp = ! empty($message['timestamp']) ? absint($message['timestamp']) : 0;
+    $created_at = $timestamp ? get_date_from_gmt(gmdate('Y-m-d H:i:s', $timestamp), 'Y-m-d H:i:s') : current_time('mysql');
+
+    if ( $wa_message_id === '' ) {
+        $wa_message_id = 'nfm_' . substr(sha1($from_phone . '|' . $reply_to_message_id . '|' . $response_raw . '|' . $created_at), 0, 36);
+    }
+
+    $existing_response_id = eventosapp_whatsapp_flows_response_exists($wa_message_id);
+    if ( $existing_response_id ) {
+        eventosapp_whatsapp_flows_add_activity('flow_respuesta_webhook_duplicada_omitida', [
+            'response_id' => $existing_response_id,
+            'wa_message_id' => $wa_message_id,
+            'reply_to_message_id' => $reply_to_message_id,
+        ]);
+        return;
+    }
+
+    $flow_token = eventosapp_whatsapp_flows_find_response_value($decoded, ['flow_token', 'eventosapp_flow_token', 'token']);
+    $flow_post_id = absint(eventosapp_whatsapp_flows_find_response_value($decoded, ['eventosapp_flow_post_id', 'flow_post_id', 'flow_id_local']));
+    $event_id = absint(eventosapp_whatsapp_flows_find_response_value($decoded, ['eventosapp_event_id', 'event_id']));
+    $ticket_id = absint(eventosapp_whatsapp_flows_find_response_value($decoded, ['eventosapp_ticket_id', 'ticket_id']));
+    $ticket_code = eventosapp_whatsapp_flows_find_response_value($decoded, ['eventosapp_ticket_code', 'ticket_code', 'ticket']);
+
+    $send = null;
+    if ( $flow_token !== '' ) {
+        $send = eventosapp_whatsapp_flows_find_send(['flow_token' => $flow_token]);
+    }
+    if ( ! $send && $reply_to_message_id !== '' ) {
+        $send = eventosapp_whatsapp_flows_find_send(['wa_message_id' => $reply_to_message_id]);
+    }
+    if ( ! $send && $from_phone !== '' ) {
+        $send = eventosapp_whatsapp_flows_find_latest_open_send_by_phone($from_phone);
+    }
+
+    if ( is_array($send) ) {
+        $send_id = absint($send['id'] ?? 0);
+        $flow_post_id = $flow_post_id ?: absint($send['flow_post_id'] ?? 0);
+        $event_id = $event_id ?: absint($send['event_id'] ?? 0);
+        $ticket_id = $ticket_id ?: absint($send['ticket_id'] ?? 0);
+        $flow_token = $flow_token !== '' ? $flow_token : sanitize_text_field((string)($send['flow_token'] ?? ''));
+        $meta_flow_id = sanitize_text_field((string)($send['meta_flow_id'] ?? ''));
+    } else {
+        $send_id = 0;
+        $meta_flow_id = '';
+    }
+
+    if ( ! $ticket_id && $ticket_code !== '' && function_exists('eventosapp_whatsapp_find_ticket_by_public_code') ) {
+        $ticket_id = absint(eventosapp_whatsapp_find_ticket_by_public_code($ticket_code));
+    }
+    if ( ! $event_id && $ticket_id ) {
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+    }
+    if ( ! $flow_post_id && $meta_flow_id !== '' ) {
+        $flow_query = get_posts([
+            'post_type'      => EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE,
+            'post_status'    => 'any',
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+            'meta_key'       => '_eventosapp_wa_flow_meta_id',
+            'meta_value'     => $meta_flow_id,
+        ]);
+        if ( ! empty($flow_query[0]) ) {
+            $flow_post_id = absint($flow_query[0]);
+        }
+    }
+    if ( $meta_flow_id === '' && $flow_post_id ) {
+        $meta_flow_id = preg_replace('/\D+/', '', (string) get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_id', true));
+    }
+
+    $response_summary = eventosapp_whatsapp_flows_format_response_summary($decoded);
+    if ( $response_summary === '' ) {
+        $response_summary = sanitize_textarea_field((string)($nfm['body'] ?? 'Respuesta de Flow recibida.'));
+    }
+
+    $raw_context = [
+        'message' => $message,
+        'value'   => is_array($value) ? $value : [],
+        'entry'   => is_array($entry) ? $entry : [],
+        'change'  => is_array($change) ? $change : [],
+        'payload' => is_array($payload) ? $payload : [],
+    ];
+
+    $inserted = $wpdb->insert(eventosapp_whatsapp_flows_responses_table_name(), [
+        'send_id'             => $send_id,
+        'flow_post_id'        => $flow_post_id,
+        'meta_flow_id'        => $meta_flow_id,
+        'event_id'            => $event_id,
+        'ticket_id'           => $ticket_id,
+        'phone'               => $from_phone,
+        'flow_token'          => $flow_token,
+        'wa_message_id'       => $wa_message_id,
+        'reply_to_message_id' => $reply_to_message_id,
+        'response_json'       => eventosapp_whatsapp_flows_json_encode($decoded, true),
+        'response_summary'    => $response_summary,
+        'raw_json'            => eventosapp_whatsapp_flows_json_encode($raw_context, true),
+        'created_at'          => $created_at,
+    ], ['%d','%d','%s','%d','%d','%s','%s','%s','%s','%s','%s','%s','%s']);
+
+    if ( $inserted === false ) {
+        eventosapp_whatsapp_flows_add_activity('flow_respuesta_webhook_no_insertada', [
+            'wa_message_id' => $wa_message_id,
+            'reply_to_message_id' => $reply_to_message_id,
+            'db_error' => $wpdb->last_error,
+            'flow_post_id' => $flow_post_id,
+            'event_id' => $event_id,
+            'ticket_id' => $ticket_id,
+        ]);
+        return;
+    }
+
+    $response_id = absint($wpdb->insert_id);
+
+    if ( $send_id ) {
+        eventosapp_whatsapp_flows_update_send_row($send_id, [
+            'status'            => 'response_received',
+            'response_received' => 1,
+            'response_json'     => eventosapp_whatsapp_flows_json_encode([
+                'wa_message_id' => $wa_message_id,
+                'response_id'   => $response_id,
+                'summary'       => $response_summary,
+                'response'      => $decoded,
+            ], true),
+            'responded_at'      => $created_at,
+        ]);
+    }
+
+    if ( $ticket_id ) {
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_id', $response_id);
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_at', $created_at);
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_summary', $response_summary);
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_json', $decoded);
+
+        if ( function_exists('eventosapp_whatsapp_add_ticket_log') ) {
+            eventosapp_whatsapp_add_ticket_log($ticket_id, 'flow_respuesta_recibida', 'Respuesta de WhatsApp Flow recibida.', [
+                'context'    => 'whatsapp_flow_response',
+                'source_key' => 'flow_response:' . $response_id,
+            ], $from_phone, [
+                'http_code'       => 0,
+                'message_id'      => $wa_message_id,
+                'delivery_status' => 'response_received',
+                'transport'       => 'webhook_flow',
+                'template_name'   => $flow_post_id ? get_the_title($flow_post_id) : 'WhatsApp Flow',
+                'response_summary'=> $response_summary,
+                'debug'           => [
+                    'flow_response_id' => $response_id,
+                    'send_id'          => $send_id,
+                    'flow_post_id'     => $flow_post_id,
+                    'meta_flow_id'     => $meta_flow_id,
+                    'event_id'         => $event_id,
+                    'ticket_id'        => $ticket_id,
+                    'flow_token'       => $flow_token,
+                    'reply_to_message_id' => $reply_to_message_id,
+                ],
+            ]);
+        }
+    } elseif ( function_exists('eventosapp_whatsapp_insert_central_log') ) {
+        eventosapp_whatsapp_insert_central_log([
+            'created_at'      => $created_at,
+            'event_id'        => $event_id,
+            'ticket_id'       => 0,
+            'recipient'       => $from_phone,
+            'channel'         => 'flow',
+            'context'         => 'whatsapp_flow_response',
+            'status'          => 'flow_respuesta_recibida',
+            'delivery_status' => 'response_received',
+            'message_id'      => $wa_message_id,
+            'source_key'      => 'flow_response:' . $response_id,
+            'transport'       => 'webhook_flow',
+            'template_name'   => $flow_post_id ? get_the_title($flow_post_id) : 'WhatsApp Flow',
+            'message'         => $response_summary,
+            'meta'            => [
+                'flow_response_id' => $response_id,
+                'send_id'          => $send_id,
+                'flow_post_id'     => $flow_post_id,
+                'meta_flow_id'     => $meta_flow_id,
+                'flow_token'       => $flow_token,
+            ],
+        ]);
+    }
+
+    eventosapp_whatsapp_flows_add_activity('flow_respuesta_webhook_registrada', [
+        'response_id' => $response_id,
+        'send_id' => $send_id,
+        'flow_post_id' => $flow_post_id,
+        'meta_flow_id' => $meta_flow_id,
+        'event_id' => $event_id,
+        'ticket_id' => $ticket_id,
+        'phone' => $from_phone,
+        'wa_message_id' => $wa_message_id,
+        'reply_to_message_id' => $reply_to_message_id,
+    ]);
+
+    do_action('eventosapp_whatsapp_flow_response_received', [
+        'response_id' => $response_id,
+        'send_id' => $send_id,
+        'flow_post_id' => $flow_post_id,
+        'meta_flow_id' => $meta_flow_id,
+        'event_id' => $event_id,
+        'ticket_id' => $ticket_id,
+        'phone' => $from_phone,
+        'flow_token' => $flow_token,
+        'wa_message_id' => $wa_message_id,
+        'reply_to_message_id' => $reply_to_message_id,
+        'response_json' => $decoded,
+        'response_summary' => $response_summary,
+        'created_at' => $created_at,
+    ], $message, $value, $entry, $change, $payload);
+}
+
 add_action('eventosapp_whatsapp_webhook_inbound_message_received', 'eventosapp_whatsapp_flows_handle_inbound_response', 8, 5);
 add_action('eventosapp_whatsapp_webhook_payload_received', 'eventosapp_whatsapp_flows_handle_payload_action', 8, 5);
 add_action('eventosapp_whatsapp_webhook_received', 'eventosapp_whatsapp_flows_handle_payload_action', 8, 5);
