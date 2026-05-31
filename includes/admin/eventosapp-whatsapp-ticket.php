@@ -336,10 +336,12 @@ function eventosapp_whatsapp_get_effective_webhook_waba_id($settings = null) {
  */
 function eventosapp_whatsapp_get_webhook_urls() {
     $public_query_url = add_query_arg('eventosapp_whatsapp_webhook', '1', home_url('/'));
+    $rest_url = function_exists('rest_url') ? rest_url('eventosapp/v1/whatsapp/webhook') : home_url('/wp-json/eventosapp/v1/whatsapp/webhook');
 
     return [
         'recommended' => $public_query_url,
         'public_query' => $public_query_url,
+        'rest' => $rest_url,
         'admin_post' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook'),
     ];
 }
@@ -361,6 +363,23 @@ add_action('init', function() {
     }
     eventosapp_whatsapp_serve_webhook_request('public_query');
 }, 0);
+
+/**
+ * Endpoint REST adicional para el webhook de Meta.
+ *
+ * No reemplaza la URL recomendada actual; queda disponible como respaldo cuando
+ * un firewall, caché o regla externa bloquea endpoints con query string o
+ * admin-post.php. Usa el mismo procesador central para no duplicar lógicas.
+ */
+add_action('rest_api_init', function() {
+    register_rest_route('eventosapp/v1', '/whatsapp/webhook', [
+        'methods'             => ['GET', 'POST'],
+        'callback'            => function() {
+            eventosapp_whatsapp_serve_webhook_request('rest');
+        },
+        'permission_callback' => '__return_true',
+    ]);
+});
 
 /**
  * Registra un resumen técnico del intento de entrada del webhook antes de procesarlo.
@@ -632,6 +651,7 @@ function eventosapp_whatsapp_channel_label($channel) {
         'recordatorio' => 'Recordatorio',
         'inbox'        => 'Inbox WhatsApp',
         'webhook'      => 'Webhook Meta',
+        'flow'         => 'WhatsApp Flow',
         'prueba'       => 'Prueba rápida',
         'sistema'      => 'Sistema',
     ];
@@ -644,6 +664,9 @@ function eventosapp_whatsapp_log_channel_from_context($context, $status = '') {
 
     if ( strpos($status, 'webhook_') === 0 || $context === 'webhook_status' ) {
         return 'webhook';
+    }
+    if ( strpos($context, 'flow') !== false || strpos($status, 'flow_') === 0 || strpos($status, 'whatsapp_flow') !== false ) {
+        return 'flow';
     }
     if ( strpos($context, 'inbox') !== false || strpos($status, 'mensaje_entrante') !== false || strpos($status, 'respuesta_') === 0 ) {
         return 'inbox';
@@ -741,6 +764,7 @@ function eventosapp_whatsapp_get_central_log_channels() {
         'recordatorio' => 'Recordatorio',
         'inbox'        => 'Inbox WhatsApp',
         'webhook'      => 'Webhook Meta',
+        'flow'         => 'WhatsApp Flow',
         'prueba'       => 'Prueba rápida',
         'sistema'      => 'Sistema',
     ];
@@ -7427,9 +7451,13 @@ function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unk
         'changes' => 0,
         'statuses' => 0,
         'messages' => 0,
+        'nfm_replies' => 0,
         'fields' => [],
         'phone_number_ids' => [],
+        'message_types' => [],
         'inbox_listeners' => (int) has_action('eventosapp_whatsapp_webhook_inbound_message_received'),
+        'payload_bridge_listeners' => (int) has_action('eventosapp_whatsapp_webhook_payload_received'),
+        'flow_response_listeners' => (int) has_action('eventosapp_whatsapp_flow_response_received'),
     ];
 
     foreach ( $entries as $entry ) {
@@ -7453,12 +7481,26 @@ function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unk
             }
             if ( ! empty($value['messages']) && is_array($value['messages']) ) {
                 $summary['messages'] += count($value['messages']);
+                foreach ( $value['messages'] as $message_for_summary ) {
+                    if ( ! is_array($message_for_summary) ) {
+                        continue;
+                    }
+                    $message_type = sanitize_key((string)($message_for_summary['type'] ?? 'unknown'));
+                    if ( $message_type !== '' ) {
+                        $summary['message_types'][$message_type] = $message_type;
+                    }
+                    $interactive = isset($message_for_summary['interactive']) && is_array($message_for_summary['interactive']) ? $message_for_summary['interactive'] : [];
+                    if ( $message_type === 'interactive' && sanitize_key((string)($interactive['type'] ?? '')) === 'nfm_reply' ) {
+                        $summary['nfm_replies']++;
+                    }
+                }
             }
         }
     }
 
     $summary['fields'] = array_values($summary['fields']);
     $summary['phone_number_ids'] = array_values($summary['phone_number_ids']);
+    $summary['message_types'] = array_values($summary['message_types']);
     update_option('eventosapp_whatsapp_last_webhook_debug', [
         'received_at' => current_time('mysql'),
         'summary' => eventosapp_whatsapp_sanitize_log_context($summary),
@@ -7466,6 +7508,18 @@ function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unk
     ], false);
 
     eventosapp_whatsapp_add_activity_log('webhook_payload_recibido', $summary);
+
+    /**
+     * Puente canónico del payload completo.
+     *
+     * Lo emitimos antes de recorrer mensajes individuales para que módulos
+     * independientes puedan procesar estructuras completas de Meta sin depender
+     * del orden de carga de archivos. Los handlers deben ser idempotentes.
+     */
+    do_action('eventosapp_whatsapp_webhook_payload_received', $payload, [], [], [], [
+        'transport' => sanitize_key((string) $transport),
+        'summary'   => $summary,
+    ]);
 
     foreach ( $entries as $entry ) {
         $changes = isset($entry['changes']) && is_array($entry['changes']) ? $entry['changes'] : [];
