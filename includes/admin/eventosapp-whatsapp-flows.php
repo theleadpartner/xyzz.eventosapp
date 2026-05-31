@@ -640,6 +640,35 @@ function eventosapp_whatsapp_flows_question_answer_schema($question) {
     ];
 }
 
+function eventosapp_whatsapp_flows_internal_data_schema($flow_post_id = 0) {
+    return [
+        'eventosapp_flow_post_id' => [
+            'type'        => 'string',
+            '__example__' => (string) absint($flow_post_id),
+        ],
+        'eventosapp_event_id' => [
+            'type'        => 'string',
+            '__example__' => '0',
+        ],
+        'eventosapp_ticket_id' => [
+            'type'        => 'string',
+            '__example__' => '0',
+        ],
+        'eventosapp_ticket_code' => [
+            'type'        => 'string',
+            '__example__' => 'TICKET',
+        ],
+    ];
+}
+
+function eventosapp_whatsapp_flows_internal_navigation_payload() {
+    $payload = [];
+    foreach ( array_keys(eventosapp_whatsapp_flows_internal_data_schema(0)) as $key ) {
+        $payload[$key] = '${data.' . $key . '}';
+    }
+    return $payload;
+}
+
 function eventosapp_whatsapp_flows_question_to_component($question) {
     $type = sanitize_key((string)($question['type'] ?? 'radio'));
     $label = sanitize_text_field((string)($question['label'] ?? 'Pregunta'));
@@ -796,9 +825,7 @@ function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_conf
             }
         }
 
-        $payload = [
-            'eventosapp_flow_post_id' => (string) absint($flow_post_id),
-        ];
+        $payload = eventosapp_whatsapp_flows_internal_navigation_payload();
 
         foreach ( $previous_slugs as $slug ) {
             $payload[$slug] = '${data.' . $slug . '}';
@@ -830,9 +857,8 @@ function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_conf
             'children' => $form_children,
         ];
 
-        $data_schema = new stdClass();
+        $data_schema = eventosapp_whatsapp_flows_internal_data_schema($flow_post_id);
         if ( ! empty($previous_slugs) ) {
-            $data_schema = [];
             foreach ( $previous_slugs as $slug ) {
                 if ( isset($answer_questions[$slug]) ) {
                     $data_schema[$slug] = eventosapp_whatsapp_flows_question_answer_schema($answer_questions[$slug]);
