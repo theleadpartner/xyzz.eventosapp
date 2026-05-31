@@ -27,6 +27,16 @@ add_action('admin_menu', function() {
     );
 }, 23);
 
+add_action('admin_enqueue_scripts', function($hook_suffix = '') {
+    if ( empty($_GET['page']) || sanitize_key(wp_unslash($_GET['page'])) !== 'eventosapp_whatsapp_flow_templates' ) {
+        return;
+    }
+
+    if ( function_exists('wp_enqueue_media') ) {
+        wp_enqueue_media();
+    }
+}, 24);
+
 function eventosapp_whatsapp_flow_templates_default_item() {
     return [
         'id'                     => '',
@@ -497,11 +507,19 @@ function eventosapp_whatsapp_flow_templates_build_meta_payload($template) {
     }
 
     $example_body = [];
+    $sample_1 = trim((string)($template['sample_1'] ?? ''));
+    $sample_2 = trim((string)($template['sample_2'] ?? ''));
+    if ( $sample_1 === '' ) {
+        $sample_1 = 'Asistente';
+    }
+    if ( $sample_2 === '' ) {
+        $sample_2 = 'Evento';
+    }
     if ( strpos((string)($template['body'] ?? ''), '{{1}}') !== false ) {
-        $example_body[] = sanitize_text_field((string)($template['sample_1'] ?? 'Asistente'));
+        $example_body[] = sanitize_text_field($sample_1);
     }
     if ( strpos((string)($template['body'] ?? ''), '{{2}}') !== false ) {
-        $example_body[] = sanitize_text_field((string)($template['sample_2'] ?? 'Evento'));
+        $example_body[] = sanitize_text_field($sample_2);
     }
 
     $body_component = [
@@ -542,15 +560,29 @@ function eventosapp_whatsapp_flow_templates_build_send_payload($template, $flow_
     $parameters = [];
 
     if ( strpos((string)$template['body'], '{{1}}') !== false ) {
+        $parameter_1 = trim((string)($context['name'] ?? ''));
+        if ( $parameter_1 === '' ) {
+            $parameter_1 = trim((string)($template['sample_1'] ?? ''));
+        }
+        if ( $parameter_1 === '' ) {
+            $parameter_1 = 'Asistente';
+        }
         $parameters[] = [
             'type' => 'text',
-            'text' => (string)($context['name'] ?? $template['sample_1'] ?? 'Asistente'),
+            'text' => $parameter_1,
         ];
     }
     if ( strpos((string)$template['body'], '{{2}}') !== false ) {
+        $parameter_2 = trim((string)($context['event_name'] ?? ''));
+        if ( $parameter_2 === '' ) {
+            $parameter_2 = trim((string)($template['sample_2'] ?? ''));
+        }
+        if ( $parameter_2 === '' ) {
+            $parameter_2 = 'Evento';
+        }
         $parameters[] = [
             'type' => 'text',
-            'text' => (string)($context['event_name'] ?? $template['sample_2'] ?? 'Evento'),
+            'text' => $parameter_2,
         ];
     }
 
@@ -656,10 +688,10 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_save', function() {
         'header_sample_file_type'=> sanitize_mime_type((string)($existing['header_sample_file_type'] ?? '')),
         'header_sample_file_size'=> absint($existing['header_sample_file_size'] ?? 0),
         'header_sample_uploaded_at' => sanitize_text_field((string)($existing['header_sample_uploaded_at'] ?? '')),
-        'header_image_url'       => esc_url_raw((string)($_POST['header_image_url'] ?? '')),
+        'header_image_url'       => esc_url_raw((string)($_POST['header_image_url'] ?? ($existing['header_image_url'] ?? ''))),
         'body'                   => sanitize_textarea_field((string)($_POST['body'] ?? '')),
-        'sample_1'               => sanitize_text_field((string)($_POST['sample_1'] ?? '')),
-        'sample_2'               => sanitize_text_field((string)($_POST['sample_2'] ?? '')),
+        'sample_1'               => sanitize_text_field((string)($_POST['sample_1'] ?? ($existing['sample_1'] ?? 'Meme'))),
+        'sample_2'               => sanitize_text_field((string)($_POST['sample_2'] ?? ($existing['sample_2'] ?? 'el evento'))),
         'footer_text'            => sanitize_text_field((string)($_POST['footer_text'] ?? '')),
         'button_text'            => sanitize_text_field((string)($_POST['button_text'] ?? 'Responder encuesta')),
         'flow_post_id'           => $flow_post_id,
@@ -921,6 +953,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_test_send', function() 
     $ticket_id = absint($_POST['test_ticket_id'] ?? 0);
     $test_sample_1 = sanitize_text_field((string)($_POST['test_sample_1'] ?? ''));
     $test_sample_2 = sanitize_text_field((string)($_POST['test_sample_2'] ?? ''));
+    $test_header_image_url = esc_url_raw((string)($_POST['test_header_image_url'] ?? ''));
     $template = eventosapp_whatsapp_flow_templates_get($template_id);
     if ( empty($template) || $phone === '' ) {
         eventosapp_whatsapp_flow_templates_notice_redirect(['template_id' => $template_id, 'flow_tpl_notice' => 'error', 'flow_tpl_message' => rawurlencode('Plantilla o teléfono inválido.')]);
@@ -933,8 +966,13 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_test_send', function() 
     if ( $test_sample_2 !== '' ) {
         $template['sample_2'] = $test_sample_2;
     }
-    if ( ($template['header_format'] ?? '') === 'IMAGE' && empty($template['header_image_url']) ) {
-        eventosapp_whatsapp_flow_templates_notice_redirect(['template_id' => $template_id, 'flow_tpl_notice' => 'error', 'flow_tpl_message' => rawurlencode('La plantilla tiene encabezado de imagen. Para enviar una prueba debes guardar una URL pública HTTPS de la imagen que WhatsApp enviará en el encabezado.')]);
+    if ( ($template['header_format'] ?? '') === 'IMAGE' ) {
+        if ( $test_header_image_url !== '' ) {
+            $template['header_image_url'] = $test_header_image_url;
+        }
+        if ( empty($template['header_image_url']) ) {
+            eventosapp_whatsapp_flow_templates_notice_redirect(['template_id' => $template_id, 'flow_tpl_notice' => 'error', 'flow_tpl_message' => rawurlencode('La plantilla tiene encabezado de imagen. Para enviar una prueba debes seleccionar o pegar una URL pública HTTPS en el campo Header de prueba.')]);
+        }
     }
 
     $flow_post_id = absint($template['flow_post_id'] ?? 0);
@@ -1100,6 +1138,12 @@ function eventosapp_whatsapp_flow_templates_render_page() {
             .eventosapp-wa-flow-templates .evapp-test-panel label{font-weight:600;display:block;}
             .eventosapp-wa-flow-templates .evapp-test-panel input{width:100%;margin-top:4px;}
             .eventosapp-wa-flow-templates .evapp-test-panel .evapp-test-actions{grid-column:1 / -1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px;}
+            .eventosapp-wa-flow-templates .evapp-test-image-field{grid-column:1 / -1;background:#fbfbfc;border:1px solid #edf0f2;border-radius:10px;padding:12px;}
+            .eventosapp-wa-flow-templates .evapp-test-image-field > label{margin-bottom:6px;}
+            .eventosapp-wa-flow-templates .evapp-media-field{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+            .eventosapp-wa-flow-templates .evapp-media-field input{flex:1 1 360px;min-width:240px;}
+            .eventosapp-wa-flow-templates .evapp-media-preview{display:none;margin-top:10px;}
+            .eventosapp-wa-flow-templates .evapp-media-preview img{max-width:260px;max-height:140px;width:auto;height:auto;border:1px solid var(--evapp-border);border-radius:8px;background:#fff;padding:4px;}
             .eventosapp-wa-flow-templates .evapp-status-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0 0 14px;}
             .eventosapp-wa-flow-templates .evapp-status-box{background:#fbfbfc;border:1px solid #edf0f2;border-radius:10px;padding:10px;}
             .eventosapp-wa-flow-templates .evapp-status-box strong{display:block;margin-bottom:3px;}
@@ -1132,6 +1176,10 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                 const headerFormat = document.getElementById('eventosapp-wa-flow-template-header-format');
                 const headerTextRow = document.querySelector('[data-header-row="text"]');
                 const headerImageRows = document.querySelectorAll('[data-header-row="image"]');
+                const testHeaderImageRows = document.querySelectorAll('[data-test-header-row="image"]');
+                const testHeaderImageInput = document.getElementById('evapp_flow_test_header_image_url');
+                const testHeaderImageButton = document.getElementById('evapp_flow_test_header_image_btn');
+                const testHeaderImagePreview = document.getElementById('evapp_flow_test_header_image_preview');
 
                 function rebuildScreens(flowId, keepCurrent) {
                     if (!screenSelect) return;
@@ -1194,6 +1242,49 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                     const value = headerFormat.value || 'NONE';
                     if (headerTextRow) headerTextRow.style.display = value === 'TEXT' ? '' : 'none';
                     headerImageRows.forEach(function(row){ row.style.display = value === 'IMAGE' ? '' : 'none'; });
+                    testHeaderImageRows.forEach(function(row){ row.style.display = value === 'IMAGE' ? '' : 'none'; });
+                }
+
+                function updateTestHeaderPreview(value) {
+                    if (!testHeaderImagePreview) return;
+                    const url = String(value || '').trim();
+                    if (!url) {
+                        testHeaderImagePreview.style.display = 'none';
+                        testHeaderImagePreview.innerHTML = '';
+                        return;
+                    }
+                    testHeaderImagePreview.style.display = 'block';
+                    testHeaderImagePreview.innerHTML = '<img src="' + escapeHtml(url) + '" alt="Vista previa header de prueba">';
+                }
+
+                function initTestHeaderMediaPicker() {
+                    if (!testHeaderImageInput || !testHeaderImageButton) return;
+                    testHeaderImageButton.addEventListener('click', function(event){
+                        event.preventDefault();
+                        if (!window.wp || !wp.media) {
+                            alert('La librería multimedia de WordPress no está disponible en esta pantalla. Puedes pegar manualmente una URL pública HTTPS.');
+                            return;
+                        }
+                        const frame = wp.media({
+                            title: 'Seleccionar header de prueba',
+                            button: { text: 'Usar esta imagen' },
+                            library: { type: 'image' },
+                            multiple: false
+                        });
+                        frame.on('select', function(){
+                            const attachment = frame.state().get('selection').first();
+                            const data = attachment ? attachment.toJSON() : {};
+                            if (data && data.url) {
+                                testHeaderImageInput.value = data.url;
+                                updateTestHeaderPreview(data.url);
+                            }
+                        });
+                        frame.open();
+                    });
+                    testHeaderImageInput.addEventListener('input', function(){
+                        updateTestHeaderPreview(this.value);
+                    });
+                    updateTestHeaderPreview(testHeaderImageInput.value);
                 }
 
                 function escapeHtml(value) {
@@ -1217,6 +1308,7 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                     headerFormat.addEventListener('change', updateHeaderRows);
                     updateHeaderRows();
                 }
+                initTestHeaderMediaPicker();
             });
         </script>
 
@@ -1225,7 +1317,7 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                 <div class="evapp-card">
                     <div class="evapp-card-header">
                         <h2><?php echo ! empty($edit['id']) ? 'Editar plantilla Flow' : 'Crear plantilla Flow'; ?></h2>
-                        <p>Completa el contenido visible para el usuario, los ejemplos que Meta exige para aprobar variables y la conexión con el Flow que abrirá el botón.</p>
+                        <p>Completa el contenido visible para el usuario y la conexión con el Flow que abrirá el botón.</p>
                     </div>
                     <div class="evapp-card-body">
                         <form id="eventosapp-wa-flow-template-save-form" method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
@@ -1278,7 +1370,7 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                                             <option value="TEXT" <?php selected($edit['header_format'], 'TEXT'); ?>>Texto</option>
                                             <option value="IMAGE" <?php selected($edit['header_format'], 'IMAGE'); ?>>Imagen</option>
                                         </select>
-                                        <p class="evapp-help">WhatsApp permite encabezado de texto o imagen en plantillas. Para imagen se necesita un Header Sample Handle para aprobación y una URL pública HTTPS para el envío real.</p>
+                                        <p class="evapp-help">WhatsApp permite encabezado de texto o imagen en plantillas. Para imagen se necesita un Header Sample Handle para aprobación; el header de prueba se selecciona en el bloque Prueba rápida de plantilla.</p>
                                     </td>
                                 </tr>
                                 <tr data-header-row="text">
@@ -1305,28 +1397,11 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                                         <div class="evapp-info"><strong>Qué subir:</strong> una imagen JPG/JPEG o PNG de ejemplo, máximo 5 MB. EventosApp reutiliza el sistema de subida de Plantillas WhatsApp para generar el Header Sample Handle.</div>
                                     </td>
                                 </tr>
-                                <tr data-header-row="image">
-                                    <th><label for="evapp_flow_header_image_url">Imagen para enviar</label></th>
-                                    <td>
-                                        <input id="evapp_flow_header_image_url" type="url" class="regular-text" name="header_image_url" value="<?php echo esc_attr($edit['header_image_url']); ?>" placeholder="https://tudominio.com/imagen-flow.jpg">
-                                        <p class="evapp-help">Esta URL pública HTTPS se usará al enviar pruebas o mensajes reales con esta plantilla. Meta usa el handle solo para aprobación.</p>
-                                    </td>
-                                </tr>
                                 <tr>
                                     <th><label for="evapp_flow_body">Mensaje</label></th>
                                     <td>
                                         <textarea id="evapp_flow_body" class="large-text" rows="6" name="body"><?php echo esc_textarea($edit['body']); ?></textarea>
-                                        <p class="evapp-help">Puedes usar {{1}} para nombre y {{2}} para nombre del evento. Meta exige ejemplos si hay variables.</p>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th>Ejemplos para Meta</th>
-                                    <td>
-                                        <div class="evapp-inline-fields">
-                                            <label>Valor ejemplo para {{1}}<br><input type="text" name="sample_1" value="<?php echo esc_attr($edit['sample_1']); ?>" placeholder="Ejemplo {{1}}"></label>
-                                            <label>Valor ejemplo para {{2}}<br><input type="text" name="sample_2" value="<?php echo esc_attr($edit['sample_2']); ?>" placeholder="Ejemplo {{2}}"></label>
-                                        </div>
-                                        <p class="evapp-help">Estos valores se guardan con la plantilla y se usan como respaldo cuando envías una prueba sin Ticket ID.</p>
+                                        <p class="evapp-help">Puedes usar {{1}} para nombre y {{2}} para nombre del evento. Los valores de prueba se definen en el bloque Prueba rápida de plantilla.</p>
                                     </td>
                                 </tr>
                                 <tr>
@@ -1494,6 +1569,15 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                                 <div class="evapp-test-panel">
                                     <label>Ejemplo {{1}} para prueba<br><input type="text" name="test_sample_1" value="<?php echo esc_attr($edit['sample_1']); ?>" placeholder="Nombre de prueba"></label>
                                     <label>Ejemplo {{2}} para prueba<br><input type="text" name="test_sample_2" value="<?php echo esc_attr($edit['sample_2']); ?>" placeholder="Evento de prueba"></label>
+                                    <div class="evapp-test-image-field" data-test-header-row="image" style="<?php echo $edit['header_format'] === 'IMAGE' ? '' : 'display:none;'; ?>">
+                                        <label for="evapp_flow_test_header_image_url">Header de prueba (imagen)</label>
+                                        <div class="evapp-media-field">
+                                            <input id="evapp_flow_test_header_image_url" type="url" name="test_header_image_url" value="<?php echo esc_attr($edit['header_image_url']); ?>" placeholder="Selecciona una imagen de la librería o pega una URL HTTPS pública">
+                                            <button type="button" class="button" id="evapp_flow_test_header_image_btn">Usar imagen de la librería</button>
+                                        </div>
+                                        <div class="evapp-media-preview" id="evapp_flow_test_header_image_preview"></div>
+                                        <p class="evapp-help">Se usa solo para esta prueba rápida cuando la plantilla guardada tiene encabezado de imagen. No reemplaza el Header Sample Handle usado para aprobación en Meta.</p>
+                                    </div>
                                     <label>Teléfono destino<br><input type="text" name="test_phone" placeholder="573001112233" required></label>
                                     <label>Ticket ID opcional<br><input type="number" name="test_ticket_id" min="0" placeholder="0"></label>
                                     <div class="evapp-test-actions">
@@ -1501,7 +1585,7 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                                         <span class="evapp-help">Si escribes un Ticket ID válido, la prueba usará los datos reales del ticket. Sin Ticket ID, usará los ejemplos escritos aquí.</span>
                                     </div>
                                 </div>
-                                <p class="evapp-help">Este método usa una plantilla aprobada con botón Flow. Si la plantilla tiene encabezado de imagen, debes guardar antes la URL pública de imagen para enviar.</p>
+                                <p class="evapp-help">Este método usa una plantilla aprobada con botón Flow. Si la plantilla tiene encabezado de imagen, selecciona el Header de prueba desde la librería multimedia o pega una URL pública HTTPS.</p>
                             </form>
                         </div>
                     </div>
