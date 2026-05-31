@@ -6744,11 +6744,15 @@ function eventosapp_whatsapp_ticket_passes_rules($ticket_id, $event_id) {
 function eventosapp_whatsapp_send_ticket_satisfaction_flow($ticket_id, $args = []) {
     $ticket_id = absint($ticket_id);
     $args = wp_parse_args(is_array($args) ? $args : [], [
-        'context'    => 'manual_admin_flow',
-        'force'      => false,
-        'skip_rules' => true,
-        'source_key' => '',
-        'send_mode'  => 'template_flow_manual_admin',
+        'context'                => 'manual_admin_flow',
+        'force'                  => false,
+        'skip_rules'             => true,
+        'source_key'             => '',
+        'send_mode'              => 'template_flow_manual_admin',
+        'template_id'            => '',
+        'flow_post_id'           => 0,
+        'sender_phone_number_id' => '',
+        'header_image_url'       => '',
     ]);
 
     if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
@@ -6781,28 +6785,67 @@ function eventosapp_whatsapp_send_ticket_satisfaction_flow($ticket_id, $args = [
         return ['ok' => false, 'message' => 'No está disponible la configuración de Flow del evento.'];
     }
 
-    $flow_config = eventosapp_whatsapp_get_event_satisfaction_flow_config($event_id);
-    $template = isset($flow_config['template']) && is_array($flow_config['template']) ? $flow_config['template'] : [];
-    $flow_post_id = absint($flow_config['flow_post_id'] ?? 0);
-    $meta_flow_id = preg_replace('/\D+/', '', (string)($flow_config['meta_flow_id'] ?? ''));
-    $sender_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($flow_config['sender_phone_number_id'] ?? '');
+    $event_flow_config = eventosapp_whatsapp_get_event_satisfaction_flow_config($event_id);
+    $requested_template_id = sanitize_key((string)($args['template_id'] ?? ''));
+    $requested_flow_post_id = absint($args['flow_post_id'] ?? 0);
+    $requested_sender_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($args['sender_phone_number_id'] ?? '');
+    $requested_header_image_url = esc_url_raw((string)($args['header_image_url'] ?? ''));
+
+    if ( $requested_template_id !== '' ) {
+        $template = eventosapp_whatsapp_get_flow_template_raw($requested_template_id);
+        $template_id = $requested_template_id;
+    } else {
+        $template = isset($event_flow_config['template']) && is_array($event_flow_config['template']) ? $event_flow_config['template'] : [];
+        $template_id = sanitize_key((string)($event_flow_config['template_id'] ?? ''));
+    }
+
+    $template = is_array($template) ? $template : [];
+    $template_flow_post_id = absint($template['flow_post_id'] ?? 0);
+    $event_config_flow_post_id = absint($event_flow_config['flow_post_id'] ?? 0);
+    $flow_post_id = $requested_flow_post_id ?: ($template_flow_post_id ?: $event_config_flow_post_id);
+    $flow_runtime_config = ($flow_post_id && function_exists('eventosapp_whatsapp_flows_get_flow_config')) ? eventosapp_whatsapp_flows_get_flow_config($flow_post_id) : [];
+    $template_meta_flow_id = preg_replace('/\D+/', '', (string)($template['meta_flow_id'] ?? ''));
+    $runtime_meta_flow_id = preg_replace('/\D+/', '', (string)($flow_runtime_config['meta_flow_id'] ?? ''));
+    $event_meta_flow_id = preg_replace('/\D+/', '', (string)($event_flow_config['meta_flow_id'] ?? ''));
+    $meta_flow_id = $runtime_meta_flow_id !== '' ? $runtime_meta_flow_id : ($template_meta_flow_id !== '' ? $template_meta_flow_id : $event_meta_flow_id);
+    $sender_phone_number_id = $requested_sender_phone_number_id ?: eventosapp_whatsapp_sanitize_phone_number_id($event_flow_config['sender_phone_number_id'] ?? '');
     $template_status = sanitize_key((string)($template['meta_status'] ?? 'local_draft'));
 
+    $event_flow_header = esc_url_raw((string) get_post_meta($event_id, '_eventosapp_whatsapp_satisfaction_flow_header_img', true));
+    $template_header = esc_url_raw((string)($template['header_image_url'] ?? ''));
+    $event_config_header = esc_url_raw((string)($event_flow_config['header_image'] ?? ''));
+    $landing_header = esc_url_raw((string) get_post_meta($event_id, '_eventosapp_whatsapp_landing_header_img', true));
+    $email_header = esc_url_raw((string) get_post_meta($event_id, '_eventosapp_email_header_img', true));
+    $default_header = function_exists('eventosapp_whatsapp_system_default_header_image') ? eventosapp_whatsapp_system_default_header_image() : '';
+    $effective_header_image = $requested_header_image_url ?: ($event_flow_header ?: ($template_header ?: ($event_config_header ?: ($landing_header ?: ($email_header ?: $default_header)))));
+
     $missing = [];
-    if ( empty($flow_config['template_id']) || empty($template) ) {
-        $missing[] = 'falta la plantilla Flow del evento';
+    if ( empty($template_id) || empty($template) ) {
+        $missing[] = 'falta la plantilla Flow';
     }
     if ( ! in_array($template_status, ['approved', 'active'], true) ) {
         $missing[] = 'la plantilla Flow no está aprobada o activa en Meta';
     }
+    if ( $requested_template_id !== '' && ! $template_flow_post_id && $template_meta_flow_id === '' ) {
+        $missing[] = 'la plantilla Flow seleccionada no tiene Flow local ni Meta Flow ID asociado';
+    }
+    if ( $requested_flow_post_id && $template_flow_post_id && $template_flow_post_id !== $requested_flow_post_id ) {
+        $missing[] = 'la plantilla Flow no corresponde al Flow seleccionado para este envío';
+    }
     if ( ! $flow_post_id ) {
         $missing[] = 'falta el Flow local asociado';
+    }
+    if ( $template_meta_flow_id !== '' && $meta_flow_id !== '' && $template_meta_flow_id !== $meta_flow_id ) {
+        $missing[] = 'el Meta Flow ID de la plantilla no coincide con el Flow seleccionado';
     }
     if ( $meta_flow_id === '' ) {
         $missing[] = 'falta el Meta Flow ID';
     }
     if ( $sender_phone_number_id === '' ) {
         $missing[] = 'falta el número emisor del Flow';
+    }
+    if ( $sender_phone_number_id !== '' && ! empty($template) && function_exists('eventosapp_whatsapp_flow_template_matches_sender') && ! eventosapp_whatsapp_flow_template_matches_sender($template, $sender_phone_number_id, true) ) {
+        $missing[] = 'la plantilla Flow no corresponde al número emisor configurado para este evento';
     }
     if ( ! function_exists('eventosapp_whatsapp_flow_templates_build_send_payload') ) {
         $missing[] = 'no está cargado el constructor de payload de plantillas Flow';
@@ -6815,11 +6858,14 @@ function eventosapp_whatsapp_send_ticket_satisfaction_flow($ticket_id, $args = [
         $message = 'No se pudo enviar el Flow: ' . implode(', ', $missing) . '.';
         eventosapp_whatsapp_add_ticket_log($ticket_id, 'error', $message, $args);
         eventosapp_whatsapp_add_activity_log('flow_ticket_envio_cancelado_config_incompleta', [
-            'ticket_id'   => $ticket_id,
-            'event_id'    => $event_id,
-            'flow_config' => eventosapp_whatsapp_sanitize_log_context($flow_config),
-            'missing'     => $missing,
-            'context'     => $args['context'] ?? 'manual_admin_flow',
+            'ticket_id'          => $ticket_id,
+            'event_id'           => $event_id,
+            'template_id'        => $template_id,
+            'requested_template' => $requested_template_id,
+            'requested_flow_id'  => $requested_flow_post_id,
+            'flow_config'        => eventosapp_whatsapp_sanitize_log_context($event_flow_config),
+            'missing'            => $missing,
+            'context'            => $args['context'] ?? 'manual_admin_flow',
         ]);
         return ['ok' => false, 'message' => $message];
     }
@@ -6850,13 +6896,14 @@ function eventosapp_whatsapp_send_ticket_satisfaction_flow($ticket_id, $args = [
     $context['ticket_id'] = $ticket_id;
     $context['event_id'] = $event_id;
     $context['event_name'] = $context['event_name'] ?? get_the_title($event_id);
-    $context['flow_name'] = ! empty($flow_config['flow_config']['title']) ? $flow_config['flow_config']['title'] : get_the_title($flow_post_id);
+    $context['flow_name'] = ! empty($flow_runtime_config['title']) ? $flow_runtime_config['title'] : get_the_title($flow_post_id);
 
     $template = function_exists('eventosapp_whatsapp_flow_templates_prepare_template_for_meta') ? eventosapp_whatsapp_flow_templates_prepare_template_for_meta($template) : $template;
+    $template['id'] = $template_id;
     $template['flow_post_id'] = $flow_post_id;
     $template['meta_flow_id'] = $meta_flow_id;
     $template['sender_phone_number_id'] = $sender_phone_number_id;
-    $template['header_image_url'] = esc_url_raw((string)($flow_config['header_image'] ?? ($template['header_image_url'] ?? '')));
+    $template['header_image_url'] = esc_url_raw((string) $effective_header_image);
 
     if ( eventosapp_whatsapp_flow_templates_sanitize_header_format($template['header_format'] ?? 'NONE') === 'IMAGE' && empty($template['header_image_url']) ) {
         $message = 'No se pudo enviar el Flow: la plantilla usa header de imagen y no hay una URL pública de imagen configurada.';
@@ -6893,7 +6940,7 @@ function eventosapp_whatsapp_send_ticket_satisfaction_flow($ticket_id, $args = [
 
     $template_name = eventosapp_whatsapp_flow_templates_template_name($template['name'] ?? '');
     $template_language = sanitize_text_field((string)($template['language'] ?? 'es_CO'));
-    $sender_label = sanitize_text_field((string)($settings['sender_phone_label'] ?? ($settings['phone_number_label'] ?? ($flow_config['sender_label'] ?? ''))));
+    $sender_label = sanitize_text_field((string)($settings['sender_phone_label'] ?? ($settings['phone_number_label'] ?? ($event_flow_config['sender_label'] ?? ''))));
     $context_key = sanitize_key((string)($args['context'] ?? 'manual_admin_flow'));
     $source_key = sanitize_text_field((string)($args['source_key'] ?? ''));
 
@@ -6906,7 +6953,7 @@ function eventosapp_whatsapp_send_ticket_satisfaction_flow($ticket_id, $args = [
         'phone_raw'              => $phone_raw,
         'transport'              => 'flow_template',
         'send_mode'              => sanitize_key((string)($args['send_mode'] ?? 'template_flow_manual_admin')),
-        'template_id'            => sanitize_key((string)($flow_config['template_id'] ?? '')),
+        'template_id'            => $template_id,
         'template_name'          => $template_name,
         'template_language'      => $template_language,
         'template_status'        => $template_status,
@@ -6917,6 +6964,7 @@ function eventosapp_whatsapp_send_ticket_satisfaction_flow($ticket_id, $args = [
         'sender_phone_number_id' => sanitize_text_field((string)($settings['phone_number_id'] ?? $sender_phone_number_id)),
         'sender_phone_label'     => $sender_label,
         'header_image_url'       => $template['header_image_url'] ?? '',
+        'header_source'          => $requested_header_image_url !== '' ? 'args' : ($event_flow_header !== '' ? 'event_satisfaction_flow' : ($template_header !== '' ? 'selected_template' : ($event_config_header !== '' ? 'event_config' : ($landing_header !== '' ? 'event_landing' : ($email_header !== '' ? 'event_email' : 'default'))))),
         'payload_summary'        => $payload_summary,
     ];
 
