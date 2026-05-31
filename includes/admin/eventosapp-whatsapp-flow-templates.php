@@ -279,12 +279,30 @@ function eventosapp_whatsapp_flow_templates_category_status_message($requested_c
 
 
 function eventosapp_whatsapp_flow_templates_sanitize_screen_id($screen, $fallback = '') {
-    $screen = strtoupper(trim(remove_accents((string) $screen)));
-    $screen = preg_replace('/[^A-Z0-9_-]+/', '_', $screen);
-    $screen = trim((string) $screen, '_-');
+    if ( function_exists('eventosapp_whatsapp_flows_sanitize_flow_screen_id') ) {
+        return eventosapp_whatsapp_flows_sanitize_flow_screen_id($screen, $fallback);
+    }
 
+    $normalize = static function($candidate) {
+        $screen = strtoupper(trim(remove_accents((string) $candidate)));
+        $screen = preg_replace('/[^A-Z_]+/', '_', $screen);
+        $screen = preg_replace('/_+/', '_', (string) $screen);
+        $screen = trim((string) $screen, '_');
+
+        if ( $screen === '' ) {
+            return '';
+        }
+
+        if ( ! preg_match('/^[A-Z]/', $screen) ) {
+            $screen = 'SCREEN_' . $screen;
+        }
+
+        return $screen;
+    };
+
+    $screen = $normalize($screen);
     if ( $screen === '' && $fallback !== '' ) {
-        return eventosapp_whatsapp_flow_templates_sanitize_screen_id($fallback);
+        $screen = $normalize($fallback);
     }
 
     return $screen;
