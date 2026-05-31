@@ -1093,6 +1093,79 @@ function eventosapp_whatsapp_flows_notice_redirect($args = []) {
     exit;
 }
 
+function eventosapp_whatsapp_flows_duplicate_local_flow($source_flow_id) {
+    $source_flow_id = absint($source_flow_id);
+    if ( ! $source_flow_id || get_post_type($source_flow_id) !== EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE ) {
+        return new WP_Error('invalid_source_flow', 'No se encontró el Flow local para duplicar.');
+    }
+
+    $source_config = eventosapp_whatsapp_flows_get_flow_config($source_flow_id);
+    if ( empty($source_config) || ! is_array($source_config) ) {
+        return new WP_Error('invalid_source_config', 'No se pudo leer la configuración del Flow original.');
+    }
+
+    $source_title = trim((string)($source_config['title'] ?? get_the_title($source_flow_id)));
+    if ( $source_title === '' ) {
+        $source_title = 'WhatsApp Flow #' . $source_flow_id;
+    }
+
+    $new_title = $source_title . ' (copia)';
+    $new_flow_id = wp_insert_post([
+        'post_type'   => EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE,
+        'post_title'  => $new_title,
+        'post_status' => 'publish',
+    ], true);
+
+    if ( is_wp_error($new_flow_id) || ! $new_flow_id ) {
+        return is_wp_error($new_flow_id) ? $new_flow_id : new WP_Error('insert_failed', 'No se pudo crear la copia local del Flow.');
+    }
+
+    $questions = eventosapp_whatsapp_flows_normalize_questions($source_config['questions'] ?? []);
+    $questions_per_screen = absint($source_config['questions_per_screen'] ?? 8);
+    $questions_per_screen = min(15, max(3, $questions_per_screen ?: 8));
+
+    $category = (string)($source_config['category'] ?? 'SURVEY');
+    $categories = eventosapp_whatsapp_flows_categories();
+    if ( ! isset($categories[$category]) ) {
+        $category = 'SURVEY';
+    }
+
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_description', sanitize_textarea_field((string)($source_config['description'] ?? '')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_category', $category);
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_cta', sanitize_text_field((string)($source_config['cta'] ?? 'Responder encuesta')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_submit_label', sanitize_text_field((string)($source_config['submit_label'] ?? 'Enviar respuestas')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_screen_id', eventosapp_whatsapp_flows_sanitize_flow_screen_id($source_config['screen_id'] ?? 'SURVEY', 'SURVEY'));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_questions_per_screen', $questions_per_screen);
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_waba_id', function_exists('eventosapp_whatsapp_sanitize_waba_id') ? eventosapp_whatsapp_sanitize_waba_id($source_config['waba_id'] ?? '') : preg_replace('/\D+/', '', (string)($source_config['waba_id'] ?? '')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_sender_phone_number_id', function_exists('eventosapp_whatsapp_sanitize_phone_number_id') ? eventosapp_whatsapp_sanitize_phone_number_id($source_config['sender_phone_number_id'] ?? '') : preg_replace('/\D+/', '', (string)($source_config['sender_phone_number_id'] ?? '')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_questions', $questions);
+
+    // La copia queda como borrador local para evitar editar o publicar accidentalmente
+    // sobre el mismo Flow ID aprobado/publicado en Meta.
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_status', 'local_draft');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_id', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_preview_url', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_meta_response', []);
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_validation_errors', []);
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_created_at_meta', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_published_at', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_sync_at', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicate_source_id', $source_flow_id);
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicate_source_status', sanitize_text_field((string)($source_config['status'] ?? '')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicate_source_meta_id', sanitize_text_field((string)($source_config['meta_flow_id'] ?? '')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicated_at', current_time('mysql'));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($new_flow_id), true));
+
+    eventosapp_whatsapp_flows_add_activity('flow_duplicado_local', [
+        'source_flow_post_id' => $source_flow_id,
+        'new_flow_post_id'    => $new_flow_id,
+        'source_status'       => $source_config['status'] ?? '',
+        'source_meta_flow_id' => $source_config['meta_flow_id'] ?? '',
+    ]);
+
+    return absint($new_flow_id);
+}
+
 function eventosapp_whatsapp_flows_make_flow_token($flow_post_id, $ticket_id = 0, $event_id = 0) {
     $parts = [
         'evappflow',
@@ -2078,6 +2151,30 @@ add_action('admin_post_eventosapp_whatsapp_flow_save', function() {
         'flow_id'      => $flow_post_id,
         'flow_notice'  => 'success',
         'flow_message' => rawurlencode('Flow guardado localmente.'),
+    ]);
+});
+
+add_action('admin_post_eventosapp_whatsapp_flow_duplicate', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+    check_admin_referer('eventosapp_whatsapp_flow_duplicate');
+
+    $source_flow_id = absint($_POST['flow_post_id'] ?? 0);
+    $new_flow_id = eventosapp_whatsapp_flows_duplicate_local_flow($source_flow_id);
+
+    if ( is_wp_error($new_flow_id) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode($new_flow_id->get_error_message()),
+        ]);
+    }
+
+    eventosapp_whatsapp_flows_notice_redirect([
+        'flow_id'      => absint($new_flow_id),
+        'flow_notice'  => 'success',
+        'flow_message' => rawurlencode('Flow duplicado como borrador local. Ya puedes modificar la copia sin afectar el original.'),
     ]);
 });
 
@@ -3137,7 +3234,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
 function eventosapp_whatsapp_flows_admin_styles() {
     ?>
     <style>
-        .eventosapp-wa-flows{--evapp-blue:#3454f4;--evapp-blue2:#eef2ff;--evapp-ink:#152234;--evapp-muted:#667085;--evapp-border:#d9e1ef;--evapp-bg:#f5f7fb;--evapp-card:#fff;--evapp-green:#0a9b67;--evapp-orange:#d97706}.eventosapp-wa-flows.wrap{background:var(--evapp-bg);padding:20px;margin:0 0 0 -20px;min-height:calc(100vh - 32px)}.eventosapp-wa-flows h1{font-size:28px;font-weight:800;color:var(--evapp-ink);margin:0 0 18px}.eventosapp-wa-flows .evapp-page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eventosapp-wa-flows .evapp-page-head p{margin:.35rem 0 0;color:var(--evapp-muted);font-size:14px}.eventosapp-wa-flows .evapp-top-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-card{background:var(--evapp-card);border:1px solid var(--evapp-border);border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:18px}.eventosapp-wa-flows .evapp-card h2{font-size:17px;margin:0 0 12px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-card h3{font-size:15px;margin:18px 0 10px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(520px,1.15fr) minmax(330px,.85fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-field{display:block;margin-bottom:12px}.eventosapp-wa-flows .evapp-field span,.eventosapp-wa-flows .evapp-label{display:block;font-weight:700;color:#26364a;margin-bottom:6px}.eventosapp-wa-flows input[type=text],.eventosapp-wa-flows input[type=number],.eventosapp-wa-flows select,.eventosapp-wa-flows textarea{border:1px solid #cfd8e6;border-radius:10px;min-height:38px;box-shadow:none}.eventosapp-wa-flows .evapp-field input[type=text],.eventosapp-wa-flows .evapp-field input[type=number],.eventosapp-wa-flows .evapp-field select,.eventosapp-wa-flows .evapp-field textarea{width:100%;max-width:100%;box-sizing:border-box}.eventosapp-wa-flows textarea{padding:8px 10px}.eventosapp-wa-flows #flow_description{display:block;width:100%;min-height:96px;resize:vertical}.eventosapp-wa-flows .regular-text,.eventosapp-wa-flows .large-text{max-width:100%;width:100%}.eventosapp-wa-flows .evapp-muted,.eventosapp-wa-flows .description{color:var(--evapp-muted)}.eventosapp-wa-flows .evapp-pill{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-blue2);color:#203bc4;padding:4px 9px;font-size:12px;font-weight:800}.eventosapp-wa-flows .evapp-pill.green{background:#e9f9f1;color:#07724d}.eventosapp-wa-flows .evapp-pill.gray{background:#eef1f5;color:#4b5563}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:linear-gradient(180deg,#fff,#f7f9ff);border:1px solid #e3e9f6;border-radius:14px;padding:13px}.eventosapp-wa-flows .evapp-stat span{display:block;font-weight:700;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:24px;color:var(--evapp-ink);line-height:1.1;margin-top:4px}.eventosapp-wa-flows .evapp-builder-toolbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 14px}.eventosapp-wa-flows .evapp-builder-toolbar button{min-height:38px;border-radius:10px}.eventosapp-wa-flows .evapp-question{border:1px solid #d9e1ef;border-radius:16px;margin:12px 0;background:#fff;overflow:hidden}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8faff;padding:12px 14px;border-bottom:1px solid #e6edf8}.eventosapp-wa-flows .evapp-question-title{display:flex;align-items:center;gap:9px}.eventosapp-wa-flows .evapp-question-number{display:inline-flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:9px;background:var(--evapp-blue);color:#fff;font-weight:800}.eventosapp-wa-flows .evapp-question-body{padding:14px}.eventosapp-wa-flows .evapp-type-help{padding:9px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5edf7;color:#536071;margin:8px 0 0;font-size:12px}.eventosapp-wa-flows .evapp-options-wrap textarea{font-family:Menlo,Consolas,monospace;min-height:96px}.eventosapp-wa-flows .evapp-question.is-display .evapp-options-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-required-wrap{display:none}.eventosapp-wa-flows .evapp-question.is-optin .evapp-options-wrap,.eventosapp-wa-flows .evapp-question:not(.is-text-input) .evapp-text-input-type-wrap{display:none}.eventosapp-wa-flows textarea.code{width:100%;min-height:310px;font-family:Menlo,Consolas,monospace;background:#0f172a;color:#d9e9ff;border-radius:14px;padding:14px}.eventosapp-wa-flows .widefat{border:1px solid #dce4f1;border-radius:12px;overflow:hidden}.eventosapp-wa-flows .widefat th{font-weight:800;color:#26364a}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:130px;overflow:auto;background:#f8fafc;border-radius:10px;padding:8px}.eventosapp-wa-flows .evapp-warning{border-left:4px solid var(--evapp-orange);background:#fff7ed;padding:12px;border-radius:12px;margin:12px 0;color:#7c2d12}.eventosapp-wa-flows .evapp-info{border-left:4px solid var(--evapp-blue);background:#eef2ff;padding:12px;border-radius:12px;margin:12px 0;color:#26364a}.eventosapp-wa-flows .evapp-success{border-left:4px solid var(--evapp-green);background:#ecfdf3;padding:12px;border-radius:12px;margin:12px 0}.eventosapp-wa-flows .button{border-radius:9px}.eventosapp-wa-flows .button-primary{background:var(--evapp-blue);border-color:var(--evapp-blue)}.eventosapp-wa-flows .evapp-empty{padding:22px;border:1px dashed #cfd8e6;border-radius:14px;background:#fafcff;color:var(--evapp-muted);text-align:center}.eventosapp-wa-flows .evapp-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.eventosapp-wa-flows .evapp-template-card{border:1px solid #dce4f1;border-radius:13px;padding:12px;background:#fbfdff}.eventosapp-wa-flows .evapp-template-card strong{display:block;color:var(--evapp-ink);margin-bottom:4px}.eventosapp-wa-flows .evapp-template-card p{margin:0;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-small{font-size:12px}.eventosapp-wa-flows .evapp-checkline{display:flex;gap:7px;align-items:center;margin:8px 0}.eventosapp-wa-flows .evapp-form-table{width:100%;border-collapse:separate;border-spacing:0 12px}.eventosapp-wa-flows .evapp-form-table th{width:170px;text-align:left;vertical-align:top;padding-top:8px;color:#26364a}.eventosapp-wa-flows .evapp-form-table td{vertical-align:top}@media(max-width:1200px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-builder-toolbar{grid-template-columns:repeat(2,1fr)}}@media(max-width:782px){.eventosapp-wa-flows.wrap{margin-left:-10px;padding:14px}.eventosapp-wa-flows .evapp-stat-grid,.eventosapp-wa-flows .evapp-grid-3,.eventosapp-wa-flows .evapp-row,.eventosapp-wa-flows .evapp-row-3,.eventosapp-wa-flows .evapp-template-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-page-head{display:block}.eventosapp-wa-flows .evapp-form-table th,.eventosapp-wa-flows .evapp-form-table td{display:block;width:100%}}
+        .eventosapp-wa-flows{--evapp-blue:#3454f4;--evapp-blue2:#eef2ff;--evapp-ink:#152234;--evapp-muted:#667085;--evapp-border:#d9e1ef;--evapp-bg:#f5f7fb;--evapp-card:#fff;--evapp-green:#0a9b67;--evapp-orange:#d97706}.eventosapp-wa-flows.wrap{background:var(--evapp-bg);padding:20px;margin:0 0 0 -20px;min-height:calc(100vh - 32px)}.eventosapp-wa-flows h1{font-size:28px;font-weight:800;color:var(--evapp-ink);margin:0 0 18px}.eventosapp-wa-flows .evapp-page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eventosapp-wa-flows .evapp-page-head p{margin:.35rem 0 0;color:var(--evapp-muted);font-size:14px}.eventosapp-wa-flows .evapp-top-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-card{background:var(--evapp-card);border:1px solid var(--evapp-border);border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:18px}.eventosapp-wa-flows .evapp-card h2{font-size:17px;margin:0 0 12px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-card h3{font-size:15px;margin:18px 0 10px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(520px,1.15fr) minmax(330px,.85fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-field{display:block;margin-bottom:12px}.eventosapp-wa-flows .evapp-field span,.eventosapp-wa-flows .evapp-label{display:block;font-weight:700;color:#26364a;margin-bottom:6px}.eventosapp-wa-flows input[type=text],.eventosapp-wa-flows input[type=number],.eventosapp-wa-flows select,.eventosapp-wa-flows textarea{border:1px solid #cfd8e6;border-radius:10px;min-height:38px;box-shadow:none}.eventosapp-wa-flows .evapp-field input[type=text],.eventosapp-wa-flows .evapp-field input[type=number],.eventosapp-wa-flows .evapp-field select,.eventosapp-wa-flows .evapp-field textarea{width:100%;max-width:100%;box-sizing:border-box}.eventosapp-wa-flows textarea{padding:8px 10px}.eventosapp-wa-flows #flow_description{display:block;width:100%;min-height:96px;resize:vertical}.eventosapp-wa-flows .regular-text,.eventosapp-wa-flows .large-text{max-width:100%;width:100%}.eventosapp-wa-flows .evapp-muted,.eventosapp-wa-flows .description{color:var(--evapp-muted)}.eventosapp-wa-flows .evapp-pill{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-blue2);color:#203bc4;padding:4px 9px;font-size:12px;font-weight:800}.eventosapp-wa-flows .evapp-pill.green{background:#e9f9f1;color:#07724d}.eventosapp-wa-flows .evapp-pill.gray{background:#eef1f5;color:#4b5563}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:linear-gradient(180deg,#fff,#f7f9ff);border:1px solid #e3e9f6;border-radius:14px;padding:13px}.eventosapp-wa-flows .evapp-stat span{display:block;font-weight:700;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:24px;color:var(--evapp-ink);line-height:1.1;margin-top:4px}.eventosapp-wa-flows .evapp-builder-toolbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 14px}.eventosapp-wa-flows .evapp-builder-toolbar button{min-height:38px;border-radius:10px}.eventosapp-wa-flows .evapp-question{border:1px solid #d9e1ef;border-radius:16px;margin:12px 0;background:#fff;overflow:hidden;transition:box-shadow .15s ease,opacity .15s ease,border-color .15s ease}.eventosapp-wa-flows .evapp-question.is-dragging{opacity:.55;border-color:#3454f4;box-shadow:0 14px 28px rgba(52,84,244,.18)}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8faff;padding:12px 14px;border-bottom:1px solid #e6edf8}.eventosapp-wa-flows .evapp-question-title{display:flex;align-items:center;gap:9px}.eventosapp-wa-flows .evapp-question-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.eventosapp-wa-flows .evapp-drag-handle{display:inline-flex;align-items:center;gap:5px;border:1px solid #cfd8e6;background:#fff;border-radius:999px;padding:4px 9px;color:#344054;font-size:12px;font-weight:800;cursor:grab}.eventosapp-wa-flows .evapp-drag-handle:active{cursor:grabbing}.eventosapp-wa-flows .evapp-builder-order-note{margin:8px 0 10px}.eventosapp-wa-flows .evapp-question-number{display:inline-flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:9px;background:var(--evapp-blue);color:#fff;font-weight:800}.eventosapp-wa-flows .evapp-question-body{padding:14px}.eventosapp-wa-flows .evapp-type-help{padding:9px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5edf7;color:#536071;margin:8px 0 0;font-size:12px}.eventosapp-wa-flows .evapp-options-wrap textarea{font-family:Menlo,Consolas,monospace;min-height:96px}.eventosapp-wa-flows .evapp-question.is-display .evapp-options-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-required-wrap{display:none}.eventosapp-wa-flows .evapp-question.is-optin .evapp-options-wrap,.eventosapp-wa-flows .evapp-question:not(.is-text-input) .evapp-text-input-type-wrap{display:none}.eventosapp-wa-flows textarea.code{width:100%;min-height:310px;font-family:Menlo,Consolas,monospace;background:#0f172a;color:#d9e9ff;border-radius:14px;padding:14px}.eventosapp-wa-flows .widefat{border:1px solid #dce4f1;border-radius:12px;overflow:hidden}.eventosapp-wa-flows .widefat th{font-weight:800;color:#26364a}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:130px;overflow:auto;background:#f8fafc;border-radius:10px;padding:8px}.eventosapp-wa-flows .evapp-warning{border-left:4px solid var(--evapp-orange);background:#fff7ed;padding:12px;border-radius:12px;margin:12px 0;color:#7c2d12}.eventosapp-wa-flows .evapp-info{border-left:4px solid var(--evapp-blue);background:#eef2ff;padding:12px;border-radius:12px;margin:12px 0;color:#26364a}.eventosapp-wa-flows .evapp-success{border-left:4px solid var(--evapp-green);background:#ecfdf3;padding:12px;border-radius:12px;margin:12px 0}.eventosapp-wa-flows .button{border-radius:9px}.eventosapp-wa-flows .button-primary{background:var(--evapp-blue);border-color:var(--evapp-blue)}.eventosapp-wa-flows .evapp-empty{padding:22px;border:1px dashed #cfd8e6;border-radius:14px;background:#fafcff;color:var(--evapp-muted);text-align:center}.eventosapp-wa-flows .evapp-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.eventosapp-wa-flows .evapp-template-card{border:1px solid #dce4f1;border-radius:13px;padding:12px;background:#fbfdff}.eventosapp-wa-flows .evapp-template-card strong{display:block;color:var(--evapp-ink);margin-bottom:4px}.eventosapp-wa-flows .evapp-template-card p{margin:0;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-small{font-size:12px}.eventosapp-wa-flows .evapp-checkline{display:flex;gap:7px;align-items:center;margin:8px 0}.eventosapp-wa-flows .evapp-form-table{width:100%;border-collapse:separate;border-spacing:0 12px}.eventosapp-wa-flows .evapp-form-table th{width:170px;text-align:left;vertical-align:top;padding-top:8px;color:#26364a}.eventosapp-wa-flows .evapp-form-table td{vertical-align:top}@media(max-width:1200px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-builder-toolbar{grid-template-columns:repeat(2,1fr)}}@media(max-width:782px){.eventosapp-wa-flows.wrap{margin-left:-10px;padding:14px}.eventosapp-wa-flows .evapp-stat-grid,.eventosapp-wa-flows .evapp-grid-3,.eventosapp-wa-flows .evapp-row,.eventosapp-wa-flows .evapp-row-3,.eventosapp-wa-flows .evapp-template-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-page-head{display:block}.eventosapp-wa-flows .evapp-form-table th,.eventosapp-wa-flows .evapp-form-table td{display:block;width:100%}}
     </style>
     <?php
 }
@@ -3209,6 +3306,9 @@ function eventosapp_whatsapp_flows_render_page() {
             <div class="evapp-top-actions">
                 <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a>
                 <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($flow_id))); ?>">Envío masivo</a>
+                <?php if ( $flow_id ) : ?>
+                    <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_duplicate', 'eventosapp_whatsapp_flow_duplicate', 'Duplicar Flow', $flow_id); ?>
+                <?php endif; ?>
                 <a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear nuevo</a>
             </div>
         </div>
@@ -3280,6 +3380,7 @@ function eventosapp_whatsapp_flows_render_page() {
                             <button type="button" class="button evapp-add-component" data-component="optin">+ OptIn</button>
                         </div>
 
+                        <p class="evapp-muted evapp-builder-order-note">Para cambiar el orden, arrastra cada componente desde el manejador <strong>↕ Mover</strong>. Al guardar, el JSON se genera con el nuevo orden.</p>
                         <div id="evapp-wa-flow-questions">
                             <?php foreach ( $edit_config['questions'] as $index => $question ) : ?>
                                 <?php eventosapp_whatsapp_flows_render_question_row($index, $question, $question_types); ?>
@@ -3435,7 +3536,7 @@ function eventosapp_whatsapp_flows_render_manage_page() {
                             <td><small><?php echo esc_html($item['meta_flow_id'] ?: '—'); ?></small></td>
                             <td><?php echo esc_html($config['screen_id'] ?? 'SURVEY'); ?></td>
                             <td><?php echo esc_html($stats['answered']); ?> respuestas / <?php echo esc_html($stats['sent']); ?> envíos<br><small>Tasa <?php echo esc_html($stats['rate']); ?>%</small></td>
-                            <td class="evapp-actions"><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=' . absint($item['id']))); ?>">Editar</a><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($item['id']))); ?>">Enviar</a><a class="button button-small" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=eventosapp_whatsapp_flow_export_responses&flow_id=' . absint($item['id'])), 'eventosapp_whatsapp_flow_export_responses')); ?>">CSV</a></td>
+                            <td class="evapp-actions"><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=' . absint($item['id']))); ?>">Editar</a><?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_duplicate', 'eventosapp_whatsapp_flow_duplicate', 'Duplicar', $item['id'], 'button-small'); ?><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($item['id']))); ?>">Enviar</a><a class="button button-small" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=eventosapp_whatsapp_flow_export_responses&flow_id=' . absint($item['id'])), 'eventosapp_whatsapp_flow_export_responses')); ?>">CSV</a></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
@@ -4171,7 +4272,10 @@ function eventosapp_whatsapp_flows_render_question_row($index, $question, $quest
     <div class="<?php echo esc_attr(implode(' ', $classes)); ?>" data-question-index="<?php echo esc_attr($index); ?>">
         <div class="evapp-question-head">
             <div class="evapp-question-title"><span class="evapp-question-number"><?php echo esc_html($index + 1); ?></span><strong><?php echo esc_html($question_types[$type] ?? 'Campo'); ?></strong></div>
-            <button type="button" class="button-link-delete evapp-remove-question">Quitar</button>
+            <div class="evapp-question-actions">
+                <button type="button" class="evapp-drag-handle" draggable="true" aria-label="Mover componente" title="Arrastra para reorganizar">↕ Mover</button>
+                <button type="button" class="button-link-delete evapp-remove-question">Quitar</button>
+            </div>
         </div>
         <div class="evapp-question-body">
             <div class="evapp-row">
@@ -4253,7 +4357,7 @@ function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_
             var required = data.required !== false;
             var inputType = data.input_type || 'text';
             return '<div class="evapp-question" data-question-index="'+i+'">'+
-                '<div class="evapp-question-head"><div class="evapp-question-title"><span class="evapp-question-number">'+(i+1)+'</span><strong>'+esc(questionTypes[type] || 'Campo')+'</strong></div><button type="button" class="button-link-delete evapp-remove-question">Quitar</button></div>'+ 
+                '<div class="evapp-question-head"><div class="evapp-question-title"><span class="evapp-question-number">'+(i+1)+'</span><strong>'+esc(questionTypes[type] || 'Campo')+'</strong></div><div class="evapp-question-actions"><button type="button" class="evapp-drag-handle" draggable="true" aria-label="Mover componente" title="Arrastra para reorganizar">↕ Mover</button><button type="button" class="button-link-delete evapp-remove-question">Quitar</button></div></div>'+ 
                 '<div class="evapp-question-body">'+
                 '<div class="evapp-row"><label class="evapp-field"><span>Texto visible</span><input type="text" class="large-text" name="questions['+i+'][label]" value="'+esc(data.label || 'Nueva pregunta')+'" placeholder="Pregunta o texto de sección"></label><label class="evapp-field"><span>Slug / nombre interno</span><input type="text" class="regular-text" name="questions['+i+'][slug]" value="'+esc(data.slug || ('pregunta_'+(i+1)))+'" placeholder="campo_respuesta"></label></div>'+ 
                 '<div class="evapp-row"><label class="evapp-field"><span>Componente WhatsApp Flow</span><select class="evapp-question-type" name="questions['+i+'][type]">'+typeOptions(type)+'</select></label><label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions['+i+'][required]" value="1" '+(required?'checked':'')+'> Obligatoria</label></label></div>'+ 
@@ -4280,11 +4384,67 @@ function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_
             var help = block.querySelector('.evapp-type-help');
             if(help) help.textContent = typeHelp[type] || '';
         }
-        function refreshAll(){ Array.prototype.forEach.call(wrap.querySelectorAll('.evapp-question'), refreshBlock); }
+        function reindexQuestions(){
+            Array.prototype.forEach.call(wrap.querySelectorAll('.evapp-question'), function(block, i){
+                block.setAttribute('data-question-index', i);
+                var number = block.querySelector('.evapp-question-number');
+                if(number) number.textContent = String(i + 1);
+                Array.prototype.forEach.call(block.querySelectorAll('[name]'), function(field){
+                    field.name = String(field.name || '').replace(/questions\[[0-9]+\]/, 'questions[' + i + ']');
+                });
+            });
+        }
+        function refreshAll(){ reindexQuestions(); Array.prototype.forEach.call(wrap.querySelectorAll('.evapp-question'), refreshBlock); }
+        function getDragAfterElement(container, y){
+            var blocks = Array.prototype.slice.call(container.querySelectorAll('.evapp-question:not(.is-dragging)'));
+            return blocks.reduce(function(closest, child){
+                var box = child.getBoundingClientRect();
+                var offset = y - box.top - (box.height / 2);
+                if(offset < 0 && offset > closest.offset){
+                    return {offset: offset, element: child};
+                }
+                return closest;
+            }, {offset: Number.NEGATIVE_INFINITY, element: null}).element;
+        }
+        var draggedQuestion = null;
+        wrap.addEventListener('dragstart', function(e){
+            var handle = e.target && e.target.closest ? e.target.closest('.evapp-drag-handle') : null;
+            var block = e.target && e.target.closest ? e.target.closest('.evapp-question') : null;
+            if(!handle || !block){
+                e.preventDefault();
+                return;
+            }
+            draggedQuestion = block;
+            block.classList.add('is-dragging');
+            if(e.dataTransfer){
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', block.getAttribute('data-question-index') || '0');
+            }
+        });
+        wrap.addEventListener('dragover', function(e){
+            if(!draggedQuestion) return;
+            e.preventDefault();
+            var afterElement = getDragAfterElement(wrap, e.clientY);
+            if(afterElement === null){
+                wrap.appendChild(draggedQuestion);
+            }else{
+                wrap.insertBefore(draggedQuestion, afterElement);
+            }
+        });
+        wrap.addEventListener('dragend', function(){
+            if(draggedQuestion){
+                draggedQuestion.classList.remove('is-dragging');
+                draggedQuestion = null;
+                refreshAll();
+            }
+        });
         document.addEventListener('click', function(e){
             if(e.target && e.target.classList.contains('evapp-remove-question')){
                 var q=e.target.closest('.evapp-question');
-                if(q) q.remove();
+                if(q){
+                    q.remove();
+                    refreshAll();
+                }
             }
             if(e.target && e.target.classList.contains('evapp-add-component')){
                 var component=e.target.getAttribute('data-component');
