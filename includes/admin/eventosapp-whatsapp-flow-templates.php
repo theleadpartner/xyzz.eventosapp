@@ -919,12 +919,20 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_test_send', function() 
     $template_id = sanitize_key((string)($_POST['template_id'] ?? ''));
     $phone = function_exists('eventosapp_whatsapp_flows_clean_phone') ? eventosapp_whatsapp_flows_clean_phone($_POST['test_phone'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['test_phone'] ?? ''));
     $ticket_id = absint($_POST['test_ticket_id'] ?? 0);
+    $test_sample_1 = sanitize_text_field((string)($_POST['test_sample_1'] ?? ''));
+    $test_sample_2 = sanitize_text_field((string)($_POST['test_sample_2'] ?? ''));
     $template = eventosapp_whatsapp_flow_templates_get($template_id);
     if ( empty($template) || $phone === '' ) {
         eventosapp_whatsapp_flow_templates_notice_redirect(['template_id' => $template_id, 'flow_tpl_notice' => 'error', 'flow_tpl_message' => rawurlencode('Plantilla o teléfono inválido.')]);
     }
 
     $template = eventosapp_whatsapp_flow_templates_prepare_template_for_meta($template);
+    if ( $test_sample_1 !== '' ) {
+        $template['sample_1'] = $test_sample_1;
+    }
+    if ( $test_sample_2 !== '' ) {
+        $template['sample_2'] = $test_sample_2;
+    }
     if ( ($template['header_format'] ?? '') === 'IMAGE' && empty($template['header_image_url']) ) {
         eventosapp_whatsapp_flow_templates_notice_redirect(['template_id' => $template_id, 'flow_tpl_notice' => 'error', 'flow_tpl_message' => rawurlencode('La plantilla tiene encabezado de imagen. Para enviar una prueba debes guardar una URL pública HTTPS de la imagen que WhatsApp enviará en el encabezado.')]);
     }
@@ -1011,12 +1019,102 @@ function eventosapp_whatsapp_flow_templates_render_page() {
 
     ?>
     <div class="wrap eventosapp-wa-flow-templates">
-        <h1>Plantillas Flow WhatsApp</h1>
+        <div class="evapp-page-hero">
+            <h1>Plantillas Flow WhatsApp</h1>
+            <p>Administra plantillas aprobables por Meta para abrir WhatsApp Flows, revisa rápidamente las plantillas existentes y ejecuta pruebas desde un bloque único sin perder de vista el Flow, el número emisor y el ticket usado.</p>
+            <div class="evapp-workflow-pills">
+                <span class="evapp-step-pill"><span>1</span> Edita contenido</span>
+                <span class="evapp-step-pill"><span>2</span> Revisa Flow y cuenta Meta</span>
+                <span class="evapp-step-pill"><span>3</span> Envía aprobación o prueba</span>
+            </div>
+        </div>
         <?php eventosapp_whatsapp_flow_templates_render_notices(); ?>
         <style>
-            .eventosapp-wa-flow-templates .evapp-grid{display:grid;grid-template-columns:minmax(420px,1fr) minmax(360px,.78fr);gap:18px;align-items:start}
-            .eventosapp-wa-flow-templates .evapp-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-            .eventosapp-wa-flow-templates .evapp-card h2{margin-top:0}.eventosapp-wa-flow-templates .evapp-muted{color:#646970}.eventosapp-wa-flow-templates .evapp-pill{display:inline-block;border-radius:999px;background:#eef6ff;color:#0a5ea8;padding:4px 9px;font-size:12px;font-weight:600}.eventosapp-wa-flow-templates .evapp-pill.warn{background:#fff3cd;color:#664d03}.eventosapp-wa-flow-templates .evapp-pill.error{background:#f8d7da;color:#842029}.eventosapp-wa-flow-templates .evapp-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flow-templates textarea.code{width:100%;min-height:260px;font-family:Menlo,Consolas,monospace}.eventosapp-wa-flow-templates .evapp-help{color:#646970;font-size:12px;margin:4px 0 0;line-height:1.45}.eventosapp-wa-flow-templates .evapp-info{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin:10px 0}.eventosapp-wa-flow-templates .evapp-warning{background:#fff8e5;border-left:4px solid #dba617;padding:10px 12px;margin:10px 0}.eventosapp-wa-flow-templates .evapp-flow-detail{background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:10px;margin-top:8px}.eventosapp-wa-flow-templates .evapp-inline-fields{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flow-templates .evapp-inline-fields input{max-width:230px}.eventosapp-wa-flow-templates .evapp-template-list td{vertical-align:top}.eventosapp-wa-flow-templates .evapp-template-actions{display:flex;gap:6px;flex-wrap:wrap}.eventosapp-wa-flow-templates .evapp-file-meta{background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:8px;margin-top:8px;max-width:620px}.eventosapp-wa-flow-templates .evapp-danger-link{color:#b32d2e;border-color:#b32d2e}.eventosapp-wa-flow-templates select.regular-text{max-width:420px}@media(max-width:1100px){.eventosapp-wa-flow-templates .evapp-grid{grid-template-columns:1fr}}
+            .eventosapp-wa-flow-templates{
+                --evapp-border:#dcdcde;
+                --evapp-soft:#f6f7f7;
+                --evapp-muted:#646970;
+                --evapp-blue:#0a5ea8;
+                --evapp-blue-soft:#eef6ff;
+                --evapp-warning:#fff8e5;
+                --evapp-warning-border:#dba617;
+                --evapp-danger:#b32d2e;
+            }
+            .eventosapp-wa-flow-templates .evapp-page-hero{
+                background:linear-gradient(135deg,#ffffff 0%,#f0f6fc 100%);
+                border:1px solid var(--evapp-border);
+                border-radius:14px;
+                padding:18px 20px;
+                margin:12px 0 18px;
+                box-shadow:0 1px 2px rgba(0,0,0,.04);
+            }
+            .eventosapp-wa-flow-templates .evapp-page-hero h1,
+            .eventosapp-wa-flow-templates .evapp-page-hero p{margin:0;}
+            .eventosapp-wa-flow-templates .evapp-page-hero h1{font-size:26px;line-height:1.2;}
+            .eventosapp-wa-flow-templates .evapp-page-hero p{max-width:980px;color:#3c434a;margin-top:6px;font-size:14px;line-height:1.55;}
+            .eventosapp-wa-flow-templates .evapp-workflow-pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+            .eventosapp-wa-flow-templates .evapp-step-pill{display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid #c3d9ef;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:600;color:#1d3f5f;}
+            .eventosapp-wa-flow-templates .evapp-step-pill span{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--evapp-blue);color:#fff;font-size:11px;}
+            .eventosapp-wa-flow-templates .evapp-grid{display:grid;grid-template-columns:minmax(560px,1.08fr) minmax(520px,.92fr);gap:20px;align-items:start;}
+            .eventosapp-wa-flow-templates .evapp-stack{display:flex;flex-direction:column;gap:16px;}
+            .eventosapp-wa-flow-templates .evapp-card{background:#fff;border:1px solid var(--evapp-border);border-radius:12px;padding:0;margin:0;box-shadow:0 1px 2px rgba(0,0,0,.04);overflow:hidden;}
+            .eventosapp-wa-flow-templates .evapp-card-header{padding:16px 18px;border-bottom:1px solid #edf0f2;background:#fbfbfc;}
+            .eventosapp-wa-flow-templates .evapp-card-header h2{margin:0;font-size:18px;line-height:1.3;}
+            .eventosapp-wa-flow-templates .evapp-card-header p{margin:5px 0 0;color:var(--evapp-muted);line-height:1.45;}
+            .eventosapp-wa-flow-templates .evapp-card-body{padding:18px;}
+            .eventosapp-wa-flow-templates .evapp-form-table{margin-top:0;}
+            .eventosapp-wa-flow-templates .evapp-form-table th{width:180px;padding-top:18px;}
+            .eventosapp-wa-flow-templates .evapp-form-table td{padding-top:14px;padding-bottom:14px;}
+            .eventosapp-wa-flow-templates .evapp-section-row th,
+            .eventosapp-wa-flow-templates .evapp-section-row td{padding:22px 0 8px;border-top:1px solid #edf0f2;}
+            .eventosapp-wa-flow-templates .evapp-section-title{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:700;color:#1d2327;}
+            .eventosapp-wa-flow-templates .evapp-section-title span{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--evapp-blue-soft);color:var(--evapp-blue);font-size:12px;font-weight:700;}
+            .eventosapp-wa-flow-templates .evapp-muted{color:var(--evapp-muted);}
+            .eventosapp-wa-flow-templates .evapp-pill{display:inline-block;border-radius:999px;background:var(--evapp-blue-soft);color:var(--evapp-blue);padding:4px 9px;font-size:12px;font-weight:600;white-space:nowrap;}
+            .eventosapp-wa-flow-templates .evapp-pill.warn{background:#fff3cd;color:#664d03;}
+            .eventosapp-wa-flow-templates .evapp-pill.error{background:#f8d7da;color:#842029;}
+            .eventosapp-wa-flow-templates .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+            .eventosapp-wa-flow-templates textarea.code{width:100%;min-height:320px;font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.45;}
+            .eventosapp-wa-flow-templates .evapp-help{color:var(--evapp-muted);font-size:12px;margin:5px 0 0;line-height:1.45;}
+            .eventosapp-wa-flow-templates .evapp-info{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin:10px 0;border-radius:0 8px 8px 0;}
+            .eventosapp-wa-flow-templates .evapp-warning{background:var(--evapp-warning);border-left:4px solid var(--evapp-warning-border);padding:10px 12px;margin:10px 0;border-radius:0 8px 8px 0;}
+            .eventosapp-wa-flow-templates .evapp-flow-detail{background:var(--evapp-soft);border:1px solid var(--evapp-border);border-radius:8px;padding:10px;margin-top:10px;line-height:1.5;}
+            .eventosapp-wa-flow-templates .evapp-inline-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;align-items:start;max-width:780px;}
+            .eventosapp-wa-flow-templates .evapp-inline-fields input,
+            .eventosapp-wa-flow-templates .evapp-inline-fields select{width:100%;max-width:100%;}
+            .eventosapp-wa-flow-templates .evapp-file-meta{background:var(--evapp-soft);border:1px solid var(--evapp-border);border-radius:8px;padding:9px;margin-top:8px;max-width:720px;word-break:break-word;}
+            .eventosapp-wa-flow-templates .evapp-danger-link{color:var(--evapp-danger);border-color:var(--evapp-danger);}
+            .eventosapp-wa-flow-templates select.regular-text,
+            .eventosapp-wa-flow-templates input.regular-text{max-width:100%;}
+            .eventosapp-wa-flow-templates .evapp-list-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
+            .eventosapp-wa-flow-templates .evapp-list-toolbar p{margin:0;}
+            .eventosapp-wa-flow-templates .evapp-template-list-wrap{border:1px solid var(--evapp-border);border-radius:10px;overflow:auto;max-height:720px;background:#fff;}
+            .eventosapp-wa-flow-templates .evapp-template-list{border:0;margin:0;min-width:820px;}
+            .eventosapp-wa-flow-templates .evapp-template-list thead th{position:sticky;top:0;z-index:1;background:#f6f7f7;border-bottom:1px solid var(--evapp-border);}
+            .eventosapp-wa-flow-templates .evapp-template-list td{vertical-align:top;padding:12px 10px;}
+            .eventosapp-wa-flow-templates .evapp-template-list .is-selected td{background:#f0f6fc;}
+            .eventosapp-wa-flow-templates .evapp-template-name{font-weight:700;font-size:13px;}
+            .eventosapp-wa-flow-templates .evapp-template-actions{display:flex;gap:6px;flex-wrap:wrap;min-width:180px;}
+            .eventosapp-wa-flow-templates .evapp-empty-state{border:1px dashed #c3c4c7;background:#fbfbfc;border-radius:10px;padding:18px;text-align:center;color:var(--evapp-muted);}
+            .eventosapp-wa-flow-templates .evapp-test-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:end;}
+            .eventosapp-wa-flow-templates .evapp-test-panel label{font-weight:600;display:block;}
+            .eventosapp-wa-flow-templates .evapp-test-panel input{width:100%;margin-top:4px;}
+            .eventosapp-wa-flow-templates .evapp-test-panel .evapp-test-actions{grid-column:1 / -1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px;}
+            .eventosapp-wa-flow-templates .evapp-status-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0 0 14px;}
+            .eventosapp-wa-flow-templates .evapp-status-box{background:#fbfbfc;border:1px solid #edf0f2;border-radius:10px;padding:10px;}
+            .eventosapp-wa-flow-templates .evapp-status-box strong{display:block;margin-bottom:3px;}
+            @media(max-width:1280px){
+                .eventosapp-wa-flow-templates .evapp-grid{grid-template-columns:1fr;}
+                .eventosapp-wa-flow-templates .evapp-template-list-wrap{max-height:560px;}
+            }
+            @media(max-width:782px){
+                .eventosapp-wa-flow-templates .evapp-page-hero{padding:14px;}
+                .eventosapp-wa-flow-templates .evapp-card-header,
+                .eventosapp-wa-flow-templates .evapp-card-body{padding:14px;}
+                .eventosapp-wa-flow-templates .evapp-form-table th{width:auto;padding-bottom:4px;}
+                .eventosapp-wa-flow-templates .evapp-test-panel,
+                .eventosapp-wa-flow-templates .evapp-status-summary{grid-template-columns:1fr;}
+            }
         </style>
         <script>
             document.addEventListener('DOMContentLoaded', function(){
@@ -1123,116 +1221,293 @@ function eventosapp_whatsapp_flow_templates_render_page() {
         </script>
 
         <div class="evapp-grid">
-            <div>
+            <div class="evapp-stack">
                 <div class="evapp-card">
-                    <h2><?php echo ! empty($edit['id']) ? 'Editar plantilla Flow' : 'Crear plantilla Flow'; ?></h2>
-                    <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                        <?php wp_nonce_field('eventosapp_whatsapp_flow_template_save'); ?>
-                        <input type="hidden" name="action" value="eventosapp_whatsapp_flow_template_save">
-                        <input type="hidden" name="template_id" value="<?php echo esc_attr($edit['id']); ?>">
+                    <div class="evapp-card-header">
+                        <h2><?php echo ! empty($edit['id']) ? 'Editar plantilla Flow' : 'Crear plantilla Flow'; ?></h2>
+                        <p>Completa el contenido visible para el usuario, los ejemplos que Meta exige para aprobar variables y la conexión con el Flow que abrirá el botón.</p>
+                    </div>
+                    <div class="evapp-card-body">
+                        <form id="eventosapp-wa-flow-template-save-form" method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                            <?php wp_nonce_field('eventosapp_whatsapp_flow_template_save'); ?>
+                            <input type="hidden" name="action" value="eventosapp_whatsapp_flow_template_save">
+                            <input type="hidden" name="template_id" value="<?php echo esc_attr($edit['id']); ?>">
 
-                        <table class="form-table" role="presentation">
-                            <tr><th><label for="evapp_flow_display_name">Nombre interno</label></th><td><input id="evapp_flow_display_name" type="text" class="regular-text" name="display_name" value="<?php echo esc_attr($edit['display_name']); ?>" placeholder="Encuesta post evento"></td></tr>
-                            <tr><th><label for="evapp_flow_template_name">Nombre Meta</label></th><td><input id="evapp_flow_template_name" type="text" class="regular-text" name="template_name" value="<?php echo esc_attr($edit['name']); ?>" placeholder="eventosapp_flow_encuesta_post_evento" required><p class="evapp-help">Usa minúsculas, números y guion bajo. EventosApp lo normaliza automáticamente.</p></td></tr>
-                            <tr><th>Idioma / categoría</th><td><div class="evapp-inline-fields"><input type="text" name="language" value="<?php echo esc_attr($edit['language']); ?>" class="small-text"><select name="category"><?php foreach ( eventosapp_whatsapp_flow_templates_supported_categories() as $category_key => $category_label ) : ?><option value="<?php echo esc_attr($category_key); ?>" <?php selected(eventosapp_whatsapp_flow_templates_sanitize_category($edit['category']), $category_key); ?>><?php echo esc_html($category_label); ?></option><?php endforeach; ?></select></div><div class="<?php echo $category_mismatch ? 'evapp-warning' : 'evapp-info'; ?>"><?php echo esc_html($category_message); ?></div><p class="evapp-help">Utility sirve para confirmaciones o seguimientos operativos. Marketing sirve para invitaciones, encuestas promocionales o mensajes comerciales. Authentication queda disponible para control administrativo, pero las plantillas Flow normalmente se aprueban como Utility o Marketing según el contenido.</p></td></tr>
+                            <table class="form-table evapp-form-table" role="presentation">
+                                <tr class="evapp-section-row">
+                                    <th colspan="2">
+                                        <div class="evapp-section-title"><span>1</span> Identificación de la plantilla</div>
+                                    </th>
+                                </tr>
+                                <tr>
+                                    <th><label for="evapp_flow_display_name">Nombre interno</label></th>
+                                    <td>
+                                        <input id="evapp_flow_display_name" type="text" class="regular-text" name="display_name" value="<?php echo esc_attr($edit['display_name']); ?>" placeholder="Encuesta post evento">
+                                        <p class="evapp-help">Solo lo verás dentro de EventosApp. Úsalo para reconocer la plantilla rápidamente.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th><label for="evapp_flow_template_name">Nombre Meta</label></th>
+                                    <td>
+                                        <input id="evapp_flow_template_name" type="text" class="regular-text" name="template_name" value="<?php echo esc_attr($edit['name']); ?>" placeholder="eventosapp_flow_encuesta_post_evento" required>
+                                        <p class="evapp-help">Usa minúsculas, números y guion bajo. EventosApp lo normaliza automáticamente.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th>Idioma / categoría</th>
+                                    <td>
+                                        <div class="evapp-inline-fields">
+                                            <label>Idioma<br><input type="text" name="language" value="<?php echo esc_attr($edit['language']); ?>" class="small-text"></label>
+                                            <label>Categoría<br><select name="category"><?php foreach ( eventosapp_whatsapp_flow_templates_supported_categories() as $category_key => $category_label ) : ?><option value="<?php echo esc_attr($category_key); ?>" <?php selected(eventosapp_whatsapp_flow_templates_sanitize_category($edit['category']), $category_key); ?>><?php echo esc_html($category_label); ?></option><?php endforeach; ?></select></label>
+                                        </div>
+                                        <div class="<?php echo $category_mismatch ? 'evapp-warning' : 'evapp-info'; ?>"><?php echo esc_html($category_message); ?></div>
+                                        <p class="evapp-help">Utility sirve para confirmaciones o seguimientos operativos. Marketing sirve para invitaciones, encuestas promocionales o mensajes comerciales. Authentication queda disponible para control administrativo, pero las plantillas Flow normalmente se aprueban como Utility o Marketing según el contenido.</p>
+                                    </td>
+                                </tr>
 
-                            <tr><th><label for="eventosapp-wa-flow-template-header-format">Encabezado</label></th><td><select id="eventosapp-wa-flow-template-header-format" name="header_format"><option value="NONE" <?php selected($edit['header_format'], 'NONE'); ?>>Sin encabezado</option><option value="TEXT" <?php selected($edit['header_format'], 'TEXT'); ?>>Texto</option><option value="IMAGE" <?php selected($edit['header_format'], 'IMAGE'); ?>>Imagen</option></select><p class="evapp-help">WhatsApp permite encabezado de texto o imagen en plantillas. Para imagen se necesita un Header Sample Handle para aprobación y una URL pública HTTPS para el envío real.</p></td></tr>
-                            <tr data-header-row="text"><th><label for="evapp_flow_header_text">Texto de encabezado</label></th><td><input id="evapp_flow_header_text" type="text" class="regular-text" name="header_text" value="<?php echo esc_attr($edit['header_text']); ?>" maxlength="60"><p class="evapp-help">Solo aplica si el encabezado es Texto.</p></td></tr>
-                            <tr data-header-row="image"><th><label for="evapp_flow_header_handle">Header Sample Handle</label></th><td><input id="evapp_flow_header_handle" type="text" class="regular-text" name="header_sample_handle" value="<?php echo esc_attr($edit['header_sample_handle']); ?>" placeholder="Se genera al subir una imagen de muestra a Meta"><p class="evapp-help">No pegues una URL pública aquí. Debe ser el handle que devuelve Meta al subir la muestra con Resumable Upload API.</p><?php if ( ! empty($edit['header_sample_handle']) ) : ?><div class="evapp-file-meta"><strong>Handle guardado:</strong> <code><?php echo esc_html($edit['header_sample_handle']); ?></code><?php if ( ! empty($edit['header_sample_uploaded_at']) ) : ?><br><small>Última muestra subida: <?php echo esc_html($edit['header_sample_uploaded_at']); ?></small><?php endif; ?><?php if ( ! empty($edit['header_sample_file_name']) ) : ?><br><small>Archivo: <?php echo esc_html($edit['header_sample_file_name']); ?> · <?php echo esc_html($edit['header_sample_file_type']); ?> · <?php echo esc_html(size_format(absint($edit['header_sample_file_size']))); ?></small><?php endif; ?></div><?php endif; ?></td></tr>
-                            <tr data-header-row="image"><th><label for="evapp_flow_header_file">Imagen de muestra para Meta</label></th><td><input id="evapp_flow_header_file" type="file" name="flow_header_sample_file" accept="image/png,image/jpeg"><div class="evapp-info"><strong>Qué subir:</strong> una imagen JPG/JPEG o PNG de ejemplo, máximo 5 MB. EventosApp reutiliza el sistema de subida de Plantillas WhatsApp para generar el Header Sample Handle.</div></td></tr>
-                            <tr data-header-row="image"><th><label for="evapp_flow_header_image_url">Imagen para enviar</label></th><td><input id="evapp_flow_header_image_url" type="url" class="regular-text" name="header_image_url" value="<?php echo esc_attr($edit['header_image_url']); ?>" placeholder="https://tudominio.com/imagen-flow.jpg"><p class="evapp-help">Esta URL pública HTTPS se usará al enviar pruebas o mensajes reales con esta plantilla. Meta usa el handle solo para aprobación.</p></td></tr>
-
-                            <tr><th><label for="evapp_flow_body">Mensaje</label></th><td><textarea id="evapp_flow_body" class="large-text" rows="5" name="body"><?php echo esc_textarea($edit['body']); ?></textarea><p class="evapp-help">Puedes usar {{1}} para nombre y {{2}} para nombre del evento. Meta exige ejemplos si hay variables.</p></td></tr>
-                            <tr><th>Ejemplos</th><td><input type="text" name="sample_1" value="<?php echo esc_attr($edit['sample_1']); ?>" placeholder="Ejemplo {{1}}"> <input type="text" name="sample_2" value="<?php echo esc_attr($edit['sample_2']); ?>" placeholder="Ejemplo {{2}}"></td></tr>
-                            <tr><th><label for="evapp_flow_footer">Pie de plantilla</label></th><td><input id="evapp_flow_footer" type="text" class="regular-text" name="footer_text" value="<?php echo esc_attr($edit['footer_text']); ?>" maxlength="60"><p class="evapp-help">Opcional. Úsalo para marca o aviso corto.</p></td></tr>
-                            <tr><th><label for="evapp_flow_button_text">Botón Flow</label></th><td><input id="evapp_flow_button_text" type="text" name="button_text" value="<?php echo esc_attr($edit['button_text']); ?>" maxlength="30" class="regular-text"></td></tr>
-                            <tr><th>Flow asociado</th><td>
-                                <select name="flow_post_id" id="eventosapp-wa-flow-template-flow-post-id" class="regular-text">
-                                    <option value="0">Seleccionar Flow local / Flow ID Meta disponible</option>
-                                    <?php foreach ( $flows_ui_metadata as $flow_id => $flow_meta ) : ?>
-                                        <?php $flow_label = '#' . $flow_id . ' · ' . ($flow_meta['title'] ?: 'Flow sin título') . ' · ' . (! empty($flow_meta['meta_flow_id']) ? 'Meta Flow ID ' . $flow_meta['meta_flow_id'] : 'sin Meta Flow ID') . ' · ' . (! empty($flow_meta['status']) ? $flow_meta['status'] : 'sin estado'); ?>
-                                        <option value="<?php echo esc_attr($flow_id); ?>" <?php selected(absint($edit['flow_post_id']), absint($flow_id)); ?>><?php echo esc_html($flow_label); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <div id="eventosapp-wa-flow-detail" class="evapp-flow-detail"></div>
-                                <p><label>Flow ID Meta<br><input type="text" class="regular-text" name="meta_flow_id" id="eventosapp-wa-flow-template-meta-flow-id" value="<?php echo esc_attr($edit['meta_flow_id']); ?>" placeholder="Se llena al escoger un Flow local con Meta ID"></label></p>
-                                <p><label>Pantalla inicial<br>
-                                    <select class="regular-text" name="navigate_screen" id="eventosapp-wa-flow-template-navigate-screen" data-current-screen="<?php echo esc_attr($edit['navigate_screen']); ?>">
-                                        <?php if ( ! empty($edit_screen_ids) ) : ?>
-                                            <?php foreach ( $edit_screen_ids as $screen_id ) : ?>
-                                                <option value="<?php echo esc_attr($screen_id); ?>" <?php selected($edit['navigate_screen'], $screen_id); ?>><?php echo esc_html($screen_id); ?></option>
-                                            <?php endforeach; ?>
-                                        <?php else : ?>
-                                            <option value="<?php echo esc_attr($edit['navigate_screen'] ?: 'SURVEY'); ?>"><?php echo esc_html($edit['navigate_screen'] ?: 'SURVEY'); ?></option>
+                                <tr class="evapp-section-row">
+                                    <th colspan="2">
+                                        <div class="evapp-section-title"><span>2</span> Encabezado y mensaje</div>
+                                    </th>
+                                </tr>
+                                <tr>
+                                    <th><label for="eventosapp-wa-flow-template-header-format">Encabezado</label></th>
+                                    <td>
+                                        <select id="eventosapp-wa-flow-template-header-format" name="header_format">
+                                            <option value="NONE" <?php selected($edit['header_format'], 'NONE'); ?>>Sin encabezado</option>
+                                            <option value="TEXT" <?php selected($edit['header_format'], 'TEXT'); ?>>Texto</option>
+                                            <option value="IMAGE" <?php selected($edit['header_format'], 'IMAGE'); ?>>Imagen</option>
+                                        </select>
+                                        <p class="evapp-help">WhatsApp permite encabezado de texto o imagen en plantillas. Para imagen se necesita un Header Sample Handle para aprobación y una URL pública HTTPS para el envío real.</p>
+                                    </td>
+                                </tr>
+                                <tr data-header-row="text">
+                                    <th><label for="evapp_flow_header_text">Texto de encabezado</label></th>
+                                    <td>
+                                        <input id="evapp_flow_header_text" type="text" class="regular-text" name="header_text" value="<?php echo esc_attr($edit['header_text']); ?>" maxlength="60">
+                                        <p class="evapp-help">Solo aplica si el encabezado es Texto.</p>
+                                    </td>
+                                </tr>
+                                <tr data-header-row="image">
+                                    <th><label for="evapp_flow_header_handle">Header Sample Handle</label></th>
+                                    <td>
+                                        <input id="evapp_flow_header_handle" type="text" class="regular-text" name="header_sample_handle" value="<?php echo esc_attr($edit['header_sample_handle']); ?>" placeholder="Se genera al subir una imagen de muestra a Meta">
+                                        <p class="evapp-help">No pegues una URL pública aquí. Debe ser el handle que devuelve Meta al subir la muestra con Resumable Upload API.</p>
+                                        <?php if ( ! empty($edit['header_sample_handle']) ) : ?>
+                                            <div class="evapp-file-meta"><strong>Handle guardado:</strong> <code><?php echo esc_html($edit['header_sample_handle']); ?></code><?php if ( ! empty($edit['header_sample_uploaded_at']) ) : ?><br><small>Última muestra subida: <?php echo esc_html($edit['header_sample_uploaded_at']); ?></small><?php endif; ?><?php if ( ! empty($edit['header_sample_file_name']) ) : ?><br><small>Archivo: <?php echo esc_html($edit['header_sample_file_name']); ?> · <?php echo esc_html($edit['header_sample_file_type']); ?> · <?php echo esc_html(size_format(absint($edit['header_sample_file_size']))); ?></small><?php endif; ?></div>
                                         <?php endif; ?>
-                                    </select>
-                                </label></p>
-                                <p class="evapp-help">La lista muestra el ID interno, nombre, Meta Flow ID y estado. Al cambiar de Flow, se actualiza el Flow ID Meta y la pantalla inicial disponible.</p>
-                            </td></tr>
-                            <tr><th>Cuenta Meta</th><td>
-                                <p><label>Número emisor<br><select id="eventosapp-wa-flow-template-sender" name="sender_phone_number_id" class="regular-text"><option value="">Usar número por defecto</option><?php foreach ( $phone_accounts as $account ) : ?><option value="<?php echo esc_attr($account['phone_number_id']); ?>" <?php selected($edit['sender_phone_number_id'] ?: $default_phone_number_id, $account['phone_number_id']); ?>><?php echo esc_html($account['label']); ?></option><?php endforeach; ?></select></label></p>
-                                <p><label>WABA ID de aprobación<br><input type="text" class="regular-text" name="waba_id" id="eventosapp-wa-flow-template-waba-id" value="<?php echo esc_attr($edit['waba_id'] ?: $effective_waba_id); ?>" placeholder="WhatsApp Business Account ID"></label></p>
-                                <p class="evapp-help" id="eventosapp-wa-flow-template-waba-hint"></p>
-                                <p class="evapp-help"><strong>Cuenta efectiva:</strong> <?php echo esc_html($sender_account['label'] ?? 'Número por defecto'); ?> · <strong>WABA efectivo:</strong> <?php echo esc_html($effective_waba_id ?: 'Sin WABA configurado'); ?></p>
-                            </td></tr>
-                        </table>
-                        <p class="submit evapp-actions"><button type="submit" name="save_mode" value="save" class="button button-primary">Guardar plantilla Flow</button><?php if ( ! empty($edit['id']) ) : ?><button type="submit" name="save_mode" value="save_as_new" class="button">Guardar como nueva plantilla</button><?php endif; ?></p>
-                    </form>
+                                    </td>
+                                </tr>
+                                <tr data-header-row="image">
+                                    <th><label for="evapp_flow_header_file">Imagen de muestra para Meta</label></th>
+                                    <td>
+                                        <input id="evapp_flow_header_file" type="file" name="flow_header_sample_file" accept="image/png,image/jpeg">
+                                        <div class="evapp-info"><strong>Qué subir:</strong> una imagen JPG/JPEG o PNG de ejemplo, máximo 5 MB. EventosApp reutiliza el sistema de subida de Plantillas WhatsApp para generar el Header Sample Handle.</div>
+                                    </td>
+                                </tr>
+                                <tr data-header-row="image">
+                                    <th><label for="evapp_flow_header_image_url">Imagen para enviar</label></th>
+                                    <td>
+                                        <input id="evapp_flow_header_image_url" type="url" class="regular-text" name="header_image_url" value="<?php echo esc_attr($edit['header_image_url']); ?>" placeholder="https://tudominio.com/imagen-flow.jpg">
+                                        <p class="evapp-help">Esta URL pública HTTPS se usará al enviar pruebas o mensajes reales con esta plantilla. Meta usa el handle solo para aprobación.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th><label for="evapp_flow_body">Mensaje</label></th>
+                                    <td>
+                                        <textarea id="evapp_flow_body" class="large-text" rows="6" name="body"><?php echo esc_textarea($edit['body']); ?></textarea>
+                                        <p class="evapp-help">Puedes usar {{1}} para nombre y {{2}} para nombre del evento. Meta exige ejemplos si hay variables.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th>Ejemplos para Meta</th>
+                                    <td>
+                                        <div class="evapp-inline-fields">
+                                            <label>Valor ejemplo para {{1}}<br><input type="text" name="sample_1" value="<?php echo esc_attr($edit['sample_1']); ?>" placeholder="Ejemplo {{1}}"></label>
+                                            <label>Valor ejemplo para {{2}}<br><input type="text" name="sample_2" value="<?php echo esc_attr($edit['sample_2']); ?>" placeholder="Ejemplo {{2}}"></label>
+                                        </div>
+                                        <p class="evapp-help">Estos valores se guardan con la plantilla y se usan como respaldo cuando envías una prueba sin Ticket ID.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th><label for="evapp_flow_footer">Pie de plantilla</label></th>
+                                    <td>
+                                        <input id="evapp_flow_footer" type="text" class="regular-text" name="footer_text" value="<?php echo esc_attr($edit['footer_text']); ?>" maxlength="60">
+                                        <p class="evapp-help">Opcional. Úsalo para marca o aviso corto.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th><label for="evapp_flow_button_text">Botón Flow</label></th>
+                                    <td>
+                                        <input id="evapp_flow_button_text" type="text" name="button_text" value="<?php echo esc_attr($edit['button_text']); ?>" maxlength="30" class="regular-text">
+                                        <p class="evapp-help">Este texto aparece en el botón que abre el Flow.</p>
+                                    </td>
+                                </tr>
+
+                                <tr class="evapp-section-row">
+                                    <th colspan="2">
+                                        <div class="evapp-section-title"><span>3</span> Flow y cuenta Meta</div>
+                                    </th>
+                                </tr>
+                                <tr>
+                                    <th>Flow asociado</th>
+                                    <td>
+                                        <select name="flow_post_id" id="eventosapp-wa-flow-template-flow-post-id" class="regular-text">
+                                            <option value="0">Seleccionar Flow local / Flow ID Meta disponible</option>
+                                            <?php foreach ( $flows_ui_metadata as $flow_id => $flow_meta ) : ?>
+                                                <?php $flow_label = '#' . $flow_id . ' · ' . ($flow_meta['title'] ?: 'Flow sin título') . ' · ' . (! empty($flow_meta['meta_flow_id']) ? 'Meta Flow ID ' . $flow_meta['meta_flow_id'] : 'sin Meta Flow ID') . ' · ' . (! empty($flow_meta['status']) ? $flow_meta['status'] : 'sin estado'); ?>
+                                                <option value="<?php echo esc_attr($flow_id); ?>" <?php selected(absint($edit['flow_post_id']), absint($flow_id)); ?>><?php echo esc_html($flow_label); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <div id="eventosapp-wa-flow-detail" class="evapp-flow-detail"></div>
+                                        <div class="evapp-inline-fields" style="margin-top:10px;">
+                                            <label>Flow ID Meta<br><input type="text" class="regular-text" name="meta_flow_id" id="eventosapp-wa-flow-template-meta-flow-id" value="<?php echo esc_attr($edit['meta_flow_id']); ?>" placeholder="Se llena al escoger un Flow local con Meta ID"></label>
+                                            <label>Pantalla inicial<br>
+                                                <select class="regular-text" name="navigate_screen" id="eventosapp-wa-flow-template-navigate-screen" data-current-screen="<?php echo esc_attr($edit['navigate_screen']); ?>">
+                                                    <?php if ( ! empty($edit_screen_ids) ) : ?>
+                                                        <?php foreach ( $edit_screen_ids as $screen_id ) : ?>
+                                                            <option value="<?php echo esc_attr($screen_id); ?>" <?php selected($edit['navigate_screen'], $screen_id); ?>><?php echo esc_html($screen_id); ?></option>
+                                                        <?php endforeach; ?>
+                                                    <?php else : ?>
+                                                        <option value="<?php echo esc_attr($edit['navigate_screen'] ?: 'SURVEY'); ?>"><?php echo esc_html($edit['navigate_screen'] ?: 'SURVEY'); ?></option>
+                                                    <?php endif; ?>
+                                                </select>
+                                            </label>
+                                        </div>
+                                        <p class="evapp-help">La lista muestra el ID interno, nombre, Meta Flow ID y estado. Al cambiar de Flow, se actualiza el Flow ID Meta y la pantalla inicial disponible.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th>Cuenta Meta</th>
+                                    <td>
+                                        <div class="evapp-inline-fields">
+                                            <label>Número emisor<br><select id="eventosapp-wa-flow-template-sender" name="sender_phone_number_id" class="regular-text"><option value="">Usar número por defecto</option><?php foreach ( $phone_accounts as $account ) : ?><option value="<?php echo esc_attr($account['phone_number_id']); ?>" <?php selected($edit['sender_phone_number_id'] ?: $default_phone_number_id, $account['phone_number_id']); ?>><?php echo esc_html($account['label']); ?></option><?php endforeach; ?></select></label>
+                                            <label>WABA ID de aprobación<br><input type="text" class="regular-text" name="waba_id" id="eventosapp-wa-flow-template-waba-id" value="<?php echo esc_attr($edit['waba_id'] ?: $effective_waba_id); ?>" placeholder="WhatsApp Business Account ID"></label>
+                                        </div>
+                                        <p class="evapp-help" id="eventosapp-wa-flow-template-waba-hint"></p>
+                                        <p class="evapp-help"><strong>Cuenta efectiva:</strong> <?php echo esc_html($sender_account['label'] ?? 'Número por defecto'); ?> · <strong>WABA efectivo:</strong> <?php echo esc_html($effective_waba_id ?: 'Sin WABA configurado'); ?></p>
+                                    </td>
+                                </tr>
+                            </table>
+                            <p class="submit evapp-actions">
+                                <button type="submit" name="save_mode" value="save" class="button button-primary">Guardar plantilla Flow</button>
+                                <?php if ( ! empty($edit['id']) ) : ?><button type="submit" name="save_mode" value="save_as_new" class="button">Guardar como nueva plantilla</button><?php endif; ?>
+                            </p>
+                        </form>
+                    </div>
                 </div>
 
                 <div class="evapp-card">
-                    <h2>Payload para Meta</h2>
-                    <textarea class="code" readonly><?php echo esc_textarea(wp_json_encode(eventosapp_whatsapp_flow_templates_build_meta_payload($edit), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?></textarea>
+                    <div class="evapp-card-header">
+                        <h2>Payload para Meta</h2>
+                        <p>Vista técnica del payload que se enviará a Meta según la configuración actual guardada o cargada en el editor.</p>
+                    </div>
+                    <div class="evapp-card-body">
+                        <textarea class="code" readonly><?php echo esc_textarea(wp_json_encode(eventosapp_whatsapp_flow_templates_build_meta_payload($edit), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?></textarea>
+                    </div>
                 </div>
             </div>
-            <div>
-                <div class="evapp-card">
-                    <h2>Gestión de plantillas Flow</h2>
-                    <p><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flow_templates&template_id=0')); ?>">Crear nueva plantilla</a></p>
-                    <?php if ( empty($items) ) : ?>
-                        <p>No hay plantillas Flow todavía.</p>
-                    <?php else : ?>
-                        <table class="widefat striped evapp-template-list"><thead><tr><th>Plantilla</th><th>Cuenta / Flow</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
-                        <?php foreach ( $items as $item ) : $item = eventosapp_whatsapp_flow_templates_prepare_template_for_meta(wp_parse_args($item, eventosapp_whatsapp_flow_templates_default_item())); $item_waba = eventosapp_whatsapp_flow_templates_get_template_waba_id($item, $settings); $item_sender = eventosapp_whatsapp_flow_templates_resolve_sender_account($item['sender_phone_number_id'] ?? '', $settings); ?>
-                            <tr>
-                                <td><strong><?php echo esc_html($item['display_name'] ?: $item['name']); ?></strong><br><small><?php echo esc_html($item['name']); ?></small><br><small><?php echo esc_html($item['language']); ?> · <?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($item['category'])); ?><?php if ( ! empty($item['meta_category']) ) : ?> · Meta: <?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($item['meta_category'])); ?><?php endif; ?></small></td>
-                                <td><small><?php echo esc_html($item_sender['label'] ?? 'Número por defecto'); ?></small><br><small>WABA: <?php echo esc_html($item_waba ?: '—'); ?></small><br><small>Flow: <?php echo esc_html($item['meta_flow_id'] ?: '—'); ?></small></td>
-                                <td><span class="evapp-pill"><?php echo esc_html($item['meta_status']); ?></span></td>
-                                <td><div class="evapp-template-actions"><a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flow_templates', 'template_id' => $item['id']], admin_url('admin.php'))); ?>">Abrir</a><?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_duplicate', 'eventosapp_whatsapp_flow_template_duplicate', 'Duplicar', $item['id'], 'button-small'); ?><?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_delete', 'eventosapp_whatsapp_flow_template_delete', 'Eliminar', $item['id'], 'button-small evapp-danger-link', 'return confirm(\'¿Eliminar esta plantilla local? Esta acción no elimina la plantilla aprobada en Meta.\');'); ?></div></td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody></table>
-                    <?php endif; ?>
+
+            <div class="evapp-stack">
+                <div class="evapp-card evapp-card--list">
+                    <div class="evapp-card-header">
+                        <h2>Plantillas creadas</h2>
+                        <p>Lista ampliada con scroll para trabajar cómodo cuando existan muchas plantillas.</p>
+                    </div>
+                    <div class="evapp-card-body">
+                        <div class="evapp-list-toolbar">
+                            <p class="evapp-muted"><strong><?php echo esc_html(number_format_i18n(count($items))); ?></strong> plantilla(s) locales registradas.</p>
+                            <a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flow_templates&template_id=0')); ?>">Crear nueva plantilla</a>
+                        </div>
+                        <?php if ( empty($items) ) : ?>
+                            <div class="evapp-empty-state">No hay plantillas Flow todavía. Crea la primera plantilla para asociarla a un WhatsApp Flow.</div>
+                        <?php else : ?>
+                            <div class="evapp-template-list-wrap" aria-label="Listado de plantillas Flow creadas">
+                                <table class="widefat striped evapp-template-list">
+                                    <thead>
+                                        <tr>
+                                            <th>Plantilla</th>
+                                            <th>Cuenta / Flow</th>
+                                            <th>Estado</th>
+                                            <th>Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ( $items as $item ) : $item = eventosapp_whatsapp_flow_templates_prepare_template_for_meta(wp_parse_args($item, eventosapp_whatsapp_flow_templates_default_item())); $item_waba = eventosapp_whatsapp_flow_templates_get_template_waba_id($item, $settings); $item_sender = eventosapp_whatsapp_flow_templates_resolve_sender_account($item['sender_phone_number_id'] ?? '', $settings); ?>
+                                            <tr class="<?php echo (! empty($edit['id']) && $item['id'] === $edit['id']) ? 'is-selected' : ''; ?>">
+                                                <td>
+                                                    <div class="evapp-template-name"><?php echo esc_html($item['display_name'] ?: $item['name']); ?></div>
+                                                    <small><?php echo esc_html($item['name']); ?></small><br>
+                                                    <small><?php echo esc_html($item['language']); ?> · <?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($item['category'])); ?><?php if ( ! empty($item['meta_category']) ) : ?> · Meta: <?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($item['meta_category'])); ?><?php endif; ?></small>
+                                                </td>
+                                                <td>
+                                                    <small><?php echo esc_html($item_sender['label'] ?? 'Número por defecto'); ?></small><br>
+                                                    <small>WABA: <?php echo esc_html($item_waba ?: '—'); ?></small><br>
+                                                    <small>Flow: <?php echo esc_html($item['meta_flow_id'] ?: '—'); ?></small>
+                                                </td>
+                                                <td><span class="evapp-pill"><?php echo esc_html($item['meta_status']); ?></span></td>
+                                                <td>
+                                                    <div class="evapp-template-actions">
+                                                        <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flow_templates', 'template_id' => $item['id']], admin_url('admin.php'))); ?>">Abrir</a>
+                                                        <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_duplicate', 'eventosapp_whatsapp_flow_template_duplicate', 'Duplicar', $item['id'], 'button-small'); ?>
+                                                        <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_delete', 'eventosapp_whatsapp_flow_template_delete', 'Eliminar', $item['id'], 'button-small evapp-danger-link', 'return confirm(\'¿Eliminar esta plantilla local? Esta acción no elimina la plantilla aprobada en Meta.\');'); ?>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php endif; ?>
+                    </div>
                 </div>
 
                 <?php if ( ! empty($edit['id']) ) : ?>
                     <div class="evapp-card">
-                        <h2>Acciones Meta</h2>
-                        <p><strong>Estado Meta:</strong> <span class="evapp-pill"><?php echo esc_html($edit['meta_status']); ?></span></p>
-                        <p><strong>Categoría solicitada:</strong> <?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($edit['category'])); ?><?php if ( ! empty($edit['meta_category']) ) : ?><br><strong>Categoría Meta:</strong> <?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($edit['meta_category'])); ?><?php endif; ?></p>
-                        <div class="evapp-actions">
-                            <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_submit_meta', 'eventosapp_whatsapp_flow_template_submit_meta', 'Enviar a aprobación', $edit['id'], 'button-primary'); ?>
-                            <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_sync_status', 'eventosapp_whatsapp_flow_template_sync_status', 'Consultar estado', $edit['id']); ?>
+                        <div class="evapp-card-header">
+                            <h2>Aprobación y estado Meta</h2>
+                            <p>Envía esta plantilla a aprobación o consulta su estado actual sin salir de la pantalla.</p>
                         </div>
-                        <details style="margin-top:12px;"><summary>Última respuesta técnica</summary><?php eventosapp_whatsapp_flow_templates_render_debug($edit['last_meta_response']); ?></details>
+                        <div class="evapp-card-body">
+                            <div class="evapp-status-summary">
+                                <div class="evapp-status-box"><strong>Estado Meta</strong><span class="evapp-pill"><?php echo esc_html($edit['meta_status']); ?></span></div>
+                                <div class="evapp-status-box"><strong>Categoría solicitada</strong><?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($edit['category'])); ?><?php if ( ! empty($edit['meta_category']) ) : ?><br><small>Meta: <?php echo esc_html(eventosapp_whatsapp_flow_templates_category_label($edit['meta_category'])); ?></small><?php endif; ?></div>
+                            </div>
+                            <div class="evapp-actions">
+                                <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_submit_meta', 'eventosapp_whatsapp_flow_template_submit_meta', 'Enviar a aprobación', $edit['id'], 'button-primary'); ?>
+                                <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_sync_status', 'eventosapp_whatsapp_flow_template_sync_status', 'Consultar estado', $edit['id']); ?>
+                            </div>
+                            <details style="margin-top:12px;"><summary>Última respuesta técnica</summary><?php eventosapp_whatsapp_flow_templates_render_debug($edit['last_meta_response']); ?></details>
+                        </div>
                     </div>
 
                     <div class="evapp-card">
-                        <h2>Enviar prueba con plantilla</h2>
-                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                            <?php wp_nonce_field('eventosapp_whatsapp_flow_template_test_send'); ?>
-                            <input type="hidden" name="action" value="eventosapp_whatsapp_flow_template_test_send">
-                            <input type="hidden" name="template_id" value="<?php echo esc_attr($edit['id']); ?>">
-                            <p><label>Teléfono destino<br><input type="text" class="regular-text" name="test_phone" placeholder="573001112233"></label></p>
-                            <p><label>Ticket ID opcional<br><input type="number" class="small-text" name="test_ticket_id" min="0"></label></p>
-                            <p><button type="submit" class="button button-primary">Enviar prueba</button></p>
-                            <p class="evapp-help">Este método usa una plantilla aprobada con botón Flow. Si la plantilla tiene encabezado de imagen, debes guardar antes la URL pública de imagen para enviar.</p>
-                        </form>
+                        <div class="evapp-card-header">
+                            <h2>Prueba rápida de plantilla</h2>
+                            <p>Personaliza los valores de prueba, agrega teléfono destino, opcionalmente un Ticket ID y envía desde el mismo bloque.</p>
+                        </div>
+                        <div class="evapp-card-body">
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                <?php wp_nonce_field('eventosapp_whatsapp_flow_template_test_send'); ?>
+                                <input type="hidden" name="action" value="eventosapp_whatsapp_flow_template_test_send">
+                                <input type="hidden" name="template_id" value="<?php echo esc_attr($edit['id']); ?>">
+                                <div class="evapp-test-panel">
+                                    <label>Ejemplo {{1}} para prueba<br><input type="text" name="test_sample_1" value="<?php echo esc_attr($edit['sample_1']); ?>" placeholder="Nombre de prueba"></label>
+                                    <label>Ejemplo {{2}} para prueba<br><input type="text" name="test_sample_2" value="<?php echo esc_attr($edit['sample_2']); ?>" placeholder="Evento de prueba"></label>
+                                    <label>Teléfono destino<br><input type="text" name="test_phone" placeholder="573001112233" required></label>
+                                    <label>Ticket ID opcional<br><input type="number" name="test_ticket_id" min="0" placeholder="0"></label>
+                                    <div class="evapp-test-actions">
+                                        <button type="submit" class="button button-primary">Enviar prueba</button>
+                                        <span class="evapp-help">Si escribes un Ticket ID válido, la prueba usará los datos reales del ticket. Sin Ticket ID, usará los ejemplos escritos aquí.</span>
+                                    </div>
+                                </div>
+                                <p class="evapp-help">Este método usa una plantilla aprobada con botón Flow. Si la plantilla tiene encabezado de imagen, debes guardar antes la URL pública de imagen para enviar.</p>
+                            </form>
+                        </div>
                     </div>
                 <?php endif; ?>
             </div>
         </div>
-    </div>
     <?php
 }
 
