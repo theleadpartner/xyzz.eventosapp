@@ -16,7 +16,7 @@ if ( ! defined('EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE') ) {
 }
 
 if ( ! defined('EVENTOSAPP_WHATSAPP_FLOWS_TABLE_VERSION') ) {
-    define('EVENTOSAPP_WHATSAPP_FLOWS_TABLE_VERSION', '2026.05.28.1');
+    define('EVENTOSAPP_WHATSAPP_FLOWS_TABLE_VERSION', '2026.05.30.1');
 }
 
 /**
@@ -1476,137 +1476,450 @@ function eventosapp_whatsapp_flows_format_response_summary($decoded) {
     return implode("\n", $lines);
 }
 
+function eventosapp_whatsapp_flows_decode_nfm_response_json($raw_response) {
+    if ( is_array($raw_response) ) {
+        return $raw_response;
+    }
+
+    if ( is_object($raw_response) ) {
+        return json_decode(wp_json_encode($raw_response), true) ?: [];
+    }
+
+    $raw_response = trim((string) $raw_response);
+    if ( $raw_response === '' ) {
+        return [];
+    }
+
+    $decoded = json_decode($raw_response, true);
+    if ( is_array($decoded) ) {
+        return $decoded;
+    }
+
+    $unescaped = wp_unslash($raw_response);
+    if ( $unescaped !== $raw_response ) {
+        $decoded = json_decode($unescaped, true);
+        if ( is_array($decoded) ) {
+            return $decoded;
+        }
+    }
+
+    $html_decoded = html_entity_decode($raw_response, ENT_QUOTES, get_bloginfo('charset') ?: 'UTF-8');
+    if ( $html_decoded !== $raw_response ) {
+        $decoded = json_decode($html_decoded, true);
+        if ( is_array($decoded) ) {
+            return $decoded;
+        }
+    }
+
+    return [];
+}
+
 function eventosapp_whatsapp_flows_extract_nfm_response($message) {
-    if ( ! is_array($message) || sanitize_key((string)($message['type'] ?? '')) !== 'interactive' ) {
+    if ( ! is_array($message) ) {
         return null;
     }
+
+    if ( isset($message['entry']) || isset($message['object']) || isset($message['changes']) || isset($message['messages']) ) {
+        return null;
+    }
+
+    if ( sanitize_key((string)($message['type'] ?? '')) !== 'interactive' ) {
+        return null;
+    }
+
     $interactive = isset($message['interactive']) && is_array($message['interactive']) ? $message['interactive'] : [];
     if ( sanitize_key((string)($interactive['type'] ?? '')) !== 'nfm_reply' ) {
         return null;
     }
+
     $reply = isset($interactive['nfm_reply']) && is_array($interactive['nfm_reply']) ? $interactive['nfm_reply'] : [];
-    $raw_response = (string)($reply['response_json'] ?? '');
-    $decoded = json_decode($raw_response, true);
-    if ( ! is_array($decoded) ) {
-        $decoded = [];
-    }
+    $raw_response = $reply['response_json'] ?? '';
+    $decoded = eventosapp_whatsapp_flows_decode_nfm_response_json($raw_response);
+
     return [
         'name'          => sanitize_text_field((string)($reply['name'] ?? '')),
         'body'          => sanitize_textarea_field((string)($reply['body'] ?? '')),
-        'response_raw'  => $raw_response,
+        'response_raw'  => is_scalar($raw_response) ? (string) $raw_response : eventosapp_whatsapp_flows_json_encode($raw_response, false),
         'response_json' => $decoded,
     ];
 }
 
-add_action('eventosapp_whatsapp_webhook_inbound_message_received', 'eventosapp_whatsapp_flows_handle_inbound_response', 8, 5);
-function eventosapp_whatsapp_flows_handle_inbound_response($message, $value = [], $entry = [], $change = [], $payload = []) {
-    $nfm = eventosapp_whatsapp_flows_extract_nfm_response($message);
-    if ( ! $nfm ) {
-        return;
+function eventosapp_whatsapp_flows_is_whatsapp_payload($payload) {
+    if ( ! is_array($payload) ) {
+        return false;
     }
 
-    global $wpdb;
-    eventosapp_whatsapp_flows_maybe_install_tables();
-
-    $from_phone = isset($message['from']) ? eventosapp_whatsapp_flows_clean_phone($message['from']) : '';
-    $wa_message_id = sanitize_text_field((string)($message['id'] ?? ''));
-    $reply_to_message_id = sanitize_text_field((string)($message['context']['id'] ?? ''));
-    $created_at = ! empty($message['timestamp']) ? date_i18n('Y-m-d H:i:s', absint($message['timestamp'])) : current_time('mysql');
-    $response = $nfm['response_json'];
-    $flow_token = sanitize_text_field((string)($response['flow_token'] ?? ($response['flowToken'] ?? '')));
-
-    $send = null;
-    if ( $flow_token !== '' ) {
-        $send = eventosapp_whatsapp_flows_find_send(['flow_token' => $flow_token]);
-    }
-    if ( ! $send && $reply_to_message_id !== '' ) {
-        $send = eventosapp_whatsapp_flows_find_send(['wa_message_id' => $reply_to_message_id]);
-    }
-    if ( ! $send && $from_phone !== '' ) {
-        $send = eventosapp_whatsapp_flows_find_latest_open_send_by_phone($from_phone);
+    if ( isset($payload['object']) && (string) $payload['object'] === 'whatsapp_business_account' ) {
+        return true;
     }
 
-    $send_id = $send ? absint($send['id'] ?? 0) : 0;
-    $flow_post_id = $send ? absint($send['flow_post_id'] ?? 0) : absint($response['eventosapp_flow_post_id'] ?? 0);
-    $event_id = $send ? absint($send['event_id'] ?? 0) : absint($response['eventosapp_event_id'] ?? 0);
-    $ticket_id = $send ? absint($send['ticket_id'] ?? 0) : absint($response['eventosapp_ticket_id'] ?? 0);
-    $meta_flow_id = $send ? sanitize_text_field((string)($send['meta_flow_id'] ?? '')) : '';
-
-    if ( $flow_token === '' && $send && ! empty($send['flow_token']) ) {
-        $flow_token = sanitize_text_field((string) $send['flow_token']);
+    if ( isset($payload['entry']) && is_array($payload['entry']) ) {
+        return true;
     }
 
-    $exists = $wa_message_id !== '' ? (int) $wpdb->get_var($wpdb->prepare(
-        'SELECT id FROM ' . eventosapp_whatsapp_flows_responses_table_name() . ' WHERE wa_message_id = %s LIMIT 1',
-        $wa_message_id
-    )) : 0;
-    if ( $exists ) {
-        return;
+    if ( isset($payload['messages']) && is_array($payload['messages']) ) {
+        return true;
     }
 
-    $summary = eventosapp_whatsapp_flows_format_response_summary($response);
-    $wpdb->insert(eventosapp_whatsapp_flows_responses_table_name(), [
-        'send_id'             => $send_id,
-        'flow_post_id'        => $flow_post_id,
-        'meta_flow_id'        => $meta_flow_id,
-        'event_id'            => $event_id,
-        'ticket_id'           => $ticket_id,
-        'phone'               => $from_phone,
-        'flow_token'          => $flow_token,
-        'wa_message_id'       => $wa_message_id,
-        'reply_to_message_id' => $reply_to_message_id,
-        'response_json'       => eventosapp_whatsapp_flows_json_encode($response, true),
-        'response_summary'    => $summary,
-        'raw_json'            => eventosapp_whatsapp_flows_json_encode([
-            'message' => $message,
-            'value'   => $value,
-            'nfm'     => $nfm,
-        ], true),
-        'created_at'          => $created_at,
-    ], ['%d', '%d', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s']);
-
-    $response_id = (int) $wpdb->insert_id;
-
-    if ( $send_id ) {
-        eventosapp_whatsapp_flows_update_send_row($send_id, [
-            'response_received' => 1,
-            'status'            => 'answered',
-            'responded_at'      => $created_at,
-        ]);
+    if ( isset($payload['changes']) && is_array($payload['changes']) ) {
+        return true;
     }
 
-    if ( $ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket' ) {
-        update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response', [
-            'response_id'  => $response_id,
-            'flow_post_id' => $flow_post_id,
-            'meta_flow_id' => $meta_flow_id,
-            'summary'      => $summary,
-            'response'     => $response,
-            'created_at'   => $created_at,
-        ]);
-        if ( function_exists('eventosapp_whatsapp_add_ticket_log') ) {
-            eventosapp_whatsapp_add_ticket_log($ticket_id, 'flow_response_received', 'Respuesta de WhatsApp Flow recibida.', [
-                'context'      => 'whatsapp_flow',
-                'flow_post_id' => $flow_post_id,
-                'response_id'  => $response_id,
-                'summary'      => $summary,
-            ], $from_phone, []);
+    return false;
+}
+
+function eventosapp_whatsapp_flows_payload_has_nfm_reply($payload) {
+    if ( ! is_array($payload) ) {
+        return false;
+    }
+
+    foreach ( $payload as $key => $value ) {
+        if ( $key === 'nfm_reply' ) {
+            return true;
+        }
+        if ( is_array($value) && eventosapp_whatsapp_flows_payload_has_nfm_reply($value) ) {
+            return true;
         }
     }
 
-    eventosapp_whatsapp_flows_add_activity('flow_respuesta_recibida', [
-        'response_id'         => $response_id,
-        'send_id'             => $send_id,
-        'flow_post_id'        => $flow_post_id,
-        'meta_flow_id'        => $meta_flow_id,
-        'event_id'            => $event_id,
-        'ticket_id'           => $ticket_id,
-        'from'                => $from_phone,
-        'wa_message_id'       => $wa_message_id,
-        'reply_to_message_id' => $reply_to_message_id,
-        'summary'             => $summary,
-    ]);
+    return false;
 }
+
+function eventosapp_whatsapp_flows_payload_has_statuses($payload) {
+    if ( ! is_array($payload) ) {
+        return false;
+    }
+
+    if ( isset($payload['statuses']) && is_array($payload['statuses']) ) {
+        return true;
+    }
+
+    foreach ( $payload as $value ) {
+        if ( is_array($value) && eventosapp_whatsapp_flows_payload_has_statuses($value) ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function eventosapp_whatsapp_flows_extract_messages_from_payload($payload) {
+    $messages = [];
+
+    if ( ! is_array($payload) ) {
+        return $messages;
+    }
+
+    if ( isset($payload['type'], $payload['interactive']) && is_array($payload['interactive']) ) {
+        $messages[] = [
+            'message' => $payload,
+            'value'   => [],
+            'entry'   => [],
+            'change'  => [],
+        ];
+        return $messages;
+    }
+
+    if ( isset($payload['messages']) && is_array($payload['messages']) ) {
+        foreach ( $payload['messages'] as $message ) {
+            if ( is_array($message) ) {
+                $messages[] = [
+                    'message' => $message,
+                    'value'   => $payload,
+                    'entry'   => [],
+                    'change'  => [],
+                ];
+            }
+        }
+    }
+
+    if ( isset($payload['entry']) && is_array($payload['entry']) ) {
+        foreach ( $payload['entry'] as $entry ) {
+            if ( ! is_array($entry) ) {
+                continue;
+            }
+            $changes = isset($entry['changes']) && is_array($entry['changes']) ? $entry['changes'] : [];
+            foreach ( $changes as $change ) {
+                if ( ! is_array($change) ) {
+                    continue;
+                }
+                $value = isset($change['value']) && is_array($change['value']) ? $change['value'] : [];
+                if ( empty($value['messages']) || ! is_array($value['messages']) ) {
+                    continue;
+                }
+                foreach ( $value['messages'] as $message ) {
+                    if ( is_array($message) ) {
+                        $messages[] = [
+                            'message' => $message,
+                            'value'   => $value,
+                            'entry'   => $entry,
+                            'change'  => $change,
+                        ];
+                    }
+                }
+            }
+        }
+    }
+
+    if ( isset($payload['changes']) && is_array($payload['changes']) ) {
+        foreach ( $payload['changes'] as $change ) {
+            if ( ! is_array($change) ) {
+                continue;
+            }
+            $value = isset($change['value']) && is_array($change['value']) ? $change['value'] : [];
+            if ( empty($value['messages']) || ! is_array($value['messages']) ) {
+                continue;
+            }
+            foreach ( $value['messages'] as $message ) {
+                if ( is_array($message) ) {
+                    $messages[] = [
+                        'message' => $message,
+                        'value'   => $value,
+                        'entry'   => [],
+                        'change'  => $change,
+                    ];
+                }
+            }
+        }
+    }
+
+    return $messages;
+}
+
+function eventosapp_whatsapp_flows_extract_statuses_from_payload($payload) {
+    $statuses = [];
+
+    if ( ! is_array($payload) ) {
+        return $statuses;
+    }
+
+    if ( isset($payload['statuses']) && is_array($payload['statuses']) ) {
+        foreach ( $payload['statuses'] as $status ) {
+            if ( is_array($status) ) {
+                $statuses[] = [
+                    'status' => $status,
+                    'value'  => $payload,
+                    'entry'  => [],
+                    'change' => [],
+                ];
+            }
+        }
+    }
+
+    if ( isset($payload['entry']) && is_array($payload['entry']) ) {
+        foreach ( $payload['entry'] as $entry ) {
+            if ( ! is_array($entry) ) {
+                continue;
+            }
+            $changes = isset($entry['changes']) && is_array($entry['changes']) ? $entry['changes'] : [];
+            foreach ( $changes as $change ) {
+                if ( ! is_array($change) ) {
+                    continue;
+                }
+                $value = isset($change['value']) && is_array($change['value']) ? $change['value'] : [];
+                if ( empty($value['statuses']) || ! is_array($value['statuses']) ) {
+                    continue;
+                }
+                foreach ( $value['statuses'] as $status ) {
+                    if ( is_array($status) ) {
+                        $statuses[] = [
+                            'status' => $status,
+                            'value'  => $value,
+                            'entry'  => $entry,
+                            'change' => $change,
+                        ];
+                    }
+                }
+            }
+        }
+    }
+
+    if ( isset($payload['changes']) && is_array($payload['changes']) ) {
+        foreach ( $payload['changes'] as $change ) {
+            if ( ! is_array($change) ) {
+                continue;
+            }
+            $value = isset($change['value']) && is_array($change['value']) ? $change['value'] : [];
+            if ( empty($value['statuses']) || ! is_array($value['statuses']) ) {
+                continue;
+            }
+            foreach ( $value['statuses'] as $status ) {
+                if ( is_array($status) ) {
+                    $statuses[] = [
+                        'status' => $status,
+                        'value'  => $value,
+                        'entry'  => [],
+                        'change' => $change,
+                    ];
+                }
+            }
+        }
+    }
+
+    return $statuses;
+}
+
+function eventosapp_whatsapp_flows_process_webhook_payload($payload, $source = 'payload_bridge') {
+    if ( is_string($payload) ) {
+        $payload = json_decode($payload, true);
+    }
+
+    $has_nfm_reply = eventosapp_whatsapp_flows_payload_has_nfm_reply($payload);
+    $has_statuses = eventosapp_whatsapp_flows_payload_has_statuses($payload);
+
+    if ( ! eventosapp_whatsapp_flows_is_whatsapp_payload($payload) || ( ! $has_nfm_reply && ! $has_statuses ) ) {
+        return [
+            'ok'        => false,
+            'processed' => 0,
+            'message'   => 'El payload no contiene respuestas nfm_reply ni estados de WhatsApp Flow.',
+        ];
+    }
+
+    $items = $has_nfm_reply ? eventosapp_whatsapp_flows_extract_messages_from_payload($payload) : [];
+    $statuses = $has_statuses ? eventosapp_whatsapp_flows_extract_statuses_from_payload($payload) : [];
+    $processed = 0;
+    $received = 0;
+    $status_processed = 0;
+
+    foreach ( $items as $item ) {
+        $message = $item['message'];
+        if ( ! eventosapp_whatsapp_flows_extract_nfm_response($message) ) {
+            continue;
+        }
+        $received++;
+        eventosapp_whatsapp_flows_handle_inbound_response(
+            $message,
+            $item['value'] ?? [],
+            $item['entry'] ?? [],
+            $item['change'] ?? [],
+            $payload
+        );
+        $processed++;
+    }
+
+    foreach ( $statuses as $item ) {
+        if ( empty($item['status']) || ! is_array($item['status']) ) {
+            continue;
+        }
+        eventosapp_whatsapp_flows_handle_status_update($item['status'], [
+            'value'  => $item['value'] ?? [],
+            'entry'  => $item['entry'] ?? [],
+            'change' => $item['change'] ?? [],
+            'source' => sanitize_key((string) $source),
+        ]);
+        $status_processed++;
+    }
+
+    if ( $processed > 0 || $status_processed > 0 ) {
+        eventosapp_whatsapp_flows_add_activity('flow_webhook_payload_procesado', [
+            'source'           => sanitize_key((string) $source),
+            'responses'        => $processed,
+            'responses_found'  => $received,
+            'statuses'         => $status_processed,
+        ]);
+    }
+
+    return [
+        'ok'        => ($processed + $status_processed) > 0,
+        'processed' => $processed + $status_processed,
+        'responses' => $processed,
+        'statuses'  => $status_processed,
+        'received'  => $received,
+        'message'   => ($processed + $status_processed) > 0 ? 'Webhook de Flow procesado.' : 'No se encontró ningún mensaje nfm_reply ni estado procesable.',
+    ];
+}
+
+function eventosapp_whatsapp_flows_capture_payload_once($payload, $source = 'bridge') {
+    static $hashes = [];
+
+    if ( is_string($payload) ) {
+        $raw = $payload;
+    } else {
+        $raw = eventosapp_whatsapp_flows_json_encode($payload, false);
+    }
+
+    if ( trim((string) $raw) === '' ) {
+        return [
+            'ok'        => false,
+            'processed' => 0,
+            'message'   => 'Payload vacío.',
+        ];
+    }
+
+    $hash = md5((string) $raw);
+    if ( isset($hashes[$hash]) ) {
+        return [
+            'ok'        => false,
+            'processed' => 0,
+            'message'   => 'Payload ya procesado en esta petición.',
+        ];
+    }
+    $hashes[$hash] = true;
+
+    return eventosapp_whatsapp_flows_process_webhook_payload($payload, $source);
+}
+
+function eventosapp_whatsapp_flows_handle_payload_action($payload = [], $value = [], $entry = [], $change = [], $extra = []) {
+    if ( eventosapp_whatsapp_flows_extract_nfm_response($payload) ) {
+        eventosapp_whatsapp_flows_handle_inbound_response($payload, is_array($value) ? $value : [], is_array($entry) ? $entry : [], is_array($change) ? $change : [], is_array($extra) ? $extra : []);
+        return;
+    }
+
+    eventosapp_whatsapp_flows_capture_payload_once($payload, 'action_bridge');
+}
+
+function eventosapp_whatsapp_flows_capture_rest_webhook_payload($result, $server, $request) {
+    if ( ! $request instanceof WP_REST_Request ) {
+        return $result;
+    }
+
+    if ( strtoupper((string) $request->get_method()) !== 'POST' ) {
+        return $result;
+    }
+
+    $route = strtolower((string) $request->get_route());
+    $body = (string) $request->get_body();
+    if ( $body === '' || (strpos($route, 'whatsapp') === false && strpos($route, 'webhook') === false && strpos($body, 'nfm_reply') === false && strpos($body, 'statuses') === false) ) {
+        return $result;
+    }
+
+    $payload = json_decode($body, true);
+    if ( is_array($payload) ) {
+        eventosapp_whatsapp_flows_capture_payload_once($payload, 'rest_pre_dispatch');
+    }
+
+    return $result;
+}
+add_filter('rest_pre_dispatch', 'eventosapp_whatsapp_flows_capture_rest_webhook_payload', 9, 3);
+
+function eventosapp_whatsapp_flows_capture_shutdown_webhook_payload() {
+    if ( empty($_SERVER['REQUEST_METHOD']) || strtoupper((string) $_SERVER['REQUEST_METHOD']) !== 'POST' ) {
+        return;
+    }
+
+    $uri = strtolower((string)($_SERVER['REQUEST_URI'] ?? ''));
+    $content_type = strtolower((string)($_SERVER['CONTENT_TYPE'] ?? ''));
+    if ( strpos($content_type, 'json') === false && strpos($uri, 'whatsapp') === false && strpos($uri, 'webhook') === false && strpos($uri, 'wp-json') === false ) {
+        return;
+    }
+
+    $raw = file_get_contents('php://input');
+    if ( ! is_string($raw) || $raw === '' || (strpos($raw, 'nfm_reply') === false && strpos($raw, 'statuses') === false) ) {
+        return;
+    }
+
+    $payload = json_decode($raw, true);
+    if ( is_array($payload) ) {
+        eventosapp_whatsapp_flows_capture_payload_once($payload, 'shutdown_bridge');
+    }
+}
+add_action('shutdown', 'eventosapp_whatsapp_flows_capture_shutdown_webhook_payload', 1);
+
+add_action('eventosapp_whatsapp_webhook_inbound_message_received', 'eventosapp_whatsapp_flows_handle_inbound_response', 8, 5);
+add_action('eventosapp_whatsapp_webhook_payload_received', 'eventosapp_whatsapp_flows_handle_payload_action', 8, 5);
+add_action('eventosapp_whatsapp_webhook_received', 'eventosapp_whatsapp_flows_handle_payload_action', 8, 5);
+add_action('eventosapp_whatsapp_webhook_raw_payload_received', 'eventosapp_whatsapp_flows_handle_payload_action', 8, 5);
+add_action('eventosapp_whatsapp_webhook_inbound_payload_received', 'eventosapp_whatsapp_flows_handle_payload_action', 8, 5);
 
 add_action('eventosapp_whatsapp_webhook_status_received', 'eventosapp_whatsapp_flows_handle_status_update', 10, 2);
 function eventosapp_whatsapp_flows_handle_status_update($status, $mapped = []) {
