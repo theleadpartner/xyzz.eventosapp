@@ -2009,6 +2009,12 @@ function eventosapp_whatsapp_inbox_render_diagnostics_card() {
     $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
     $last_endpoint_test = isset($settings['last_webhook_endpoint_test']) && is_array($settings['last_webhook_endpoint_test']) ? $settings['last_webhook_endpoint_test'] : [];
     $effective_waba = function_exists('eventosapp_whatsapp_get_effective_webhook_waba_id') ? eventosapp_whatsapp_get_effective_webhook_waba_id($settings) : '';
+    $listener_status = [
+        'Webhook principal' => function_exists('eventosapp_whatsapp_process_webhook_payload') ? 'Activo' : 'No disponible',
+        'Inbox inbound' => has_action('eventosapp_whatsapp_webhook_inbound_message_received', 'eventosapp_whatsapp_inbox_handle_inbound_message') ? 'Activo' : 'No registrado',
+        'Flows inbound' => function_exists('eventosapp_whatsapp_flows_handle_inbound_response') && has_action('eventosapp_whatsapp_webhook_inbound_message_received', 'eventosapp_whatsapp_flows_handle_inbound_response') ? 'Activo' : 'No registrado',
+        'Puente payload' => has_action('eventosapp_whatsapp_webhook_payload_received') ? 'Activo' : 'Sin listeners',
+    ];
     ?>
     <div class="evapp-card">
         <div class="evapp-wa-inbox-header">
@@ -2023,7 +2029,11 @@ function eventosapp_whatsapp_inbox_render_diagnostics_card() {
         <table class="evapp-wa-inbox-table">
             <tbody>
                 <tr><th>Webhook recomendado para Meta</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_url); ?></span></td></tr>
+                <?php if ( ! empty($webhook_urls['rest']) ) : ?>
+                    <tr><th>Webhook REST alternativo</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_urls['rest']); ?></span></td></tr>
+                <?php endif; ?>
                 <tr><th>Webhook legacy admin-post</th><td><span class="evapp-wa-break"><?php echo esc_html($webhook_urls['admin_post'] ?? admin_url('admin-post.php?action=eventosapp_whatsapp_webhook')); ?></span></td></tr>
+                <tr><th>Procesadores registrados</th><td><?php eventosapp_whatsapp_inbox_render_debug_details('Ver listeners del webhook', $listener_status); ?></td></tr>
                 <tr><th>WABA efectivo</th><td><?php echo esc_html($effective_waba ?: 'Sin WABA ID configurado'); ?></td></tr>
                 <tr><th>Tabla del inbox</th><td><?php echo $table_exists ? 'Existe: ' . esc_html($table) : 'No existe todavía: ' . esc_html($table); ?></td></tr>
                 <tr><th>Conversaciones / mensajes</th><td><?php echo esc_html((string) eventosapp_whatsapp_inbox_count_conversations()); ?> conversaciones / <?php echo esc_html((string) eventosapp_whatsapp_inbox_count_messages()); ?> mensajes</td></tr>
