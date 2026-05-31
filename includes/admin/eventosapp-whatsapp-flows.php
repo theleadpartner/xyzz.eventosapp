@@ -361,6 +361,63 @@ function eventosapp_whatsapp_flows_sanitize_slug($value, $fallback = '') {
     return $slug !== '' ? $slug : 'campo';
 }
 
+/**
+ * Normaliza IDs de pantalla para WhatsApp Flow JSON.
+ * Meta valida screens[n].id con letras y guiones bajos únicamente.
+ * Por eso no se reutiliza sanitize_key(), porque permite números y guiones.
+ */
+function eventosapp_whatsapp_flows_sanitize_flow_screen_id($value, $fallback = 'SURVEY') {
+    $normalize = static function($candidate) {
+        $screen = strtoupper(trim(remove_accents((string) $candidate)));
+        $screen = preg_replace('/[^A-Z_]+/', '_', $screen);
+        $screen = preg_replace('/_+/', '_', (string) $screen);
+        $screen = trim((string) $screen, '_');
+
+        if ( $screen === '' ) {
+            return '';
+        }
+
+        if ( ! preg_match('/^[A-Z]/', $screen) ) {
+            $screen = 'SCREEN_' . $screen;
+        }
+
+        return $screen;
+    };
+
+    $screen = $normalize($value);
+    if ( $screen === '' && $fallback !== '' ) {
+        $screen = $normalize($fallback);
+    }
+
+    return $screen;
+}
+
+function eventosapp_whatsapp_flows_screen_suffix_from_index($screen_index) {
+    $screen_index = absint($screen_index);
+    if ( $screen_index <= 0 ) {
+        return '';
+    }
+
+    $letters = '';
+    $number = $screen_index;
+    while ( $number >= 0 ) {
+        $letters = chr(65 + ($number % 26)) . $letters;
+        $number = (int) floor($number / 26) - 1;
+    }
+
+    return $letters;
+}
+
+function eventosapp_whatsapp_flows_make_screen_id($base_screen_id, $screen_index = 0) {
+    $base_screen_id = eventosapp_whatsapp_flows_sanitize_flow_screen_id($base_screen_id, 'SURVEY');
+    if ( $base_screen_id === '' ) {
+        $base_screen_id = 'SURVEY';
+    }
+
+    $suffix = eventosapp_whatsapp_flows_screen_suffix_from_index($screen_index);
+    return $suffix !== '' ? $base_screen_id . '_' . $suffix : $base_screen_id;
+}
+
 function eventosapp_whatsapp_flows_normalize_options($raw_options) {
     $options = [];
     if ( is_string($raw_options) ) {
@@ -556,8 +613,7 @@ function eventosapp_whatsapp_flows_get_flow_config($flow_post_id) {
     ];
 
     $config['category'] = array_key_exists($config['category'], eventosapp_whatsapp_flows_categories()) ? $config['category'] : 'SURVEY';
-    $config['screen_id'] = eventosapp_whatsapp_flows_sanitize_slug($config['screen_id'], 'SURVEY');
-    $config['screen_id'] = strtoupper($config['screen_id']);
+    $config['screen_id'] = eventosapp_whatsapp_flows_sanitize_flow_screen_id($config['screen_id'], 'SURVEY');
     $config['questions_per_screen'] = min(15, max(3, absint($config['questions_per_screen'] ?? 8)));
 
     return $config;
@@ -634,10 +690,8 @@ function eventosapp_whatsapp_flows_question_to_component($question) {
         $component['data-source'] = $options;
     }
 
-    $placeholder = sanitize_text_field((string)($question['placeholder'] ?? ''));
-    if ( $placeholder !== '' && in_array($component['type'], ['TextInput', 'TextArea'], true) ) {
-        $component['placeholder'] = eventosapp_whatsapp_flows_text_limit($placeholder, 80);
-    }
+    // Compatibilidad Meta Flow JSON: TextInput y TextArea no aceptan la propiedad placeholder.
+    // Si existen placeholders guardados por versiones anteriores, se conservan localmente pero no se envían a Meta.
 
     $min_chars = absint($question['min_chars'] ?? 0);
     $max_chars = absint($question['max_chars'] ?? 0);
@@ -659,8 +713,7 @@ function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_conf
     $title        = sanitize_text_field((string)($config['title'] ?? 'Encuesta del evento'));
     $description  = sanitize_textarea_field((string)($config['description'] ?? 'Completa esta breve encuesta.'));
     $submit_label = sanitize_text_field((string)($config['submit_label'] ?? 'Enviar respuestas'));
-    $screen_id    = eventosapp_whatsapp_flows_sanitize_slug($config['screen_id'] ?? 'SURVEY', 'SURVEY');
-    $screen_id    = strtoupper($screen_id);
+    $screen_id    = eventosapp_whatsapp_flows_sanitize_flow_screen_id($config['screen_id'] ?? 'SURVEY', 'SURVEY');
     $questions    = eventosapp_whatsapp_flows_normalize_questions($config['questions'] ?? []);
     $per_screen   = min(15, max(3, absint($config['questions_per_screen'] ?? 8)));
 
@@ -700,7 +753,7 @@ function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_conf
 
     $screen_ids = [];
     foreach ( $screens_questions as $idx => $_screen_questions ) {
-        $screen_ids[$idx] = $idx === 0 ? $screen_id : $screen_id . '_' . ($idx + 1);
+        $screen_ids[$idx] = eventosapp_whatsapp_flows_make_screen_id($screen_id, $idx);
     }
 
     $screens = [];
@@ -1228,7 +1281,7 @@ function eventosapp_whatsapp_flows_send_direct_flow($flow_post_id, $to, $args = 
     $body_text = sanitize_textarea_field(eventosapp_whatsapp_flows_replace_vars($args['body_text'] ?? $config['description'], $context));
     $footer_text = sanitize_text_field(eventosapp_whatsapp_flows_replace_vars($args['footer_text'] ?? 'Responde desde WhatsApp de forma rápida y segura.', $context));
     $cta = sanitize_text_field((string)($args['cta'] ?? $config['cta']));
-    $screen_id = strtoupper(eventosapp_whatsapp_flows_sanitize_slug($config['screen_id'] ?? 'SURVEY', 'SURVEY'));
+    $screen_id = eventosapp_whatsapp_flows_sanitize_flow_screen_id($config['screen_id'] ?? 'SURVEY', 'SURVEY');
 
     $payload = [
         'type' => 'interactive',
@@ -1985,7 +2038,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_save', function() {
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_category', $category);
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_cta', sanitize_text_field((string)($_POST['flow_cta'] ?? 'Responder encuesta')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_submit_label', sanitize_text_field((string)($_POST['flow_submit_label'] ?? 'Enviar respuestas')));
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_screen_id', strtoupper(eventosapp_whatsapp_flows_sanitize_slug($_POST['flow_screen_id'] ?? 'SURVEY', 'SURVEY')));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_screen_id', eventosapp_whatsapp_flows_sanitize_flow_screen_id($_POST['flow_screen_id'] ?? 'SURVEY', 'SURVEY'));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_questions_per_screen', min(15, max(3, absint($_POST['flow_questions_per_screen'] ?? 8))));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_waba_id', function_exists('eventosapp_whatsapp_sanitize_waba_id') ? eventosapp_whatsapp_sanitize_waba_id($_POST['flow_waba_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['flow_waba_id'] ?? '')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_sender_phone_number_id', function_exists('eventosapp_whatsapp_sanitize_phone_number_id') ? eventosapp_whatsapp_sanitize_phone_number_id($_POST['flow_sender_phone_number_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['flow_sender_phone_number_id'] ?? '')));
@@ -3058,7 +3111,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
 function eventosapp_whatsapp_flows_admin_styles() {
     ?>
     <style>
-        .eventosapp-wa-flows{--evapp-blue:#3454f4;--evapp-blue2:#eef2ff;--evapp-ink:#152234;--evapp-muted:#667085;--evapp-border:#d9e1ef;--evapp-bg:#f5f7fb;--evapp-card:#fff;--evapp-green:#0a9b67;--evapp-orange:#d97706}.eventosapp-wa-flows.wrap{background:var(--evapp-bg);padding:20px;margin:0 0 0 -20px;min-height:calc(100vh - 32px)}.eventosapp-wa-flows h1{font-size:28px;font-weight:800;color:var(--evapp-ink);margin:0 0 18px}.eventosapp-wa-flows .evapp-page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eventosapp-wa-flows .evapp-page-head p{margin:.35rem 0 0;color:var(--evapp-muted);font-size:14px}.eventosapp-wa-flows .evapp-top-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-card{background:var(--evapp-card);border:1px solid var(--evapp-border);border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:18px}.eventosapp-wa-flows .evapp-card h2{font-size:17px;margin:0 0 12px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-card h3{font-size:15px;margin:18px 0 10px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(520px,1.15fr) minmax(330px,.85fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-field{display:block;margin-bottom:12px}.eventosapp-wa-flows .evapp-field span,.eventosapp-wa-flows .evapp-label{display:block;font-weight:700;color:#26364a;margin-bottom:6px}.eventosapp-wa-flows input[type=text],.eventosapp-wa-flows input[type=number],.eventosapp-wa-flows select,.eventosapp-wa-flows textarea{border:1px solid #cfd8e6;border-radius:10px;min-height:38px;box-shadow:none}.eventosapp-wa-flows .evapp-field input[type=text],.eventosapp-wa-flows .evapp-field input[type=number],.eventosapp-wa-flows .evapp-field select,.eventosapp-wa-flows .evapp-field textarea{width:100%;max-width:100%;box-sizing:border-box}.eventosapp-wa-flows textarea{padding:8px 10px}.eventosapp-wa-flows #flow_description{display:block;width:100%;min-height:96px;resize:vertical}.eventosapp-wa-flows .regular-text,.eventosapp-wa-flows .large-text{max-width:100%;width:100%}.eventosapp-wa-flows .evapp-muted,.eventosapp-wa-flows .description{color:var(--evapp-muted)}.eventosapp-wa-flows .evapp-pill{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-blue2);color:#203bc4;padding:4px 9px;font-size:12px;font-weight:800}.eventosapp-wa-flows .evapp-pill.green{background:#e9f9f1;color:#07724d}.eventosapp-wa-flows .evapp-pill.gray{background:#eef1f5;color:#4b5563}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:linear-gradient(180deg,#fff,#f7f9ff);border:1px solid #e3e9f6;border-radius:14px;padding:13px}.eventosapp-wa-flows .evapp-stat span{display:block;font-weight:700;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:24px;color:var(--evapp-ink);line-height:1.1;margin-top:4px}.eventosapp-wa-flows .evapp-builder-toolbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 14px}.eventosapp-wa-flows .evapp-builder-toolbar button{min-height:38px;border-radius:10px}.eventosapp-wa-flows .evapp-question{border:1px solid #d9e1ef;border-radius:16px;margin:12px 0;background:#fff;overflow:hidden}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8faff;padding:12px 14px;border-bottom:1px solid #e6edf8}.eventosapp-wa-flows .evapp-question-title{display:flex;align-items:center;gap:9px}.eventosapp-wa-flows .evapp-question-number{display:inline-flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:9px;background:var(--evapp-blue);color:#fff;font-weight:800}.eventosapp-wa-flows .evapp-question-body{padding:14px}.eventosapp-wa-flows .evapp-type-help{padding:9px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5edf7;color:#536071;margin:8px 0 0;font-size:12px}.eventosapp-wa-flows .evapp-options-wrap textarea{font-family:Menlo,Consolas,monospace;min-height:96px}.eventosapp-wa-flows .evapp-question.is-display .evapp-options-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-required-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-placeholder-wrap{display:none}.eventosapp-wa-flows .evapp-question.is-choice .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-date .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-placeholder-wrap,.eventosapp-wa-flows .evapp-question.is-optin .evapp-options-wrap,.eventosapp-wa-flows .evapp-question:not(.is-text-input) .evapp-text-input-type-wrap{display:none}.eventosapp-wa-flows textarea.code{width:100%;min-height:310px;font-family:Menlo,Consolas,monospace;background:#0f172a;color:#d9e9ff;border-radius:14px;padding:14px}.eventosapp-wa-flows .widefat{border:1px solid #dce4f1;border-radius:12px;overflow:hidden}.eventosapp-wa-flows .widefat th{font-weight:800;color:#26364a}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:130px;overflow:auto;background:#f8fafc;border-radius:10px;padding:8px}.eventosapp-wa-flows .evapp-warning{border-left:4px solid var(--evapp-orange);background:#fff7ed;padding:12px;border-radius:12px;margin:12px 0;color:#7c2d12}.eventosapp-wa-flows .evapp-info{border-left:4px solid var(--evapp-blue);background:#eef2ff;padding:12px;border-radius:12px;margin:12px 0;color:#26364a}.eventosapp-wa-flows .evapp-success{border-left:4px solid var(--evapp-green);background:#ecfdf3;padding:12px;border-radius:12px;margin:12px 0}.eventosapp-wa-flows .button{border-radius:9px}.eventosapp-wa-flows .button-primary{background:var(--evapp-blue);border-color:var(--evapp-blue)}.eventosapp-wa-flows .evapp-empty{padding:22px;border:1px dashed #cfd8e6;border-radius:14px;background:#fafcff;color:var(--evapp-muted);text-align:center}.eventosapp-wa-flows .evapp-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.eventosapp-wa-flows .evapp-template-card{border:1px solid #dce4f1;border-radius:13px;padding:12px;background:#fbfdff}.eventosapp-wa-flows .evapp-template-card strong{display:block;color:var(--evapp-ink);margin-bottom:4px}.eventosapp-wa-flows .evapp-template-card p{margin:0;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-small{font-size:12px}.eventosapp-wa-flows .evapp-checkline{display:flex;gap:7px;align-items:center;margin:8px 0}.eventosapp-wa-flows .evapp-form-table{width:100%;border-collapse:separate;border-spacing:0 12px}.eventosapp-wa-flows .evapp-form-table th{width:170px;text-align:left;vertical-align:top;padding-top:8px;color:#26364a}.eventosapp-wa-flows .evapp-form-table td{vertical-align:top}@media(max-width:1200px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-builder-toolbar{grid-template-columns:repeat(2,1fr)}}@media(max-width:782px){.eventosapp-wa-flows.wrap{margin-left:-10px;padding:14px}.eventosapp-wa-flows .evapp-stat-grid,.eventosapp-wa-flows .evapp-grid-3,.eventosapp-wa-flows .evapp-row,.eventosapp-wa-flows .evapp-row-3,.eventosapp-wa-flows .evapp-template-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-page-head{display:block}.eventosapp-wa-flows .evapp-form-table th,.eventosapp-wa-flows .evapp-form-table td{display:block;width:100%}}
+        .eventosapp-wa-flows{--evapp-blue:#3454f4;--evapp-blue2:#eef2ff;--evapp-ink:#152234;--evapp-muted:#667085;--evapp-border:#d9e1ef;--evapp-bg:#f5f7fb;--evapp-card:#fff;--evapp-green:#0a9b67;--evapp-orange:#d97706}.eventosapp-wa-flows.wrap{background:var(--evapp-bg);padding:20px;margin:0 0 0 -20px;min-height:calc(100vh - 32px)}.eventosapp-wa-flows h1{font-size:28px;font-weight:800;color:var(--evapp-ink);margin:0 0 18px}.eventosapp-wa-flows .evapp-page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eventosapp-wa-flows .evapp-page-head p{margin:.35rem 0 0;color:var(--evapp-muted);font-size:14px}.eventosapp-wa-flows .evapp-top-actions{display:flex;gap:8px;flex-wrap:wrap}.eventosapp-wa-flows .evapp-card{background:var(--evapp-card);border:1px solid var(--evapp-border);border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:18px}.eventosapp-wa-flows .evapp-card h2{font-size:17px;margin:0 0 12px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-card h3{font-size:15px;margin:18px 0 10px;color:var(--evapp-ink)}.eventosapp-wa-flows .evapp-grid{display:grid;grid-template-columns:minmax(520px,1.15fr) minmax(330px,.85fr);gap:18px;align-items:start}.eventosapp-wa-flows .evapp-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.eventosapp-wa-flows .evapp-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.eventosapp-wa-flows .evapp-field{display:block;margin-bottom:12px}.eventosapp-wa-flows .evapp-field span,.eventosapp-wa-flows .evapp-label{display:block;font-weight:700;color:#26364a;margin-bottom:6px}.eventosapp-wa-flows input[type=text],.eventosapp-wa-flows input[type=number],.eventosapp-wa-flows select,.eventosapp-wa-flows textarea{border:1px solid #cfd8e6;border-radius:10px;min-height:38px;box-shadow:none}.eventosapp-wa-flows .evapp-field input[type=text],.eventosapp-wa-flows .evapp-field input[type=number],.eventosapp-wa-flows .evapp-field select,.eventosapp-wa-flows .evapp-field textarea{width:100%;max-width:100%;box-sizing:border-box}.eventosapp-wa-flows textarea{padding:8px 10px}.eventosapp-wa-flows #flow_description{display:block;width:100%;min-height:96px;resize:vertical}.eventosapp-wa-flows .regular-text,.eventosapp-wa-flows .large-text{max-width:100%;width:100%}.eventosapp-wa-flows .evapp-muted,.eventosapp-wa-flows .description{color:var(--evapp-muted)}.eventosapp-wa-flows .evapp-pill{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-blue2);color:#203bc4;padding:4px 9px;font-size:12px;font-weight:800}.eventosapp-wa-flows .evapp-pill.green{background:#e9f9f1;color:#07724d}.eventosapp-wa-flows .evapp-pill.gray{background:#eef1f5;color:#4b5563}.eventosapp-wa-flows .evapp-stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.eventosapp-wa-flows .evapp-stat{background:linear-gradient(180deg,#fff,#f7f9ff);border:1px solid #e3e9f6;border-radius:14px;padding:13px}.eventosapp-wa-flows .evapp-stat span{display:block;font-weight:700;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-stat strong{display:block;font-size:24px;color:var(--evapp-ink);line-height:1.1;margin-top:4px}.eventosapp-wa-flows .evapp-builder-toolbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 14px}.eventosapp-wa-flows .evapp-builder-toolbar button{min-height:38px;border-radius:10px}.eventosapp-wa-flows .evapp-question{border:1px solid #d9e1ef;border-radius:16px;margin:12px 0;background:#fff;overflow:hidden}.eventosapp-wa-flows .evapp-question-head{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8faff;padding:12px 14px;border-bottom:1px solid #e6edf8}.eventosapp-wa-flows .evapp-question-title{display:flex;align-items:center;gap:9px}.eventosapp-wa-flows .evapp-question-number{display:inline-flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:9px;background:var(--evapp-blue);color:#fff;font-weight:800}.eventosapp-wa-flows .evapp-question-body{padding:14px}.eventosapp-wa-flows .evapp-type-help{padding:9px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5edf7;color:#536071;margin:8px 0 0;font-size:12px}.eventosapp-wa-flows .evapp-options-wrap textarea{font-family:Menlo,Consolas,monospace;min-height:96px}.eventosapp-wa-flows .evapp-question.is-display .evapp-options-wrap,.eventosapp-wa-flows .evapp-question.is-display .evapp-required-wrap{display:none}.eventosapp-wa-flows .evapp-question.is-optin .evapp-options-wrap,.eventosapp-wa-flows .evapp-question:not(.is-text-input) .evapp-text-input-type-wrap{display:none}.eventosapp-wa-flows textarea.code{width:100%;min-height:310px;font-family:Menlo,Consolas,monospace;background:#0f172a;color:#d9e9ff;border-radius:14px;padding:14px}.eventosapp-wa-flows .widefat{border:1px solid #dce4f1;border-radius:12px;overflow:hidden}.eventosapp-wa-flows .widefat th{font-weight:800;color:#26364a}.eventosapp-wa-flows .widefat td{vertical-align:top}.eventosapp-wa-flows .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.eventosapp-wa-flows .evapp-response-pre{white-space:pre-wrap;max-height:130px;overflow:auto;background:#f8fafc;border-radius:10px;padding:8px}.eventosapp-wa-flows .evapp-warning{border-left:4px solid var(--evapp-orange);background:#fff7ed;padding:12px;border-radius:12px;margin:12px 0;color:#7c2d12}.eventosapp-wa-flows .evapp-info{border-left:4px solid var(--evapp-blue);background:#eef2ff;padding:12px;border-radius:12px;margin:12px 0;color:#26364a}.eventosapp-wa-flows .evapp-success{border-left:4px solid var(--evapp-green);background:#ecfdf3;padding:12px;border-radius:12px;margin:12px 0}.eventosapp-wa-flows .button{border-radius:9px}.eventosapp-wa-flows .button-primary{background:var(--evapp-blue);border-color:var(--evapp-blue)}.eventosapp-wa-flows .evapp-empty{padding:22px;border:1px dashed #cfd8e6;border-radius:14px;background:#fafcff;color:var(--evapp-muted);text-align:center}.eventosapp-wa-flows .evapp-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.eventosapp-wa-flows .evapp-template-card{border:1px solid #dce4f1;border-radius:13px;padding:12px;background:#fbfdff}.eventosapp-wa-flows .evapp-template-card strong{display:block;color:var(--evapp-ink);margin-bottom:4px}.eventosapp-wa-flows .evapp-template-card p{margin:0;color:var(--evapp-muted);font-size:12px}.eventosapp-wa-flows .evapp-small{font-size:12px}.eventosapp-wa-flows .evapp-checkline{display:flex;gap:7px;align-items:center;margin:8px 0}.eventosapp-wa-flows .evapp-form-table{width:100%;border-collapse:separate;border-spacing:0 12px}.eventosapp-wa-flows .evapp-form-table th{width:170px;text-align:left;vertical-align:top;padding-top:8px;color:#26364a}.eventosapp-wa-flows .evapp-form-table td{vertical-align:top}@media(max-width:1200px){.eventosapp-wa-flows .evapp-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-builder-toolbar{grid-template-columns:repeat(2,1fr)}}@media(max-width:782px){.eventosapp-wa-flows.wrap{margin-left:-10px;padding:14px}.eventosapp-wa-flows .evapp-stat-grid,.eventosapp-wa-flows .evapp-grid-3,.eventosapp-wa-flows .evapp-row,.eventosapp-wa-flows .evapp-row-3,.eventosapp-wa-flows .evapp-template-grid{grid-template-columns:1fr}.eventosapp-wa-flows .evapp-page-head{display:block}.eventosapp-wa-flows .evapp-form-table th,.eventosapp-wa-flows .evapp-form-table td{display:block;width:100%}}
     </style>
     <?php
 }
@@ -3168,7 +3221,7 @@ function eventosapp_whatsapp_flows_render_page() {
                         <div class="evapp-row-3">
                             <label class="evapp-field"><span>Texto del botón</span><input type="text" name="flow_cta" value="<?php echo esc_attr($edit_config['cta']); ?>" maxlength="30"></label>
                             <label class="evapp-field"><span>Botón final</span><input type="text" name="flow_submit_label" value="<?php echo esc_attr($edit_config['submit_label']); ?>" maxlength="30"></label>
-                            <label class="evapp-field"><span>ID pantalla inicial</span><input type="text" name="flow_screen_id" value="<?php echo esc_attr($edit_config['screen_id']); ?>"></label>
+                            <label class="evapp-field"><span>ID pantalla inicial</span><input type="text" name="flow_screen_id" value="<?php echo esc_attr($edit_config['screen_id']); ?>"><span class="description">Usa solo letras y guiones bajos. Si hay varias pantallas, el sistema genera sufijos como _B, _C, sin números.</span></label>
                         </div>
 
                         <div class="evapp-row-3">
@@ -3183,7 +3236,7 @@ function eventosapp_whatsapp_flows_render_page() {
                         </div>
 
                         <div class="evapp-info">
-                            <strong>Componentes oficiales usados por el constructor:</strong> TextHeading, TextSubheading, TextBody, TextCaption, TextInput, TextArea, RadioButtonsGroup, CheckboxGroup, Dropdown, DatePicker y OptIn. El componente Footer se genera automáticamente al final de cada pantalla.
+                            <strong>Componentes oficiales usados por el constructor:</strong> TextHeading, TextSubheading, TextBody, TextCaption, TextInput, TextArea, RadioButtonsGroup, CheckboxGroup, Dropdown, DatePicker y OptIn. El componente Footer se genera automáticamente al final de cada pantalla. Para mantener compatibilidad con la validación de Meta, el JSON no incluye propiedades <code>placeholder</code> en TextInput/TextArea y las pantallas adicionales se nombran solo con letras y guiones bajos.
                         </div>
 
                         <h2>2. Componentes del Flow</h2>
@@ -4099,13 +4152,12 @@ function eventosapp_whatsapp_flows_render_question_row($index, $question, $quest
                 <label class="evapp-field"><span>Texto visible</span><input type="text" class="large-text" name="questions[<?php echo esc_attr($index); ?>][label]" value="<?php echo esc_attr($question['label'] ?? ''); ?>" placeholder="Pregunta o texto de sección"></label>
                 <label class="evapp-field"><span>Slug / nombre interno</span><input type="text" class="regular-text" name="questions[<?php echo esc_attr($index); ?>][slug]" value="<?php echo esc_attr($question['slug'] ?? ''); ?>" placeholder="campo_respuesta"></label>
             </div>
-            <div class="evapp-row-3">
+            <div class="evapp-row">
                 <label class="evapp-field"><span>Componente WhatsApp Flow</span><select class="evapp-question-type" name="questions[<?php echo esc_attr($index); ?>][type]">
                     <?php foreach ( $question_types as $key => $label ) : ?>
                         <option value="<?php echo esc_attr($key); ?>" <?php selected($type, $key); ?>><?php echo esc_html($label); ?></option>
                     <?php endforeach; ?>
                 </select></label>
-                <label class="evapp-field evapp-placeholder-wrap"><span>Placeholder opcional</span><input type="text" name="questions[<?php echo esc_attr($index); ?>][placeholder]" value="<?php echo esc_attr($question['placeholder'] ?? ''); ?>" placeholder="Ej: Escribe tu respuesta"></label>
                 <label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions[<?php echo esc_attr($index); ?>][required]" value="1" <?php checked(($question['required'] ?? '0'), '1'); ?>> Obligatoria</label></label>
             </div>
             <div class="evapp-row evapp-text-input-type-wrap">
@@ -4151,8 +4203,8 @@ function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_
             radio: {type:'radio', label:'RadioButtonsGroup', slug:'radio_buttons_group', help:'', options:'opcion_1|Opción 1\nopcion_2|Opción 2', required:true},
             checkbox: {type:'checkbox', label:'CheckboxGroup', slug:'checkbox_group', help:'', options:'opcion_1|Opción 1\nopcion_2|Opción 2', required:false},
             dropdown: {type:'dropdown', label:'Dropdown', slug:'dropdown', help:'', options:'opcion_1|Opción 1\nopcion_2|Opción 2', required:false},
-            text: {type:'text', input_type:'text', label:'TextInput', slug:'text_input', help:'', options:'', required:false, placeholder:'Escribe tu respuesta'},
-            textarea: {type:'textarea', label:'TextArea', slug:'text_area', help:'', options:'', required:false, placeholder:'Escribe tu respuesta'},
+            text: {type:'text', input_type:'text', label:'TextInput', slug:'text_input', help:'', options:'', required:false},
+            textarea: {type:'textarea', label:'TextArea', slug:'text_area', help:'', options:'', required:false},
             date: {type:'date', label:'DatePicker', slug:'date_picker', help:'', options:'', required:false},
             optin: {type:'optin', label:'OptIn', slug:'opt_in', help:'', options:'', required:true}
         };
@@ -4178,7 +4230,7 @@ function eventosapp_whatsapp_flows_render_builder_script($question_types, $type_
                 '<div class="evapp-question-head"><div class="evapp-question-title"><span class="evapp-question-number">'+(i+1)+'</span><strong>'+esc(questionTypes[type] || 'Campo')+'</strong></div><button type="button" class="button-link-delete evapp-remove-question">Quitar</button></div>'+ 
                 '<div class="evapp-question-body">'+
                 '<div class="evapp-row"><label class="evapp-field"><span>Texto visible</span><input type="text" class="large-text" name="questions['+i+'][label]" value="'+esc(data.label || 'Nueva pregunta')+'" placeholder="Pregunta o texto de sección"></label><label class="evapp-field"><span>Slug / nombre interno</span><input type="text" class="regular-text" name="questions['+i+'][slug]" value="'+esc(data.slug || ('pregunta_'+(i+1)))+'" placeholder="campo_respuesta"></label></div>'+ 
-                '<div class="evapp-row-3"><label class="evapp-field"><span>Componente WhatsApp Flow</span><select class="evapp-question-type" name="questions['+i+'][type]">'+typeOptions(type)+'</select></label><label class="evapp-field evapp-placeholder-wrap"><span>Placeholder opcional</span><input type="text" name="questions['+i+'][placeholder]" value="'+esc(data.placeholder || '')+'" placeholder="Ej: Escribe tu respuesta"></label><label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions['+i+'][required]" value="1" '+(required?'checked':'')+'> Obligatoria</label></label></div>'+ 
+                '<div class="evapp-row"><label class="evapp-field"><span>Componente WhatsApp Flow</span><select class="evapp-question-type" name="questions['+i+'][type]">'+typeOptions(type)+'</select></label><label class="evapp-field evapp-required-wrap"><span>Validación</span><label class="evapp-checkline"><input type="checkbox" name="questions['+i+'][required]" value="1" '+(required?'checked':'')+'> Obligatoria</label></label></div>'+ 
                 '<div class="evapp-row evapp-text-input-type-wrap"><label class="evapp-field"><span>Formato de TextInput</span><select name="questions['+i+'][input_type]">'+inputTypeOptions(inputType)+'</select><span class="description">No crea otro componente: solo cambia el formato interno de TextInput.</span></label></div>'+ 
                 '<label class="evapp-field"><span>Ayuda / instrucción opcional</span><textarea rows="2" name="questions['+i+'][help]" placeholder="Ej: 1 es el mínimo y 5 el máximo">'+esc(data.help || '')+'</textarea></label>'+ 
                 '<div class="evapp-row evapp-text-limits-wrap"><label class="evapp-field"><span>Mínimo de caracteres</span><input type="number" name="questions['+i+'][min_chars]" value="0" min="0"></label><label class="evapp-field"><span>Máximo de caracteres</span><input type="number" name="questions['+i+'][max_chars]" value="0" min="0"></label></div>'+ 
