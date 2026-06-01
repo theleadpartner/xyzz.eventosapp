@@ -86,6 +86,154 @@ function eventosapp_whatsapp_flow_templates_get($template_id) {
     return isset($items[$template_id]) && is_array($items[$template_id]) ? wp_parse_args($items[$template_id], eventosapp_whatsapp_flow_templates_default_item()) : [];
 }
 
+
+function eventosapp_whatsapp_flow_templates_exportable_keys() {
+    return [
+        'name',
+        'display_name',
+        'language',
+        'category',
+        'header_format',
+        'header_text',
+        'header_sample_handle',
+        'header_sample_file_name',
+        'header_sample_file_type',
+        'header_sample_file_size',
+        'header_sample_uploaded_at',
+        'header_image_url',
+        'body',
+        'sample_1',
+        'sample_2',
+        'footer_text',
+        'button_text',
+        'meta_flow_id',
+        'navigate_screen',
+    ];
+}
+
+function eventosapp_whatsapp_flow_templates_system_managed_keys() {
+    return [
+        'id',
+        'flow_post_id',
+        'waba_id',
+        'sender_phone_number_id',
+        'meta_status',
+        'meta_template_id',
+        'meta_category',
+        'last_meta_response',
+        'created_at',
+        'updated_at',
+    ];
+}
+
+function eventosapp_whatsapp_flow_templates_sanitize_exportable_template($template) {
+    $template = wp_parse_args(is_array($template) ? $template : [], eventosapp_whatsapp_flow_templates_default_item());
+
+    $sanitized = [];
+    $sanitized['name'] = eventosapp_whatsapp_flow_templates_template_name($template['name'] ?? '');
+    $sanitized['display_name'] = sanitize_text_field((string)($template['display_name'] ?? ''));
+    $sanitized['language'] = sanitize_text_field((string)($template['language'] ?? 'es_CO'));
+    $sanitized['category'] = eventosapp_whatsapp_flow_templates_sanitize_category($template['category'] ?? 'UTILITY');
+    $sanitized['header_format'] = eventosapp_whatsapp_flow_templates_sanitize_header_format($template['header_format'] ?? 'NONE');
+    $sanitized['header_text'] = sanitize_text_field((string)($template['header_text'] ?? ''));
+    $sanitized['header_sample_handle'] = eventosapp_whatsapp_flow_templates_sanitize_header_handle($template['header_sample_handle'] ?? '');
+    $sanitized['header_sample_file_name'] = sanitize_file_name((string)($template['header_sample_file_name'] ?? ''));
+    $sanitized['header_sample_file_type'] = sanitize_mime_type((string)($template['header_sample_file_type'] ?? ''));
+    $sanitized['header_sample_file_size'] = absint($template['header_sample_file_size'] ?? 0);
+    $sanitized['header_sample_uploaded_at'] = sanitize_text_field((string)($template['header_sample_uploaded_at'] ?? ''));
+    $sanitized['header_image_url'] = esc_url_raw((string)($template['header_image_url'] ?? ''));
+    $sanitized['body'] = sanitize_textarea_field((string)($template['body'] ?? ''));
+    $sanitized['sample_1'] = sanitize_text_field((string)($template['sample_1'] ?? ''));
+    $sanitized['sample_2'] = sanitize_text_field((string)($template['sample_2'] ?? ''));
+    $sanitized['footer_text'] = sanitize_text_field((string)($template['footer_text'] ?? ''));
+    $sanitized['button_text'] = sanitize_text_field((string)($template['button_text'] ?? 'Responder encuesta'));
+    $sanitized['meta_flow_id'] = preg_replace('/\D+/', '', (string)($template['meta_flow_id'] ?? ''));
+    $sanitized['navigate_screen'] = eventosapp_whatsapp_flow_templates_sanitize_screen_id($template['navigate_screen'] ?? 'SURVEY', 'SURVEY');
+
+    if ( $sanitized['name'] === '' ) {
+        $sanitized['name'] = eventosapp_whatsapp_flow_templates_template_name('eventosapp_flow_importada');
+    }
+    if ( $sanitized['body'] === '' ) {
+        $sanitized['body'] = eventosapp_whatsapp_flow_templates_default_item()['body'];
+    }
+    if ( $sanitized['button_text'] === '' ) {
+        $sanitized['button_text'] = eventosapp_whatsapp_flow_templates_default_item()['button_text'];
+    }
+    if ( $sanitized['navigate_screen'] === '' ) {
+        $sanitized['navigate_screen'] = 'SURVEY';
+    }
+
+    return $sanitized;
+}
+
+function eventosapp_whatsapp_flow_templates_build_export_payload($template) {
+    $template = wp_parse_args(is_array($template) ? $template : [], eventosapp_whatsapp_flow_templates_default_item());
+    $exportable = eventosapp_whatsapp_flow_templates_sanitize_exportable_template($template);
+
+    return [
+        'schema'                => 'eventosapp_whatsapp_flow_template',
+        'version'               => 1,
+        'exported_at'           => current_time('mysql'),
+        'exported_at_gmt'       => current_time('mysql', true),
+        'generator'             => 'EventosApp',
+        'template'              => $exportable,
+        'excluded_system_fields'=> eventosapp_whatsapp_flow_templates_system_managed_keys(),
+        'notes'                 => 'Este archivo exporta solo la configuración reutilizable de la plantilla. No incluye ID local, Flow local, WABA, número emisor, estado de aprobación de Meta ni respuestas técnicas.',
+    ];
+}
+
+function eventosapp_whatsapp_flow_templates_parse_import_payload($payload) {
+    if ( ! is_array($payload) ) {
+        return new WP_Error('invalid_payload', 'El archivo JSON no contiene una estructura válida de plantilla Flow.');
+    }
+
+    if ( isset($payload['schema']) ) {
+        $schema = sanitize_key((string)($payload['schema'] ?? ''));
+        if ( $schema !== 'eventosapp_whatsapp_flow_template' ) {
+            return new WP_Error('invalid_schema', 'El archivo JSON no corresponde a una plantilla Flow exportada desde EventosApp.');
+        }
+        if ( empty($payload['template']) || ! is_array($payload['template']) ) {
+            return new WP_Error('missing_template', 'El archivo de importación no contiene el bloque template con la configuración exportable.');
+        }
+        $payload = $payload['template'];
+    }
+
+    $has_exportable_field = false;
+    foreach ( eventosapp_whatsapp_flow_templates_exportable_keys() as $key ) {
+        if ( array_key_exists($key, $payload) ) {
+            $has_exportable_field = true;
+            break;
+        }
+    }
+
+    if ( ! $has_exportable_field ) {
+        return new WP_Error('empty_template', 'El archivo no trae campos exportables de una plantilla Flow.');
+    }
+
+    return eventosapp_whatsapp_flow_templates_sanitize_exportable_template($payload);
+}
+
+function eventosapp_whatsapp_flow_templates_upload_error_message($error_code) {
+    $error_code = (int) $error_code;
+    switch ( $error_code ) {
+        case UPLOAD_ERR_INI_SIZE:
+        case UPLOAD_ERR_FORM_SIZE:
+            return 'El archivo supera el tamaño permitido por el servidor.';
+        case UPLOAD_ERR_PARTIAL:
+            return 'El archivo se subió parcialmente. Intenta importarlo nuevamente.';
+        case UPLOAD_ERR_NO_FILE:
+            return 'Debes seleccionar un archivo JSON exportado previamente.';
+        case UPLOAD_ERR_NO_TMP_DIR:
+            return 'El servidor no tiene carpeta temporal disponible para procesar la importación.';
+        case UPLOAD_ERR_CANT_WRITE:
+            return 'El servidor no pudo escribir el archivo temporal de importación.';
+        case UPLOAD_ERR_EXTENSION:
+            return 'Una extensión del servidor bloqueó la subida del archivo.';
+        default:
+            return 'No se pudo subir el archivo de importación.';
+    }
+}
+
 function eventosapp_whatsapp_flow_templates_notice_redirect($args = []) {
     $args = wp_parse_args($args, ['page' => 'eventosapp_whatsapp_flow_templates']);
     wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
@@ -834,6 +982,158 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_delete', function() {
         'flow_tpl_message' => rawurlencode('Plantilla Flow eliminada localmente.'),
     ]);
 });
+
+add_action('admin_post_eventosapp_whatsapp_flow_template_export', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+    check_admin_referer('eventosapp_whatsapp_flow_template_export');
+
+    $template_id = sanitize_key((string)($_POST['template_id'] ?? ''));
+    $template = eventosapp_whatsapp_flow_templates_get($template_id);
+    if ( empty($template) ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode('No se encontró la plantilla para exportar.'),
+        ]);
+    }
+
+    $payload = eventosapp_whatsapp_flow_templates_build_export_payload($template);
+    $json = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ( ! is_string($json) || $json === '' ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'template_id'       => $template_id,
+            'flow_tpl_notice'   => 'error',
+            'flow_tpl_message'  => rawurlencode('No se pudo construir el archivo JSON de exportación.'),
+        ]);
+    }
+
+    $export_name = eventosapp_whatsapp_flow_templates_template_name($template['name'] ?? 'plantilla_flow');
+    if ( $export_name === '' ) {
+        $export_name = 'plantilla_flow';
+    }
+    $filename = sanitize_file_name($export_name . '-' . gmdate('Ymd-His') . '.json');
+
+    while ( ob_get_level() ) {
+        ob_end_clean();
+    }
+
+    nocache_headers();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('X-Content-Type-Options: nosniff');
+    echo $json;
+    exit;
+});
+
+add_action('admin_post_eventosapp_whatsapp_flow_template_import', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+    check_admin_referer('eventosapp_whatsapp_flow_template_import');
+
+    $file = $_FILES['flow_template_import_file'] ?? null;
+    if ( empty($file) || ! is_array($file) ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode('Debes seleccionar un archivo JSON para importar.'),
+        ]);
+    }
+
+    $upload_error = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+    if ( $upload_error !== UPLOAD_ERR_OK ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode(eventosapp_whatsapp_flow_templates_upload_error_message($upload_error)),
+        ]);
+    }
+
+    $file_name = sanitize_file_name((string)($file['name'] ?? ''));
+    $file_size = absint($file['size'] ?? 0);
+    $tmp_name = (string)($file['tmp_name'] ?? '');
+    $extension = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+
+    if ( $extension !== 'json' ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode('El archivo de importación debe tener extensión .json.'),
+        ]);
+    }
+
+    if ( $file_size <= 0 || $file_size > 1048576 ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode('El archivo de importación está vacío o supera 1 MB.'),
+        ]);
+    }
+
+    if ( $tmp_name === '' || ! is_uploaded_file($tmp_name) ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode('No se pudo validar el archivo temporal de importación.'),
+        ]);
+    }
+
+    $contents = file_get_contents($tmp_name);
+    if ( ! is_string($contents) || trim($contents) === '' ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode('El archivo JSON está vacío o no pudo leerse.'),
+        ]);
+    }
+
+    $decoded = json_decode($contents, true);
+    if ( json_last_error() !== JSON_ERROR_NONE ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode('El archivo no es un JSON válido: ' . json_last_error_msg()),
+        ]);
+    }
+
+    $imported_template = eventosapp_whatsapp_flow_templates_parse_import_payload($decoded);
+    if ( is_wp_error($imported_template) ) {
+        eventosapp_whatsapp_flow_templates_notice_redirect([
+            'flow_tpl_notice'  => 'error',
+            'flow_tpl_message' => rawurlencode($imported_template->get_error_message()),
+        ]);
+    }
+
+    $new_id = sanitize_key('flow_tpl_' . wp_generate_password(12, false, false));
+    $item = wp_parse_args(array_merge($imported_template, [
+        'id'                     => $new_id,
+        'flow_post_id'           => 0,
+        'waba_id'                => '',
+        'sender_phone_number_id' => '',
+        'meta_status'            => 'local_draft',
+        'meta_template_id'       => '',
+        'meta_category'          => '',
+        'last_meta_response'     => [],
+        'created_at'             => current_time('mysql'),
+        'updated_at'             => current_time('mysql'),
+    ]), eventosapp_whatsapp_flow_templates_default_item());
+    $item = eventosapp_whatsapp_flow_templates_prepare_template_for_meta($item, $item['navigate_screen'] ?? 'SURVEY');
+    $item['id'] = $new_id;
+    $item['flow_post_id'] = 0;
+    $item['waba_id'] = '';
+    $item['sender_phone_number_id'] = '';
+    $item['meta_status'] = 'local_draft';
+    $item['meta_template_id'] = '';
+    $item['meta_category'] = '';
+    $item['last_meta_response'] = [];
+    $item['created_at'] = current_time('mysql');
+    $item['updated_at'] = current_time('mysql');
+
+    $items = eventosapp_whatsapp_flow_templates_get_all();
+    $items[$new_id] = $item;
+    eventosapp_whatsapp_flow_templates_save_all($items);
+
+    eventosapp_whatsapp_flow_templates_notice_redirect([
+        'template_id'      => $new_id,
+        'flow_tpl_notice'  => 'success',
+        'flow_tpl_message' => rawurlencode('Plantilla Flow importada como nueva plantilla local. Revisa y selecciona el Flow local, WABA o número emisor si aplica en este sistema.'),
+    ]);
+});
+
 add_action('admin_post_eventosapp_whatsapp_flow_template_submit_meta', function() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
@@ -1130,6 +1430,8 @@ function eventosapp_whatsapp_flow_templates_render_page() {
             .eventosapp-wa-flow-templates .evapp-pill.warn{background:#fff3cd;color:#664d03;}
             .eventosapp-wa-flow-templates .evapp-pill.error{background:#f8d7da;color:#842029;}
             .eventosapp-wa-flow-templates .evapp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+            .eventosapp-wa-flow-templates .evapp-import-form{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;}
+            .eventosapp-wa-flow-templates .evapp-import-form input[type="file"]{max-width:100%;}
             .eventosapp-wa-flow-templates textarea.code{width:100%;min-height:320px;font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.45;}
             .eventosapp-wa-flow-templates .evapp-help{color:var(--evapp-muted);font-size:12px;margin:5px 0 0;line-height:1.45;}
             .eventosapp-wa-flow-templates .evapp-info{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin:10px 0;border-radius:0 8px 8px 0;}
@@ -1543,6 +1845,7 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                                                     <div class="evapp-template-actions">
                                                         <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'eventosapp_whatsapp_flow_templates', 'template_id' => $item['id']], admin_url('admin.php'))); ?>">Abrir</a>
                                                         <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_duplicate', 'eventosapp_whatsapp_flow_template_duplicate', 'Duplicar', $item['id'], 'button-small'); ?>
+                                                        <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_export', 'eventosapp_whatsapp_flow_template_export', 'Exportar', $item['id'], 'button-small'); ?>
                                                         <?php eventosapp_whatsapp_flow_templates_post_button('eventosapp_whatsapp_flow_template_delete', 'eventosapp_whatsapp_flow_template_delete', 'Eliminar', $item['id'], 'button-small evapp-danger-link', 'return confirm(\'¿Eliminar esta plantilla local? Esta acción no elimina la plantilla aprobada en Meta.\');'); ?>
                                                     </div>
                                                 </td>
@@ -1552,6 +1855,23 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                                 </table>
                             </div>
                         <?php endif; ?>
+                    </div>
+                </div>
+
+                <div class="evapp-card">
+                    <div class="evapp-card-header">
+                        <h2>Exportar / importar plantillas</h2>
+                        <p>Exporta plantillas en JSON o importa una plantilla previamente exportada sin traer datos propios de este sistema.</p>
+                    </div>
+                    <div class="evapp-card-body">
+                        <div class="evapp-info"><strong>Qué se importa:</strong> nombre, idioma, categoría, encabezado, mensaje, botón, ejemplos, Header Sample Handle, Header de prueba, Meta Flow ID y pantalla inicial. <strong>No se importa:</strong> ID local, Flow local, WABA, número emisor, estado de aprobación, ID de plantilla en Meta ni respuestas técnicas.</div>
+                        <form class="evapp-import-form" method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                            <?php wp_nonce_field('eventosapp_whatsapp_flow_template_import'); ?>
+                            <input type="hidden" name="action" value="eventosapp_whatsapp_flow_template_import">
+                            <input type="file" name="flow_template_import_file" accept="application/json,.json" required>
+                            <button type="submit" class="button button-primary">Importar plantilla</button>
+                        </form>
+                        <p class="evapp-help">Después de importar, la plantilla queda como borrador local para que puedas revisar la cuenta Meta y asociarla al Flow local correcto antes de enviarla o probarla.</p>
                     </div>
                 </div>
 
