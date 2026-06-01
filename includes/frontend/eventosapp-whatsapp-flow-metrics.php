@@ -1,6 +1,6 @@
 <?php
 /**
- * EventosApp - Métricas frontend de WhatsApp Flows
+ * EventosApp - Métricas frontend de encuestas por WhatsApp Flow
  *
  * Shortcode: [eventosapp_whatsapp_flow_metrics]
  * Página configurable desde EventosApp > Configuración.
@@ -83,14 +83,31 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_configured_flow_id'
             return 0;
         }
 
-        if ( function_exists('eventosapp_whatsapp_get_event_selected_satisfaction_flow_post_id') ) {
-            $flow_id = absint(eventosapp_whatsapp_get_event_selected_satisfaction_flow_post_id($event_id));
-            if ( $flow_id ) {
-                return $flow_id;
+        $flow_id = 0;
+
+        // Fuente principal: configuración efectiva del metabox
+        // "Diseño WhatsApp y Landing" > "Encuesta de satisfacción por WhatsApp Flow".
+        // Esta función ya resuelve la prioridad correcta entre plantilla Flow y Flow guardado.
+        if ( function_exists('eventosapp_whatsapp_get_event_satisfaction_flow_config') ) {
+            $config = eventosapp_whatsapp_get_event_satisfaction_flow_config($event_id);
+            if ( is_array($config) ) {
+                $flow_id = absint($config['flow_post_id'] ?? 0);
             }
         }
 
-        $flow_id = absint(get_post_meta($event_id, '_eventosapp_whatsapp_satisfaction_flow_post_id', true));
+        // Compatibilidad hacia atrás si el archivo de WhatsApp Ticket no está cargado todavía.
+        if ( ! $flow_id && function_exists('eventosapp_whatsapp_get_event_selected_satisfaction_flow_post_id') ) {
+            $flow_id = absint(eventosapp_whatsapp_get_event_selected_satisfaction_flow_post_id($event_id));
+        }
+
+        if ( ! $flow_id ) {
+            $flow_id = absint(get_post_meta($event_id, '_eventosapp_whatsapp_satisfaction_flow_post_id', true));
+        }
+
+        if ( $flow_id && function_exists('eventosapp_whatsapp_is_valid_flow_post') && ! eventosapp_whatsapp_is_valid_flow_post($flow_id) ) {
+            return 0;
+        }
+
         return $flow_id;
     }
 }
@@ -119,96 +136,54 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_event_flows') ) {
             return [];
         }
 
+        $configured_flow_id = eventosapp_whatsapp_flow_metrics_get_configured_flow_id($event_id);
+        if ( ! $configured_flow_id ) {
+            return [];
+        }
+
         $sends_table = eventosapp_whatsapp_flows_sends_table_name();
         $responses_table = eventosapp_whatsapp_flows_responses_table_name();
-        $flows = [];
 
-        $send_rows = $wpdb->get_results(
+        $send_row = $wpdb->get_row(
             $wpdb->prepare(
-                "SELECT flow_post_id, MAX(updated_at) AS last_activity, COUNT(*) AS total_sends
+                "SELECT MAX(updated_at) AS last_activity, COUNT(*) AS total_sends
                  FROM {$sends_table}
-                 WHERE event_id = %d AND flow_post_id > 0
-                 GROUP BY flow_post_id",
-                $event_id
+                 WHERE event_id = %d AND flow_post_id = %d",
+                $event_id,
+                $configured_flow_id
             ),
             ARRAY_A
         );
 
-        foreach ( (array) $send_rows as $row ) {
-            $fid = absint($row['flow_post_id'] ?? 0);
-            if ( ! $fid ) {
-                continue;
-            }
-            $flows[$fid] = [
-                'id'            => $fid,
-                'title'         => eventosapp_whatsapp_flow_metrics_get_flow_title($fid),
-                'last_activity' => (string)($row['last_activity'] ?? ''),
-                'total_sends'   => absint($row['total_sends'] ?? 0),
-                'total_answers' => 0,
-                'configured'    => false,
-            ];
-        }
-
-        $response_rows = $wpdb->get_results(
+        $response_row = $wpdb->get_row(
             $wpdb->prepare(
-                "SELECT r.flow_post_id, MAX(r.created_at) AS last_activity, COUNT(*) AS total_answers
+                "SELECT MAX(r.created_at) AS last_activity, COUNT(*) AS total_answers
                  FROM {$responses_table} r
                  LEFT JOIN {$sends_table} s ON s.id = r.send_id
-                 WHERE (r.event_id = %d OR s.event_id = %d) AND r.flow_post_id > 0
-                 GROUP BY r.flow_post_id",
+                 WHERE r.flow_post_id = %d AND (r.event_id = %d OR s.event_id = %d)",
+                $configured_flow_id,
                 $event_id,
                 $event_id
             ),
             ARRAY_A
         );
 
-        foreach ( (array) $response_rows as $row ) {
-            $fid = absint($row['flow_post_id'] ?? 0);
-            if ( ! $fid ) {
-                continue;
-            }
-            if ( ! isset($flows[$fid]) ) {
-                $flows[$fid] = [
-                    'id'            => $fid,
-                    'title'         => eventosapp_whatsapp_flow_metrics_get_flow_title($fid),
-                    'last_activity' => (string)($row['last_activity'] ?? ''),
-                    'total_sends'   => 0,
-                    'total_answers' => 0,
-                    'configured'    => false,
-                ];
-            }
-            $flows[$fid]['total_answers'] = absint($row['total_answers'] ?? 0);
-            if ( ! empty($row['last_activity']) && strcmp((string)$row['last_activity'], (string)$flows[$fid]['last_activity']) > 0 ) {
-                $flows[$fid]['last_activity'] = (string) $row['last_activity'];
-            }
+        $send_last = (string)($send_row['last_activity'] ?? '');
+        $response_last = (string)($response_row['last_activity'] ?? '');
+        $last_activity = $send_last;
+        if ( $response_last !== '' && ($last_activity === '' || strcmp($response_last, $last_activity) > 0) ) {
+            $last_activity = $response_last;
         }
 
-        $configured_flow_id = eventosapp_whatsapp_flow_metrics_get_configured_flow_id($event_id);
-        if ( $configured_flow_id ) {
-            if ( ! isset($flows[$configured_flow_id]) ) {
-                $flows[$configured_flow_id] = [
-                    'id'            => $configured_flow_id,
-                    'title'         => eventosapp_whatsapp_flow_metrics_get_flow_title($configured_flow_id),
-                    'last_activity' => '',
-                    'total_sends'   => 0,
-                    'total_answers' => 0,
-                    'configured'    => true,
-                ];
-            } else {
-                $flows[$configured_flow_id]['configured'] = true;
-            }
-        }
-
-        uasort($flows, function($a, $b) {
-            $a_time = ! empty($a['last_activity']) ? strtotime((string)$a['last_activity']) : 0;
-            $b_time = ! empty($b['last_activity']) ? strtotime((string)$b['last_activity']) : 0;
-            if ( $a_time === $b_time ) {
-                return absint($b['id'] ?? 0) <=> absint($a['id'] ?? 0);
-            }
-            return $b_time <=> $a_time;
-        });
-
-        return array_values($flows);
+        return [[
+            'id'            => $configured_flow_id,
+            'title'         => eventosapp_whatsapp_flow_metrics_get_flow_title($configured_flow_id),
+            'last_activity' => $last_activity,
+            'total_sends'   => absint($send_row['total_sends'] ?? 0),
+            'total_answers' => absint($response_row['total_answers'] ?? 0),
+            'configured'    => true,
+            'source'        => 'event_satisfaction_flow_config',
+        ]];
     }
 }
 
@@ -504,6 +479,11 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_build_payload') ) {
         $valid_flow_ids = array_map('absint', wp_list_pluck($flows, 'id'));
 
         if ( ! $event_id || ! $flow_post_id || ! in_array($flow_post_id, $valid_flow_ids, true) ) {
+            $configured_flow_id = eventosapp_whatsapp_flow_metrics_get_configured_flow_id($event_id);
+            $message = $configured_flow_id
+                ? 'Esta sección solo permite consultar la encuesta configurada en el metabox Diseño WhatsApp y Landing del evento activo.'
+                : 'Este evento no tiene una encuesta de satisfacción por WhatsApp Flow configurada en el metabox Diseño WhatsApp y Landing.';
+
             return [
                 'event_id' => $event_id,
                 'flow_id'  => $flow_post_id,
@@ -511,7 +491,7 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_build_payload') ) {
                 'flows'    => $flows,
                 'counts'   => ['sent'=>0, 'read'=>0, 'answered'=>0, 'read_rate'=>0, 'answer_rate'=>0],
                 'questions'=> [],
-                'message'  => 'No hay envíos ni respuestas registradas para este Flow en el evento activo.',
+                'message'  => $message,
                 'performance' => ['cached' => false, 'processed_responses' => 0, 'batch_size' => 0],
             ];
         }
@@ -675,7 +655,7 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_build_payload') ) {
 }
 
 if ( ! function_exists('eventosapp_whatsapp_flow_metrics_send_json_exception') ) {
-    function eventosapp_whatsapp_flow_metrics_send_json_exception($e, $public_message = 'No se pudieron cargar las métricas de WhatsApp Flow.') {
+    function eventosapp_whatsapp_flow_metrics_send_json_exception($e, $public_message = 'No se pudieron cargar las métricas de encuestas.') {
         $payload = ['error' => $public_message];
         if ( defined('WP_DEBUG') && WP_DEBUG && $e instanceof Throwable ) {
             $payload['debug_message'] = $e->getMessage();
@@ -708,7 +688,8 @@ add_action('wp_ajax_eventosapp_whatsapp_flow_metrics_data', function() {
         $flows = eventosapp_whatsapp_flow_metrics_get_event_flows($event_id);
         $requested_flow_id = absint($_POST['flow_id'] ?? 0);
         $default_flow_id = ! empty($flows[0]['id']) ? absint($flows[0]['id']) : 0;
-        $flow_id = $requested_flow_id ?: $default_flow_id;
+        $allowed_flow_ids = array_map('absint', wp_list_pluck($flows, 'id'));
+        $flow_id = ($requested_flow_id && in_array($requested_flow_id, $allowed_flow_ids, true)) ? $requested_flow_id : $default_flow_id;
 
         wp_send_json_success(eventosapp_whatsapp_flow_metrics_build_payload($event_id, $flow_id));
     } catch ( Throwable $e ) {
@@ -787,17 +768,17 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
     <div class="evapp-flow-metrics-wrap" data-evapp-flow-metrics-root data-event-id="<?php echo esc_attr($active_event); ?>" data-default-flow-id="<?php echo esc_attr($default_flow_id); ?>">
         <div class="evapp-flow-metrics-head">
             <div>
-                <h2 class="evapp-flow-metrics-title">Métricas de WhatsApp Flows</h2>
-                <p class="evapp-flow-metrics-subtitle">Evento activo: <strong><?php echo esc_html(get_the_title($active_event)); ?></strong></p>
+                <h2 class="evapp-flow-metrics-title">Métricas de Encuestas</h2>
+                <p class="evapp-flow-metrics-subtitle">Evento activo: <strong><?php echo esc_html(get_the_title($active_event)); ?></strong>. Se muestran únicamente las métricas de la encuesta configurada en el evento.</p>
             </div>
         </div>
 
         <?php if ( empty($flows) ) : ?>
-            <div class="evapp-flow-metrics-empty">Todavía no hay Flows enviados, respondidos o configurados para este evento.</div>
+            <div class="evapp-flow-metrics-empty">Todavía no hay una encuesta de satisfacción por WhatsApp Flow configurada para este evento.</div>
         <?php else : ?>
             <div class="evapp-flow-metrics-toolbar">
                 <?php if ( count($flows) > 1 ) : ?>
-                    <label for="evappFlowMetricsFlow">Flow a revisar
+                    <label for="evappFlowMetricsFlow">Encuesta a revisar
                         <select id="evappFlowMetricsFlow">
                             <?php foreach ( $flows as $flow ) : ?>
                                 <option value="<?php echo esc_attr(absint($flow['id'])); ?>" <?php selected(absint($flow['id']), $default_flow_id); ?>>
@@ -808,7 +789,7 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
                     </label>
                 <?php else : ?>
                     <div>
-                        <div style="font-size:.88rem;font-weight:800;color:#334155;margin-bottom:5px;">Flow a revisar</div>
+                        <div style="font-size:.88rem;font-weight:800;color:#334155;margin-bottom:5px;">Encuesta a revisar</div>
                         <div class="evapp-flow-metrics-flow-static"><?php echo esc_html($flows[0]['title']); ?></div>
                         <input type="hidden" id="evappFlowMetricsFlow" value="<?php echo esc_attr($default_flow_id); ?>">
                     </div>
@@ -816,10 +797,10 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
                 <div class="evapp-flow-metrics-status" id="evappFlowMetricsStatus">Preparando métricas…</div>
             </div>
 
-            <div class="evapp-flow-metrics-kpis" aria-label="Indicadores de WhatsApp Flow">
-                <div class="evapp-flow-metrics-kpi"><span>Mensajes / Flows enviados</span><strong id="evappFlowMetricSent">0</strong><small>Solicitudes aceptadas por Meta</small></div>
-                <div class="evapp-flow-metrics-kpi"><span>Flows leídos</span><strong id="evappFlowMetricRead">0</strong><small><span id="evappFlowMetricReadRate">0%</span> sobre enviados</small></div>
-                <div class="evapp-flow-metrics-kpi"><span>Flows respondidos</span><strong id="evappFlowMetricAnswered">0</strong><small><span id="evappFlowMetricAnswerRate">0%</span> sobre enviados</small></div>
+            <div class="evapp-flow-metrics-kpis" aria-label="Indicadores de encuestas">
+                <div class="evapp-flow-metrics-kpi"><span>Mensajes / encuestas enviadas</span><strong id="evappFlowMetricSent">0</strong><small>Solicitudes aceptadas por Meta</small></div>
+                <div class="evapp-flow-metrics-kpi"><span>Encuestas leídas</span><strong id="evappFlowMetricRead">0</strong><small><span id="evappFlowMetricReadRate">0%</span> sobre enviados</small></div>
+                <div class="evapp-flow-metrics-kpi"><span>Encuestas respondidas</span><strong id="evappFlowMetricAnswered">0</strong><small><span id="evappFlowMetricAnswerRate">0%</span> sobre enviados</small></div>
             </div>
 
             <div class="evapp-flow-metrics-grid" id="evappFlowMetricsCharts"></div>
@@ -886,7 +867,7 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
 
         function renderEmpty(message){
             destroyCharts();
-            chartsWrap.innerHTML = '<div class="evapp-flow-metrics-card" style="grid-column:span 12;"><h3>Sin respuestas para graficar</h3><p style="color:#a9b6d3;margin:0;">'+escapeHtml(message || 'Todavía no hay respuestas con preguntas de selección para este Flow.')+'</p></div>';
+            chartsWrap.innerHTML = '<div class="evapp-flow-metrics-card" style="grid-column:span 12;"><h3>Sin respuestas para graficar</h3><p style="color:#a9b6d3;margin:0;">'+escapeHtml(message || 'Todavía no hay respuestas con preguntas de selección para esta encuesta.')+'</p></div>';
         }
 
         function renderCharts(questions){
@@ -894,7 +875,7 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
             chartsWrap.innerHTML = '';
 
             if (!Array.isArray(questions) || !questions.length) {
-                renderEmpty('Este Flow todavía no tiene respuestas de selección para graficar.');
+                renderEmpty('Esta encuesta todavía no tiene respuestas de selección para graficar.');
                 return;
             }
 
@@ -958,7 +939,7 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
             const flowId = flowInput ? flowInput.value : root.getAttribute('data-default-flow-id');
             if (!flowId) {
                 renderKpis({});
-                renderEmpty('No hay Flow seleccionado.');
+                renderEmpty('No hay encuesta seleccionada.');
                 return;
             }
 
