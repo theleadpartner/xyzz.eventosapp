@@ -11,6 +11,7 @@ if ( ! defined('ABSPATH') ) exit;
  *   'register_page_id'     => (int),
  *   'qr_page_id'           => (int),
  *   'metrics_page_id'      => (int),
+ *   'flow_metrics_page_id' => (int), // Métricas WhatsApp Flows
  *   'edit_page_id'         => (int),
  *   'qr_localidad_page_id' => (int), // Validador de Localidad (solo lectura)
  *   'qr_sesion_page_id'    => (int), // NUEVO: Control por sesión
@@ -27,6 +28,7 @@ function eventosapp_get_pages_config() {
         'register_page_id'          => 0,
         'qr_page_id'                => 0,
         'metrics_page_id'           => 0,
+        'flow_metrics_page_id'      => 0,
         'edit_page_id'              => 0,
         'qr_localidad_page_id'      => 0,
         'qr_sesion_page_id'         => 0,
@@ -69,6 +71,9 @@ function eventosapp_get_qr_url() {
 }
 function eventosapp_get_metrics_url() {
     return eventosapp_get_configured_page_url('metrics_page_id', '#');
+}
+function eventosapp_get_flow_metrics_url() {
+    return eventosapp_get_configured_page_url('flow_metrics_page_id', '#');
 }
 function eventosapp_get_edit_url() {
     return eventosapp_get_configured_page_url('edit_page_id', '#');
@@ -178,6 +183,15 @@ add_action('admin_init', function(){
 		['key'=>'metrics_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_front_metrics]</code>']
 	);
 
+	add_settings_field(
+		'flow_metrics_page_id',
+		'Página de Métricas de WhatsApp Flows',
+		'eventosapp_render_pages_field',
+		'eventosapp_configuracion',
+		'eventosapp_pages_section',
+		['key'=>'flow_metrics_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_whatsapp_flow_metrics]</code>']
+	);
+
     // Página de Edición de Tickets
     add_settings_field(
         'edit_page_id',
@@ -276,6 +290,7 @@ function eventosapp_sanitize_pages_option($input){
         'register_page_id',
         'qr_page_id',
         'metrics_page_id',
+        'flow_metrics_page_id',
         'edit_page_id',
         'qr_localidad_page_id',
         'qr_sesion_page_id',
@@ -335,6 +350,8 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_front_search]</code> — Check-In manual & Escarapela.</li>
             <li><code>[eventosapp_front_register]</code> — Registro manual de asistentes.</li>
             <li><code>[eventosapp_qr_checkin]</code> — Check-In con QR (lector de cámara).</li>
+            <li><code>[eventosapp_front_metrics]</code> — Métricas del evento.</li>
+            <li><code>[eventosapp_whatsapp_flow_metrics]</code> — Métricas de WhatsApp Flows del evento.</li>
             <li><code>[eventosapp_front_edit]</code> — Edición de tickets.</li>
             <li><code>[eventosapp_qr_localidad]</code> — Validador de Localidad (solo lectura).</li>
             <li><code>[eventosapp_qr_sesion]</code> — Control de acceso por sesión.</li>
@@ -357,6 +374,7 @@ function eventosapp_dashboard_features() {
     return [
         'dashboard'          => 'Ver Dashboard',
         'metrics'            => 'Métricas',
+        'flow_metrics'       => 'Métricas de Flows',
         'search'             => 'Check-In Manual & Escarapela',
         'register'           => 'Registro Manual de Asistentes',
         'qr'                 => 'Check-In con QR',
@@ -581,6 +599,7 @@ function eventosapp_feature_page_map() {
     return [
         'dashboard'          => 'dashboard_page_id',
         'metrics'            => 'metrics_page_id',
+        'flow_metrics'       => 'flow_metrics_page_id',
         'search'             => 'front_search_page_id',
         'register'           => 'register_page_id',
         'qr'                 => 'qr_page_id',
