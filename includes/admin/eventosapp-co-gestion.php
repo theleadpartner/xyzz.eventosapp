@@ -78,8 +78,10 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
    * Retorna true si el usuario cumple alguna de estas condiciones:
    * 1. Es administrador (manage_options)
    * 2. Es el autor del evento (post_author)
-   * 3. Es co-gestor temporal (_evapp_temp_authors) y no ha expirado
-   * 4. Es staff asignado (_evapp_event_staff_assigned) y no ha expirado
+   * 3. Tiene acceso personalizado al dashboard frontend del evento
+   * 4. Es co-gestor temporal (_evapp_temp_authors) y no ha expirado
+   * 5. Es staff asignado (_evapp_event_staff_assigned) y no ha expirado
+   * 6. Es staff de apoyo asignado al módulo Asistencia
    *
    * @param int $event_id ID del evento
    * @param int|null $user_id ID del usuario (null = usuario actual)
@@ -107,9 +109,19 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
       return true;
     }
 
+    // 3. Acceso personalizado al dashboard frontend para este evento.
+    // Si el usuario existe en la nueva sección del metabox Control de Acceso Dashboard Staff,
+    // esa decisión manda para el acceso general al evento desde el frontend.
+    if (function_exists('eventosapp_staff_access_get_user_feature_value')) {
+      $custom_dashboard_access = eventosapp_staff_access_get_user_feature_value($event_id, $user_id, 'dashboard', null);
+      if ($custom_dashboard_access !== null) {
+        return ((int)$custom_dashboard_access === 1);
+      }
+    }
+
     $now = time();
 
-    // 3. Co-gestores temporales (no expirados)
+    // 4. Co-gestores temporales (no expirados)
     $temp_authors = get_post_meta($event_id, '_evapp_temp_authors', true);
     if (is_array($temp_authors)) {
       foreach ($temp_authors as $row) {
@@ -125,7 +137,7 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
       }
     }
 
-    // 4. Staff asignado (no expirado)
+    // 5. Staff asignado (no expirado)
     $staff_assigned = get_post_meta($event_id, '_evapp_event_staff_assigned', true);
     if (is_array($staff_assigned) && isset($staff_assigned[$user_id])) {
       $staff_data = $staff_assigned[$user_id];
@@ -135,7 +147,7 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
       }
     }
 
-    // 5. Staff de apoyo asignado al módulo Asistencia.
+    // 6. Staff de apoyo asignado al módulo Asistencia.
     // El acceso real a secciones se limita después por eventosapp_role_can().
     if ( function_exists('eventosapp_support_user_is_assigned_to_event') && eventosapp_support_user_is_assigned_to_event($event_id, $user_id) ) {
       return true;
