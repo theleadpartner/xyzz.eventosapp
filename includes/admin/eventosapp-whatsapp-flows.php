@@ -1340,6 +1340,167 @@ function eventosapp_whatsapp_flows_find_latest_open_send_by_phone($phone) {
     ), ARRAY_A);
 }
 
+
+/**
+ * Identifica si un mensaje inbound corresponde a la respuesta nativa de un WhatsApp Flow.
+ */
+function eventosapp_whatsapp_flows_is_nfm_reply_message($message) {
+    if ( ! is_array($message) ) {
+        return false;
+    }
+
+    if ( sanitize_key((string)($message['type'] ?? '')) !== 'interactive' ) {
+        return false;
+    }
+
+    $interactive = isset($message['interactive']) && is_array($message['interactive']) ? $message['interactive'] : [];
+    return sanitize_key((string)($interactive['type'] ?? '')) === 'nfm_reply';
+}
+
+/**
+ * Ventana máxima para considerar un Flow como contexto activo del usuario.
+ *
+ * Se usa solo para bloquear respuestas automáticas del inbox mientras el Flow
+ * enviado al número aún no tiene respuesta. El valor puede ajustarse con filtro
+ * sin tocar este archivo.
+ */
+function eventosapp_whatsapp_flows_autoreply_suppression_window_days() {
+    $days = apply_filters('eventosapp_whatsapp_flows_autoreply_suppression_window_days', 14);
+    $days = absint($days);
+    if ( $days < 1 ) {
+        $days = 1;
+    }
+    if ( $days > 60 ) {
+        $days = 60;
+    }
+    return $days;
+}
+
+/**
+ * Busca un envío de Flow que deba bloquear las respuestas automáticas del inbox.
+ *
+ * Prioridad:
+ * 1. Token exacto del Flow recibido.
+ * 2. Mensaje respondido por WhatsApp, cuando apunta al mensaje que abrió el Flow.
+ * 3. Último Flow pendiente enviado al mismo número dentro de la ventana activa.
+ */
+function eventosapp_whatsapp_flows_find_autoreply_suppression_send($args = []) {
+    global $wpdb;
+
+    eventosapp_whatsapp_flows_maybe_install_tables();
+
+    $args = is_array($args) ? $args : [];
+    $flow_token = sanitize_text_field((string)($args['flow_token'] ?? ''));
+    $reply_to_message_id = sanitize_text_field((string)($args['reply_to_message_id'] ?? ''));
+    $phone = eventosapp_whatsapp_flows_clean_phone($args['phone'] ?? ($args['from_phone'] ?? ''));
+    $sender_phone_number_id = function_exists('eventosapp_whatsapp_sanitize_phone_number_id')
+        ? eventosapp_whatsapp_sanitize_phone_number_id($args['sender_phone_number_id'] ?? '')
+        : preg_replace('/\D+/', '', (string)($args['sender_phone_number_id'] ?? ''));
+    $event_id = absint($args['event_id'] ?? 0);
+    $ticket_id = absint($args['ticket_id'] ?? 0);
+    $created_at = sanitize_text_field((string)($args['created_at'] ?? ''));
+
+    if ( $flow_token !== '' ) {
+        $send = eventosapp_whatsapp_flows_find_send(['flow_token' => $flow_token]);
+        if ( is_array($send) ) {
+            $send['_evapp_suppression_reason'] = 'flow_token';
+            return $send;
+        }
+    }
+
+    if ( $reply_to_message_id !== '' ) {
+        $send = eventosapp_whatsapp_flows_find_send(['wa_message_id' => $reply_to_message_id]);
+        if ( is_array($send) ) {
+            $send['_evapp_suppression_reason'] = 'reply_to_flow_message';
+            return $send;
+        }
+    }
+
+    if ( $phone === '' ) {
+        return null;
+    }
+
+    $days = eventosapp_whatsapp_flows_autoreply_suppression_window_days();
+    $since = date('Y-m-d H:i:s', current_time('timestamp') - ($days * DAY_IN_SECONDS));
+    $table = eventosapp_whatsapp_flows_sends_table_name();
+    $where = [
+        'phone = %s',
+        'response_received = 0',
+        'created_at >= %s',
+        "status NOT IN ('failed_request','failed_webhook')",
+    ];
+    $values = [$phone, $since];
+
+    if ( $sender_phone_number_id !== '' ) {
+        $where[] = 'sender_phone_number_id = %s';
+        $values[] = $sender_phone_number_id;
+    }
+    if ( $event_id ) {
+        $where[] = '(event_id = %d OR event_id = 0)';
+        $values[] = $event_id;
+    }
+    if ( $ticket_id ) {
+        $where[] = '(ticket_id = %d OR ticket_id = 0)';
+        $values[] = $ticket_id;
+    }
+    if ( $created_at !== '' ) {
+        $where[] = 'created_at <= %s';
+        $values[] = $created_at;
+    }
+
+    $sql = "SELECT * FROM {$table} WHERE " . implode(' AND ', $where) . ' ORDER BY created_at DESC, id DESC LIMIT 1';
+    $send = $wpdb->get_row($wpdb->prepare($sql, $values), ARRAY_A);
+    if ( is_array($send) ) {
+        $send['_evapp_suppression_reason'] = 'pending_flow_without_response';
+        return $send;
+    }
+
+    return null;
+}
+
+/**
+ * Decide si el inbox debe omitir respuestas automáticas porque el inbound está
+ * relacionado con un WhatsApp Flow enviado por EventosApp.
+ */
+function eventosapp_whatsapp_flows_should_suppress_inbox_autoreply($args = []) {
+    $args = is_array($args) ? $args : [];
+    $message = isset($args['message']) && is_array($args['message']) ? $args['message'] : [];
+    $decoded_response = isset($args['response_json']) && is_array($args['response_json']) ? $args['response_json'] : [];
+    $flow_token = sanitize_text_field((string)($args['flow_token'] ?? ''));
+
+    if ( $flow_token === '' && ! empty($decoded_response) ) {
+        $flow_token = eventosapp_whatsapp_flows_find_response_value($decoded_response, ['flow_token', 'eventosapp_flow_token', 'token']);
+    }
+
+    $is_nfm_reply = ! empty($args['is_flow_response']) || eventosapp_whatsapp_flows_is_nfm_reply_message($message);
+
+    $send = eventosapp_whatsapp_flows_find_autoreply_suppression_send(array_merge($args, [
+        'flow_token' => $flow_token,
+    ]));
+
+    if ( $is_nfm_reply ) {
+        return [
+            'suppress' => true,
+            'reason'   => 'flow_response_nfm_reply',
+            'send'     => is_array($send) ? $send : null,
+        ];
+    }
+
+    if ( is_array($send) ) {
+        return [
+            'suppress' => true,
+            'reason'   => sanitize_key((string)($send['_evapp_suppression_reason'] ?? 'pending_flow_without_response')),
+            'send'     => $send,
+        ];
+    }
+
+    return [
+        'suppress' => false,
+        'reason'   => '',
+        'send'     => null,
+    ];
+}
+
 function eventosapp_whatsapp_flows_send_direct_flow($flow_post_id, $to, $args = []) {
     $flow_post_id = absint($flow_post_id);
     $to = eventosapp_whatsapp_flows_clean_phone($to);
