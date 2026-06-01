@@ -271,9 +271,9 @@ add_shortcode('eventosapp_dashboard', function(){
 			<?php endif; ?>
 
 			<?php if (eventosapp_role_can('flow_metrics')): ?>
-				<a class="evapp-card" href="<?php echo esc_url($url_flow_metrics); ?>" aria-label="Métricas de WhatsApp Flows">
+				<a class="evapp-card" href="<?php echo esc_url($url_flow_metrics); ?>" aria-label="Métricas de Encuestas">
 					<?php echo eventosapp_dashboard_icon('flow-metrics'); ?>
-					<span class="evapp-title">Métricas de Flows</span>
+					<span class="evapp-title">Métricas de Encuestas</span>
 				</a>
 			<?php endif; ?>
 
