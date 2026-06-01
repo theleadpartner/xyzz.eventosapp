@@ -11,7 +11,7 @@ if ( ! defined('ABSPATH') ) exit;
  *   'register_page_id'     => (int),
  *   'qr_page_id'           => (int),
  *   'metrics_page_id'      => (int),
- *   'flow_metrics_page_id' => (int), // Métricas WhatsApp Flows
+ *   'flow_metrics_page_id' => (int), // Métricas de Encuestas
  *   'edit_page_id'         => (int),
  *   'qr_localidad_page_id' => (int), // Validador de Localidad (solo lectura)
  *   'qr_sesion_page_id'    => (int), // NUEVO: Control por sesión
@@ -185,7 +185,7 @@ add_action('admin_init', function(){
 
 	add_settings_field(
 		'flow_metrics_page_id',
-		'Página de Métricas de WhatsApp Flows',
+		'Página de Métricas de Encuestas',
 		'eventosapp_render_pages_field',
 		'eventosapp_configuracion',
 		'eventosapp_pages_section',
@@ -351,7 +351,7 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_front_register]</code> — Registro manual de asistentes.</li>
             <li><code>[eventosapp_qr_checkin]</code> — Check-In con QR (lector de cámara).</li>
             <li><code>[eventosapp_front_metrics]</code> — Métricas del evento.</li>
-            <li><code>[eventosapp_whatsapp_flow_metrics]</code> — Métricas de WhatsApp Flows del evento.</li>
+            <li><code>[eventosapp_whatsapp_flow_metrics]</code> — Métricas de Encuestas del evento.</li>
             <li><code>[eventosapp_front_edit]</code> — Edición de tickets.</li>
             <li><code>[eventosapp_qr_localidad]</code> — Validador de Localidad (solo lectura).</li>
             <li><code>[eventosapp_qr_sesion]</code> — Control de acceso por sesión.</li>
@@ -374,7 +374,7 @@ function eventosapp_dashboard_features() {
     return [
         'dashboard'          => 'Ver Dashboard',
         'metrics'            => 'Métricas',
-        'flow_metrics'       => 'Métricas de Flows',
+        'flow_metrics'       => 'Métricas de Encuestas',
         'search'             => 'Check-In Manual & Escarapela',
         'register'           => 'Registro Manual de Asistentes',
         'qr'                 => 'Check-In con QR',
