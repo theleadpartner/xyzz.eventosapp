@@ -664,13 +664,47 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_export_url') ) {
             return '#';
         }
 
-        $url = add_query_arg([
+        // Importante: no usar wp_nonce_url() aquí porque devuelve la URL escapada para HTML
+        // y, cuando JavaScript reemplaza el Flow dinámico, puede conservar "&amp;" como texto real.
+        // Eso provoca que WordPress reciba amp;_wpnonce en vez de _wpnonce y muestre
+        // "El enlace que has seguido ha caducado".
+        return add_query_arg([
             'action'   => 'eventosapp_whatsapp_flow_metrics_export_csv',
             'event_id' => $event_id,
             'flow_id'  => $flow_post_id,
+            '_wpnonce' => wp_create_nonce('eventosapp_whatsapp_flow_metrics_export_csv'),
         ], admin_url('admin-post.php'));
+    }
+}
 
-        return wp_nonce_url($url, 'eventosapp_whatsapp_flow_metrics_export_csv');
+if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_request_value') ) {
+    function eventosapp_whatsapp_flow_metrics_get_request_value($key, $default = '') {
+        $key = (string) $key;
+        if ( $key === '' ) {
+            return $default;
+        }
+
+        if ( isset($_REQUEST[$key]) ) {
+            return wp_unslash($_REQUEST[$key]);
+        }
+
+        // Compatibilidad defensiva para enlaces que llegaron con &amp; dentro de la URL.
+        // En ese caso PHP recibe nombres como amp;event_id, amp;flow_id o amp;_wpnonce.
+        $amp_key = 'amp;' . $key;
+        if ( isset($_REQUEST[$amp_key]) ) {
+            return wp_unslash($_REQUEST[$amp_key]);
+        }
+
+        return $default;
+    }
+}
+
+if ( ! function_exists('eventosapp_whatsapp_flow_metrics_verify_export_nonce') ) {
+    function eventosapp_whatsapp_flow_metrics_verify_export_nonce() {
+        $nonce = eventosapp_whatsapp_flow_metrics_get_request_value('_wpnonce', '');
+        if ( ! is_scalar($nonce) || ! wp_verify_nonce((string) $nonce, 'eventosapp_whatsapp_flow_metrics_export_csv') ) {
+            wp_die('El enlace de descarga no es válido o expiró. Regresa a Métricas de Encuestas y presiona nuevamente el botón Descargar resultados CSV.');
+        }
     }
 }
 
@@ -1028,9 +1062,9 @@ add_action('admin_post_eventosapp_whatsapp_flow_metrics_export_csv', function() 
             wp_die('No tienes permisos suficientes para descargar este CSV.');
         }
 
-        check_admin_referer('eventosapp_whatsapp_flow_metrics_export_csv');
+        eventosapp_whatsapp_flow_metrics_verify_export_nonce();
 
-        $event_id = absint($_GET['event_id'] ?? ($_POST['event_id'] ?? 0));
+        $event_id = absint(eventosapp_whatsapp_flow_metrics_get_request_value('event_id', 0));
         if ( ! $event_id ) {
             $event_id = eventosapp_whatsapp_flow_metrics_get_active_event_id();
         }
@@ -1045,7 +1079,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_metrics_export_csv', function() 
 
         $flows = eventosapp_whatsapp_flow_metrics_get_event_flows($event_id);
         $valid_flow_ids = array_map('absint', wp_list_pluck($flows, 'id'));
-        $requested_flow_id = absint($_GET['flow_id'] ?? ($_POST['flow_id'] ?? 0));
+        $requested_flow_id = absint(eventosapp_whatsapp_flow_metrics_get_request_value('flow_id', 0));
         $default_flow_id = ! empty($flows[0]['id']) ? absint($flows[0]['id']) : 0;
         $flow_post_id = $requested_flow_id ?: $default_flow_id;
 
@@ -1137,11 +1171,14 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
     $default_flow_id = ! empty($flows[0]['id']) ? absint($flows[0]['id']) : 0;
     $nonce = wp_create_nonce('eventosapp_whatsapp_flow_metrics_data');
     $export_url = eventosapp_whatsapp_flow_metrics_get_export_url($active_event, $default_flow_id);
-    $export_url_template = wp_nonce_url(add_query_arg([
+    // Plantilla RAW para JavaScript. No se usa wp_nonce_url() porque transforma & en &amp;
+    // y eso rompe la verificación del nonce cuando JS actualiza el href del botón.
+    $export_url_template = add_query_arg([
         'action'   => 'eventosapp_whatsapp_flow_metrics_export_csv',
         'event_id' => absint($active_event),
         'flow_id'  => '__EVAPP_FLOW_ID__',
-    ], admin_url('admin-post.php')), 'eventosapp_whatsapp_flow_metrics_export_csv');
+        '_wpnonce' => wp_create_nonce('eventosapp_whatsapp_flow_metrics_export_csv'),
+    ], admin_url('admin-post.php'));
 
     wp_register_script('chartjs', 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js', [], '4.4.1', true);
     wp_enqueue_script('chartjs');
@@ -1235,7 +1272,8 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
 
         const ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
         const nonce = <?php echo wp_json_encode($nonce); ?>;
-        const exportUrlTemplate = <?php echo wp_json_encode($export_url_template); ?>;
+        const rawExportUrlTemplate = <?php echo wp_json_encode($export_url_template); ?>;
+        const exportUrlTemplate = decodeHtmlEntities(rawExportUrlTemplate);
         const flowInput = document.getElementById('evappFlowMetricsFlow');
         const csvDownload = document.getElementById('evappFlowMetricsCsvDownload');
         const statusEl = document.getElementById('evappFlowMetricsStatus');
@@ -1261,6 +1299,12 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
             return String(value == null ? '' : value).replace(/[&<>'"]/g, function(c){
                 return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[c];
             });
+        }
+
+        function decodeHtmlEntities(value){
+            const textarea = document.createElement('textarea');
+            textarea.innerHTML = String(value == null ? '' : value);
+            return textarea.value;
         }
 
         function destroyCharts(){
