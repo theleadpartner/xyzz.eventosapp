@@ -1093,6 +1093,226 @@ function eventosapp_whatsapp_flows_notice_redirect($args = []) {
     exit;
 }
 
+function eventosapp_whatsapp_flows_exportable_keys() {
+    return [
+        'title',
+        'description',
+        'category',
+        'cta',
+        'submit_label',
+        'screen_id',
+        'questions_per_screen',
+        'questions',
+    ];
+}
+
+function eventosapp_whatsapp_flows_system_managed_keys() {
+    return [
+        'id',
+        'status',
+        'meta_flow_id',
+        'waba_id',
+        'sender_phone_number_id',
+        'preview_url',
+        'last_meta_response',
+        'validation_errors',
+        'created_at_meta',
+        'published_at',
+        'last_sync_at',
+        'last_json',
+        'duplicate_source_id',
+        'duplicate_source_status',
+        'duplicate_source_meta_id',
+        'duplicated_at',
+        'imported_at',
+        'import_source_title',
+        'import_source_exported_at',
+        'import_source_version',
+        'sends',
+        'responses',
+        'flow_tokens',
+        'wa_message_ids',
+    ];
+}
+
+function eventosapp_whatsapp_flows_sanitize_exportable_flow($flow) {
+    $flow = is_array($flow) ? $flow : [];
+    $default = [
+        'title'                => 'WhatsApp Flow importado',
+        'description'          => '',
+        'category'             => 'SURVEY',
+        'cta'                  => 'Responder encuesta',
+        'submit_label'         => 'Enviar respuestas',
+        'screen_id'            => 'SURVEY',
+        'questions_per_screen' => 8,
+        'questions'            => eventosapp_whatsapp_flows_default_questions(),
+    ];
+    $flow = wp_parse_args($flow, $default);
+
+    $categories = eventosapp_whatsapp_flows_categories();
+    $category = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', (string)($flow['category'] ?? 'SURVEY')));
+    if ( ! isset($categories[$category]) ) {
+        $category = 'SURVEY';
+    }
+
+    $title = sanitize_text_field((string)($flow['title'] ?? ''));
+    if ( $title === '' ) {
+        $title = 'WhatsApp Flow importado';
+    }
+
+    $cta = sanitize_text_field((string)($flow['cta'] ?? 'Responder encuesta'));
+    if ( $cta === '' ) {
+        $cta = 'Responder encuesta';
+    }
+
+    $submit_label = sanitize_text_field((string)($flow['submit_label'] ?? 'Enviar respuestas'));
+    if ( $submit_label === '' ) {
+        $submit_label = 'Enviar respuestas';
+    }
+
+    $questions_per_screen = absint($flow['questions_per_screen'] ?? 8);
+    $questions_per_screen = min(15, max(3, $questions_per_screen ?: 8));
+
+    $questions = eventosapp_whatsapp_flows_normalize_questions($flow['questions'] ?? []);
+
+    return [
+        'title'                => $title,
+        'description'          => sanitize_textarea_field((string)($flow['description'] ?? '')),
+        'category'             => $category,
+        'cta'                  => $cta,
+        'submit_label'         => $submit_label,
+        'screen_id'            => eventosapp_whatsapp_flows_sanitize_flow_screen_id($flow['screen_id'] ?? 'SURVEY', 'SURVEY'),
+        'questions_per_screen' => $questions_per_screen,
+        'questions'            => $questions,
+    ];
+}
+
+function eventosapp_whatsapp_flows_build_export_payload($flow_post_id) {
+    $flow_post_id = absint($flow_post_id);
+    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    if ( empty($config) || ! is_array($config) ) {
+        return new WP_Error('invalid_flow', 'No se encontró el Flow para exportar.');
+    }
+
+    $exportable = eventosapp_whatsapp_flows_sanitize_exportable_flow($config);
+
+    return [
+        'schema'                 => 'eventosapp_whatsapp_flow',
+        'version'                => 1,
+        'exported_at'            => current_time('mysql'),
+        'exported_at_gmt'        => current_time('mysql', true),
+        'generator'              => 'EventosApp',
+        'flow'                   => $exportable,
+        'excluded_system_fields' => eventosapp_whatsapp_flows_system_managed_keys(),
+        'notes'                  => 'Este archivo exporta solo el contenido editable del constructor del Flow. No incluye ID local, Flow ID de Meta, WABA, número emisor, estado en Meta, URL de vista previa, respuestas, envíos ni tokens.',
+    ];
+}
+
+function eventosapp_whatsapp_flows_parse_import_payload($payload) {
+    if ( ! is_array($payload) ) {
+        return new WP_Error('invalid_payload', 'El archivo JSON no contiene una estructura válida de WhatsApp Flow.');
+    }
+
+    if ( isset($payload['schema']) ) {
+        $schema = sanitize_key((string)($payload['schema'] ?? ''));
+        if ( $schema !== 'eventosapp_whatsapp_flow' ) {
+            return new WP_Error('invalid_schema', 'El archivo JSON no corresponde a un Flow exportado desde EventosApp.');
+        }
+        if ( empty($payload['flow']) || ! is_array($payload['flow']) ) {
+            return new WP_Error('missing_flow', 'El archivo de importación no contiene el bloque flow con la configuración exportable.');
+        }
+        $payload = $payload['flow'];
+    }
+
+    $has_exportable_field = false;
+    foreach ( eventosapp_whatsapp_flows_exportable_keys() as $key ) {
+        if ( array_key_exists($key, $payload) ) {
+            $has_exportable_field = true;
+            break;
+        }
+    }
+
+    if ( ! $has_exportable_field ) {
+        return new WP_Error('empty_flow', 'El archivo no trae campos exportables de un Flow.');
+    }
+
+    return eventosapp_whatsapp_flows_sanitize_exportable_flow($payload);
+}
+
+function eventosapp_whatsapp_flows_upload_error_message($error_code) {
+    $error_code = (int) $error_code;
+    switch ( $error_code ) {
+        case UPLOAD_ERR_INI_SIZE:
+        case UPLOAD_ERR_FORM_SIZE:
+            return 'El archivo supera el tamaño permitido por el servidor.';
+        case UPLOAD_ERR_PARTIAL:
+            return 'El archivo se subió parcialmente. Intenta importarlo nuevamente.';
+        case UPLOAD_ERR_NO_FILE:
+            return 'Debes seleccionar un archivo JSON exportado previamente.';
+        case UPLOAD_ERR_NO_TMP_DIR:
+            return 'El servidor no tiene carpeta temporal disponible para procesar la importación.';
+        case UPLOAD_ERR_CANT_WRITE:
+            return 'El servidor no pudo escribir el archivo temporal de importación.';
+        case UPLOAD_ERR_EXTENSION:
+            return 'Una extensión del servidor bloqueó la subida del archivo.';
+        default:
+            return 'No se pudo subir el archivo de importación.';
+    }
+}
+
+function eventosapp_whatsapp_flows_create_imported_local_flow($imported_flow, $import_context = []) {
+    $imported_flow = eventosapp_whatsapp_flows_sanitize_exportable_flow(is_array($imported_flow) ? $imported_flow : []);
+
+    $title = sanitize_text_field((string)($imported_flow['title'] ?? 'WhatsApp Flow importado'));
+    if ( $title === '' ) {
+        $title = 'WhatsApp Flow importado';
+    }
+
+    $new_flow_id = wp_insert_post([
+        'post_type'   => EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE,
+        'post_title'  => $title,
+        'post_status' => 'publish',
+    ], true);
+
+    if ( is_wp_error($new_flow_id) || ! $new_flow_id ) {
+        return is_wp_error($new_flow_id) ? $new_flow_id : new WP_Error('insert_failed', 'No se pudo crear el Flow importado.');
+    }
+
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_description', sanitize_textarea_field((string)($imported_flow['description'] ?? '')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_category', strtoupper(preg_replace('/[^A-Z0-9_]+/', '', (string)($imported_flow['category'] ?? 'SURVEY'))));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_cta', sanitize_text_field((string)($imported_flow['cta'] ?? 'Responder encuesta')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_submit_label', sanitize_text_field((string)($imported_flow['submit_label'] ?? 'Enviar respuestas')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_screen_id', eventosapp_whatsapp_flows_sanitize_flow_screen_id($imported_flow['screen_id'] ?? 'SURVEY', 'SURVEY'));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_questions_per_screen', min(15, max(3, absint($imported_flow['questions_per_screen'] ?? 8))));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_questions', eventosapp_whatsapp_flows_normalize_questions($imported_flow['questions'] ?? []));
+
+    // El Flow importado queda limpio para este sistema: no hereda IDs ni estado de Meta,
+    // tampoco WABA, número emisor, envíos, respuestas ni tokens del origen.
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_status', 'local_draft');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_id', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_waba_id', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_sender_phone_number_id', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_preview_url', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_meta_response', []);
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_validation_errors', []);
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_created_at_meta', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_published_at', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_sync_at', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_imported_at', current_time('mysql'));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_import_source_title', sanitize_text_field((string)($import_context['source_title'] ?? $title)));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_import_source_exported_at', sanitize_text_field((string)($import_context['exported_at'] ?? '')));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_import_source_version', absint($import_context['version'] ?? 1));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($new_flow_id), true));
+
+    eventosapp_whatsapp_flows_add_activity('flow_importado_local', [
+        'new_flow_post_id' => absint($new_flow_id),
+        'source_title'     => sanitize_text_field((string)($import_context['source_title'] ?? $title)),
+        'source_exported_at' => sanitize_text_field((string)($import_context['exported_at'] ?? '')),
+    ]);
+
+    return absint($new_flow_id);
+}
+
 function eventosapp_whatsapp_flows_duplicate_local_flow($source_flow_id) {
     $source_flow_id = absint($source_flow_id);
     if ( ! $source_flow_id || get_post_type($source_flow_id) !== EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE ) {
@@ -2781,7 +3001,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_save', function() {
         eventosapp_whatsapp_flows_notice_redirect(['flow_notice' => 'error', 'flow_message' => rawurlencode('No se pudo guardar el Flow local.')]);
     }
 
-    $category = sanitize_key((string)($_POST['flow_category'] ?? 'SURVEY'));
+    $category = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', (string)($_POST['flow_category'] ?? 'SURVEY')));
     $categories = eventosapp_whatsapp_flows_categories();
     if ( ! isset($categories[$category]) ) {
         $category = 'SURVEY';
@@ -2829,6 +3049,160 @@ add_action('admin_post_eventosapp_whatsapp_flow_duplicate', function() {
         'flow_id'      => absint($new_flow_id),
         'flow_notice'  => 'success',
         'flow_message' => rawurlencode('Flow duplicado como borrador local. Ya puedes modificar la copia sin afectar el original.'),
+    ]);
+});
+
+add_action('admin_post_eventosapp_whatsapp_flow_export', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+    check_admin_referer('eventosapp_whatsapp_flow_export');
+
+    $flow_post_id = absint($_POST['flow_post_id'] ?? ($_GET['flow_id'] ?? 0));
+    if ( ! $flow_post_id || get_post_type($flow_post_id) !== EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('No se encontró el Flow para exportar.'),
+        ]);
+    }
+
+    $payload = eventosapp_whatsapp_flows_build_export_payload($flow_post_id);
+    if ( is_wp_error($payload) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode($payload->get_error_message()),
+        ]);
+    }
+
+    $json = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ( ! is_string($json) || $json === '' ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'flow_id'      => $flow_post_id,
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('No se pudo construir el archivo JSON de exportación.'),
+        ]);
+    }
+
+    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    $export_name = sanitize_title($config['title'] ?? ('flow-' . $flow_post_id));
+    if ( $export_name === '' ) {
+        $export_name = 'whatsapp-flow';
+    }
+    $filename = sanitize_file_name($export_name . '-' . gmdate('Ymd-His') . '.json');
+
+    while ( ob_get_level() ) {
+        ob_end_clean();
+    }
+
+    nocache_headers();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('X-Content-Type-Options: nosniff');
+    echo $json;
+    exit;
+});
+
+add_action('admin_post_eventosapp_whatsapp_flow_import', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+    check_admin_referer('eventosapp_whatsapp_flow_import');
+
+    $file = $_FILES['flow_import_file'] ?? null;
+    if ( empty($file) || ! is_array($file) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('Debes seleccionar un archivo JSON para importar.'),
+        ]);
+    }
+
+    $upload_error = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+    if ( $upload_error !== UPLOAD_ERR_OK ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode(eventosapp_whatsapp_flows_upload_error_message($upload_error)),
+        ]);
+    }
+
+    $file_name = sanitize_file_name((string)($file['name'] ?? ''));
+    $file_size = absint($file['size'] ?? 0);
+    $tmp_name = (string)($file['tmp_name'] ?? '');
+    $extension = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+
+    if ( $extension !== 'json' ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('El archivo de importación debe tener extensión .json.'),
+        ]);
+    }
+
+    if ( $file_size <= 0 || $file_size > 2097152 ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('El archivo de importación está vacío o supera 2 MB.'),
+        ]);
+    }
+
+    if ( $tmp_name === '' || ! is_uploaded_file($tmp_name) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('No se pudo validar el archivo temporal de importación.'),
+        ]);
+    }
+
+    $contents = file_get_contents($tmp_name);
+    if ( ! is_string($contents) || trim($contents) === '' ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('El archivo JSON está vacío o no pudo leerse.'),
+        ]);
+    }
+
+    $decoded = json_decode($contents, true);
+    if ( json_last_error() !== JSON_ERROR_NONE ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('El archivo no es un JSON válido: ' . json_last_error_msg()),
+        ]);
+    }
+
+    $imported_flow = eventosapp_whatsapp_flows_parse_import_payload($decoded);
+    if ( is_wp_error($imported_flow) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode($imported_flow->get_error_message()),
+        ]);
+    }
+
+    $import_context = [
+        'source_title' => sanitize_text_field((string)($imported_flow['title'] ?? '')),
+        'exported_at'  => is_array($decoded) ? sanitize_text_field((string)($decoded['exported_at'] ?? '')) : '',
+        'version'      => is_array($decoded) ? absint($decoded['version'] ?? 1) : 1,
+    ];
+    $new_flow_id = eventosapp_whatsapp_flows_create_imported_local_flow($imported_flow, $import_context);
+
+    if ( is_wp_error($new_flow_id) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode($new_flow_id->get_error_message()),
+        ]);
+    }
+
+    eventosapp_whatsapp_flows_notice_redirect([
+        'flow_id'      => absint($new_flow_id),
+        'flow_notice'  => 'success',
+        'flow_message' => rawurlencode('Flow importado como borrador local. Se conservó el contenido editable y se limpiaron los datos propios de Meta, WABA, envíos, respuestas y tokens.'),
     ]);
 });
 
@@ -4401,6 +4775,7 @@ function eventosapp_whatsapp_flows_render_page() {
                 <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($flow_id))); ?>">Envío masivo</a>
                 <?php if ( $flow_id ) : ?>
                     <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_duplicate', 'eventosapp_whatsapp_flow_duplicate', 'Duplicar Flow', $flow_id); ?>
+                    <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_export', 'eventosapp_whatsapp_flow_export', 'Exportar Flow', $flow_id); ?>
                 <?php endif; ?>
                 <a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear nuevo</a>
             </div>
@@ -4604,6 +4979,18 @@ function eventosapp_whatsapp_flows_render_manage_page() {
         </div>
         <?php eventosapp_whatsapp_flows_render_notices(); ?>
         <div class="evapp-card">
+            <h2>Exportar / importar Flows</h2>
+            <p>Exporta el contenido editable de un Flow en JSON o importa un Flow exportado para reutilizarlo como borrador local.</p>
+            <div class="evapp-info"><strong>Qué se importa:</strong> nombre, descripción, categoría, CTA, etiqueta de envío, pantalla inicial, cantidad de preguntas por pantalla, componentes, textos, ayudas, validaciones y opciones. <strong>No se importa:</strong> ID local, Flow ID de Meta, WABA, número emisor, estado en Meta, vista previa, envíos, respuestas ni tokens.</div>
+            <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="evapp-actions">
+                <?php wp_nonce_field('eventosapp_whatsapp_flow_import'); ?>
+                <input type="hidden" name="action" value="eventosapp_whatsapp_flow_import">
+                <input type="file" name="flow_import_file" accept="application/json,.json" required>
+                <button type="submit" class="button button-primary">Importar Flow</button>
+            </form>
+            <p class="description">Después de importar, revisa el Flow, selecciona WABA/número emisor de este sistema si aplica y luego créalo o súbelo a Meta.</p>
+        </div>
+        <div class="evapp-card">
             <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" class="evapp-actions">
                 <input type="hidden" name="page" value="eventosapp_whatsapp_flows_manage">
                 <input type="search" name="s" value="<?php echo esc_attr($search); ?>" placeholder="Buscar por nombre">
@@ -4629,7 +5016,13 @@ function eventosapp_whatsapp_flows_render_manage_page() {
                             <td><small><?php echo esc_html($item['meta_flow_id'] ?: '—'); ?></small></td>
                             <td><?php echo esc_html($config['screen_id'] ?? 'SURVEY'); ?></td>
                             <td><?php echo esc_html($stats['answered']); ?> respuestas / <?php echo esc_html($stats['sent']); ?> envíos<br><small>Tasa <?php echo esc_html($stats['rate']); ?>%</small></td>
-                            <td class="evapp-actions"><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=' . absint($item['id']))); ?>">Editar</a><?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_duplicate', 'eventosapp_whatsapp_flow_duplicate', 'Duplicar', $item['id'], 'button-small'); ?><a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($item['id']))); ?>">Enviar</a><a class="button button-small" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=eventosapp_whatsapp_flow_export_responses&flow_id=' . absint($item['id'])), 'eventosapp_whatsapp_flow_export_responses')); ?>">CSV</a></td>
+                            <td class="evapp-actions">
+                                <a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=' . absint($item['id']))); ?>">Editar</a>
+                                <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_duplicate', 'eventosapp_whatsapp_flow_duplicate', 'Duplicar', $item['id'], 'button-small'); ?>
+                                <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_export', 'eventosapp_whatsapp_flow_export', 'Exportar', $item['id'], 'button-small'); ?>
+                                <a class="button button-small" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($item['id']))); ?>">Enviar</a>
+                                <a class="button button-small" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=eventosapp_whatsapp_flow_export_responses&flow_id=' . absint($item['id'])), 'eventosapp_whatsapp_flow_export_responses')); ?>">CSV</a>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
