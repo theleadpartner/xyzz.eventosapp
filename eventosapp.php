@@ -887,6 +887,10 @@ eventosapp_require_first_existing_file([
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-generador-masivo-qr.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-edit.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-metrics.php';
+eventosapp_require_first_existing_file([
+    'includes/frontend/eventosapp-whatsapp-flow-metrics.php',
+    'eventosapp-whatsapp-flow-metrics.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-campos-adicionales.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-privacidad.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-api-autocomplete.php';
