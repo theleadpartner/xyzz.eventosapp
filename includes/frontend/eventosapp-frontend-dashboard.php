@@ -10,6 +10,9 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 			case 'metrics':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="10" width="4" height="10" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><rect x="17" y="7" width="4" height="13" rx="1"/></svg>';
 
+			case 'flow-metrics':
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v9H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M7 18h10M9 21h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 11l2-2 2 2 4-5 2 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+
 			case 'circle-user':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -244,6 +247,7 @@ add_shortcode('eventosapp_dashboard', function(){
 
 // URLs desde Configuración
 		$url_metrics        = function_exists('eventosapp_get_metrics_url')               ? eventosapp_get_metrics_url()               : '#';
+		$url_flow_metrics   = function_exists('eventosapp_get_flow_metrics_url')          ? eventosapp_get_flow_metrics_url()          : '#';
 		$url_search         = function_exists('eventosapp_get_search_url')                ? eventosapp_get_search_url()                : '#';
 		$url_register       = function_exists('eventosapp_get_register_url')              ? eventosapp_get_register_url()              : '#';
 		$url_qr             = function_exists('eventosapp_get_qr_url')                    ? eventosapp_get_qr_url()                    : '#';
@@ -263,6 +267,13 @@ add_shortcode('eventosapp_dashboard', function(){
 				<a class="evapp-card" href="<?php echo esc_url($url_metrics); ?>" aria-label="Métricas">
 					<?php echo eventosapp_dashboard_icon('metrics'); ?>
 					<span class="evapp-title">Métricas</span>
+				</a>
+			<?php endif; ?>
+
+			<?php if (eventosapp_role_can('flow_metrics')): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_flow_metrics); ?>" aria-label="Métricas de WhatsApp Flows">
+					<?php echo eventosapp_dashboard_icon('flow-metrics'); ?>
+					<span class="evapp-title">Métricas de Flows</span>
 				</a>
 			<?php endif; ?>
 
