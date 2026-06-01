@@ -210,7 +210,12 @@ add_shortcode('eventosapp_dashboard', function(){
 		return '<p>Debes iniciar sesión. <a href="'.esc_url($login).'">Iniciar sesión</a></p>';
 	}
 
-	if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('dashboard') ) {
+	$evapp_can_view_dashboard = function_exists('eventosapp_role_can') && eventosapp_role_can('dashboard');
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_staff_access_user_has_any_dashboard_event') ) {
+		$evapp_can_view_dashboard = eventosapp_staff_access_user_has_any_dashboard_event( get_current_user_id() );
+	}
+
+	if ( ! $evapp_can_view_dashboard ) {
 		return '<p>No tienes permisos para ver este panel.</p>';
 	}
 
@@ -380,17 +385,22 @@ add_shortcode('eventosapp_dashboard', function(){
 		$events = array_values(array_filter($all_events, function($ev){
 			$user_id = get_current_user_id();
 
-			if ( function_exists('eventosapp_support_user_can_select_event_in_dashboard') ) {
-				return eventosapp_support_user_can_select_event_in_dashboard($ev->ID, $user_id);
+			if ( function_exists('eventosapp_staff_access_user_can_select_event_in_dashboard') && eventosapp_staff_access_user_can_select_event_in_dashboard($ev->ID, $user_id) ) {
+				return true;
+			}
+
+			if ( function_exists('eventosapp_support_user_can_select_event_in_dashboard') && eventosapp_support_user_can_select_event_in_dashboard($ev->ID, $user_id) ) {
+				return true;
 			}
 
 			if ( function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event($ev->ID, $user_id) ) {
 				return true;
 			}
 
-			if ( function_exists('eventosapp_user_can_manage_event') ) {
-				return eventosapp_user_can_manage_event($ev->ID);
+			if ( function_exists('eventosapp_user_can_manage_event') && eventosapp_user_can_manage_event($ev->ID, $user_id) ) {
+				return true;
 			}
+
 			return current_user_can('manage_options') || (int)$ev->post_author === $user_id;
 		}));
 
