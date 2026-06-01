@@ -1596,35 +1596,241 @@ function eventosapp_whatsapp_flows_get_stats($flow_post_id = 0) {
     ];
 }
 
-function eventosapp_whatsapp_flows_format_response_summary($decoded) {
+function eventosapp_whatsapp_flows_is_internal_response_key($key) {
+    $key = sanitize_key((string) $key);
+    if ( $key === '' ) {
+        return true;
+    }
+
+    return in_array($key, [
+        'flow_token',
+        'eventosapp_flow_token',
+        'eventosapp_flow_post_id',
+        'eventosapp_event_id',
+        'eventosapp_ticket_id',
+        'eventosapp_ticket_code',
+        'flow_post_id',
+        'event_id',
+        'ticket_id',
+        'ticket_code',
+        'flow_id_local',
+        'token',
+    ], true);
+}
+
+function eventosapp_whatsapp_flows_response_label_from_slug($slug) {
+    $slug = sanitize_key((string) $slug);
+    if ( $slug === '' ) {
+        return 'Respuesta';
+    }
+    return ucwords(str_replace('_', ' ', $slug));
+}
+
+function eventosapp_whatsapp_flows_get_answer_questions_map($flow_post_id) {
+    static $cache = [];
+
+    $flow_post_id = absint($flow_post_id);
+    if ( ! $flow_post_id ) {
+        return [];
+    }
+
+    if ( isset($cache[$flow_post_id]) ) {
+        return $cache[$flow_post_id];
+    }
+
+    if ( get_post_type($flow_post_id) !== EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE ) {
+        $cache[$flow_post_id] = [];
+        return $cache[$flow_post_id];
+    }
+
+    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    $questions = eventosapp_whatsapp_flows_normalize_questions($config['questions'] ?? []);
+    $input_types = eventosapp_whatsapp_flows_input_question_types();
+    $map = [];
+
+    foreach ( $questions as $question ) {
+        $type = sanitize_key((string)($question['type'] ?? ''));
+        if ( ! in_array($type, $input_types, true) ) {
+            continue;
+        }
+
+        $slug = eventosapp_whatsapp_flows_sanitize_slug($question['slug'] ?? '', 'pregunta_' . (count($map) + 1));
+        if ( $slug === '' ) {
+            continue;
+        }
+
+        $label = sanitize_text_field((string)($question['label'] ?? ''));
+        if ( $label === '' ) {
+            $label = eventosapp_whatsapp_flows_response_label_from_slug($slug);
+        }
+
+        $question['slug'] = $slug;
+        $question['label'] = $label;
+        $question['type'] = $type;
+        $map[$slug] = $question;
+    }
+
+    $cache[$flow_post_id] = $map;
+    return $cache[$flow_post_id];
+}
+
+function eventosapp_whatsapp_flows_option_title_map($question) {
+    $map = [];
+    if ( ! is_array($question) ) {
+        return $map;
+    }
+
+    $options = eventosapp_whatsapp_flows_normalize_options($question['options'] ?? []);
+    foreach ( $options as $option ) {
+        $id = isset($option['id']) ? (string) $option['id'] : '';
+        $title = sanitize_text_field((string)($option['title'] ?? ''));
+        if ( $id === '' || $title === '' ) {
+            continue;
+        }
+
+        $map[$id] = $title;
+        $map[sanitize_key($id)] = $title;
+    }
+
+    return $map;
+}
+
+function eventosapp_whatsapp_flows_format_response_scalar_value($value, $question = []) {
+    if ( is_bool($value) ) {
+        return $value ? 'Sí' : 'No';
+    }
+
+    if ( $value === null ) {
+        return '';
+    }
+
+    if ( is_array($value) || is_object($value) ) {
+        return sanitize_textarea_field(eventosapp_whatsapp_flows_json_encode($value, false));
+    }
+
+    $raw = (string) $value;
+    $text = sanitize_text_field($raw);
+    if ( $text === '' ) {
+        return '';
+    }
+
+    $option_map = eventosapp_whatsapp_flows_option_title_map(is_array($question) ? $question : []);
+    if ( ! empty($option_map) ) {
+        if ( array_key_exists($raw, $option_map) ) {
+            return $option_map[$raw];
+        }
+        $safe_key = sanitize_key($raw);
+        if ( array_key_exists($safe_key, $option_map) ) {
+            return $option_map[$safe_key];
+        }
+    }
+
+    return $text;
+}
+
+function eventosapp_whatsapp_flows_format_response_value_for_question($value, $question = []) {
+    if ( is_array($value) ) {
+        $parts = [];
+        foreach ( $value as $item ) {
+            $formatted = eventosapp_whatsapp_flows_format_response_scalar_value($item, $question);
+            if ( $formatted !== '' ) {
+                $parts[] = $formatted;
+            }
+        }
+        return implode(', ', $parts);
+    }
+
+    return eventosapp_whatsapp_flows_format_response_scalar_value($value, $question);
+}
+
+function eventosapp_whatsapp_flows_build_response_answer_map($decoded, $flow_post_id = 0, $include_unknown = true) {
     if ( is_string($decoded) ) {
         $maybe = json_decode($decoded, true);
         if ( is_array($maybe) ) {
             $decoded = $maybe;
         }
+    } elseif ( is_object($decoded) ) {
+        $decoded = json_decode(wp_json_encode($decoded), true);
     }
+
+    if ( ! is_array($decoded) ) {
+        return [];
+    }
+
+    $flow_post_id = absint($flow_post_id);
+    $questions = eventosapp_whatsapp_flows_get_answer_questions_map($flow_post_id);
+    $answers = [];
+
+    foreach ( $questions as $slug => $question ) {
+        if ( ! array_key_exists($slug, $decoded) ) {
+            continue;
+        }
+
+        $value = eventosapp_whatsapp_flows_format_response_value_for_question($decoded[$slug], $question);
+        if ( $value === '' ) {
+            continue;
+        }
+
+        $answers[] = [
+            'slug'      => $slug,
+            'label'     => sanitize_text_field((string)($question['label'] ?? eventosapp_whatsapp_flows_response_label_from_slug($slug))),
+            'value'     => $value,
+            'type'      => sanitize_key((string)($question['type'] ?? '')),
+            'source'    => 'flow_config',
+            'raw_value' => $decoded[$slug],
+        ];
+    }
+
+    if ( $include_unknown ) {
+        foreach ( $decoded as $key => $value ) {
+            $slug = eventosapp_whatsapp_flows_sanitize_slug($key, 'respuesta_' . (count($answers) + 1));
+            if ( eventosapp_whatsapp_flows_is_internal_response_key($slug) || isset($questions[$slug]) ) {
+                continue;
+            }
+
+            $formatted = eventosapp_whatsapp_flows_format_response_value_for_question($value, []);
+            if ( $formatted === '' ) {
+                continue;
+            }
+
+            $answers[] = [
+                'slug'      => $slug,
+                'label'     => eventosapp_whatsapp_flows_response_label_from_slug($slug),
+                'value'     => $formatted,
+                'type'      => 'unknown',
+                'source'    => 'response_json',
+                'raw_value' => $value,
+            ];
+        }
+    }
+
+    return $answers;
+}
+
+function eventosapp_whatsapp_flows_format_response_summary($decoded, $flow_post_id = 0) {
+    if ( is_string($decoded) ) {
+        $maybe = json_decode($decoded, true);
+        if ( is_array($maybe) ) {
+            $decoded = $maybe;
+        }
+    } elseif ( is_object($decoded) ) {
+        $decoded = json_decode(wp_json_encode($decoded), true);
+    }
+
     if ( ! is_array($decoded) ) {
         return '';
     }
 
-    $skip_keys = ['flow_token', 'eventosapp_flow_post_id', 'eventosapp_event_id', 'eventosapp_ticket_id', 'eventosapp_ticket_code'];
+    $answers = eventosapp_whatsapp_flows_build_response_answer_map($decoded, $flow_post_id, true);
     $lines = [];
-    foreach ( $decoded as $key => $value ) {
-        if ( in_array($key, $skip_keys, true) ) {
-            continue;
-        }
-        $label = ucwords(str_replace('_', ' ', sanitize_key((string) $key)));
-        if ( is_array($value) ) {
-            $value = implode(', ', array_map('sanitize_text_field', array_map('strval', $value)));
-        } elseif ( is_bool($value) ) {
-            $value = $value ? 'Sí' : 'No';
-        } else {
-            $value = sanitize_text_field((string) $value);
-        }
-        if ( $value !== '' ) {
+    foreach ( $answers as $answer ) {
+        $label = sanitize_text_field((string)($answer['label'] ?? ''));
+        $value = sanitize_textarea_field((string)($answer['value'] ?? ''));
+        if ( $label !== '' && $value !== '' ) {
             $lines[] = $label . ': ' . $value;
         }
     }
+
     return implode("\n", $lines);
 }
 
@@ -2209,7 +2415,8 @@ function eventosapp_whatsapp_flows_handle_inbound_response($message, $value = []
         $meta_flow_id = preg_replace('/\D+/', '', (string) get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_id', true));
     }
 
-    $response_summary = eventosapp_whatsapp_flows_format_response_summary($decoded);
+    $response_summary = eventosapp_whatsapp_flows_format_response_summary($decoded, $flow_post_id);
+    $response_answers = eventosapp_whatsapp_flows_build_response_answer_map($decoded, $flow_post_id, true);
     if ( $response_summary === '' ) {
         $response_summary = sanitize_textarea_field((string)($nfm['body'] ?? 'Respuesta de Flow recibida.'));
     }
@@ -2271,6 +2478,7 @@ function eventosapp_whatsapp_flows_handle_inbound_response($message, $value = []
         update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_at', $created_at);
         update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_summary', $response_summary);
         update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_json', $decoded);
+        update_post_meta($ticket_id, '_eventosapp_whatsapp_flow_last_response_answers', $response_answers);
 
         if ( function_exists('eventosapp_whatsapp_add_ticket_log') ) {
             eventosapp_whatsapp_add_ticket_log($ticket_id, 'flow_respuesta_recibida', 'Respuesta de WhatsApp Flow recibida.', [
@@ -2292,6 +2500,7 @@ function eventosapp_whatsapp_flows_handle_inbound_response($message, $value = []
                     'ticket_id'        => $ticket_id,
                     'flow_token'       => $flow_token,
                     'reply_to_message_id' => $reply_to_message_id,
+                    'response_answers' => $response_answers,
                 ],
             ]);
         }
@@ -2316,6 +2525,7 @@ function eventosapp_whatsapp_flows_handle_inbound_response($message, $value = []
                 'flow_post_id'     => $flow_post_id,
                 'meta_flow_id'     => $meta_flow_id,
                 'flow_token'       => $flow_token,
+                'response_answers' => $response_answers,
             ],
         ]);
     }
@@ -2345,6 +2555,7 @@ function eventosapp_whatsapp_flows_handle_inbound_response($message, $value = []
         'reply_to_message_id' => $reply_to_message_id,
         'response_json' => $decoded,
         'response_summary' => $response_summary,
+        'response_answers' => $response_answers,
         'created_at' => $created_at,
     ], $message, $value, $entry, $change, $payload);
 }
@@ -3755,6 +3966,147 @@ add_action('admin_post_eventosapp_whatsapp_flow_campaign_send', function() {
 });
 
 
+function eventosapp_whatsapp_flows_collect_response_export_columns($rows, $requested_flow_post_id = 0) {
+    $requested_flow_post_id = absint($requested_flow_post_id);
+    $rows = is_array($rows) ? $rows : [];
+    $flow_ids = [];
+
+    if ( $requested_flow_post_id ) {
+        $flow_ids[] = $requested_flow_post_id;
+    }
+
+    foreach ( $rows as $row ) {
+        $row_flow_id = absint($row['flow_post_id'] ?? 0);
+        if ( $row_flow_id && ! in_array($row_flow_id, $flow_ids, true) ) {
+            $flow_ids[] = $row_flow_id;
+        }
+    }
+
+    $multiple_flows = count(array_filter($flow_ids)) > 1 && ! $requested_flow_post_id;
+    $columns = [];
+    $column_keys = [];
+    $question_maps = [];
+
+    foreach ( $flow_ids as $flow_id ) {
+        $flow_id = absint($flow_id);
+        if ( ! $flow_id ) {
+            continue;
+        }
+
+        $question_maps[$flow_id] = eventosapp_whatsapp_flows_get_answer_questions_map($flow_id);
+        foreach ( $question_maps[$flow_id] as $slug => $question ) {
+            $column_key = $flow_id . ':' . $slug;
+            if ( isset($column_keys[$column_key]) ) {
+                continue;
+            }
+
+            $label = sanitize_text_field((string)($question['label'] ?? eventosapp_whatsapp_flows_response_label_from_slug($slug)));
+            $flow_title = get_the_title($flow_id);
+            $header = $label;
+            if ( $multiple_flows ) {
+                $header = trim(($flow_title !== '' ? $flow_title : ('Flow #' . $flow_id)) . ' — ' . $label);
+            }
+
+            $columns[] = [
+                'key'          => $column_key,
+                'flow_post_id' => $flow_id,
+                'slug'         => $slug,
+                'label'        => $label,
+                'header'       => $header,
+                'question'     => $question,
+                'source'       => 'flow_config',
+            ];
+            $column_keys[$column_key] = true;
+        }
+    }
+
+    foreach ( $rows as $row ) {
+        $row_flow_id = absint($row['flow_post_id'] ?? 0);
+        $decoded = eventosapp_whatsapp_flows_decode_nfm_response_json($row['response_json'] ?? '');
+        if ( ! is_array($decoded) ) {
+            continue;
+        }
+
+        $known_for_flow = $row_flow_id && isset($question_maps[$row_flow_id]) ? $question_maps[$row_flow_id] : [];
+        foreach ( $decoded as $key => $value ) {
+            $slug = eventosapp_whatsapp_flows_sanitize_slug($key, 'respuesta_' . (count($columns) + 1));
+            if ( eventosapp_whatsapp_flows_is_internal_response_key($slug) || isset($known_for_flow[$slug]) ) {
+                continue;
+            }
+
+            $column_key = $row_flow_id . ':' . $slug;
+            if ( isset($column_keys[$column_key]) ) {
+                continue;
+            }
+
+            $label = eventosapp_whatsapp_flows_response_label_from_slug($slug);
+            $flow_title = $row_flow_id ? get_the_title($row_flow_id) : '';
+            $header = $label;
+            if ( $multiple_flows && $row_flow_id ) {
+                $header = trim(($flow_title !== '' ? $flow_title : ('Flow #' . $row_flow_id)) . ' — ' . $label);
+            }
+
+            $columns[] = [
+                'key'          => $column_key,
+                'flow_post_id' => $row_flow_id,
+                'slug'         => $slug,
+                'label'        => $label,
+                'header'       => $header,
+                'question'     => [],
+                'source'       => 'response_json',
+            ];
+            $column_keys[$column_key] = true;
+        }
+    }
+
+    $used_headers = [];
+    foreach ( $columns as $index => $column ) {
+        $header = sanitize_text_field((string)($column['header'] ?? ''));
+        if ( $header === '' ) {
+            $header = eventosapp_whatsapp_flows_response_label_from_slug($column['slug'] ?? 'respuesta');
+        }
+
+        $base_header = $header;
+        if ( isset($used_headers[$header]) ) {
+            $suffix = sanitize_key((string)($column['slug'] ?? ''));
+            $header = $base_header . ' [' . ($suffix !== '' ? $suffix : ((int) $index + 1)) . ']';
+        }
+        while ( isset($used_headers[$header]) ) {
+            $header = $base_header . ' [' . ((int) $index + 1) . ']';
+        }
+
+        $columns[$index]['header'] = $header;
+        $used_headers[$header] = true;
+    }
+
+    return $columns;
+}
+
+function eventosapp_whatsapp_flows_response_export_cell_value($row, $column) {
+    if ( ! is_array($row) || ! is_array($column) ) {
+        return '';
+    }
+
+    $row_flow_id = absint($row['flow_post_id'] ?? 0);
+    $column_flow_id = absint($column['flow_post_id'] ?? 0);
+    if ( $row_flow_id && $column_flow_id && $row_flow_id !== $column_flow_id ) {
+        return '';
+    }
+
+    $decoded = eventosapp_whatsapp_flows_decode_nfm_response_json($row['response_json'] ?? '');
+    if ( ! is_array($decoded) ) {
+        return '';
+    }
+
+    $slug = eventosapp_whatsapp_flows_sanitize_slug($column['slug'] ?? '', '');
+    if ( $slug === '' || ! array_key_exists($slug, $decoded) ) {
+        return '';
+    }
+
+    $question = is_array($column['question'] ?? null) ? $column['question'] : [];
+    return eventosapp_whatsapp_flows_format_response_value_for_question($decoded[$slug], $question);
+}
+
 add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
@@ -3775,11 +4127,34 @@ add_action('admin_post_eventosapp_whatsapp_flow_export_responses', function() {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename=eventosapp-whatsapp-flow-responses-' . date('Ymd-His') . '.csv');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['response_id', 'flow_post_id', 'meta_flow_id', 'event_id', 'ticket_id', 'phone', 'flow_token', 'wa_message_id', 'reply_to_message_id', 'created_at', 'summary', 'response_json']);
+    $question_columns = eventosapp_whatsapp_flows_collect_response_export_columns($rows, $flow_post_id);
+    $headers = ['response_id', 'flow_post_id', 'meta_flow_id', 'event_id', 'ticket_id', 'phone', 'flow_token', 'wa_message_id', 'reply_to_message_id', 'created_at', 'summary', 'response_json'];
+    foreach ( $question_columns as $column ) {
+        $headers[] = sanitize_text_field((string)($column['header'] ?? $column['label'] ?? $column['slug'] ?? 'respuesta'));
+    }
+    fputcsv($out, $headers);
+
     foreach ( $rows as $row ) {
-        fputcsv($out, [
-            $row['id'], $row['flow_post_id'], $row['meta_flow_id'], $row['event_id'], $row['ticket_id'], $row['phone'], $row['flow_token'], $row['wa_message_id'], $row['reply_to_message_id'], $row['created_at'], $row['response_summary'], $row['response_json'],
-        ]);
+        $line = [
+            $row['id'],
+            $row['flow_post_id'],
+            $row['meta_flow_id'],
+            $row['event_id'],
+            $row['ticket_id'],
+            $row['phone'],
+            $row['flow_token'],
+            $row['wa_message_id'],
+            $row['reply_to_message_id'],
+            $row['created_at'],
+            $row['response_summary'],
+            $row['response_json'],
+        ];
+
+        foreach ( $question_columns as $column ) {
+            $line[] = eventosapp_whatsapp_flows_response_export_cell_value($row, $column);
+        }
+
+        fputcsv($out, $line);
     }
     fclose($out);
     exit;
@@ -5163,13 +5538,18 @@ function eventosapp_whatsapp_flows_render_responses_table($rows) {
     <table class="widefat striped">
         <thead><tr><th>Fecha</th><th>Flow</th><th>Ticket</th><th>Teléfono</th><th>Respuesta</th></tr></thead>
         <tbody>
-        <?php foreach ( $rows as $row ) : ?>
+        <?php foreach ( $rows as $row ) :
+            $display_summary = eventosapp_whatsapp_flows_format_response_summary($row['response_json'] ?? '', absint($row['flow_post_id'] ?? 0));
+            if ( $display_summary === '' ) {
+                $display_summary = $row['response_summary'] ?: $row['response_json'];
+            }
+        ?>
             <tr>
                 <td><?php echo esc_html($row['created_at']); ?></td>
                 <td>#<?php echo esc_html($row['flow_post_id']); ?><br><small><?php echo esc_html($row['meta_flow_id']); ?></small></td>
                 <td><?php echo $row['ticket_id'] ? '<a href="' . esc_url(get_edit_post_link(absint($row['ticket_id']))) . '">#' . esc_html($row['ticket_id']) . '</a>' : '—'; ?></td>
                 <td><?php echo esc_html($row['phone']); ?></td>
-                <td><pre class="evapp-response-pre"><?php echo esc_html($row['response_summary'] ?: $row['response_json']); ?></pre></td>
+                <td><pre class="evapp-response-pre"><?php echo esc_html($display_summary); ?></pre></td>
             </tr>
         <?php endforeach; ?>
         </tbody>
