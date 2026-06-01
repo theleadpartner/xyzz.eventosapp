@@ -374,6 +374,193 @@ if ( ! function_exists('eventosapp_support_user_can_feature_for_event') ) {
     }
 }
 
+
+// =====================================================
+// Compatibilidad: selección de evento para Equipo del Organizador
+// =====================================================
+if ( ! function_exists('eventosapp_support_user_can_select_event_in_dashboard') ) {
+    function eventosapp_support_user_can_select_event_in_dashboard( $event_id, $user_id = null ) {
+        $event_id = absint($event_id);
+        $user_id  = $user_id === null ? get_current_user_id() : absint($user_id);
+
+        if ( ! $event_id || ! $user_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return false;
+        }
+
+        if ( eventosapp_support_user_is_super_admin($user_id) ) {
+            return true;
+        }
+
+        // Incluye miembros de grupos de apoyo, coordinadores y Equipo del Organizador.
+        // Este permiso solo habilita la selección del evento en el dashboard frontend;
+        // no concede edición del evento ni acceso al botón de Asistencia.
+        if ( eventosapp_support_user_has_assignment_in_event($event_id, $user_id) ) {
+            return true;
+        }
+
+        if ( eventosapp_support_user_can_admin_event_without_support($event_id, $user_id) ) {
+            return true;
+        }
+
+        if ( function_exists('eventosapp_user_can_manage_event') ) {
+            try {
+                $ref = new ReflectionFunction('eventosapp_user_can_manage_event');
+                if ( $ref->getNumberOfParameters() >= 2 ) {
+                    return (bool) eventosapp_user_can_manage_event($event_id, $user_id);
+                }
+                return (bool) eventosapp_user_can_manage_event($event_id);
+            } catch ( Throwable $e ) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists('eventosapp_support_get_dashboard_redirect_url') ) {
+    function eventosapp_support_get_dashboard_redirect_url() {
+        $url = '';
+
+        if ( function_exists('eventosapp_get_dashboard_url') ) {
+            $url = eventosapp_get_dashboard_url();
+        }
+
+        if ( ! $url || $url === '#' ) {
+            $cfg = function_exists('eventosapp_get_pages_config') ? eventosapp_get_pages_config() : [];
+            $dashboard_page_id = isset($cfg['dashboard_page_id']) ? absint($cfg['dashboard_page_id']) : 0;
+            if ( $dashboard_page_id ) {
+                $url = get_permalink($dashboard_page_id);
+            }
+        }
+
+        if ( ! $url || $url === '#' ) {
+            $url = wp_get_referer();
+        }
+
+        if ( ! $url || $url === '#' ) {
+            $url = home_url('/');
+        }
+
+        return remove_query_arg(['evapp_err', 'set', 'from'], $url);
+    }
+}
+
+if ( ! function_exists('eventosapp_support_redirect_dashboard_error') ) {
+    function eventosapp_support_redirect_dashboard_error( $message, array $extra = [] ) {
+        if ( function_exists('eventosapp_redirect_with_error') ) {
+            eventosapp_redirect_with_error($message, $extra);
+        }
+
+        $url = add_query_arg(
+            array_merge([
+                'evapp_err' => rawurlencode($message),
+            ], $extra),
+            eventosapp_support_get_dashboard_redirect_url()
+        );
+
+        wp_safe_redirect($url);
+        exit;
+    }
+}
+
+if ( ! function_exists('eventosapp_support_set_active_event_for_frontend') ) {
+    function eventosapp_support_set_active_event_for_frontend( $event_id, $user_id = null ) {
+        $event_id = absint($event_id);
+        $user_id  = $user_id === null ? get_current_user_id() : absint($user_id);
+
+        if ( ! $event_id || ! $user_id ) {
+            return false;
+        }
+
+        if ( function_exists('eventosapp_set_active_event') ) {
+            try {
+                $ref = new ReflectionFunction('eventosapp_set_active_event');
+                if ( $ref->getNumberOfParameters() >= 2 ) {
+                    eventosapp_set_active_event($event_id, $user_id);
+                } else {
+                    eventosapp_set_active_event($event_id);
+                }
+            } catch ( Throwable $e ) {
+                // Si el helper propio no está disponible o falla por firma distinta,
+                // mantenemos los respaldos de user meta/cookie de abajo.
+            }
+        }
+
+        // Respaldos no destructivos para instalaciones donde el helper del evento activo
+        // lee una meta/cookie común. No eliminan ni modifican permisos ni asignaciones.
+        update_user_meta($user_id, 'eventosapp_active_event', $event_id);
+        update_user_meta($user_id, '_eventosapp_active_event', $event_id);
+        update_user_meta($user_id, 'evapp_active_event', $event_id);
+
+        $cookie_path   = ( defined('COOKIEPATH') && COOKIEPATH ) ? COOKIEPATH : '/';
+        $cookie_domain = ( defined('COOKIE_DOMAIN') && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '';
+        $cookie_expire = time() + WEEK_IN_SECONDS;
+        $cookie_secure = is_ssl();
+
+        if ( ! headers_sent() ) {
+            setcookie('eventosapp_active_event', (string) $event_id, $cookie_expire, $cookie_path, $cookie_domain, $cookie_secure, true);
+            setcookie('evapp_active_event', (string) $event_id, $cookie_expire, $cookie_path, $cookie_domain, $cookie_secure, true);
+        }
+
+        $_COOKIE['eventosapp_active_event'] = (string) $event_id;
+        $_COOKIE['evapp_active_event']      = (string) $event_id;
+
+        return true;
+    }
+}
+
+if ( ! function_exists('eventosapp_support_handle_dashboard_event_selection') ) {
+    function eventosapp_support_handle_dashboard_event_selection() {
+        if ( is_admin() || wp_doing_ajax() ) {
+            return;
+        }
+
+        $method = isset($_SERVER['REQUEST_METHOD']) ? strtoupper(sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD']))) : '';
+        if ( $method !== 'POST' ) {
+            return;
+        }
+
+        $action = isset($_POST['evapp_action']) ? sanitize_text_field(wp_unslash($_POST['evapp_action'])) : '';
+        if ( $action !== 'set_event' ) {
+            return;
+        }
+
+        if ( ! is_user_logged_in() ) {
+            return;
+        }
+
+        $nonce = isset($_POST['_wpnonce']) ? sanitize_text_field(wp_unslash($_POST['_wpnonce'])) : '';
+        if ( ! wp_verify_nonce($nonce, 'evapp_set_event') ) {
+            return;
+        }
+
+        $event_id = isset($_POST['eventosapp_event_id']) ? absint(wp_unslash($_POST['eventosapp_event_id'])) : 0;
+        $user_id  = get_current_user_id();
+
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            eventosapp_support_redirect_dashboard_error('Evento inválido.', ['from' => 'dashboard']);
+        }
+
+        // Solo interceptamos los usuarios asignados desde Equipo de apoyo / Equipo del Organizador.
+        // Los administradores, co-gestores y propietarios siguen usando el flujo original existente.
+        if ( ! eventosapp_support_user_has_assignment_in_event($event_id, $user_id) ) {
+            return;
+        }
+
+        if ( ! eventosapp_support_user_can_feature_for_event($event_id, 'dashboard', $user_id) ) {
+            eventosapp_support_redirect_dashboard_error('No puedes gestionar este evento.', ['from' => 'dashboard']);
+        }
+
+        eventosapp_support_set_active_event_for_frontend($event_id, $user_id);
+
+        $url = add_query_arg('set', '1', eventosapp_support_get_dashboard_redirect_url());
+        wp_safe_redirect($url);
+        exit;
+    }
+}
+add_action('init', 'eventosapp_support_handle_dashboard_event_selection', -1000);
+
 /**
  * Permisos dinámicos para el metabox Equipo de apoyo / Asistencia.
  * Este filtro se ejecuta después del control por rol y por evento para que estas dos secciones
