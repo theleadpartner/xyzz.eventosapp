@@ -380,6 +380,10 @@ add_shortcode('eventosapp_dashboard', function(){
 		$events = array_values(array_filter($all_events, function($ev){
 			$user_id = get_current_user_id();
 
+			if ( function_exists('eventosapp_support_user_can_select_event_in_dashboard') ) {
+				return eventosapp_support_user_can_select_event_in_dashboard($ev->ID, $user_id);
+			}
+
 			if ( function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event($ev->ID, $user_id) ) {
 				return true;
 			}
