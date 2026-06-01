@@ -501,7 +501,8 @@ function eventosapp_whatsapp_inbox_render_event_autoreplies_metabox($post) {
 
     <div class="evapp-wa-auto-box">
         <p class="evapp-wa-auto-intro">
-            Este módulo responde automáticamente cuando un asistente escribe al WhatsApp emisor y el mensaje entrante queda asociado a un <strong>ticket de este evento</strong>. No responde conversaciones sin ticket asociado.
+            Este módulo responde automáticamente cuando un asistente escribe al WhatsApp emisor y el mensaje entrante queda asociado a un <strong>ticket de este evento</strong>. No responde conversaciones sin ticket asociado.<br>
+            <strong>Protección Flow:</strong> si el número tiene un WhatsApp Flow pendiente enviado por EventosApp, o si el inbound recibido es la respuesta nativa de un Flow, la respuesta automática se omite para evitar mensajes duplicados o fuera de contexto.
         </p>
 
         <p>
@@ -632,6 +633,91 @@ function eventosapp_whatsapp_inbox_save_event_autoreplies_metabox($post_id, $pos
     }
 }
 
+
+/**
+ * Detecta si el mensaje inbound es una respuesta nativa de WhatsApp Flow.
+ */
+function eventosapp_whatsapp_inbox_is_flow_response_message($message) {
+    if ( function_exists('eventosapp_whatsapp_flows_is_nfm_reply_message') ) {
+        return eventosapp_whatsapp_flows_is_nfm_reply_message($message);
+    }
+
+    if ( ! is_array($message) ) {
+        return false;
+    }
+
+    if ( sanitize_key((string)($message['type'] ?? '')) !== 'interactive' ) {
+        return false;
+    }
+
+    $interactive = isset($message['interactive']) && is_array($message['interactive']) ? $message['interactive'] : [];
+    return sanitize_key((string)($interactive['type'] ?? '')) === 'nfm_reply';
+}
+
+/**
+ * Aplica el bloqueo anti-autorespuesta cuando el inbound pertenece a un Flow.
+ */
+function eventosapp_whatsapp_inbox_get_flow_autoreply_guard($args) {
+    $args = is_array($args) ? $args : [];
+
+    if ( function_exists('eventosapp_whatsapp_flows_should_suppress_inbox_autoreply') ) {
+        $guard = eventosapp_whatsapp_flows_should_suppress_inbox_autoreply($args);
+        if ( is_array($guard) ) {
+            return wp_parse_args($guard, [
+                'suppress' => false,
+                'reason'   => '',
+                'send'     => null,
+            ]);
+        }
+    }
+
+    if ( ! empty($args['is_flow_response']) ) {
+        return [
+            'suppress' => true,
+            'reason'   => 'flow_response_nfm_reply',
+            'send'     => null,
+        ];
+    }
+
+    return [
+        'suppress' => false,
+        'reason'   => '',
+        'send'     => null,
+    ];
+}
+
+/**
+ * Registra en el log interno por qué se omitió una autorespuesta del inbox.
+ */
+function eventosapp_whatsapp_inbox_log_flow_autoreply_guard($args, $guard) {
+    if ( ! function_exists('eventosapp_whatsapp_add_activity_log') ) {
+        return;
+    }
+
+    $args = is_array($args) ? $args : [];
+    $guard = is_array($guard) ? $guard : [];
+    $send = isset($guard['send']) && is_array($guard['send']) ? $guard['send'] : [];
+
+    eventosapp_whatsapp_add_activity_log('inbox_autorespuesta_omitida_por_flow', [
+        'conversation_id'        => absint($args['conversation_id'] ?? 0),
+        'inbound_message_id'     => absint($args['inbound_message_id'] ?? 0),
+        'event_id'               => absint($args['event_id'] ?? 0),
+        'ticket_id'              => absint($args['ticket_id'] ?? 0),
+        'from_phone'             => eventosapp_whatsapp_inbox_clean_phone($args['from_phone'] ?? ''),
+        'sender_phone_number_id' => eventosapp_whatsapp_inbox_clean_phone($args['sender_phone_number_id'] ?? ''),
+        'wa_message_id'          => sanitize_text_field((string)($args['wa_message_id'] ?? '')),
+        'reply_to_message_id'    => sanitize_text_field((string)($args['reply_to_message_id'] ?? '')),
+        'message_type'           => sanitize_key((string)($args['message_type'] ?? '')),
+        'reason'                 => sanitize_key((string)($guard['reason'] ?? 'flow_guard')),
+        'flow_send_id'           => absint($send['id'] ?? 0),
+        'flow_post_id'           => absint($send['flow_post_id'] ?? 0),
+        'meta_flow_id'           => sanitize_text_field((string)($send['meta_flow_id'] ?? '')),
+        'flow_token'             => sanitize_text_field((string)($send['flow_token'] ?? '')),
+        'flow_send_status'       => sanitize_key((string)($send['status'] ?? '')),
+        'flow_response_received' => absint($send['response_received'] ?? 0),
+    ]);
+}
+
 function eventosapp_whatsapp_inbox_maybe_send_auto_reply($args) {
     $args = is_array($args) ? $args : [];
 
@@ -645,6 +731,15 @@ function eventosapp_whatsapp_inbox_maybe_send_auto_reply($args) {
     $to_phone = eventosapp_whatsapp_inbox_clean_phone($args['from_phone'] ?? '');
     $sender_phone_number_id = eventosapp_whatsapp_inbox_clean_phone($args['sender_phone_number_id'] ?? '');
     $message_body = (string)($args['message_body'] ?? '');
+
+    $flow_guard = eventosapp_whatsapp_inbox_get_flow_autoreply_guard(array_merge($args, [
+        'phone'      => $to_phone,
+        'from_phone' => $to_phone,
+    ]));
+    if ( ! empty($flow_guard['suppress']) ) {
+        eventosapp_whatsapp_inbox_log_flow_autoreply_guard($args, $flow_guard);
+        return false;
+    }
 
     if ( ! $conversation_id || ! $event_id || ! $ticket_id || $to_phone === '' ) {
         return false;
@@ -1498,6 +1593,7 @@ function eventosapp_whatsapp_inbox_handle_inbound_message($message, $value = [],
             'from_phone' => $from_phone,
             'wa_message_id' => $wa_message_id,
             'message_type' => $parts['type'],
+            'is_flow_response' => eventosapp_whatsapp_inbox_is_flow_response_message($message) ? 1 : 0,
             'event_id' => $event_id,
             'ticket_id' => $ticket_id,
             'reply_to_message_id' => $reply_to_message_id,
@@ -1553,6 +1649,9 @@ function eventosapp_whatsapp_inbox_handle_inbound_message($message, $value = [],
             'contact_name'           => $contact_name,
             'message_body'           => $parts['body'],
             'message_type'           => $parts['type'],
+            'message'                => $message,
+            'is_flow_response'       => eventosapp_whatsapp_inbox_is_flow_response_message($message) ? 1 : 0,
+            'created_at'             => $created_at,
             'wa_message_id'          => $wa_message_id,
             'reply_to_message_id'    => $reply_to_message_id,
             'origin'                 => $origin,
