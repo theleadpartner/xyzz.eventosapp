@@ -500,35 +500,21 @@ if ( ! function_exists('eventosapp_custom_metrics_format_metric_cell') ) {
 
 if ( ! function_exists('eventosapp_custom_metrics_ticket_checked_in_any') ) {
     function eventosapp_custom_metrics_ticket_checked_in_any($ticket_id){
+        $ticket_id = (int) $ticket_id;
+        if ( $ticket_id <= 0 ) return 'No';
+
         $status_arr = get_post_meta($ticket_id, '_eventosapp_checkin_status', true);
-        if ( is_string($status_arr) ) {
-            $maybe = @unserialize($status_arr);
-            if ( $maybe !== false || $status_arr === 'b:0;' ) $status_arr = $maybe;
-        }
-        if ( ! is_array($status_arr) ) $status_arr = [];
-        return ( in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true) ) ? 'Sí' : 'No';
+        $virtual_status_arr = get_post_meta($ticket_id, '_eventosapp_virtual_checkin_status', true);
+        $log = get_post_meta($ticket_id, '_eventosapp_checkin_log', true);
+
+        return eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr, $virtual_status_arr, $log);
     }
 }
 
 if ( ! function_exists('eventosapp_custom_metrics_ticket_first_qr_label') ) {
     function eventosapp_custom_metrics_ticket_first_qr_label($ticket_id){
         $log = get_post_meta($ticket_id, '_eventosapp_checkin_log', true);
-        if ( is_string($log) ) {
-            $maybe = @unserialize($log);
-            if ( $maybe !== false || $log === 'b:0;' ) $log = $maybe;
-        }
-        if ( ! is_array($log) ) $log = [];
-
-        foreach ( $log as $entry ) {
-            if ( ! is_array($entry) ) continue;
-            $status = isset($entry['status']) ? (string) $entry['status'] : '';
-            if ( $status === 'checked_in' || $status === 'checked-in' ) {
-                if ( isset($entry['qr_type_label']) && $entry['qr_type_label'] !== '' ) return sanitize_text_field($entry['qr_type_label']);
-                if ( isset($entry['qr_type']) && $entry['qr_type'] !== '' ) return sanitize_text_field($entry['qr_type']);
-                return 'Sin clasificar';
-            }
-        }
-        return '';
+        return eventosapp_custom_metrics_ticket_first_qr_label_from_meta($log);
     }
 }
 
@@ -591,6 +577,8 @@ if ( ! function_exists('eventosapp_custom_metrics_field_requires_meta_keys') ) {
             }
             if ( $key === 'checked_in_any' ) {
                 $meta_keys[] = '_eventosapp_checkin_status';
+                $meta_keys[] = '_eventosapp_virtual_checkin_status';
+                $meta_keys[] = '_eventosapp_checkin_log';
                 continue;
             }
             if ( $key === 'medio_checkin' ) {
@@ -733,13 +721,57 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_meta_map') ) {
     }
 }
 
-if ( ! function_exists('eventosapp_custom_metrics_ticket_checked_in_any_from_meta') ) {
-    function eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr){
-        // Conserva el comportamiento histórico de métricas personalizadas:
-        // este campo evalúa el check-in presencial principal guardado en _eventosapp_checkin_status.
+if ( ! function_exists('eventosapp_custom_metrics_status_array_has_checked_in') ) {
+    function eventosapp_custom_metrics_status_array_has_checked_in($status_arr){
         $status_arr = eventosapp_custom_metrics_array_value($status_arr);
-        $has_presencial = in_array('checked_in', $status_arr, true) || in_array('checked-in', $status_arr, true);
-        return $has_presencial ? 'Sí' : 'No';
+        foreach ( $status_arr as $status_value ) {
+            if ( in_array((string) $status_value, ['checked_in', 'checked-in'], true) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_checkin_log_has_successful_any_checkin') ) {
+    function eventosapp_custom_metrics_checkin_log_has_successful_any_checkin($log){
+        $log = eventosapp_custom_metrics_array_value($log);
+        foreach ( $log as $entry ) {
+            if ( ! is_array($entry) ) continue;
+
+            $status = isset($entry['status']) ? (string) $entry['status'] : '';
+            $type   = isset($entry['checkin_type']) ? (string) $entry['checkin_type'] : '';
+
+            if ( in_array($status, ['not_checked_in', 'virtual_not_checked_in'], true) ) {
+                continue;
+            }
+
+            if ( in_array($status, ['checked_in', 'checked-in', 'virtual_checked_in'], true) ) {
+                return true;
+            }
+
+            // Compatibilidad con registros antiguos de acceso digital que podían guardar
+            // el tipo como virtual sin usar todavía el status virtual_checked_in.
+            if ( $type === 'virtual' ) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_ticket_checked_in_any_from_meta') ) {
+    function eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr, $virtual_status_arr = [], $log = []){
+        $has_presencial = eventosapp_custom_metrics_status_array_has_checked_in($status_arr);
+        $has_virtual    = eventosapp_custom_metrics_status_array_has_checked_in($virtual_status_arr);
+
+        // Fallback intencional: algunos accesos digitales ya quedan en el log de medios
+        // aunque el meta virtual no esté poblado en instalaciones anteriores.
+        $has_log_checkin = ( ! $has_presencial && ! $has_virtual )
+            ? eventosapp_custom_metrics_checkin_log_has_successful_any_checkin($log)
+            : false;
+
+        return ( $has_presencial || $has_virtual || $has_log_checkin ) ? 'Sí' : 'No';
     }
 }
 
@@ -799,7 +831,9 @@ if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value_from_batc
         }
         if ( $key === 'checked_in_any' ) {
             return eventosapp_custom_metrics_ticket_checked_in_any_from_meta(
-                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_checkin_status', [])
+                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_checkin_status', []),
+                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_virtual_checkin_status', []),
+                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_checkin_log', [])
             );
         }
         if ( $key === 'medio_checkin' ) {
