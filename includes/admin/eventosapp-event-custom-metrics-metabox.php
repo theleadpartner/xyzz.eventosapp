@@ -499,15 +499,20 @@ if ( ! function_exists('eventosapp_custom_metrics_format_metric_cell') ) {
 }
 
 if ( ! function_exists('eventosapp_custom_metrics_ticket_checked_in_any') ) {
-    function eventosapp_custom_metrics_ticket_checked_in_any($ticket_id){
+    function eventosapp_custom_metrics_ticket_checked_in_any($ticket_id, $event_id = 0){
         $ticket_id = (int) $ticket_id;
+        $event_id  = (int) $event_id;
         if ( $ticket_id <= 0 ) return 'No';
 
-        $status_arr = get_post_meta($ticket_id, '_eventosapp_checkin_status', true);
-        $virtual_status_arr = get_post_meta($ticket_id, '_eventosapp_virtual_checkin_status', true);
-        $log = get_post_meta($ticket_id, '_eventosapp_checkin_log', true);
+        if ( $event_id <= 0 ) {
+            $event_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
+        }
 
-        return eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr, $virtual_status_arr, $log);
+        $status_arr         = get_post_meta($ticket_id, '_eventosapp_checkin_status', true);
+        $virtual_status_arr = get_post_meta($ticket_id, '_eventosapp_virtual_checkin_status', true);
+        $event_days         = eventosapp_custom_metrics_get_event_days($event_id);
+
+        return eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr, $virtual_status_arr, $event_days);
     }
 }
 
@@ -524,7 +529,7 @@ if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value') ) {
 
         if ( $key === 'ticket_post_id' ) return (string) $ticket_id;
         if ( $key === 'modalidad' ) return eventosapp_custom_metrics_get_ticket_modalidad_display($ticket_id, $event_id);
-        if ( $key === 'checked_in_any' ) return eventosapp_custom_metrics_ticket_checked_in_any($ticket_id);
+        if ( $key === 'checked_in_any' ) return eventosapp_custom_metrics_ticket_checked_in_any($ticket_id, $event_id);
         if ( $key === 'medio_checkin' ) return eventosapp_custom_metrics_ticket_first_qr_label($ticket_id);
         if ( $key === 'fecha_creacion' ) return get_post_time('Y-m-d H:i:s', false, $ticket_id);
 
@@ -578,7 +583,6 @@ if ( ! function_exists('eventosapp_custom_metrics_field_requires_meta_keys') ) {
             if ( $key === 'checked_in_any' ) {
                 $meta_keys[] = '_eventosapp_checkin_status';
                 $meta_keys[] = '_eventosapp_virtual_checkin_status';
-                $meta_keys[] = '_eventosapp_checkin_log';
                 continue;
             }
             if ( $key === 'medio_checkin' ) {
@@ -721,57 +725,110 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_meta_map') ) {
     }
 }
 
-if ( ! function_exists('eventosapp_custom_metrics_status_array_has_checked_in') ) {
-    function eventosapp_custom_metrics_status_array_has_checked_in($status_arr){
-        $status_arr = eventosapp_custom_metrics_array_value($status_arr);
-        foreach ( $status_arr as $status_value ) {
-            if ( in_array((string) $status_value, ['checked_in', 'checked-in'], true) ) {
-                return true;
+if ( ! function_exists('eventosapp_custom_metrics_get_event_days') ) {
+    function eventosapp_custom_metrics_get_event_days($event_id){
+        $event_id = (int) $event_id;
+        if ( $event_id <= 0 || ! function_exists('eventosapp_get_event_days') ) return [];
+
+        $days = eventosapp_get_event_days($event_id);
+        if ( ! is_array($days) ) return [];
+
+        $valid_days = [];
+        foreach ( $days as $day ) {
+            if ( is_string($day) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) ) {
+                $valid_days[] = $day;
             }
         }
+
+        return array_values(array_unique($valid_days));
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_status_array_has_checked_in') ) {
+    function eventosapp_custom_metrics_status_array_has_checked_in($status_arr, $event_days = []){
+        $status_arr = eventosapp_custom_metrics_array_value($status_arr);
+        if ( empty($status_arr) ) return false;
+
+        $event_days_lookup = [];
+        if ( is_array($event_days) ) {
+            foreach ( $event_days as $day ) {
+                if ( is_string($day) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) ) {
+                    $event_days_lookup[$day] = true;
+                }
+            }
+        }
+
+        foreach ( $status_arr as $status_day => $status_value ) {
+            if ( ! in_array((string) $status_value, ['checked_in', 'checked-in'], true) ) {
+                continue;
+            }
+
+            // Cuando conocemos las fechas reales del evento, solo cuenta el check-in
+            // guardado para uno de esos días. Esto evita que estados antiguos o logs
+            // de accesos digitales inflen el campo "Checked-In (algún día)".
+            if ( ! empty($event_days_lookup) ) {
+                $status_day = is_scalar($status_day) ? (string) $status_day : '';
+                if ( isset($event_days_lookup[$status_day]) ) {
+                    return true;
+                }
+                continue;
+            }
+
+            return true;
+        }
+
         return false;
     }
 }
 
 if ( ! function_exists('eventosapp_custom_metrics_checkin_log_has_successful_any_checkin') ) {
-    function eventosapp_custom_metrics_checkin_log_has_successful_any_checkin($log){
+    function eventosapp_custom_metrics_checkin_log_has_successful_any_checkin($log, $event_days = []){
         $log = eventosapp_custom_metrics_array_value($log);
+        if ( empty($log) ) return false;
+
+        $event_days_lookup = [];
+        if ( is_array($event_days) ) {
+            foreach ( $event_days as $day ) {
+                if ( is_string($day) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) ) {
+                    $event_days_lookup[$day] = true;
+                }
+            }
+        }
+
         foreach ( $log as $entry ) {
             if ( ! is_array($entry) ) continue;
 
             $status = isset($entry['status']) ? (string) $entry['status'] : '';
-            $type   = isset($entry['checkin_type']) ? (string) $entry['checkin_type'] : '';
-
-            if ( in_array($status, ['not_checked_in', 'virtual_not_checked_in'], true) ) {
+            if ( ! in_array($status, ['checked_in', 'checked-in', 'virtual_checked_in'], true) ) {
                 continue;
             }
 
-            if ( in_array($status, ['checked_in', 'checked-in', 'virtual_checked_in'], true) ) {
-                return true;
+            if ( ! empty($event_days_lookup) ) {
+                $entry_day = '';
+                if ( isset($entry['dia']) && is_scalar($entry['dia']) && (string) $entry['dia'] !== '' ) {
+                    $entry_day = (string) $entry['dia'];
+                } elseif ( isset($entry['fecha']) && is_scalar($entry['fecha']) ) {
+                    $entry_day = (string) $entry['fecha'];
+                }
+
+                if ( ! isset($event_days_lookup[$entry_day]) ) {
+                    continue;
+                }
             }
 
-            // Compatibilidad con registros antiguos de acceso digital que podían guardar
-            // el tipo como virtual sin usar todavía el status virtual_checked_in.
-            if ( $type === 'virtual' ) {
-                return true;
-            }
+            return true;
         }
+
         return false;
     }
 }
 
 if ( ! function_exists('eventosapp_custom_metrics_ticket_checked_in_any_from_meta') ) {
-    function eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr, $virtual_status_arr = [], $log = []){
-        $has_presencial = eventosapp_custom_metrics_status_array_has_checked_in($status_arr);
-        $has_virtual    = eventosapp_custom_metrics_status_array_has_checked_in($virtual_status_arr);
+    function eventosapp_custom_metrics_ticket_checked_in_any_from_meta($status_arr, $virtual_status_arr = [], $event_days = []){
+        $has_presencial = eventosapp_custom_metrics_status_array_has_checked_in($status_arr, $event_days);
+        $has_virtual    = eventosapp_custom_metrics_status_array_has_checked_in($virtual_status_arr, $event_days);
 
-        // Fallback intencional: algunos accesos digitales ya quedan en el log de medios
-        // aunque el meta virtual no esté poblado en instalaciones anteriores.
-        $has_log_checkin = ( ! $has_presencial && ! $has_virtual )
-            ? eventosapp_custom_metrics_checkin_log_has_successful_any_checkin($log)
-            : false;
-
-        return ( $has_presencial || $has_virtual || $has_log_checkin ) ? 'Sí' : 'No';
+        return ( $has_presencial || $has_virtual ) ? 'Sí' : 'No';
     }
 }
 
@@ -833,7 +890,7 @@ if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value_from_batc
             return eventosapp_custom_metrics_ticket_checked_in_any_from_meta(
                 eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_checkin_status', []),
                 eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_virtual_checkin_status', []),
-                eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_checkin_log', [])
+                eventosapp_custom_metrics_get_event_days($event_id)
             );
         }
         if ( $key === 'medio_checkin' ) {
