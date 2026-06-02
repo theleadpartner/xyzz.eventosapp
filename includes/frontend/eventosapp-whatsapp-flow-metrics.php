@@ -664,16 +664,27 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_export_url') ) {
             return '#';
         }
 
-        // Importante: no usar wp_nonce_url() aquí porque devuelve la URL escapada para HTML
-        // y, cuando JavaScript reemplaza el Flow dinámico, puede conservar "&amp;" como texto real.
-        // Eso provoca que WordPress reciba amp;_wpnonce en vez de _wpnonce y muestre
-        // "El enlace que has seguido ha caducado".
+        // Importante: el botón frontend no debe depender de wp-admin/admin-post.php.
+        // Usuarios con permiso de dashboard frontend pueden ser redirigidos fuera del admin
+        // antes de que WordPress ejecute admin_post. Por eso la URL principal usa una
+        // acción frontend propia atendida en init; admin_post se conserva por compatibilidad.
+        // Tampoco se usa wp_nonce_url() porque devuelve la URL escapada para HTML y,
+        // cuando JavaScript reemplaza el Flow dinámico, puede conservar "&amp;" como texto real.
         return add_query_arg([
-            'action'   => 'eventosapp_whatsapp_flow_metrics_export_csv',
-            'event_id' => $event_id,
-            'flow_id'  => $flow_post_id,
-            '_wpnonce' => wp_create_nonce('eventosapp_whatsapp_flow_metrics_export_csv'),
-        ], admin_url('admin-post.php'));
+            'eventosapp_frontend_action' => 'eventosapp_whatsapp_flow_metrics_export_csv',
+            'event_id'                   => $event_id,
+            'flow_id'                    => $flow_post_id,
+            '_wpnonce'                   => wp_create_nonce('eventosapp_whatsapp_flow_metrics_export_csv'),
+        ], home_url('/'));
+    }
+}
+
+if ( ! function_exists('eventosapp_whatsapp_flow_metrics_is_frontend_export_request') ) {
+    function eventosapp_whatsapp_flow_metrics_is_frontend_export_request() {
+        $action = eventosapp_whatsapp_flow_metrics_get_request_value('eventosapp_frontend_action', '');
+        $action = is_scalar($action) ? sanitize_key((string) $action) : '';
+
+        return $action === 'eventosapp_whatsapp_flow_metrics_export_csv';
     }
 }
 
@@ -705,6 +716,53 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_verify_export_nonce') )
         if ( ! is_scalar($nonce) || ! wp_verify_nonce((string) $nonce, 'eventosapp_whatsapp_flow_metrics_export_csv') ) {
             wp_die('El enlace de descarga no es válido o expiró. Regresa a Métricas de Encuestas y presiona nuevamente el botón Descargar resultados CSV.');
         }
+    }
+}
+
+if ( ! function_exists('eventosapp_whatsapp_flow_metrics_user_can_download_csv') ) {
+    /**
+     * Autoriza la descarga CSV contra el evento solicitado, no contra el evento activo
+     * implícito. Esto permite que usuarios con permisos personalizados de
+     * "Métricas de encuestas" descarguen desde el dashboard frontend aunque no tengan
+     * acceso al wp-admin o permisos globales de administrador.
+     *
+     * @param int $event_id
+     * @param int|null $user_id
+     * @return bool
+     */
+    function eventosapp_whatsapp_flow_metrics_user_can_download_csv($event_id, $user_id = null) {
+        $event_id = absint($event_id);
+        $user_id = $user_id === null ? get_current_user_id() : absint($user_id);
+
+        if ( ! $event_id || ! $user_id || ! is_user_logged_in() ) {
+            return false;
+        }
+
+        if ( user_can($user_id, 'manage_options') ) {
+            return true;
+        }
+
+        if ( function_exists('eventosapp_user_can_access_dashboard_feature_in_event')
+            && eventosapp_user_can_access_dashboard_feature_in_event($user_id, 'flow_metrics', $event_id) ) {
+            return true;
+        }
+
+        if ( function_exists('eventosapp_staff_access_user_can_access_feature') ) {
+            $custom_permission = eventosapp_staff_access_user_can_access_feature($event_id, $user_id, 'flow_metrics', null);
+            if ( $custom_permission !== null ) {
+                return (bool) $custom_permission;
+            }
+        }
+
+        $active_event = function_exists('eventosapp_get_active_event')
+            ? absint(eventosapp_get_active_event())
+            : 0;
+
+        if ( $active_event && $active_event === $event_id && eventosapp_whatsapp_flow_metrics_can_view() ) {
+            return true;
+        }
+
+        return false;
     }
 }
 
@@ -1056,47 +1114,66 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_stream_csv_export') ) {
     }
 }
 
-add_action('admin_post_eventosapp_whatsapp_flow_metrics_export_csv', function() {
-    try {
-        if ( ! eventosapp_whatsapp_flow_metrics_can_view() ) {
-            wp_die('No tienes permisos suficientes para descargar este CSV.');
+if ( ! function_exists('eventosapp_whatsapp_flow_metrics_handle_csv_export') ) {
+    function eventosapp_whatsapp_flow_metrics_handle_csv_export() {
+        try {
+            eventosapp_whatsapp_flow_metrics_verify_export_nonce();
+
+            $event_id = absint(eventosapp_whatsapp_flow_metrics_get_request_value('event_id', 0));
+            if ( ! $event_id ) {
+                $event_id = eventosapp_whatsapp_flow_metrics_get_active_event_id();
+            }
+
+            if ( ! $event_id ) {
+                wp_die('No hay evento activo para descargar resultados.');
+            }
+
+            if ( get_post_type($event_id) !== 'eventosapp_event' ) {
+                wp_die('Evento inválido para descargar resultados.');
+            }
+
+            if ( ! eventosapp_whatsapp_flow_metrics_user_can_download_csv($event_id) ) {
+                wp_die('No tienes permisos suficientes para descargar este CSV.');
+            }
+
+            if ( ! eventosapp_whatsapp_flow_metrics_require_dependencies() ) {
+                wp_die('El módulo de métricas de encuestas no está disponible.');
+            }
+
+            $flows = eventosapp_whatsapp_flow_metrics_get_event_flows($event_id);
+            $valid_flow_ids = array_map('absint', wp_list_pluck($flows, 'id'));
+            $requested_flow_id = absint(eventosapp_whatsapp_flow_metrics_get_request_value('flow_id', 0));
+            $default_flow_id = ! empty($flows[0]['id']) ? absint($flows[0]['id']) : 0;
+            $flow_post_id = $requested_flow_id ?: $default_flow_id;
+
+            if ( ! $flow_post_id || ! in_array($flow_post_id, $valid_flow_ids, true) ) {
+                wp_die('La encuesta solicitada no pertenece al evento activo o no está disponible para descargar.');
+            }
+
+            eventosapp_whatsapp_flow_metrics_stream_csv_export($event_id, $flow_post_id);
+        } catch ( Throwable $e ) {
+            eventosapp_whatsapp_flow_metrics_log_debug('csv_export_error', [
+                'message' => $e->getMessage(),
+                'file'    => $e->getFile(),
+                'line'    => $e->getLine(),
+            ]);
+            wp_die('No se pudo generar el CSV de resultados de la encuesta.');
         }
-
-        eventosapp_whatsapp_flow_metrics_verify_export_nonce();
-
-        $event_id = absint(eventosapp_whatsapp_flow_metrics_get_request_value('event_id', 0));
-        if ( ! $event_id ) {
-            $event_id = eventosapp_whatsapp_flow_metrics_get_active_event_id();
-        }
-
-        if ( ! $event_id ) {
-            wp_die('No hay evento activo para descargar resultados.');
-        }
-
-        if ( ! eventosapp_whatsapp_flow_metrics_require_dependencies() ) {
-            wp_die('El módulo de métricas de encuestas no está disponible.');
-        }
-
-        $flows = eventosapp_whatsapp_flow_metrics_get_event_flows($event_id);
-        $valid_flow_ids = array_map('absint', wp_list_pluck($flows, 'id'));
-        $requested_flow_id = absint(eventosapp_whatsapp_flow_metrics_get_request_value('flow_id', 0));
-        $default_flow_id = ! empty($flows[0]['id']) ? absint($flows[0]['id']) : 0;
-        $flow_post_id = $requested_flow_id ?: $default_flow_id;
-
-        if ( ! $flow_post_id || ! in_array($flow_post_id, $valid_flow_ids, true) ) {
-            wp_die('La encuesta solicitada no pertenece al evento activo o no está disponible para descargar.');
-        }
-
-        eventosapp_whatsapp_flow_metrics_stream_csv_export($event_id, $flow_post_id);
-    } catch ( Throwable $e ) {
-        eventosapp_whatsapp_flow_metrics_log_debug('csv_export_error', [
-            'message' => $e->getMessage(),
-            'file'    => $e->getFile(),
-            'line'    => $e->getLine(),
-        ]);
-        wp_die('No se pudo generar el CSV de resultados de la encuesta.');
     }
-});
+}
+
+if ( ! function_exists('eventosapp_whatsapp_flow_metrics_handle_frontend_csv_export') ) {
+    function eventosapp_whatsapp_flow_metrics_handle_frontend_csv_export() {
+        if ( ! eventosapp_whatsapp_flow_metrics_is_frontend_export_request() ) {
+            return;
+        }
+
+        eventosapp_whatsapp_flow_metrics_handle_csv_export();
+    }
+}
+
+add_action('init', 'eventosapp_whatsapp_flow_metrics_handle_frontend_csv_export', -1000);
+add_action('admin_post_eventosapp_whatsapp_flow_metrics_export_csv', 'eventosapp_whatsapp_flow_metrics_handle_csv_export');
 
 if ( ! function_exists('eventosapp_whatsapp_flow_metrics_send_json_exception') ) {
     function eventosapp_whatsapp_flow_metrics_send_json_exception($e, $public_message = 'No se pudieron cargar las métricas de encuestas.') {
@@ -1174,11 +1251,11 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
     // Plantilla RAW para JavaScript. No se usa wp_nonce_url() porque transforma & en &amp;
     // y eso rompe la verificación del nonce cuando JS actualiza el href del botón.
     $export_url_template = add_query_arg([
-        'action'   => 'eventosapp_whatsapp_flow_metrics_export_csv',
-        'event_id' => absint($active_event),
-        'flow_id'  => '__EVAPP_FLOW_ID__',
-        '_wpnonce' => wp_create_nonce('eventosapp_whatsapp_flow_metrics_export_csv'),
-    ], admin_url('admin-post.php'));
+        'eventosapp_frontend_action' => 'eventosapp_whatsapp_flow_metrics_export_csv',
+        'event_id'                   => absint($active_event),
+        'flow_id'                    => '__EVAPP_FLOW_ID__',
+        '_wpnonce'                   => wp_create_nonce('eventosapp_whatsapp_flow_metrics_export_csv'),
+    ], home_url('/'));
 
     wp_register_script('chartjs', 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js', [], '4.4.1', true);
     wp_enqueue_script('chartjs');
