@@ -555,6 +555,7 @@ if ( ! function_exists('eventosapp_metrics_get_ticket_ids_batch_for_event') ) {
 if ( ! function_exists('eventosapp_metrics_default_payload_cache_key') ) {
     function eventosapp_metrics_default_payload_cache_key($event_id, array $request) {
         $parts = [
+            'version'      => 'qr_participation_v2',
             'event_id'     => absint($event_id),
             'mode'         => isset($request['mode']) ? sanitize_key((string) $request['mode']) : '',
             'day'          => isset($request['day']) ? sanitize_text_field((string) $request['day']) : '',
@@ -884,11 +885,23 @@ if ( ! function_exists('eventosapp_metrics_build_default_payload') ) {
         $qr_stats_filtered = [];
         $qr_total = 0;
         foreach ( $qr_types_count as $type => $count ) {
+            $count = (int) $count;
             if ( $count > 0 ) {
                 $qr_stats_filtered[$type] = $count;
                 $qr_total += $count;
             }
         }
+
+        /*
+         * Base real de participación para el gráfico y la tabla de medios.
+         * Antes el porcentaje se calculaba contra la suma de medios ($qr_total), lo que solo mostraba
+         * distribución interna entre medios. Para participación real del evento, cada medio debe dividirse
+         * contra el total de tickets del evento, igual que el KPI general de asistencia.
+         */
+        $qr_participation_base     = max((int) $total, 0);
+        $qr_checked_base           = max((int) $checked_total, 0);
+        $qr_without_media_total    = max($qr_checked_base - (int) $qr_total, 0);
+        $qr_not_checked_base_total = max($qr_participation_base - $qr_checked_base, 0);
 
         return [
             'total_tickets'               => $total,
@@ -905,8 +918,15 @@ if ( ! function_exists('eventosapp_metrics_build_default_payload') ) {
             'bar'                         => $bar_meta,
             'table'                       => [ 'rows' => $rows ],
             'qr_stats'                    => [
-                'types' => $qr_stats_filtered,
-                'total' => $qr_total,
+                'types'                      => $qr_stats_filtered,
+                'total'                      => $qr_total,
+                'distribution_total'         => $qr_total,
+                'participation_base'         => $qr_participation_base,
+                'participation_base_label'   => 'Total de tickets del evento',
+                'checked_total'              => $qr_checked_base,
+                'without_media_total'        => $qr_without_media_total,
+                'not_checked_total'          => $qr_not_checked_base_total,
+                'percentage_mode'            => 'participation',
             ],
             'custom_metrics_available' => eventosapp_metrics_safe_custom_metrics_available($event_id),
             'custom_metrics' => null,
@@ -1161,7 +1181,7 @@ add_shortcode('eventosapp_front_metrics', function(){
                 <tr>
                   <th>Medio</th>
                   <th>Check-ins</th>
-                  <th>% del Total</th>
+                  <th>% Participación</th>
                 </tr>
               </thead>
               <tbody id="evappQrTableBody">
@@ -1282,6 +1302,15 @@ $js = <<<'JS'
 
         function fmt(n){ return (n||0).toLocaleString(); }
         function pct(n){ return (Math.round((n||0)*100)/100).toFixed(2) + '%'; }
+        function toNumber(n){
+            n = Number(n || 0);
+            return Number.isFinite(n) ? n : 0;
+        }
+        function calcPercent(value, base){
+            value = toNumber(value);
+            base = toNumber(base);
+            return base > 0 ? (value * 100 / base) : 0;
+        }
 
         function setCustomPanelVisible(visible){
             if (!customMetricsPanel) return;
@@ -1545,7 +1574,7 @@ $js = <<<'JS'
             tableBody.innerHTML = bodyHTML + '<tr class="evapp-total">' + totalCells + '</tr>';
         }
         
-        // Renderizar gráfico de torta de medios de check-in
+        // Renderizar gráfico de torta de medios de check-in con porcentaje real de participación.
         function renderQrPie(qrStats){
             if (!qrStats || !qrStats.types || Object.keys(qrStats.types).length === 0) {
                 qrPieHint.textContent = 'No hay datos de medios de check-in disponibles';
@@ -1558,6 +1587,11 @@ $js = <<<'JS'
             
             const ctx = document.getElementById('evappQrPie').getContext('2d');
             const types = qrStats.types || {};
+            const mediaTotal = toNumber(qrStats.distribution_total || qrStats.total || 0);
+            const participationBase = toNumber(qrStats.participation_base || qrStats.checked_total || qrStats.total || 0);
+            const checkedTotal = toNumber(qrStats.checked_total || mediaTotal);
+            const withoutMediaTotal = toNumber(qrStats.without_media_total || 0);
+            const notCheckedTotal = toNumber(qrStats.not_checked_total || Math.max(participationBase - checkedTotal, 0));
             const labels = [];
             const dataValues = [];
             const colors = {
@@ -1570,19 +1604,33 @@ $js = <<<'JS'
                 'QR Legacy': '#94a3b8',
                 'QR Preimpreso': '#64748b',
                 'Acceso virtual': '#8b5cf6',
-                'Check-in virtual': '#8b5cf6'
+                'Check-in virtual': '#8b5cf6',
+                'Check-ins sin medio': '#cbd5e1',
+                'Sin check-in': '#334155'
             };
             
             const backgroundColors = [];
             
             Object.keys(types).sort().forEach(type => {
                 labels.push(type);
-                dataValues.push(types[type]);
+                dataValues.push(toNumber(types[type]));
                 backgroundColors.push(colors[type] || colorFor(type));
             });
+
+            if (withoutMediaTotal > 0) {
+                labels.push('Check-ins sin medio');
+                dataValues.push(withoutMediaTotal);
+                backgroundColors.push(colors['Check-ins sin medio']);
+            }
+
+            if (notCheckedTotal > 0) {
+                labels.push('Sin check-in');
+                dataValues.push(notCheckedTotal);
+                backgroundColors.push(colors['Sin check-in']);
+            }
             
-            const total = qrStats.total || 0;
-            qrPieHint.textContent = `Total de check-ins: ${fmt(total)}`;
+            const checkedPct = calcPercent(checkedTotal, participationBase);
+            qrPieHint.textContent = `Base real: ${fmt(participationBase)} tickets · Participación registrada: ${fmt(checkedTotal)} (${pct(checkedPct)}) · Check-ins por medio: ${fmt(mediaTotal)}`;
             
             const cfg = {
                 type: 'doughnut',
@@ -1605,9 +1653,9 @@ $js = <<<'JS'
                             callbacks: {
                                 label: function(context) {
                                     const label = context.label || '';
-                                    const value = context.parsed || 0;
-                                    const percentage = total ? ((value / total) * 100).toFixed(2) : 0;
-                                    return `${label}: ${fmt(value)} (${percentage}%)`;
+                                    const value = toNumber(context.parsed || 0);
+                                    const percentage = calcPercent(value, participationBase);
+                                    return `${label}: ${fmt(value)} (${pct(percentage)})`;
                                 }
                             }
                         }
@@ -1617,13 +1665,14 @@ $js = <<<'JS'
             
             if (qrPieChart) {
                 qrPieChart.data = cfg.data;
+                qrPieChart.options = cfg.options;
                 qrPieChart.update();
             } else {
                 qrPieChart = new Chart(ctx, cfg);
             }
         }
         
-        // Renderizar tabla de medios de check-in
+        // Renderizar tabla de medios de check-in con porcentaje real de participación.
         function renderQrTable(qrStats){
             if (!qrStats || !qrStats.types || Object.keys(qrStats.types).length === 0) {
                 qrTableBody.innerHTML = '<tr><td colspan="3" class="evapp-muted">Sin datos de medios de check-in.</td></tr>';
@@ -1631,13 +1680,18 @@ $js = <<<'JS'
             }
             
             const types = qrStats.types || {};
-            const total = qrStats.total || 0;
+            const mediaTotal = toNumber(qrStats.distribution_total || qrStats.total || 0);
+            const participationBase = toNumber(qrStats.participation_base || qrStats.checked_total || qrStats.total || 0);
+            const checkedTotal = toNumber(qrStats.checked_total || mediaTotal);
+            const withoutMediaTotal = toNumber(qrStats.without_media_total || 0);
+            const notCheckedTotal = toNumber(qrStats.not_checked_total || Math.max(participationBase - checkedTotal, 0));
             
-            // Crear array de tipos ordenado por cantidad (descendente)
+            // Crear array de tipos ordenado por cantidad (descendente).
+            // El porcentaje ya no se calcula contra mediaTotal, sino contra participationBase.
             const typeArray = Object.keys(types).map(type => ({
                 type: type,
-                count: types[type],
-                percentage: total ? ((types[type] / total) * 100) : 0
+                count: toNumber(types[type]),
+                percentage: calcPercent(types[type], participationBase)
             })).sort((a, b) => b.count - a.count);
             
             let bodyHTML = typeArray.map(item => {
@@ -1649,12 +1703,30 @@ $js = <<<'JS'
                     + '</tr>'
                 );
             }).join('');
+
+            if (withoutMediaTotal > 0) {
+                bodyHTML +=
+                    '<tr>'
+                    + '<td>Check-ins sin medio</td>'
+                    + '<td>' + fmt(withoutMediaTotal) + '</td>'
+                    + '<td>' + calcPercent(withoutMediaTotal, participationBase).toFixed(2) + '%</td>'
+                    + '</tr>';
+            }
+
+            if (notCheckedTotal > 0) {
+                bodyHTML +=
+                    '<tr>'
+                    + '<td>Sin check-in</td>'
+                    + '<td>' + fmt(notCheckedTotal) + '</td>'
+                    + '<td>' + calcPercent(notCheckedTotal, participationBase).toFixed(2) + '%</td>'
+                    + '</tr>';
+            }
             
-            // Agregar fila de totales
+            // Total real de participación: el 100% ahora corresponde al total de tickets del evento.
             bodyHTML += 
                 '<tr class="evapp-total">'
-                + '<td>Total</td>'
-                + '<td>' + fmt(total) + '</td>'
+                + '<td>Total tickets</td>'
+                + '<td>' + fmt(participationBase) + '</td>'
                 + '<td>100.00%</td>'
                 + '</tr>';
             
