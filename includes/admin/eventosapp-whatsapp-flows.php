@@ -3481,6 +3481,13 @@ function eventosapp_whatsapp_flows_bulk_modalidad_labels() {
     ];
 }
 
+function eventosapp_whatsapp_flows_bulk_checkin_status_options() {
+    return [
+        'checked_in'     => 'Chequeados en el evento (presencial o virtual)',
+        'not_checked_in' => 'No chequeados en el evento',
+    ];
+}
+
 function eventosapp_whatsapp_flows_bulk_get_ticket_modalidad_key($ticket_id, $event_id = 0) {
     $ticket_id = absint($ticket_id);
     $event_id = absint($event_id);
@@ -3852,6 +3859,153 @@ function eventosapp_whatsapp_flows_bulk_sanitize_filters($filters) {
     return $clean;
 }
 
+
+function eventosapp_whatsapp_flows_bulk_get_ticket_meta_map($ticket_ids, $meta_keys) {
+    global $wpdb;
+
+    $ticket_ids = array_values(array_unique(array_filter(array_map('absint', is_array($ticket_ids) ? $ticket_ids : []))));
+    $meta_keys = array_values(array_unique(array_filter(array_map('strval', is_array($meta_keys) ? $meta_keys : []))));
+    if ( empty($ticket_ids) || empty($meta_keys) ) {
+        return [];
+    }
+
+    $map = [];
+    foreach ( array_chunk($ticket_ids, 400) as $ids_chunk ) {
+        foreach ( array_chunk($meta_keys, 20) as $keys_chunk ) {
+            $id_placeholders = implode(',', array_fill(0, count($ids_chunk), '%d'));
+            $key_placeholders = implode(',', array_fill(0, count($keys_chunk), '%s'));
+            $params = array_merge($ids_chunk, $keys_chunk);
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT post_id, meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id IN ({$id_placeholders}) AND meta_key IN ({$key_placeholders})",
+                $params
+            ), ARRAY_A);
+
+            foreach ( (array) $rows as $row ) {
+                $post_id = absint($row['post_id'] ?? 0);
+                $meta_key = (string)($row['meta_key'] ?? '');
+                if ( ! $post_id || $meta_key === '' ) {
+                    continue;
+                }
+                if ( ! isset($map[$post_id]) ) {
+                    $map[$post_id] = [];
+                }
+                if ( array_key_exists($meta_key, $map[$post_id]) ) {
+                    continue;
+                }
+                $raw = $row['meta_value'] ?? '';
+                $map[$post_id][$meta_key] = function_exists('maybe_unserialize') ? maybe_unserialize($raw) : @unserialize($raw);
+                if ( $map[$post_id][$meta_key] === false && $raw !== 'b:0;' ) {
+                    $map[$post_id][$meta_key] = $raw;
+                }
+            }
+        }
+    }
+
+    return $map;
+}
+
+function eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $ticket_id, $meta_key, $default = '') {
+    $ticket_id = absint($ticket_id);
+    $meta_key = (string) $meta_key;
+    return isset($meta_map[$ticket_id]) && array_key_exists($meta_key, $meta_map[$ticket_id]) ? $meta_map[$ticket_id][$meta_key] : $default;
+}
+
+function eventosapp_whatsapp_flows_bulk_normalize_ymd($date) {
+    $date = sanitize_text_field((string) $date);
+    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ? $date : '';
+}
+
+function eventosapp_whatsapp_flows_bulk_get_event_valid_days($event_id) {
+    static $cache = [];
+    $event_id = absint($event_id);
+    if ( ! $event_id ) {
+        return [];
+    }
+    if ( isset($cache[$event_id]) ) {
+        return $cache[$event_id];
+    }
+
+    $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($event_id) : [];
+    $days = array_values(array_unique(array_filter(array_map('eventosapp_whatsapp_flows_bulk_normalize_ymd', $days))));
+    $cache[$event_id] = $days;
+    return $days;
+}
+
+function eventosapp_whatsapp_flows_bulk_ticket_modalidad_key_from_meta($ticket_id, $event_id = 0, $meta_map = []) {
+    $ticket_id = absint($ticket_id);
+    $event_id = absint($event_id);
+    $mode = eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $ticket_id, '_eventosapp_ticket_modalidad', '');
+    $mode = is_scalar($mode) ? (string) $mode : '';
+
+    if ( $mode === '' && $event_id ) {
+        if ( function_exists('eventosapp_ticket_allowed_modalidades_for_event') ) {
+            $allowed = eventosapp_ticket_allowed_modalidades_for_event($event_id);
+            $mode = is_array($allowed) && ! empty($allowed) ? (string) reset($allowed) : '';
+        } elseif ( function_exists('eventosapp_get_event_modalidad') ) {
+            $event_mode = eventosapp_get_event_modalidad($event_id);
+            $mode = $event_mode === 'virtual' ? 'virtual' : 'presencial';
+        }
+    }
+
+    $mode = function_exists('eventosapp_normalize_ticket_modalidad') ? eventosapp_normalize_ticket_modalidad($mode) : sanitize_key((string) $mode);
+    return in_array($mode, ['presencial', 'virtual'], true) ? $mode : 'presencial';
+}
+
+function eventosapp_whatsapp_flows_bulk_ticket_whatsapp_sent_status_from_meta($ticket_id, $meta_map = []) {
+    $ticket_id = absint($ticket_id);
+    $sent_status = eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $ticket_id, '_eventosapp_whatsapp_sent_status', '');
+    $sent_status = sanitize_key(is_scalar($sent_status) ? (string) $sent_status : '');
+    if ( $sent_status === '' ) {
+        $first_sent = eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $ticket_id, '_eventosapp_whatsapp_first_sent_at', '');
+        $last_sent = eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $ticket_id, '_eventosapp_whatsapp_last_sent_at', '');
+        $sent_status = ($first_sent !== '' || $last_sent !== '') ? 'enviado' : 'no_enviado';
+    }
+    return $sent_status === 'enviado' ? 'enviado' : 'no_enviado';
+}
+
+function eventosapp_whatsapp_flows_bulk_status_array_has_checked_in($status_arr, $valid_dates_lookup = []) {
+    if ( ! is_array($status_arr) ) {
+        return false;
+    }
+
+    foreach ( $status_arr as $day => $status ) {
+        $day = eventosapp_whatsapp_flows_bulk_normalize_ymd($day);
+        $status = is_scalar($status) ? (string) $status : '';
+        if ( ! in_array($status, ['checked_in', 'checked-in'], true) ) {
+            continue;
+        }
+        if ( ! empty($valid_dates_lookup) && ( $day === '' || ! isset($valid_dates_lookup[$day]) ) ) {
+            continue;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+function eventosapp_whatsapp_flows_bulk_ticket_has_any_checkin_from_meta($ticket_id, $meta_map = [], $event_days = [], $event_date = '') {
+    $ticket_id = absint($ticket_id);
+    $event_date = eventosapp_whatsapp_flows_bulk_normalize_ymd($event_date);
+    $valid_dates_lookup = [];
+
+    if ( $event_date !== '' ) {
+        $valid_dates_lookup[$event_date] = true;
+    } elseif ( is_array($event_days) && ! empty($event_days) ) {
+        foreach ( $event_days as $day ) {
+            $day = eventosapp_whatsapp_flows_bulk_normalize_ymd($day);
+            if ( $day !== '' ) {
+                $valid_dates_lookup[$day] = true;
+            }
+        }
+    }
+
+    $presencial = eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $ticket_id, '_eventosapp_checkin_status', []);
+    $virtual = eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $ticket_id, '_eventosapp_virtual_checkin_status', []);
+
+    return eventosapp_whatsapp_flows_bulk_status_array_has_checked_in($presencial, $valid_dates_lookup)
+        || eventosapp_whatsapp_flows_bulk_status_array_has_checked_in($virtual, $valid_dates_lookup);
+}
+
 function eventosapp_whatsapp_flows_bulk_existing_ticket_ids($flow_post_id, $event_id, $ticket_ids = []) {
     global $wpdb;
     eventosapp_whatsapp_flows_maybe_install_tables();
@@ -3892,32 +4046,12 @@ function eventosapp_whatsapp_flows_bulk_existing_ticket_ids($flow_post_id, $even
 
 function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
     $filters = is_array($filters) ? $filters : [];
+    $event_id = absint($filters['evento_id'] ?? 0);
+    $event_date = ! empty($filters['event_date']) ? eventosapp_whatsapp_flows_bulk_normalize_ymd($filters['event_date']) : '';
+    $event_days = $event_id ? eventosapp_whatsapp_flows_bulk_get_event_valid_days($event_id) : [];
 
-    $args = [
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'any',
-        'fields'         => 'ids',
-        'posts_per_page' => -1,
-        'no_found_rows'  => true,
-    ];
-
-    $meta_query = ['relation' => 'AND'];
-    $date_query = [];
-
-    if ( ! empty($filters['evento_id']) ) {
-        $meta_query[] = [
-            'key'     => '_eventosapp_ticket_evento_id',
-            'value'   => absint($filters['evento_id']),
-            'compare' => '=',
-        ];
-    }
-
-    if ( ! empty($filters['localidad']) ) {
-        $meta_query[] = [
-            'key'     => '_eventosapp_asistente_localidad',
-            'value'   => sanitize_text_field((string) $filters['localidad']),
-            'compare' => '=',
-        ];
+    if ( $event_date !== '' && $event_id && ! empty($event_days) && ! in_array($event_date, $event_days, true) ) {
+        return [];
     }
 
     $modalidad_filter = '';
@@ -3935,7 +4069,52 @@ function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
         $whatsapp_status = sanitize_key((string) $filters['whatsapp_status']);
         if ( in_array($whatsapp_status, ['no_enviado', 'enviado'], true) ) {
             $whatsapp_tracking_filter = $whatsapp_status;
-        } else {
+        }
+    }
+
+    $checkin_status_filter = '';
+    if ( ! empty($filters['checkin_status']) ) {
+        $checkin_status_filter = sanitize_key((string) $filters['checkin_status']);
+        if ( ! in_array($checkin_status_filter, ['checked_in', 'not_checked_in'], true) ) {
+            $checkin_status_filter = '';
+        }
+    }
+
+    $args = [
+        'post_type'              => 'eventosapp_ticket',
+        'post_status'            => 'any',
+        'fields'                 => 'ids',
+        'posts_per_page'         => 500,
+        'no_found_rows'          => true,
+        'orderby'                => 'ID',
+        'order'                  => 'ASC',
+        'cache_results'          => false,
+        'update_post_meta_cache' => false,
+        'update_post_term_cache' => false,
+    ];
+
+    $meta_query = ['relation' => 'AND'];
+    $date_query = [];
+
+    if ( $event_id ) {
+        $meta_query[] = [
+            'key'     => '_eventosapp_ticket_evento_id',
+            'value'   => $event_id,
+            'compare' => '=',
+        ];
+    }
+
+    if ( ! empty($filters['localidad']) ) {
+        $meta_query[] = [
+            'key'     => '_eventosapp_asistente_localidad',
+            'value'   => sanitize_text_field((string) $filters['localidad']),
+            'compare' => '=',
+        ];
+    }
+
+    if ( ! empty($filters['whatsapp_status']) ) {
+        $whatsapp_status = sanitize_key((string) $filters['whatsapp_status']);
+        if ( ! in_array($whatsapp_status, ['no_enviado', 'enviado'], true) ) {
             $meta_query[] = [
                 'key'     => '_eventosapp_whatsapp_last_status',
                 'value'   => $whatsapp_status,
@@ -4010,54 +4189,91 @@ function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
         $args['date_query'] = $date_query;
     }
 
-    $query = new WP_Query($args);
-    $ticket_ids = array_map('absint', (array) $query->posts);
-    if ( ! empty($ticket_ids) ) {
-        update_meta_cache('post', $ticket_ids);
-    }
-
-    if ( ! empty($filters['event_date']) ) {
-        $event_date = sanitize_text_field((string) $filters['event_date']);
-        $filtered_ids = [];
-        foreach ( $ticket_ids as $tid ) {
-            $evento_id = absint(get_post_meta($tid, '_eventosapp_ticket_evento_id', true));
-            if ( $evento_id && function_exists('eventosapp_get_event_days') ) {
-                $event_days = eventosapp_get_event_days($evento_id);
-                if ( is_array($event_days) && in_array($event_date, $event_days, true) ) {
-                    $filtered_ids[] = $tid;
-                }
-            }
-        }
-        $ticket_ids = $filtered_ids;
-    }
-
+    $meta_keys = [];
     if ( $modalidad_filter !== '' ) {
-        $ticket_ids = array_values(array_filter($ticket_ids, function($tid) use ($modalidad_filter) {
-            $event_id = absint(get_post_meta($tid, '_eventosapp_ticket_evento_id', true));
-            return eventosapp_whatsapp_flows_bulk_get_ticket_modalidad_key($tid, $event_id) === $modalidad_filter;
-        }));
+        $meta_keys[] = '_eventosapp_ticket_modalidad';
     }
-
     if ( $whatsapp_tracking_filter !== '' ) {
-        $ticket_ids = array_values(array_filter($ticket_ids, function($tid) use ($whatsapp_tracking_filter) {
-            if ( function_exists('eventosapp_whatsapp_get_send_tracking') ) {
-                $tracking = eventosapp_whatsapp_get_send_tracking($tid, true);
-                $sent_status = is_array($tracking) && ! empty($tracking['sent_status']) ? sanitize_key((string) $tracking['sent_status']) : 'no_enviado';
-            } else {
-                $sent_status = sanitize_key((string) get_post_meta($tid, '_eventosapp_whatsapp_sent_status', true));
-                if ( $sent_status === '' ) {
-                    $first_sent = get_post_meta($tid, '_eventosapp_whatsapp_first_sent_at', true);
-                    $last_sent = get_post_meta($tid, '_eventosapp_whatsapp_last_sent_at', true);
-                    $sent_status = ($first_sent !== '' || $last_sent !== '') ? 'enviado' : 'no_enviado';
+        $meta_keys[] = '_eventosapp_whatsapp_sent_status';
+        $meta_keys[] = '_eventosapp_whatsapp_first_sent_at';
+        $meta_keys[] = '_eventosapp_whatsapp_last_sent_at';
+    }
+    if ( $checkin_status_filter !== '' ) {
+        $meta_keys[] = '_eventosapp_checkin_status';
+        $meta_keys[] = '_eventosapp_virtual_checkin_status';
+    }
+    if ( ($event_date !== '' && ! $event_id) || $modalidad_filter !== '' ) {
+        $meta_keys[] = '_eventosapp_ticket_evento_id';
+    }
+    $meta_keys = array_values(array_unique($meta_keys));
+
+    $ticket_ids = [];
+    $page = 1;
+    $max_pages_guard = 10000;
+
+    do {
+        $args['paged'] = $page;
+        $query = new WP_Query($args);
+        $page_ids = array_values(array_filter(array_map('absint', (array) $query->posts)));
+
+        if ( empty($page_ids) ) {
+            unset($query);
+            break;
+        }
+
+        $meta_map = ! empty($meta_keys) ? eventosapp_whatsapp_flows_bulk_get_ticket_meta_map($page_ids, $meta_keys) : [];
+
+        foreach ( $page_ids as $tid ) {
+            $ticket_event_id = $event_id;
+            if ( ! $ticket_event_id ) {
+                $ticket_event_id = absint(eventosapp_whatsapp_flows_bulk_meta_value($meta_map, $tid, '_eventosapp_ticket_evento_id', 0));
+            }
+
+            if ( $event_date !== '' ) {
+                $ticket_event_days = $ticket_event_id ? eventosapp_whatsapp_flows_bulk_get_event_valid_days($ticket_event_id) : [];
+                if ( ! empty($ticket_event_days) && ! in_array($event_date, $ticket_event_days, true) ) {
+                    continue;
                 }
             }
-            return $whatsapp_tracking_filter === 'enviado' ? $sent_status === 'enviado' : $sent_status !== 'enviado';
-        }));
-    }
+
+            if ( $modalidad_filter !== '' ) {
+                $ticket_mode = eventosapp_whatsapp_flows_bulk_ticket_modalidad_key_from_meta($tid, $ticket_event_id, $meta_map);
+                if ( $ticket_mode !== $modalidad_filter ) {
+                    continue;
+                }
+            }
+
+            if ( $whatsapp_tracking_filter !== '' ) {
+                $sent_status = eventosapp_whatsapp_flows_bulk_ticket_whatsapp_sent_status_from_meta($tid, $meta_map);
+                if ( $whatsapp_tracking_filter === 'enviado' && $sent_status !== 'enviado' ) {
+                    continue;
+                }
+                if ( $whatsapp_tracking_filter === 'no_enviado' && $sent_status === 'enviado' ) {
+                    continue;
+                }
+            }
+
+            if ( $checkin_status_filter !== '' ) {
+                $ticket_event_days = $ticket_event_id ? eventosapp_whatsapp_flows_bulk_get_event_valid_days($ticket_event_id) : [];
+                $has_checkin = eventosapp_whatsapp_flows_bulk_ticket_has_any_checkin_from_meta($tid, $meta_map, $ticket_event_days, $event_date);
+                if ( $checkin_status_filter === 'checked_in' && ! $has_checkin ) {
+                    continue;
+                }
+                if ( $checkin_status_filter === 'not_checked_in' && $has_checkin ) {
+                    continue;
+                }
+            }
+
+            $ticket_ids[] = $tid;
+        }
+
+        $count_page = count($page_ids);
+        unset($query, $page_ids, $meta_map);
+        $page++;
+    } while ( $count_page >= $args['posts_per_page'] && $page <= $max_pages_guard );
 
     $flow_send_status = sanitize_key((string)($filters['flow_send_status'] ?? ''));
     $flow_post_id = absint($filters['flow_id'] ?? 0);
-    $event_id = absint($filters['evento_id'] ?? 0);
     if ( $flow_post_id && $event_id && in_array($flow_send_status, ['no_recibido', 'recibido'], true) ) {
         $existing = eventosapp_whatsapp_flows_bulk_existing_ticket_ids($flow_post_id, $event_id, $ticket_ids);
         if ( ! empty($existing) ) {
@@ -4094,16 +4310,24 @@ function eventosapp_whatsapp_flows_bulk_preview_ticket_row($ticket_id, $flow_pos
     $existing = eventosapp_whatsapp_flows_bulk_existing_ticket_ids($flow_post_id, $event_id, [$ticket_id]);
     $labels = eventosapp_whatsapp_flows_bulk_modalidad_labels();
     $mode = eventosapp_whatsapp_flows_bulk_get_ticket_modalidad_key($ticket_id, $event_id);
+    $preview_meta_map = [
+        $ticket_id => [
+            '_eventosapp_checkin_status' => get_post_meta($ticket_id, '_eventosapp_checkin_status', true),
+            '_eventosapp_virtual_checkin_status' => get_post_meta($ticket_id, '_eventosapp_virtual_checkin_status', true),
+        ],
+    ];
+    $has_checkin = eventosapp_whatsapp_flows_bulk_ticket_has_any_checkin_from_meta($ticket_id, $preview_meta_map, eventosapp_whatsapp_flows_bulk_get_event_valid_days($event_id), '');
 
     return [
-        'ticket_code' => sanitize_text_field((string) $ticket_code),
-        'name'        => $name !== '' ? $name : 'Sin nombre',
-        'phone'       => $phone ?: sanitize_text_field((string) $phone_raw),
-        'email'       => sanitize_email((string) get_post_meta($ticket_id, '_eventosapp_asistente_email', true)),
-        'localidad'   => sanitize_text_field((string) get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true)),
-        'modalidad'   => $labels[$mode] ?? ucfirst($mode),
-        'status'      => trim($status_label . ($delivery_label ? ' / ' . $delivery_label : '')),
-        'flow_status' => ! empty($existing) ? 'Ya recibió este Flow' : 'No ha recibido este Flow',
+        'ticket_code'    => sanitize_text_field((string) $ticket_code),
+        'name'           => $name !== '' ? $name : 'Sin nombre',
+        'phone'          => $phone ?: sanitize_text_field((string) $phone_raw),
+        'email'          => sanitize_email((string) get_post_meta($ticket_id, '_eventosapp_asistente_email', true)),
+        'localidad'      => sanitize_text_field((string) get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true)),
+        'modalidad'      => $labels[$mode] ?? ucfirst($mode),
+        'checkin_status' => $has_checkin ? 'Chequeado' : 'No chequeado',
+        'status'         => trim($status_label . ($delivery_label ? ' / ' . $delivery_label : '')),
+        'flow_status'    => ! empty($existing) ? 'Ya recibió este Flow' : 'No ha recibido este Flow',
     ];
 }
 
@@ -5127,6 +5351,7 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
     $status_options = eventosapp_whatsapp_flows_bulk_status_options();
     $delivery_options = eventosapp_whatsapp_flows_bulk_delivery_options();
     $modalidad_labels = eventosapp_whatsapp_flows_bulk_modalidad_labels();
+    $checkin_status_options = eventosapp_whatsapp_flows_bulk_checkin_status_options();
     $selected_flow_id = absint($_GET['flow_id'] ?? 0);
     $selected_template_id = sanitize_key((string)($_GET['flow_template_id'] ?? ''));
 
@@ -5312,14 +5537,27 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
             </div>
             <div class="evapp-flow-filter-row">
                 <div class="evapp-flow-filter-field">
+                    <label for="checkin_status">Estado de check-in</label>
+                    <select name="filters[checkin_status]" id="checkin_status">
+                        <option value="">-- Todos --</option>
+                        <?php foreach ( $checkin_status_options as $value => $label ) : ?>
+                            <option value="<?php echo esc_attr($value); ?>"><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>Cuenta como chequeado si tiene check-in presencial o virtual en las fechas del evento.</small>
+                </div>
+                <div class="evapp-flow-filter-field">
                     <label for="event_date">Fecha específica del evento</label>
                     <input type="date" name="filters[event_date]" id="event_date">
-                    <small>Tickets válidos para esta fecha del evento. Déjalo vacío para incluir todas las fechas.</small>
+                    <small>Tickets válidos para esta fecha del evento. Si filtras check-in, se evaluará esa fecha específica.</small>
                 </div>
+            </div>
+            <div class="evapp-flow-filter-row">
                 <div class="evapp-flow-filter-field">
                     <label>&nbsp;</label>
                     <div class="evapp-empty" style="padding:12px;text-align:left;">Los campos adicionales del evento se cargan dinámicamente al seleccionar el evento.</div>
                 </div>
+                <div class="evapp-flow-filter-field"></div>
             </div>
         </div>
 
@@ -5533,6 +5771,7 @@ function eventosapp_whatsapp_flows_render_campaign_filter_tags($segment) {
     $status_options = eventosapp_whatsapp_flows_bulk_status_options();
     $delivery_options = eventosapp_whatsapp_flows_bulk_delivery_options();
     $modalidad_labels = eventosapp_whatsapp_flows_bulk_modalidad_labels();
+    $checkin_status_options = eventosapp_whatsapp_flows_bulk_checkin_status_options();
     $flow_status_labels = [
         'no_recibido' => 'No han recibido este Flow',
         'todos'       => 'Todos',
@@ -5552,6 +5791,7 @@ function eventosapp_whatsapp_flows_render_campaign_filter_tags($segment) {
         'delivery_status'  => 'Webhook',
         'localidad'        => 'Localidad',
         'modalidad'        => 'Modalidad',
+        'checkin_status'   => 'Check-in',
         'event_date'       => 'Fecha evento',
         'last_sent_from'   => 'Último envío desde',
         'last_sent_to'     => 'Último envío hasta',
@@ -5571,6 +5811,8 @@ function eventosapp_whatsapp_flows_render_campaign_filter_tags($segment) {
             $value = $modalidad_labels[$value] ?? $value;
         } elseif ( $key === 'flow_send_status' ) {
             $value = $flow_status_labels[$value] ?? $value;
+        } elseif ( $key === 'checkin_status' ) {
+            $value = $checkin_status_options[$value] ?? $value;
         }
         echo '<span class="evapp-flow-filter-tag"><strong>' . esc_html($label) . ':</strong> ' . esc_html((string) $value) . '</span>';
     }
@@ -5625,6 +5867,7 @@ function eventosapp_whatsapp_flows_render_campaign_step2($segment_id) {
                         <th>Asistente</th>
                         <th>Teléfono</th>
                         <th>Localidad / modalidad</th>
+                        <th>Check-in</th>
                         <th>Último estado WhatsApp</th>
                         <th>Estado Flow</th>
                     </tr>
@@ -5637,6 +5880,7 @@ function eventosapp_whatsapp_flows_render_campaign_step2($segment_id) {
                             <td><?php echo esc_html($row['name']); ?><br><small><?php echo esc_html($row['email']); ?></small></td>
                             <td><?php echo esc_html($row['phone']); ?></td>
                             <td><?php echo esc_html($row['localidad'] ?: 'Sin localidad'); ?><br><small><?php echo esc_html($row['modalidad']); ?></small></td>
+                            <td><span class="evapp-pill <?php echo $row['checkin_status'] === 'Chequeado' ? 'green' : 'gray'; ?>"><?php echo esc_html($row['checkin_status']); ?></span></td>
                             <td><?php echo esc_html($row['status'] ?: 'Sin estado'); ?></td>
                             <td><span class="evapp-pill <?php echo $row['flow_status'] === 'Ya recibió este Flow' ? 'green' : 'gray'; ?>"><?php echo esc_html($row['flow_status']); ?></span></td>
                         </tr>
