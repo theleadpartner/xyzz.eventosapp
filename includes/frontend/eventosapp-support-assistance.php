@@ -207,6 +207,43 @@ if ( ! function_exists('eventosapp_support_user_can_download_csv') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_support_get_download_csv_url') ) {
+    /**
+     * Construye una URL frontend para descargar el CSV de consultas.
+     *
+     * No se usa wp-admin/admin-post.php como URL principal porque algunos usuarios
+     * operativos del dashboard no tienen acceso al área administrativa y pueden ser
+     * redirigidos antes de que WordPress ejecute admin_post. El handler se mantiene
+     * también en admin_post por compatibilidad, pero los botones del frontend usan
+     * esta ruta segura.
+     *
+     * @param int $event_id
+     * @return string
+     */
+    function eventosapp_support_get_download_csv_url( $event_id ) {
+        $event_id = absint($event_id);
+        if ( ! $event_id ) {
+            return '#';
+        }
+
+        return add_query_arg([
+            'eventosapp_frontend_action' => 'eventosapp_support_download_csv',
+            'event_id'                   => $event_id,
+            '_wpnonce'                   => wp_create_nonce('eventosapp_support_download_csv_' . $event_id),
+        ], home_url('/'));
+    }
+}
+
+if ( ! function_exists('eventosapp_support_is_frontend_download_csv_request') ) {
+    function eventosapp_support_is_frontend_download_csv_request() {
+        $action = isset($_REQUEST['eventosapp_frontend_action'])
+            ? sanitize_key(wp_unslash($_REQUEST['eventosapp_frontend_action']))
+            : '';
+
+        return $action === 'eventosapp_support_download_csv';
+    }
+}
+
 if ( ! function_exists('eventosapp_support_get_all_assigned_user_ids') ) {
     function eventosapp_support_get_all_assigned_user_ids( $event_id ) {
         $ids = eventosapp_support_get_event_staff_user_ids($event_id);
@@ -846,13 +883,7 @@ if ( ! function_exists('eventosapp_support_render_groups_metabox') ) {
         ]);
 
         $latest = eventosapp_support_get_latest_attentions($event_id, 30);
-        $download_url = wp_nonce_url(
-            add_query_arg([
-                'action'   => 'eventosapp_support_download_csv',
-                'event_id' => $event_id,
-            ], admin_url('admin-post.php')),
-            'eventosapp_support_download_csv_' . $event_id
-        );
+        $download_url = eventosapp_support_get_download_csv_url($event_id);
         $can_download_csv = eventosapp_support_user_can_download_csv($event_id);
         ?>
         <style>
@@ -1830,13 +1861,7 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
     $can_download_csv = eventosapp_support_user_can_download_csv($event_id);
     $download_url = '';
     if ( $can_download_csv ) {
-        $download_url = wp_nonce_url(
-            add_query_arg([
-                'action'   => 'eventosapp_support_download_csv',
-                'event_id' => $event_id,
-            ], admin_url('admin-post.php')),
-            'eventosapp_support_download_csv_' . $event_id
-        );
+        $download_url = eventosapp_support_get_download_csv_url($event_id);
     }
 
     ob_start();
@@ -1924,84 +1949,103 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
 // =====================================================
 // Descarga CSV
 // =====================================================
-add_action('admin_post_eventosapp_support_download_csv', function(){
-    $event_id = absint($_GET['event_id'] ?? 0);
-    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
-        wp_die('Evento inválido.', '', 400);
-    }
+if ( ! function_exists('eventosapp_support_handle_download_csv') ) {
+    function eventosapp_support_handle_download_csv() {
+        $event_id = absint($_GET['event_id'] ?? 0);
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            wp_die('Evento inválido.', '', 400);
+        }
 
-    check_admin_referer('eventosapp_support_download_csv_' . $event_id);
+        check_admin_referer('eventosapp_support_download_csv_' . $event_id);
 
-    if ( ! eventosapp_support_user_can_download_csv($event_id) ) {
-        wp_die('No tienes permisos para descargar esta base de consultas.', '', 403);
-    }
+        if ( ! eventosapp_support_user_can_download_csv($event_id) ) {
+            wp_die('No tienes permisos para descargar esta base de consultas.', '', 403);
+        }
 
-    $scope = ['type' => 'all', 'group_number' => 0, 'label' => 'Vista total del evento'];
+        $scope = ['type' => 'all', 'group_number' => 0, 'label' => 'Vista total del evento'];
 
-    global $wpdb;
-    $table = eventosapp_support_table_name();
-    $where_params = [];
-    $where_sql = eventosapp_support_metrics_where_sql($event_id, $scope, $where_params);
+        global $wpdb;
+        $table = eventosapp_support_table_name();
+        $where_params = [];
+        $where_sql = eventosapp_support_metrics_where_sql($event_id, $scope, $where_params);
 
-    $rows = $wpdb->get_results( eventosapp_support_prepare_query(
-        "SELECT * FROM {$table} WHERE {$where_sql} ORDER BY id ASC",
-        $where_params
-    ), ARRAY_A );
+        $rows = $wpdb->get_results( eventosapp_support_prepare_query(
+            "SELECT * FROM {$table} WHERE {$where_sql} ORDER BY id ASC",
+            $where_params
+        ), ARRAY_A );
 
-    $filename = 'eventosapp-consultas-evento-' . $event_id . '-' . gmdate('Ymd-His') . '.csv';
+        $filename = 'eventosapp-consultas-evento-' . $event_id . '-' . gmdate('Ymd-His') . '.csv';
 
-    nocache_headers();
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename=' . $filename);
+        nocache_headers();
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=' . $filename);
 
-    $out = fopen('php://output', 'w');
-    fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF));
+        $out = fopen('php://output', 'w');
+        if ( ! $out ) {
+            exit;
+        }
 
-    fputcsv($out, [
-        'ID',
-        'Usuario que hizo la atención',
-        'Correo usuario',
-        'Evento',
-        'ID Evento',
-        'Nombre asistente',
-        'Apellido asistente',
-        'Cédula asistente',
-        'Ticket',
-        'Correo asistente',
-        'Teléfono asistente',
-        'Motivo de la consulta',
-        'Fecha de la consulta',
-        'Hora de la consulta',
-        'Grupo',
-        'Es coordinador',
-    ]);
-
-    $event_name = get_the_title($event_id);
-    foreach ( $rows as $row ) {
-        $local = isset($row['created_at_local']) ? (string) $row['created_at_local'] : '';
-        $date = $local ? substr($local, 0, 10) : '';
-        $time = $local ? substr($local, 11, 8) : '';
+        fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF));
 
         fputcsv($out, [
-            $row['id'] ?? '',
-            $row['staff_name'] ?? '',
-            $row['staff_email'] ?? '',
-            $event_name,
-            $event_id,
-            $row['attendee_first_name'] ?? '',
-            $row['attendee_last_name'] ?? '',
-            $row['attendee_cc'] ?? '',
-            $row['ticket_code'] ?? '',
-            $row['attendee_email'] ?? '',
-            $row['attendee_phone'] ?? '',
-            $row['reason'] ?? '',
-            $date,
-            $time,
-            $row['support_group_number'] ?? '',
-            ! empty($row['is_group_coordinator']) ? 'Sí' : 'No',
+            'ID',
+            'Usuario que hizo la atención',
+            'Correo usuario',
+            'Evento',
+            'ID Evento',
+            'Nombre asistente',
+            'Apellido asistente',
+            'Cédula asistente',
+            'Ticket',
+            'Correo asistente',
+            'Teléfono asistente',
+            'Motivo de la consulta',
+            'Fecha de la consulta',
+            'Hora de la consulta',
+            'Grupo',
+            'Es coordinador',
         ]);
-    }
 
-    fclose($out);
-    exit;
-});
+        $event_name = get_the_title($event_id);
+        foreach ( $rows as $row ) {
+            $local = isset($row['created_at_local']) ? (string) $row['created_at_local'] : '';
+            $date = $local ? substr($local, 0, 10) : '';
+            $time = $local ? substr($local, 11, 8) : '';
+
+            fputcsv($out, [
+                $row['id'] ?? '',
+                $row['staff_name'] ?? '',
+                $row['staff_email'] ?? '',
+                $event_name,
+                $event_id,
+                $row['attendee_first_name'] ?? '',
+                $row['attendee_last_name'] ?? '',
+                $row['attendee_cc'] ?? '',
+                $row['ticket_code'] ?? '',
+                $row['attendee_email'] ?? '',
+                $row['attendee_phone'] ?? '',
+                $row['reason'] ?? '',
+                $date,
+                $time,
+                $row['support_group_number'] ?? '',
+                ! empty($row['is_group_coordinator']) ? 'Sí' : 'No',
+            ]);
+        }
+
+        fclose($out);
+        exit;
+    }
+}
+
+if ( ! function_exists('eventosapp_support_handle_frontend_download_csv') ) {
+    function eventosapp_support_handle_frontend_download_csv() {
+        if ( ! eventosapp_support_is_frontend_download_csv_request() ) {
+            return;
+        }
+
+        eventosapp_support_handle_download_csv();
+    }
+}
+
+add_action('init', 'eventosapp_support_handle_frontend_download_csv', -1000);
+add_action('admin_post_eventosapp_support_download_csv', 'eventosapp_support_handle_download_csv');
