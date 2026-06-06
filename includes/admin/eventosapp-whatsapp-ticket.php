@@ -56,6 +56,10 @@ function eventosapp_whatsapp_default_settings() {
         'last_webhook_subscription_check' => [],
         'last_webhook_subscription_action' => [],
         'last_webhook_endpoint_test' => [],
+        'last_display_name_request' => [],
+        'last_display_name_status'  => [],
+        'last_display_name_register' => [],
+        'last_display_name_webhook' => [],
         'last_test_result'       => [],
         'message_intro'          => 'Hola {{nombre}}, tu inscripción para {{evento_nombre}} está confirmada.',
     ];
@@ -291,6 +295,11 @@ function eventosapp_whatsapp_get_settings() {
     if ( ! is_array($settings['last_webhook_endpoint_test'] ?? null) ) {
         $settings['last_webhook_endpoint_test'] = [];
     }
+    foreach ( ['last_display_name_request', 'last_display_name_status', 'last_display_name_register', 'last_display_name_webhook'] as $display_name_log_key ) {
+        if ( ! is_array($settings[$display_name_log_key] ?? null) ) {
+            $settings[$display_name_log_key] = [];
+        }
+    }
 
     $available_accounts = eventosapp_whatsapp_get_phone_accounts($settings);
     $test_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['test_phone_number_id'] ?? '');
@@ -408,9 +417,10 @@ function eventosapp_whatsapp_store_webhook_transport_debug($transport, $raw = ''
  * Solicitud genérica a Graph API para diagnósticos administrativos.
  * No se usa para envíos de mensajes, por eso no altera el flujo actual de WhatsApp.
  */
-function eventosapp_whatsapp_graph_api_request($method, $path, $body = null, $settings = null) {
+function eventosapp_whatsapp_graph_api_request($method, $path, $body = null, $settings = null, $query_args = []) {
     $method = strtoupper((string) $method);
     $settings = is_array($settings) ? wp_parse_args($settings, eventosapp_whatsapp_default_settings()) : eventosapp_whatsapp_get_settings();
+    $query_args = is_array($query_args) ? $query_args : [];
 
     $access_token = trim((string)($settings['access_token'] ?? ''));
     $api_version = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($settings['api_version'] ?? 'v23.0'));
@@ -440,6 +450,10 @@ function eventosapp_whatsapp_graph_api_request($method, $path, $body = null, $se
     }
 
     $endpoint = sprintf('https://graph.facebook.com/%s/%s', rawurlencode($api_version), $path);
+    if ( ! empty($query_args) ) {
+        $endpoint = add_query_arg($query_args, $endpoint);
+    }
+
     $args = [
         'timeout' => $timeout,
         'method' => $method,
@@ -500,6 +514,292 @@ function eventosapp_whatsapp_webhook_subscription_request($action, $waba_id = ''
 
     return $result;
 }
+
+/**
+ * Limpia un nombre visible antes de enviarlo a revisión de Meta.
+ */
+function eventosapp_whatsapp_sanitize_display_name($value) {
+    $name = wp_strip_all_tags((string) $value);
+    $name = sanitize_text_field($name);
+    $name = preg_replace('/\s+/u', ' ', trim($name));
+
+    if ( function_exists('mb_strlen') && function_exists('mb_substr') ) {
+        if ( mb_strlen($name, 'UTF-8') > 512 ) {
+            $name = mb_substr($name, 0, 512, 'UTF-8');
+        }
+    } elseif ( strlen($name) > 512 ) {
+        $name = substr($name, 0, 512);
+    }
+
+    return trim($name);
+}
+
+function eventosapp_whatsapp_display_name_status_label($status) {
+    $status = strtoupper(sanitize_text_field((string) $status));
+    $labels = [
+        'APPROVED'       => 'Aprobado',
+        'REJECTED'       => 'Rechazado',
+        'DECLINED'       => 'Rechazado',
+        'PENDING'        => 'Pendiente',
+        'PENDING_REVIEW' => 'Pendiente de revisión',
+        'DEFERRED'       => 'Aplazado por Meta',
+        'AVAILABLE_WITHOUT_REVIEW' => 'Disponible sin revisión',
+    ];
+
+    return $labels[$status] ?? ($status !== '' ? $status : 'Sin estado');
+}
+
+function eventosapp_whatsapp_display_name_rejection_label($reason) {
+    $reason = strtoupper(sanitize_text_field((string) $reason));
+    $labels = [
+        'NAME_EMPLOYEE_ISSUE'       => 'El nombre parece incluir el nombre de una persona o empleado.',
+        'NAME_ENDCLIENT_NOTRELATED' => 'El nombre no parece relacionado con la empresa.',
+        'NAME_FORMAT_UNACCEPTABLE'  => 'El formato del nombre no es aceptable.',
+        'NAME_INDIVIDUAL_ISSUE'     => 'El nombre parece identificar a una persona.',
+        'NAME_NOT_CONSISTENT'       => 'El nombre no coincide con la marca o negocio.',
+        'UNKNOWN'                   => 'Meta no entregó un motivo específico.',
+    ];
+
+    return $labels[$reason] ?? ($reason !== '' ? $reason : 'Sin motivo reportado');
+}
+
+function eventosapp_whatsapp_update_display_name_setting_snapshot($key, $context) {
+    $settings = eventosapp_whatsapp_get_settings();
+    $settings[$key] = eventosapp_whatsapp_sanitize_log_context($context);
+    update_option(EVENTOSAPP_WHATSAPP_OPTION, $settings, false);
+}
+
+function eventosapp_whatsapp_log_display_name_admin_action($event, $context, $status, $message, $phone_number_id = '') {
+    eventosapp_whatsapp_add_activity_log($event, $context);
+
+    if ( function_exists('eventosapp_whatsapp_insert_central_log') ) {
+        eventosapp_whatsapp_insert_central_log([
+            'channel'                => 'sistema',
+            'context'                => 'display_name_api',
+            'status'                 => sanitize_key((string) $status),
+            'sender_phone_number_id' => eventosapp_whatsapp_sanitize_phone_number_id($phone_number_id),
+            'message'                => sanitize_textarea_field((string) $message),
+            'meta'                   => $context,
+        ]);
+    }
+}
+
+/**
+ * Solicita a Meta el cambio del nombre visible del Phone Number ID.
+ * Endpoint oficial usado: POST /{PHONE_NUMBER_ID}?new_display_name=Nombre.
+ */
+function eventosapp_whatsapp_request_display_name_update($phone_number_id, $new_display_name) {
+    $settings = eventosapp_whatsapp_get_settings();
+    $phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($phone_number_id);
+    $new_display_name = eventosapp_whatsapp_sanitize_display_name($new_display_name);
+
+    if ( $phone_number_id === '' ) {
+        return [
+            'ok' => false,
+            'http_code' => 0,
+            'message' => 'Debes seleccionar un Phone Number ID válido.',
+            'response' => null,
+        ];
+    }
+
+    if ( $new_display_name === '' ) {
+        return [
+            'ok' => false,
+            'http_code' => 0,
+            'message' => 'Debes escribir el nuevo nombre visible que se enviará a Meta.',
+            'response' => null,
+        ];
+    }
+
+    $result = eventosapp_whatsapp_graph_api_request(
+        'POST',
+        rawurlencode($phone_number_id),
+        null,
+        $settings,
+        ['new_display_name' => $new_display_name]
+    );
+
+    $context = [
+        'action'           => 'request_display_name_update',
+        'requested_at'     => current_time('mysql'),
+        'phone_number_id'  => $phone_number_id,
+        'new_display_name' => $new_display_name,
+        'ok'               => ! empty($result['ok']),
+        'http_code'        => $result['http_code'] ?? 0,
+        'message'          => $result['message'] ?? '',
+        'response'         => $result['response'] ?? null,
+    ];
+
+    eventosapp_whatsapp_update_display_name_setting_snapshot('last_display_name_request', $context);
+    eventosapp_whatsapp_log_display_name_admin_action(
+        ! empty($result['ok']) ? 'display_name_solicitud_enviada' : 'display_name_solicitud_error',
+        $context,
+        ! empty($result['ok']) ? 'submitted' : 'error',
+        $result['message'] ?? 'Solicitud de nombre visible ejecutada.',
+        $phone_number_id
+    );
+
+    if ( ! empty($result['ok']) ) {
+        $result['message'] = 'Meta recibió la solicitud del nombre visible. Ahora debes esperar la revisión y consultar el estado en esta misma sección.';
+    }
+
+    $result['context'] = $context;
+    return $result;
+}
+
+/**
+ * Consulta el estado actual y el estado del nuevo nombre visible, cuando Meta lo expone.
+ */
+function eventosapp_whatsapp_check_display_name_status($phone_number_id) {
+    $settings = eventosapp_whatsapp_get_settings();
+    $phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($phone_number_id);
+
+    if ( $phone_number_id === '' ) {
+        return [
+            'ok' => false,
+            'http_code' => 0,
+            'message' => 'Debes seleccionar un Phone Number ID válido para consultar el estado.',
+            'response' => null,
+        ];
+    }
+
+    $field_groups = [
+        'current' => 'display_phone_number,verified_name,name_status',
+        'pending' => 'new_display_name,new_name_status',
+    ];
+    $merged = [];
+    $responses = [];
+    $errors = [];
+    $ok = false;
+    $last_http_code = 0;
+
+    foreach ( $field_groups as $group => $fields ) {
+        $result = eventosapp_whatsapp_graph_api_request(
+            'GET',
+            rawurlencode($phone_number_id),
+            null,
+            $settings,
+            ['fields' => $fields]
+        );
+        $last_http_code = absint($result['http_code'] ?? 0);
+        $responses[$group] = [
+            'ok'        => ! empty($result['ok']),
+            'http_code' => $last_http_code,
+            'message'   => $result['message'] ?? '',
+            'response'  => $result['response'] ?? null,
+        ];
+
+        if ( ! empty($result['ok']) && is_array($result['response'] ?? null) ) {
+            $ok = true;
+            $merged = array_merge($merged, $result['response']);
+        } elseif ( empty($result['ok']) ) {
+            $errors[$group] = $result['message'] ?? 'Meta no respondió correctamente.';
+        }
+    }
+
+    $context = [
+        'action'          => 'check_display_name_status',
+        'checked_at'      => current_time('mysql'),
+        'phone_number_id' => $phone_number_id,
+        'ok'              => $ok,
+        'http_code'       => $last_http_code,
+        'response'        => $merged,
+        'partial_errors'  => $errors,
+        'raw_responses'   => $responses,
+    ];
+
+    eventosapp_whatsapp_update_display_name_setting_snapshot('last_display_name_status', $context);
+    eventosapp_whatsapp_log_display_name_admin_action(
+        $ok ? 'display_name_estado_consultado' : 'display_name_estado_error',
+        $context,
+        $ok ? 'checked' : 'error',
+        $ok ? 'Consulta de nombre visible realizada.' : 'No se pudo consultar el estado del nombre visible.',
+        $phone_number_id
+    );
+
+    return [
+        'ok'        => $ok,
+        'http_code' => $last_http_code,
+        'message'   => $ok ? 'Estado del nombre visible consultado correctamente.' : 'Meta no permitió consultar el estado del nombre visible. Revisa el token, permisos y versión Graph API.',
+        'response'  => $merged,
+        'context'   => $context,
+    ];
+}
+
+/**
+ * Re-registra el Phone Number ID cuando Meta aprueba el nuevo nombre visible.
+ * Endpoint oficial usado: POST /{PHONE_NUMBER_ID}/register con messaging_product y PIN.
+ */
+function eventosapp_whatsapp_register_display_name_after_approval($phone_number_id, $pin) {
+    $settings = eventosapp_whatsapp_get_settings();
+    $phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($phone_number_id);
+    $pin = preg_replace('/\D+/', '', (string) $pin);
+
+    if ( $phone_number_id === '' ) {
+        return [
+            'ok' => false,
+            'http_code' => 0,
+            'message' => 'Debes seleccionar un Phone Number ID válido para volver a registrar el número.',
+            'response' => null,
+        ];
+    }
+
+    if ( strlen($pin) !== 6 ) {
+        return [
+            'ok' => false,
+            'http_code' => 0,
+            'message' => 'Debes ingresar el PIN de verificación en dos pasos de 6 dígitos.',
+            'response' => null,
+        ];
+    }
+
+    $result = eventosapp_whatsapp_graph_api_request(
+        'POST',
+        rawurlencode($phone_number_id) . '/register',
+        [
+            'messaging_product' => 'whatsapp',
+            'pin'               => $pin,
+        ],
+        $settings
+    );
+
+    $context = [
+        'action'          => 'register_display_name_after_approval',
+        'registered_at'   => current_time('mysql'),
+        'phone_number_id' => $phone_number_id,
+        'ok'              => ! empty($result['ok']),
+        'http_code'       => $result['http_code'] ?? 0,
+        'message'         => $result['message'] ?? '',
+        'response'        => $result['response'] ?? null,
+    ];
+
+    eventosapp_whatsapp_update_display_name_setting_snapshot('last_display_name_register', $context);
+    eventosapp_whatsapp_log_display_name_admin_action(
+        ! empty($result['ok']) ? 'display_name_numero_registrado' : 'display_name_registro_error',
+        $context,
+        ! empty($result['ok']) ? 'registered' : 'error',
+        $result['message'] ?? 'Re-registro de número ejecutado.',
+        $phone_number_id
+    );
+
+    if ( ! empty($result['ok']) ) {
+        $result['message'] = 'Número registrado nuevamente. Si el nombre ya estaba aprobado, Meta debería reflejarlo en los servidores de WhatsApp.';
+    }
+
+    $result['context'] = $context;
+    return $result;
+}
+
+function eventosapp_whatsapp_render_display_name_result_summary($context) {
+    $context = is_array($context) ? $context : [];
+    if ( empty($context) ) {
+        echo '<span class="evapp-wa-help">Sin registros todavía.</span>';
+        return;
+    }
+
+    eventosapp_whatsapp_render_log_details($context);
+}
+
 
 /**
  * Guarda logs solo cuando está activo el modo debug.
@@ -2579,6 +2879,13 @@ function eventosapp_whatsapp_render_settings_page() {
             <div class="notice <?php echo $ok ? 'notice-success' : 'notice-error'; ?> is-dismissible"><p><strong>EventosApp:</strong> <?php echo esc_html($msg); ?></p></div>
         <?php endif; ?>
 
+        <?php if ( isset($_GET['evapp_whatsapp_display_name']) ) :
+            $ok = sanitize_text_field(wp_unslash($_GET['evapp_whatsapp_display_name'])) === '1';
+            $msg = isset($_GET['evapp_whatsapp_msg']) ? sanitize_text_field(wp_unslash($_GET['evapp_whatsapp_msg'])) : ($ok ? 'Acción de nombre visible ejecutada.' : 'No se pudo ejecutar la acción de nombre visible.');
+            ?>
+            <div class="notice <?php echo $ok ? 'notice-success' : 'notice-error'; ?> is-dismissible"><p><strong>EventosApp:</strong> <?php echo esc_html($msg); ?></p></div>
+        <?php endif; ?>
+
         <style>
             .evapp-wa-card{background:#fff;border:1px solid #ccd0d4;border-radius:8px;padding:18px;margin:18px 0;max-width:980px;}
             .evapp-wa-card h2{margin-top:0;}
@@ -2594,7 +2901,12 @@ function eventosapp_whatsapp_render_settings_page() {
             .evapp-wa-phone-accounts{display:flex;flex-direction:column;gap:10px;}
             .evapp-wa-phone-account-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(240px,1fr) auto;gap:8px;align-items:center;background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:10px;}
             .evapp-wa-phone-account-row input{width:100%;}
-            @media (max-width: 782px){.evapp-wa-grid{grid-template-columns:1fr;}.evapp-wa-phone-account-row{grid-template-columns:1fr;}}
+            .evapp-wa-actions-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:12px;}
+            .evapp-wa-action-form{border:1px solid #dcdcde;background:#f6f7f7;border-radius:6px;padding:12px;min-width:260px;max-width:100%;}
+            .evapp-wa-action-form label{font-weight:600;display:block;margin-bottom:6px;}
+            .evapp-wa-action-form select,.evapp-wa-action-form input[type="text"],.evapp-wa-action-form input[type="password"]{width:100%;margin-bottom:8px;}
+            .evapp-wa-status-pill{display:inline-block;padding:2px 7px;border-radius:999px;background:#eef6ff;border:1px solid #b8d6f3;font-size:12px;font-weight:600;}
+            @media (max-width: 782px){.evapp-wa-grid{grid-template-columns:1fr;}.evapp-wa-phone-account-row{grid-template-columns:1fr;}.evapp-wa-action-form{width:100%;}}
         </style>
 
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
@@ -2790,6 +3102,91 @@ function eventosapp_whatsapp_render_settings_page() {
 
             <?php submit_button('Guardar configuración de WhatsApp'); ?>
         </form>
+
+        <?php
+        $display_name_accounts = eventosapp_whatsapp_get_phone_accounts($settings);
+        $last_display_name_request = isset($settings['last_display_name_request']) && is_array($settings['last_display_name_request']) ? $settings['last_display_name_request'] : [];
+        $last_display_name_status = isset($settings['last_display_name_status']) && is_array($settings['last_display_name_status']) ? $settings['last_display_name_status'] : [];
+        $last_display_name_register = isset($settings['last_display_name_register']) && is_array($settings['last_display_name_register']) ? $settings['last_display_name_register'] : [];
+        $last_display_name_webhook = get_option('eventosapp_whatsapp_last_display_name_webhook', []);
+        $last_display_name_webhook = is_array($last_display_name_webhook) ? ($last_display_name_webhook['_last'] ?? $last_display_name_webhook) : [];
+        $last_status_response = isset($last_display_name_status['response']) && is_array($last_display_name_status['response']) ? $last_display_name_status['response'] : [];
+        ?>
+        <div class="evapp-wa-card">
+            <h2>Nombre visible del número WhatsApp</h2>
+            <p class="evapp-wa-help">
+                Desde aquí puedes solicitar a Meta el cambio del nombre visible de un Phone Number ID usando el campo <span class="evapp-wa-code">new_display_name</span>, consultar el estado y volver a registrar el número cuando el nombre esté aprobado. Para recibir la decisión automática de Meta, activa el campo de webhook <span class="evapp-wa-code">phone_number_name_update</span> en tu app de Meta.
+            </p>
+
+            <?php if ( ! empty($last_status_response) ) : ?>
+                <table class="evapp-wa-status-table" style="margin-top:12px;">
+                    <tbody>
+                        <tr><th>Número visible actual</th><td><?php echo esc_html($last_status_response['display_phone_number'] ?? 'No reportado'); ?></td></tr>
+                        <tr><th>Nombre aprobado actual</th><td><?php echo esc_html($last_status_response['verified_name'] ?? 'No reportado'); ?></td></tr>
+                        <tr><th>Estado actual</th><td><span class="evapp-wa-status-pill"><?php echo esc_html(eventosapp_whatsapp_display_name_status_label($last_status_response['name_status'] ?? '')); ?></span></td></tr>
+                        <tr><th>Nuevo nombre solicitado</th><td><?php echo esc_html($last_status_response['new_display_name'] ?? 'Sin solicitud pendiente reportada por Meta'); ?></td></tr>
+                        <tr><th>Estado del nuevo nombre</th><td><span class="evapp-wa-status-pill"><?php echo esc_html(eventosapp_whatsapp_display_name_status_label($last_status_response['new_name_status'] ?? '')); ?></span></td></tr>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+
+            <?php if ( empty($display_name_accounts) ) : ?>
+                <p class="evapp-wa-help" style="margin-top:12px;">Primero guarda el Phone Number ID por defecto o agrega números emisores adicionales en la sección API de WhatsApp Cloud.</p>
+            <?php else : ?>
+                <div class="evapp-wa-actions-row">
+                    <form class="evapp-wa-action-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                        <?php wp_nonce_field('eventosapp_whatsapp_display_name_request', 'eventosapp_whatsapp_display_name_nonce'); ?>
+                        <input type="hidden" name="action" value="eventosapp_whatsapp_display_name_request">
+                        <label for="evapp_wa_display_name_phone_request">Solicitar nombre visible</label>
+                        <select id="evapp_wa_display_name_phone_request" name="display_phone_number_id">
+                            <?php foreach ( $display_name_accounts as $account_id => $account ) : ?>
+                                <option value="<?php echo esc_attr($account_id); ?>"><?php echo esc_html($account['label']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <input type="text" name="new_display_name" value="" placeholder="Ej: EventosApp" autocomplete="off" maxlength="512">
+                        <?php submit_button('Enviar a revisión de Meta', 'secondary', 'submit', false); ?>
+                        <p class="evapp-wa-help">Usa el nombre de marca más directo posible. Evita frases largas, descriptores genéricos o textos que no coincidan con la marca.</p>
+                    </form>
+
+                    <form class="evapp-wa-action-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                        <?php wp_nonce_field('eventosapp_whatsapp_display_name_check', 'eventosapp_whatsapp_display_name_nonce'); ?>
+                        <input type="hidden" name="action" value="eventosapp_whatsapp_display_name_check">
+                        <label for="evapp_wa_display_name_phone_check">Consultar estado</label>
+                        <select id="evapp_wa_display_name_phone_check" name="display_phone_number_id">
+                            <?php foreach ( $display_name_accounts as $account_id => $account ) : ?>
+                                <option value="<?php echo esc_attr($account_id); ?>"><?php echo esc_html($account['label']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <?php submit_button('Consultar en Meta', 'secondary', 'submit', false); ?>
+                        <p class="evapp-wa-help">Consulta el nombre aprobado actual y, si Meta lo expone, el nuevo nombre pendiente o aprobado.</p>
+                    </form>
+
+                    <form class="evapp-wa-action-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                        <?php wp_nonce_field('eventosapp_whatsapp_display_name_register', 'eventosapp_whatsapp_display_name_nonce'); ?>
+                        <input type="hidden" name="action" value="eventosapp_whatsapp_display_name_register">
+                        <label for="evapp_wa_display_name_phone_register">Aplicar nombre aprobado</label>
+                        <select id="evapp_wa_display_name_phone_register" name="display_phone_number_id">
+                            <?php foreach ( $display_name_accounts as $account_id => $account ) : ?>
+                                <option value="<?php echo esc_attr($account_id); ?>"><?php echo esc_html($account['label']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <input type="password" name="display_name_pin" value="" placeholder="PIN de 6 dígitos" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="new-password">
+                        <?php submit_button('Volver a registrar número', 'secondary', 'submit', false); ?>
+                        <p class="evapp-wa-help">Ejecuta esta acción solo cuando el nuevo nombre aparezca aprobado. Es el paso que sincroniza el nombre aprobado con los servidores de WhatsApp.</p>
+                    </form>
+                </div>
+            <?php endif; ?>
+
+            <h3>Últimos resultados</h3>
+            <table class="evapp-wa-status-table">
+                <tbody>
+                    <tr><th>Última solicitud enviada</th><td><?php eventosapp_whatsapp_render_display_name_result_summary($last_display_name_request); ?></td></tr>
+                    <tr><th>Última consulta de estado</th><td><?php eventosapp_whatsapp_render_display_name_result_summary($last_display_name_status); ?></td></tr>
+                    <tr><th>Último re-registro</th><td><?php eventosapp_whatsapp_render_display_name_result_summary($last_display_name_register); ?></td></tr>
+                    <tr><th>Último webhook de decisión</th><td><?php eventosapp_whatsapp_render_display_name_result_summary($last_display_name_webhook); ?></td></tr>
+                </tbody>
+            </table>
+        </div>
 
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
             <?php wp_nonce_field('eventosapp_whatsapp_send_test', 'eventosapp_whatsapp_test_nonce'); ?>
@@ -3030,6 +3427,77 @@ add_action('admin_post_eventosapp_whatsapp_webhook_endpoint_test', function() {
 });
 
 /**
+ * Solicita a Meta un nuevo nombre visible para un Phone Number ID.
+ */
+add_action('admin_post_eventosapp_whatsapp_display_name_request', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('Permisos insuficientes.');
+    }
+
+    if ( ! isset($_POST['eventosapp_whatsapp_display_name_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_display_name_nonce'], 'eventosapp_whatsapp_display_name_request') ) {
+        wp_die('Nonce inválido.');
+    }
+
+    $phone_number_id = isset($_POST['display_phone_number_id']) ? eventosapp_whatsapp_sanitize_phone_number_id(wp_unslash($_POST['display_phone_number_id'])) : '';
+    $new_display_name = isset($_POST['new_display_name']) ? eventosapp_whatsapp_sanitize_display_name(wp_unslash($_POST['new_display_name'])) : '';
+    $result = eventosapp_whatsapp_request_display_name_update($phone_number_id, $new_display_name);
+
+    wp_safe_redirect(add_query_arg([
+        'page' => 'eventosapp_whatsapp_tickets',
+        'evapp_whatsapp_display_name' => ! empty($result['ok']) ? '1' : '0',
+        'evapp_whatsapp_msg' => rawurlencode($result['message'] ?? 'Solicitud de nombre visible ejecutada.'),
+    ], admin_url('admin.php')));
+    exit;
+});
+
+/**
+ * Consulta en Meta el estado del nombre visible de un Phone Number ID.
+ */
+add_action('admin_post_eventosapp_whatsapp_display_name_check', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('Permisos insuficientes.');
+    }
+
+    if ( ! isset($_POST['eventosapp_whatsapp_display_name_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_display_name_nonce'], 'eventosapp_whatsapp_display_name_check') ) {
+        wp_die('Nonce inválido.');
+    }
+
+    $phone_number_id = isset($_POST['display_phone_number_id']) ? eventosapp_whatsapp_sanitize_phone_number_id(wp_unslash($_POST['display_phone_number_id'])) : '';
+    $result = eventosapp_whatsapp_check_display_name_status($phone_number_id);
+
+    wp_safe_redirect(add_query_arg([
+        'page' => 'eventosapp_whatsapp_tickets',
+        'evapp_whatsapp_display_name' => ! empty($result['ok']) ? '1' : '0',
+        'evapp_whatsapp_msg' => rawurlencode($result['message'] ?? 'Consulta de nombre visible ejecutada.'),
+    ], admin_url('admin.php')));
+    exit;
+});
+
+/**
+ * Vuelve a registrar el Phone Number ID para aplicar un nombre visible aprobado.
+ */
+add_action('admin_post_eventosapp_whatsapp_display_name_register', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('Permisos insuficientes.');
+    }
+
+    if ( ! isset($_POST['eventosapp_whatsapp_display_name_nonce']) || ! wp_verify_nonce($_POST['eventosapp_whatsapp_display_name_nonce'], 'eventosapp_whatsapp_display_name_register') ) {
+        wp_die('Nonce inválido.');
+    }
+
+    $phone_number_id = isset($_POST['display_phone_number_id']) ? eventosapp_whatsapp_sanitize_phone_number_id(wp_unslash($_POST['display_phone_number_id'])) : '';
+    $pin = isset($_POST['display_name_pin']) ? preg_replace('/\D+/', '', (string) wp_unslash($_POST['display_name_pin'])) : '';
+    $result = eventosapp_whatsapp_register_display_name_after_approval($phone_number_id, $pin);
+
+    wp_safe_redirect(add_query_arg([
+        'page' => 'eventosapp_whatsapp_tickets',
+        'evapp_whatsapp_display_name' => ! empty($result['ok']) ? '1' : '0',
+        'evapp_whatsapp_msg' => rawurlencode($result['message'] ?? 'Re-registro de nombre visible ejecutado.'),
+    ], admin_url('admin.php')));
+    exit;
+});
+
+/**
  * Guarda settings globales.
  */
 add_action('admin_post_eventosapp_whatsapp_save_settings', function() {
@@ -3100,6 +3568,10 @@ add_action('admin_post_eventosapp_whatsapp_save_settings', function() {
         'last_webhook_subscription_check' => isset($current['last_webhook_subscription_check']) && is_array($current['last_webhook_subscription_check']) ? $current['last_webhook_subscription_check'] : [],
         'last_webhook_subscription_action' => isset($current['last_webhook_subscription_action']) && is_array($current['last_webhook_subscription_action']) ? $current['last_webhook_subscription_action'] : [],
         'last_webhook_endpoint_test' => isset($current['last_webhook_endpoint_test']) && is_array($current['last_webhook_endpoint_test']) ? $current['last_webhook_endpoint_test'] : [],
+        'last_display_name_request' => isset($current['last_display_name_request']) && is_array($current['last_display_name_request']) ? $current['last_display_name_request'] : [],
+        'last_display_name_status'  => isset($current['last_display_name_status']) && is_array($current['last_display_name_status']) ? $current['last_display_name_status'] : [],
+        'last_display_name_register' => isset($current['last_display_name_register']) && is_array($current['last_display_name_register']) ? $current['last_display_name_register'] : [],
+        'last_display_name_webhook' => isset($current['last_display_name_webhook']) && is_array($current['last_display_name_webhook']) ? $current['last_display_name_webhook'] : [],
         'last_test_result'       => isset($current['last_test_result']) && is_array($current['last_test_result']) ? $current['last_test_result'] : [],
         'message_intro'          => isset($_POST['message_intro']) ? sanitize_textarea_field(wp_unslash($_POST['message_intro'])) : eventosapp_whatsapp_default_settings()['message_intro'],
     ];
@@ -7452,6 +7924,7 @@ function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unk
         'statuses' => 0,
         'messages' => 0,
         'nfm_replies' => 0,
+        'display_name_updates' => 0,
         'fields' => [],
         'phone_number_ids' => [],
         'message_types' => [],
@@ -7468,6 +7941,9 @@ function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unk
             $field = sanitize_text_field((string)($change['field'] ?? ''));
             if ( $field !== '' ) {
                 $summary['fields'][$field] = $field;
+            }
+            if ( $field === 'phone_number_name_update' ) {
+                $summary['display_name_updates']++;
             }
             $value = isset($change['value']) && is_array($change['value']) ? $change['value'] : [];
             if ( ! empty($value['metadata']['phone_number_id']) ) {
@@ -7525,7 +8001,12 @@ function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unk
         $changes = isset($entry['changes']) && is_array($entry['changes']) ? $entry['changes'] : [];
 
         foreach ( $changes as $change ) {
+            $field = sanitize_text_field((string)($change['field'] ?? ''));
             $value = isset($change['value']) && is_array($change['value']) ? $change['value'] : [];
+
+            if ( $field === 'phone_number_name_update' ) {
+                eventosapp_whatsapp_process_display_name_update_webhook($value, $entry, $change, $payload, $transport);
+            }
 
             if ( ! empty($value['statuses']) && is_array($value['statuses']) ) {
                 foreach ( $value['statuses'] as $status ) {
@@ -7550,6 +8031,54 @@ function eventosapp_whatsapp_process_webhook_payload($payload, $transport = 'unk
                 }
             }
         }
+    }
+}
+
+function eventosapp_whatsapp_process_display_name_update_webhook($value, $entry = [], $change = [], $payload = [], $transport = 'unknown') {
+    $value = is_array($value) ? $value : [];
+    $display_phone_number = sanitize_text_field((string)($value['display_phone_number'] ?? ''));
+    $phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($value['phone_number_id'] ?? ($value['metadata']['phone_number_id'] ?? ''));
+    $decision = strtoupper(sanitize_text_field((string)($value['decision'] ?? ($value['name_status'] ?? ''))));
+    $requested_name = eventosapp_whatsapp_sanitize_display_name($value['requested_verified_name'] ?? ($value['requested_display_name'] ?? ($value['new_display_name'] ?? '')));
+    $rejection_reason = strtoupper(sanitize_text_field((string)($value['rejection_reason'] ?? '')));
+
+    $context = [
+        'received_at'          => current_time('mysql'),
+        'transport'            => sanitize_key((string) $transport),
+        'display_phone_number' => $display_phone_number,
+        'phone_number_id'      => $phone_number_id,
+        'decision'             => $decision,
+        'decision_label'       => eventosapp_whatsapp_display_name_status_label($decision),
+        'requested_name'       => $requested_name,
+        'rejection_reason'     => $rejection_reason,
+        'rejection_label'      => eventosapp_whatsapp_display_name_rejection_label($rejection_reason),
+        'raw_value'            => $value,
+    ];
+
+    $stored = get_option('eventosapp_whatsapp_last_display_name_webhook', []);
+    if ( ! is_array($stored) ) {
+        $stored = [];
+    }
+    $key = $phone_number_id !== '' ? $phone_number_id : ($display_phone_number !== '' ? $display_phone_number : '_last');
+    $stored[$key] = eventosapp_whatsapp_sanitize_log_context($context);
+    $stored['_last'] = eventosapp_whatsapp_sanitize_log_context($context);
+    update_option('eventosapp_whatsapp_last_display_name_webhook', $stored, false);
+    eventosapp_whatsapp_update_display_name_setting_snapshot('last_display_name_webhook', $context);
+
+    eventosapp_whatsapp_add_activity_log('display_name_webhook_decision_recibida', $context);
+
+    if ( function_exists('eventosapp_whatsapp_insert_central_log') ) {
+        eventosapp_whatsapp_insert_central_log([
+            'channel'                => 'webhook',
+            'context'                => 'display_name_webhook',
+            'status'                 => sanitize_key(strtolower($decision ?: 'received')),
+            'sender_phone_number_id' => $phone_number_id,
+            'transport'              => sanitize_key((string) $transport),
+            'message'                => $decision !== ''
+                ? 'Meta reportó decisión de nombre visible: ' . eventosapp_whatsapp_display_name_status_label($decision)
+                : 'Meta envió actualización de nombre visible.',
+            'meta'                   => $context,
+        ]);
     }
 }
 
