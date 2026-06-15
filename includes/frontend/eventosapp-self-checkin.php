@@ -678,6 +678,13 @@ add_shortcode('eventosapp_self_checkin', function( $atts ) {
 .evsc-alert-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
 .evsc-admin-note{margin:16px 0 18px;padding:14px 16px;border-radius:16px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:15px;line-height:1.45;font-weight:700}
 .evsc-admin-note strong{color:#7c2d12}
+html.evsc-kiosk-lock,body.evsc-kiosk-lock{overscroll-behavior:none;overscroll-behavior-x:none;background:#f8fafc}
+body.evsc-kiosk-lock{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+body.evsc-kiosk-lock input,body.evsc-kiosk-lock textarea,body.evsc-kiosk-lock select,body.evsc-kiosk-lock [contenteditable="true"]{touch-action:manipulation;-webkit-user-select:text;user-select:text}
+body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
+.evsc-kiosk-hint{display:none;margin:0 0 14px;padding:12px 14px;border-radius:14px;background:#ecfdf5;color:#065f46;border:1px solid #bbf7d0;font-size:14px;line-height:1.4;font-weight:800}
+.evsc-kiosk-hint.is-visible{display:block}
+.evsc-fullscreen-btn{display:inline-flex;margin-left:8px;border:0;border-radius:999px;background:#047857;color:#fff;padding:8px 12px;font-size:13px;font-weight:900;cursor:pointer;touch-action:manipulation}
 @media(max-width:800px){.evsc-wrap{padding:14px;border-radius:18px}.evsc-title{font-size:30px}.evsc-search{grid-template-columns:1fr}.evsc-input{font-size:28px;min-height:74px}.evsc-btn{width:100%;min-height:68px}.evsc-result{grid-template-columns:1fr}.evsc-actions{justify-content:stretch}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-result-name{font-size:23px}}
 CSS;
 
@@ -702,6 +709,141 @@ jQuery(function($){
   var selectedTicket = null;
   var confirmedTicket = null;
   var currentRows = [];
+  var kioskHistoryArmed = false;
+  var kioskLastTouch = {x:0, y:0, edge:false};
+
+  function evscIsEditableTarget(target){
+    if(!target) return false;
+    var tag = String(target.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable === true;
+  }
+
+  function evscTryFullscreen(){
+    var docEl = document.documentElement;
+    if(!docEl || document.fullscreenElement || !docEl.requestFullscreen){
+      return;
+    }
+    try {
+      var request = docEl.requestFullscreen({navigationUI:'hide'});
+      if(request && request.catch){
+        request.catch(function(){});
+      }
+    } catch(e) {}
+  }
+
+  function evscArmHistoryTrap(){
+    if(kioskHistoryArmed){
+      return;
+    }
+    kioskHistoryArmed = true;
+
+    try {
+      window.history.replaceState({evscKiosk:true}, document.title, window.location.href);
+      window.history.pushState({evscKiosk:true}, document.title, window.location.href);
+    } catch(e) {}
+
+    window.addEventListener('popstate', function(){
+      try {
+        window.history.pushState({evscKiosk:true}, document.title, window.location.href);
+      } catch(e) {}
+    });
+  }
+
+  function evscInstallKioskGuards(){
+    $('html, body').addClass('evsc-kiosk-lock');
+    evscArmHistoryTrap();
+
+    try {
+      if(window.navigator && window.navigator.maxTouchPoints > 0){
+        $('#evsc-kiosk-hint').addClass('is-visible');
+      }
+    } catch(e) {}
+
+    document.addEventListener('contextmenu', function(e){
+      e.preventDefault();
+    }, true);
+
+    document.addEventListener('dragstart', function(e){
+      e.preventDefault();
+    }, true);
+
+    document.addEventListener('selectstart', function(e){
+      if(!evscIsEditableTarget(e.target)){
+        e.preventDefault();
+      }
+    }, true);
+
+    document.addEventListener('keydown', function(e){
+      var key = String(e.key || '').toLowerCase();
+      var blockNavigationKey = (e.altKey && (key === 'arrowleft' || key === 'arrowright')) || key === 'browserback' || key === 'browserforward';
+      var blockBackspaceNavigation = key === 'backspace' && !evscIsEditableTarget(e.target);
+      if(blockNavigationKey || blockBackspaceNavigation){
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+
+    document.addEventListener('touchstart', function(e){
+      if(!e.touches || e.touches.length !== 1){
+        if(e.touches && e.touches.length > 1){
+          e.preventDefault();
+        }
+        return;
+      }
+      var touch = e.touches[0];
+      var width = window.innerWidth || document.documentElement.clientWidth || 0;
+      kioskLastTouch.x = touch.clientX;
+      kioskLastTouch.y = touch.clientY;
+      kioskLastTouch.edge = touch.clientX <= 32 || (width > 0 && touch.clientX >= width - 32);
+    }, {capture:true, passive:false});
+
+    document.addEventListener('touchmove', function(e){
+      if(!e.touches || !e.touches.length){
+        return;
+      }
+      if(e.touches.length > 1){
+        e.preventDefault();
+        return;
+      }
+      var touch = e.touches[0];
+      var dx = touch.clientX - kioskLastTouch.x;
+      var dy = touch.clientY - kioskLastTouch.y;
+      var absX = Math.abs(dx);
+      var absY = Math.abs(dy);
+
+      if(kioskLastTouch.edge && absX > 22 && absX > absY * 1.2){
+        e.preventDefault();
+      }
+    }, {capture:true, passive:false});
+
+    document.addEventListener('wheel', function(e){
+      if(Math.abs(e.deltaX || 0) > Math.abs(e.deltaY || 0) && Math.abs(e.deltaX || 0) > 8){
+        e.preventDefault();
+      }
+    }, {capture:true, passive:false});
+
+    window.addEventListener('pageshow', function(){
+      evscArmHistoryTrap();
+    });
+  }
+
+  evscInstallKioskGuards();
+
+  setTimeout(evscTryFullscreen, 350);
+  document.addEventListener('pointerdown', function(){
+    evscTryFullscreen();
+  }, true);
+
+  $(document).on('click', '#evsc-fullscreen-btn', function(e){
+    e.preventDefault();
+    evscTryFullscreen();
+  });
+
+  document.addEventListener('fullscreenchange', function(){
+    if(document.fullscreenElement){
+      $('#evsc-kiosk-hint').removeClass('is-visible');
+    }
+  });
 
   window.addEventListener('message', function(evt){
     try {
@@ -948,9 +1090,14 @@ JS;
         <p class="evsc-subtitle">Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.</p>
         <?php if ( current_user_can('manage_options') ) : ?>
             <div class="evsc-admin-note">
-                <strong>Impresión silenciosa:</strong> el módulo ya envía la orden de impresión automáticamente. Para que no aparezca el diálogo nativo del navegador, el equipo del kiosko debe abrir Chrome/Edge en modo kiosko o silent printing y tener una impresora física predeterminada.
+                <strong>Modo kiosko / impresión silenciosa:</strong> por seguridad del navegador, WordPress no puede activar por sí solo las banderas nativas de Chrome. Este módulo bloquea gestos, intenta pantalla completa y protege la navegación interna, pero la impresión silenciosa real requiere abrir el equipo con Chrome/Edge en modo kiosko o con política empresarial de impresión silenciosa.
             </div>
         <?php endif; ?>
+
+        <div id="evsc-kiosk-hint" class="evsc-kiosk-hint">
+            Modo kiosko asistido activo: los gestos de atrás/adelante quedan bloqueados dentro de la página.
+            <button id="evsc-fullscreen-btn" type="button" class="evsc-fullscreen-btn">Activar pantalla completa</button>
+        </div>
 
         <div class="evsc-panel">
             <div class="evsc-search">
