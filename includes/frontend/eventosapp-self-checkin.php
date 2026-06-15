@@ -11,6 +11,108 @@
 
 if ( ! defined('ABSPATH') ) exit;
 
+
+if ( ! function_exists('eventosapp_self_checkin_prepare_badge_print_html') ) {
+    /**
+     * Ajusta el HTML de la escarapela para el módulo de autogestión.
+     *
+     * La función original eventosapp_get_badge_html_from_event() ya trae window.print().
+     * Aquí no cambiamos el diseño ni la configuración de escarapela: solo reemplazamos
+     * el disparador de impresión por uno más estable para kioskos, esperando DOM,
+     * fuentes e imágenes/QR antes de enviar la orden al navegador.
+     *
+     * Importante: la impresión silenciosa real depende del navegador/dispositivo
+     * configurado en modo kiosko/silent printing. JavaScript no puede aprobar el
+     * diálogo nativo de impresión por seguridad del navegador.
+     */
+    function eventosapp_self_checkin_prepare_badge_print_html( $html ) {
+        if ( ! is_string( $html ) || $html === '' ) {
+            return $html;
+        }
+
+        $script = <<<'HTML'
+<script>
+(function(){
+  var evscPrinted = false;
+
+  function evscSendPrint(){
+    if(evscPrinted) return;
+    evscPrinted = true;
+    setTimeout(function(){
+      try { window.focus(); } catch(e) {}
+      try { window.print(); } catch(e) {}
+    }, 250);
+  }
+
+  function evscWaitImages(){
+    var imgs = [];
+    try { imgs = Array.prototype.slice.call(document.images || []); } catch(e) { imgs = []; }
+
+    if(!imgs.length){
+      evscSendPrint();
+      return;
+    }
+
+    var pending = imgs.length;
+    var done = function(){
+      pending--;
+      if(pending <= 0){
+        evscSendPrint();
+      }
+    };
+
+    imgs.forEach(function(img){
+      if(img.complete){
+        done();
+      } else {
+        img.addEventListener('load', done, {once:true});
+        img.addEventListener('error', done, {once:true});
+      }
+    });
+
+    setTimeout(evscSendPrint, 2500);
+  }
+
+  function evscReady(){
+    if(document.fonts && document.fonts.ready){
+      document.fonts.ready.then(evscWaitImages).catch(evscWaitImages);
+    } else {
+      evscWaitImages();
+    }
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', evscReady, {once:true});
+  } else {
+    evscReady();
+  }
+
+  window.addEventListener('afterprint', function(){
+    setTimeout(function(){
+      try {
+        if(window.parent && window.parent !== window){
+          window.parent.postMessage({type:'eventosapp_self_checkin_afterprint'}, '*');
+        }
+      } catch(e) {}
+    }, 100);
+  });
+})();
+</script>
+HTML;
+
+        $replaced = preg_replace('/<script>\s*window\.print\(\);\s*<\/script>/i', $script, $html, 1, $count);
+        if ( $count > 0 && is_string( $replaced ) ) {
+            return $replaced;
+        }
+
+        if ( stripos( $html, '</body>' ) !== false ) {
+            return preg_replace('/<\/body>/i', $script . "\n</body>", $html, 1);
+        }
+
+        return $html . $script;
+    }
+}
+
 if ( ! function_exists('eventosapp_self_checkin_digits_only') ) {
     function eventosapp_self_checkin_digits_only( $value ) {
         return preg_replace('/\D+/', '', (string) $value);
@@ -574,6 +676,8 @@ add_shortcode('eventosapp_self_checkin', function( $atts ) {
 .evsc-alert{max-width:900px;margin:16px auto;padding:14px 16px;border-radius:14px;font-size:17px;font-weight:700}
 .evsc-alert-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
 .evsc-alert-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.evsc-admin-note{margin:16px 0 18px;padding:14px 16px;border-radius:16px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:15px;line-height:1.45;font-weight:700}
+.evsc-admin-note strong{color:#7c2d12}
 @media(max-width:800px){.evsc-wrap{padding:14px;border-radius:18px}.evsc-title{font-size:30px}.evsc-search{grid-template-columns:1fr}.evsc-input{font-size:28px;min-height:74px}.evsc-btn{width:100%;min-height:68px}.evsc-result{grid-template-columns:1fr}.evsc-actions{justify-content:stretch}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-result-name{font-size:23px}}
 CSS;
 
@@ -598,6 +702,14 @@ jQuery(function($){
   var selectedTicket = null;
   var confirmedTicket = null;
   var currentRows = [];
+
+  window.addEventListener('message', function(evt){
+    try {
+      if(evt && evt.data && evt.data.type === 'eventosapp_self_checkin_afterprint'){
+        $('.evsc-print-frame').first().remove();
+      }
+    } catch(e) {}
+  });
 
   function escHtml(value){
     if(value === null || typeof value === 'undefined') return '';
@@ -834,6 +946,11 @@ JS;
         <p class="evsc-kicker">Autogestión</p>
         <h2 class="evsc-title">Identificación del asistente</h2>
         <p class="evsc-subtitle">Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.</p>
+        <?php if ( current_user_can('manage_options') ) : ?>
+            <div class="evsc-admin-note">
+                <strong>Impresión silenciosa:</strong> el módulo ya envía la orden de impresión automáticamente. Para que no aparezca el diálogo nativo del navegador, el equipo del kiosko debe abrir Chrome/Edge en modo kiosko o silent printing y tener una impresora física predeterminada.
+            </div>
+        <?php endif; ?>
 
         <div class="evsc-panel">
             <div class="evsc-search">
@@ -1000,6 +1117,7 @@ add_action('wp_ajax_eventosapp_self_checkin_badge', function() {
         wp_die('La función de escarapela no está disponible.', '', 500);
     }
 
-    echo eventosapp_get_badge_html_from_event( $event_id, $ticket_id );
+    $badge_html = eventosapp_get_badge_html_from_event( $event_id, $ticket_id );
+    echo eventosapp_self_checkin_prepare_badge_print_html( $badge_html );
     exit;
 });
