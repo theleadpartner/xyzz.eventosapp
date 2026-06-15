@@ -39,6 +39,14 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<path d="M9 16h6a.8.8 0 0 1 .8.8V18H8.2v-1.2A.8.8 0 0 1 9 16Z"/>
 				</svg>';
 
+			case 'self-checkin':
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<rect x="4" y="3" width="16" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+					<circle cx="12" cy="9" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/>
+					<path d="M8 15c.8-2 2.2-3 4-3s3.2 1 4 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					<path d="M8 18h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+				</svg>';
+
 			case 'check-double':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<path d="M3 13l3 3 5-6M12 13l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -254,6 +262,7 @@ add_shortcode('eventosapp_dashboard', function(){
 		$url_metrics        = function_exists('eventosapp_get_metrics_url')               ? eventosapp_get_metrics_url()               : '#';
 		$url_flow_metrics   = function_exists('eventosapp_get_flow_metrics_url')          ? eventosapp_get_flow_metrics_url()          : '#';
 		$url_search         = function_exists('eventosapp_get_search_url')                ? eventosapp_get_search_url()                : '#';
+		$url_self_checkin   = function_exists('eventosapp_get_self_checkin_url')          ? eventosapp_get_self_checkin_url()          : '#';
 		$url_register       = function_exists('eventosapp_get_register_url')              ? eventosapp_get_register_url()              : '#';
 		$url_qr             = function_exists('eventosapp_get_qr_url')                    ? eventosapp_get_qr_url()                    : '#';
 		$url_edit           = function_exists('eventosapp_get_edit_url')                  ? eventosapp_get_edit_url()                  : '#';
@@ -300,6 +309,13 @@ add_shortcode('eventosapp_dashboard', function(){
 				<a class="evapp-card" href="<?php echo esc_url($url_search); ?>" aria-label="Check-In Manual y Escarapela">
 					<?php echo eventosapp_dashboard_icon('id-badge'); ?>
 					<span class="evapp-title">Check-In Manual &amp; Escarapela</span>
+				</a>
+			<?php endif; ?>
+
+			<?php if (eventosapp_role_can('self_checkin')): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_self_checkin); ?>" aria-label="Autogestión del Asistente">
+					<?php echo eventosapp_dashboard_icon('self-checkin'); ?>
+					<span class="evapp-title">Autogestión del Asistente</span>
 				</a>
 			<?php endif; ?>
 
