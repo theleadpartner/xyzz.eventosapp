@@ -98,11 +98,40 @@ if ( ! function_exists('eventosapp_self_checkin_validate_cc') ) {
         }
 
         $len = strlen( $digits );
-        if ( $len < 5 || $len > 12 ) {
-            return new WP_Error('invalid_cc', 'La cédula debe contener entre 5 y 12 números.');
+
+        /*
+         * Se amplía el rango máximo para no bloquear cédulas/documentos reales
+         * guardados en tickets antiguos o importados con longitudes superiores a 12.
+         * El campo sigue aceptando solo números.
+         */
+        if ( $len < 5 || $len > 30 ) {
+            return new WP_Error('invalid_cc', 'La cédula debe contener entre 5 y 30 números.');
         }
 
         return $digits;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_prepare') ) {
+    function eventosapp_self_checkin_prepare( $sql, $params = [] ) {
+        global $wpdb;
+
+        $params = (array) $params;
+        array_unshift( $params, $sql );
+
+        return call_user_func_array( [ $wpdb, 'prepare' ], $params );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_normalized_sql_expression') ) {
+    function eventosapp_self_checkin_normalized_sql_expression( $column ) {
+        $column = (string) $column;
+
+        /*
+         * Normalización compatible con MySQL sin depender de REGEXP_REPLACE:
+         * elimina separadores frecuentes en documentos importados o digitados.
+         */
+        return "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({$column}, CHAR(160), ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', ''), '.', ''), '-', ''), ',', ''), '_', ''), '/', ''), '\\\\', ''), '+', ''), '#', '')";
     }
 }
 
@@ -118,64 +147,186 @@ if ( ! function_exists('eventosapp_self_checkin_find_tickets_by_cc') ) {
             return [];
         }
 
-        $cache_key = 'evapp_self_cc_' . md5( $event_id . '|' . $cedula_digits . '|' . $limit );
+        $cache_key = 'evapp_self_cc_v2_' . md5( $event_id . '|' . $cedula_digits . '|' . $limit );
         $cached = wp_cache_get( $cache_key, 'eventosapp_self_checkin' );
         if ( is_array( $cached ) ) {
             return array_map('intval', $cached);
         }
 
-        $base_join = "
-            INNER JOIN {$wpdb->postmeta} event_pm
-                    ON event_pm.post_id = p.ID
-                   AND event_pm.meta_key = %s
-                   AND event_pm.meta_value = %s
-            INNER JOIN {$wpdb->posts} p2
-                    ON p2.ID = event_pm.post_id
-        ";
+        $ids = [];
 
-        // 1) Índice segmentado generado por EventosApp: búsqueda exacta y rápida.
-        $ids = $wpdb->get_col( $wpdb->prepare(
-            "SELECT DISTINCT p.ID
-               FROM {$wpdb->posts} p
-               {$base_join}
-               INNER JOIN {$wpdb->postmeta} cc_idx
-                       ON cc_idx.post_id = p.ID
-                      AND cc_idx.meta_key = %s
-                      AND cc_idx.meta_value = %s
-              WHERE p.post_type = 'eventosapp_ticket'
-                AND p.post_status NOT IN ('trash','auto-draft','inherit')
-              ORDER BY p.ID DESC
-              LIMIT %d",
-            '_eventosapp_ticket_evento_id',
-            (string) $event_id,
-            '_evapp_search_cc',
-            $cedula_digits,
-            $limit
-        ) );
+        $push_ids = function( $new_ids ) use ( &$ids, $limit ) {
+            foreach ( (array) $new_ids as $new_id ) {
+                $new_id = absint( $new_id );
+                if ( $new_id && ! in_array( $new_id, $ids, true ) ) {
+                    $ids[] = $new_id;
+                }
 
-        // 2) Fallback para tickets antiguos sin índice o con cédula guardada con puntos/espacios/guiones.
-        if ( empty( $ids ) ) {
-            $ids = $wpdb->get_col( $wpdb->prepare(
-                "SELECT DISTINCT p.ID
-                   FROM {$wpdb->posts} p
-                   {$base_join}
-                   INNER JOIN {$wpdb->postmeta} cc_raw
-                           ON cc_raw.post_id = p.ID
-                          AND cc_raw.meta_key = %s
-                  WHERE p.post_type = 'eventosapp_ticket'
-                    AND p.post_status NOT IN ('trash','auto-draft','inherit')
-                    AND REPLACE(REPLACE(REPLACE(REPLACE(cc_raw.meta_value, '.', ''), '-', ''), ' ', ''), ',', '') = %s
-                  ORDER BY p.ID DESC
-                  LIMIT %d",
+                if ( count( $ids ) >= $limit ) {
+                    break;
+                }
+            }
+        };
+
+        $run_simple_meta_query = function( $meta_key, $operator, $value, $query_limit = null ) use ( $wpdb, $event_id, $limit ) {
+            $operator = strtoupper( trim( (string) $operator ) );
+            if ( ! in_array( $operator, [ '=', 'LIKE' ], true ) ) {
+                $operator = '=';
+            }
+
+            $query_limit = $query_limit ? absint( $query_limit ) : $limit;
+            $query_limit = max(1, min(80, $query_limit));
+
+            $sql = "
+                SELECT DISTINCT p.ID
+                  FROM {$wpdb->posts} p
+                  INNER JOIN {$wpdb->postmeta} event_pm
+                          ON event_pm.post_id = p.ID
+                         AND event_pm.meta_key = %s
+                         AND event_pm.meta_value = %s
+                  INNER JOIN {$wpdb->postmeta} cc_pm
+                          ON cc_pm.post_id = p.ID
+                         AND cc_pm.meta_key = %s
+                 WHERE p.post_type = %s
+                   AND p.post_status NOT IN ('trash','auto-draft','inherit')
+                   AND cc_pm.meta_value {$operator} %s
+                 ORDER BY p.ID DESC
+                 LIMIT %d
+            ";
+
+            return $wpdb->get_col( eventosapp_self_checkin_prepare( $sql, [
+                '_eventosapp_ticket_evento_id',
+                (string) $event_id,
+                $meta_key,
+                'eventosapp_ticket',
+                $value,
+                $query_limit,
+            ] ) );
+        };
+
+        $run_normalized_raw_query = function( $operator, $value, $query_limit = null ) use ( $wpdb, $event_id, $limit ) {
+            $operator = strtoupper( trim( (string) $operator ) );
+            if ( ! in_array( $operator, [ '=', 'LIKE' ], true ) ) {
+                $operator = '=';
+            }
+
+            $query_limit = $query_limit ? absint( $query_limit ) : $limit;
+            $query_limit = max(1, min(80, $query_limit));
+            $normalized_cc_sql = eventosapp_self_checkin_normalized_sql_expression( 'cc_raw.meta_value' );
+
+            $sql = "
+                SELECT DISTINCT p.ID
+                  FROM {$wpdb->posts} p
+                  INNER JOIN {$wpdb->postmeta} event_pm
+                          ON event_pm.post_id = p.ID
+                         AND event_pm.meta_key = %s
+                         AND event_pm.meta_value = %s
+                  INNER JOIN {$wpdb->postmeta} cc_raw
+                          ON cc_raw.post_id = p.ID
+                         AND cc_raw.meta_key = %s
+                 WHERE p.post_type = %s
+                   AND p.post_status NOT IN ('trash','auto-draft','inherit')
+                   AND {$normalized_cc_sql} {$operator} %s
+                 ORDER BY p.ID DESC
+                 LIMIT %d
+            ";
+
+            return $wpdb->get_col( eventosapp_self_checkin_prepare( $sql, [
                 '_eventosapp_ticket_evento_id',
                 (string) $event_id,
                 '_eventosapp_asistente_cc',
-                $cedula_digits,
-                $limit
-            ) );
+                'eventosapp_ticket',
+                $value,
+                $query_limit,
+            ] ) );
+        };
+
+        /*
+         * Orden de búsqueda:
+         * 1) índice segmentado exacto;
+         * 2) cédula original exacta;
+         * 3) cédula normalizada exacta;
+         * 4) índice/cédula normalizada por coincidencia parcial como respaldo.
+         *
+         * Esto corrige tickets creados antes del índice _evapp_search_cc y casos
+         * donde el documento quedó guardado con separadores o con más de 12 dígitos.
+         */
+        $push_ids( $run_simple_meta_query( '_evapp_search_cc', '=', $cedula_digits, $limit ) );
+
+        if ( count( $ids ) < $limit ) {
+            $push_ids( $run_simple_meta_query( '_eventosapp_asistente_cc', '=', $cedula_digits, $limit ) );
         }
 
-        $ids = array_map('intval', (array) $ids);
+        if ( count( $ids ) < $limit ) {
+            $push_ids( $run_normalized_raw_query( '=', $cedula_digits, $limit ) );
+        }
+
+        if ( count( $ids ) < $limit && strlen( $cedula_digits ) >= 6 ) {
+            $like = '%' . $wpdb->esc_like( $cedula_digits ) . '%';
+            $push_ids( $run_simple_meta_query( '_evapp_search_cc', 'LIKE', $like, 30 ) );
+        }
+
+        if ( count( $ids ) < $limit && strlen( $cedula_digits ) >= 6 ) {
+            $like = '%' . $wpdb->esc_like( $cedula_digits ) . '%';
+            $push_ids( $run_normalized_raw_query( 'LIKE', $like, 30 ) );
+        }
+
+        /*
+         * Último respaldo en PHP: útil para documentos importados con caracteres
+         * invisibles o separadores no contemplados por SQL. Solo recorre tickets
+         * del evento activo y se detiene al completar el límite.
+         */
+        if ( count( $ids ) < $limit ) {
+            $candidate_ids = get_posts([
+                'post_type'              => 'eventosapp_ticket',
+                'post_status'            => [ 'publish', 'private', 'draft', 'pending', 'future' ],
+                'fields'                 => 'ids',
+                'posts_per_page'         => 6000,
+                'no_found_rows'          => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+                'meta_query'             => [
+                    [
+                        'key'     => '_eventosapp_ticket_evento_id',
+                        'value'   => (string) $event_id,
+                        'compare' => '=',
+                    ],
+                ],
+            ]);
+
+            $candidate_ids = array_map('intval', (array) $candidate_ids);
+            if ( ! empty( $candidate_ids ) ) {
+                update_meta_cache( 'post', $candidate_ids );
+            }
+
+            foreach ( $candidate_ids as $candidate_id ) {
+                if ( in_array( $candidate_id, $ids, true ) ) {
+                    continue;
+                }
+
+                $stored_cc_digits = eventosapp_self_checkin_digits_only( get_post_meta( $candidate_id, '_eventosapp_asistente_cc', true ) );
+
+                if ( $stored_cc_digits === '' ) {
+                    continue;
+                }
+
+                $is_exact = ( $stored_cc_digits === $cedula_digits );
+                $is_safe_partial = strlen( $cedula_digits ) >= 8 && (
+                    strpos( $stored_cc_digits, $cedula_digits ) !== false ||
+                    strpos( $cedula_digits, $stored_cc_digits ) !== false
+                );
+
+                if ( $is_exact || $is_safe_partial ) {
+                    $ids[] = $candidate_id;
+                }
+
+                if ( count( $ids ) >= $limit ) {
+                    break;
+                }
+            }
+        }
+
+        $ids = array_slice( array_values( array_unique( array_map('intval', (array) $ids ) ) ), 0, $limit );
         wp_cache_set( $cache_key, $ids, 'eventosapp_self_checkin', 30 );
 
         return $ids;
@@ -369,7 +520,7 @@ add_shortcode('eventosapp_self_checkin', function( $atts ) {
         'event_id'       => $event_id,
         'event_name'     => get_the_title( $event_id ),
         'messages'       => [
-            'cc_required' => 'Ingresa una cédula válida de 5 a 12 números.',
+            'cc_required' => 'Ingresa una cédula válida de 5 a 30 números.',
             'searching'   => 'Buscando asistente…',
             'no_results'  => 'No se encontró ningún asistente con esa cédula en este evento.',
             'select_one'  => 'Selecciona un resultado para continuar.',
@@ -460,14 +611,14 @@ jQuery(function($){
   }
 
   function normalizeCc(){
-    var value = ($input.val() || '').replace(/\D+/g, '').slice(0, 12);
+    var value = ($input.val() || '').replace(/\D+/g, '');
     $input.val(value);
     return value;
   }
 
   function validCc(){
     var cc = normalizeCc();
-    return cc.length >= 5 && cc.length <= 12;
+    return cc.length >= 5 && cc.length <= 30;
   }
 
   function resetSelection(keepResults){
@@ -688,7 +839,7 @@ JS;
             <div class="evsc-search">
                 <div class="evsc-field">
                     <label for="evsc-cc">Cédula de ciudadanía</label>
-                    <input id="evsc-cc" class="evsc-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off" placeholder="Ej: 1234567890" aria-label="Cédula de ciudadanía">
+                    <input id="evsc-cc" class="evsc-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="30" autocomplete="off" placeholder="Ej: 1234567890" aria-label="Cédula de ciudadanía">
                 </div>
                 <button id="evsc-search-btn" type="button" class="evsc-btn evsc-btn-primary">Buscar</button>
             </div>
