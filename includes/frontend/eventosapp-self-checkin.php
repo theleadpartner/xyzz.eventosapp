@@ -591,6 +591,126 @@ if ( ! function_exists('eventosapp_self_checkin_mark_ticket') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_self_checkin_shell_single_quote') ) {
+    function eventosapp_self_checkin_shell_single_quote( $value ) {
+        return "'" . str_replace( "'", "'\\''", (string) $value ) . "'";
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_get_current_page_url') ) {
+    function eventosapp_self_checkin_get_current_page_url( $event_id = 0 ) {
+        $event_id = absint( $event_id );
+
+        if ( function_exists('eventosapp_get_self_checkin_url') ) {
+            $configured_url = eventosapp_get_self_checkin_url();
+            if ( $configured_url ) {
+                return esc_url_raw( $configured_url );
+            }
+        }
+
+        $queried_id = get_queried_object_id();
+        if ( $queried_id ) {
+            $permalink = get_permalink( $queried_id );
+            if ( $permalink ) {
+                return esc_url_raw( $permalink );
+            }
+        }
+
+        $scheme = is_ssl() ? 'https' : 'http';
+        $host   = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : wp_parse_url( home_url('/'), PHP_URL_HOST );
+        $uri    = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '/';
+        $url    = $scheme . '://' . $host . $uri;
+
+        return esc_url_raw( remove_query_arg( [ '_wpnonce', 'action', 'platform', 'evsc_url' ], $url ) );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_validate_local_launcher_url') ) {
+    function eventosapp_self_checkin_validate_local_launcher_url( $url ) {
+        $url = esc_url_raw( trim( (string) $url ) );
+
+        if ( ! $url ) {
+            $url = function_exists('eventosapp_get_self_checkin_url') ? eventosapp_get_self_checkin_url() : home_url('/');
+            $url = esc_url_raw( $url );
+        }
+
+        $home_host = wp_parse_url( home_url('/'), PHP_URL_HOST );
+        $url_host  = wp_parse_url( $url, PHP_URL_HOST );
+
+        if ( ! $home_host || ! $url_host || strtolower( $home_host ) !== strtolower( $url_host ) ) {
+            $url = function_exists('eventosapp_get_self_checkin_url') ? eventosapp_get_self_checkin_url() : home_url('/');
+            $url = esc_url_raw( $url );
+        }
+
+        return $url;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_get_launcher_download_url') ) {
+    function eventosapp_self_checkin_get_launcher_download_url( $platform, $page_url ) {
+        $platform = sanitize_key( $platform );
+        $page_url = eventosapp_self_checkin_validate_local_launcher_url( $page_url );
+
+        $url = add_query_arg([
+            'action'   => 'eventosapp_self_checkin_download_launcher',
+            'platform' => $platform,
+            'evsc_url' => rawurlencode( $page_url ),
+        ], admin_url('admin-post.php'));
+
+        return wp_nonce_url( $url, 'eventosapp_self_checkin_download_launcher_' . $platform );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_mac_launcher_content') ) {
+    function eventosapp_self_checkin_mac_launcher_content( $page_url ) {
+        $page_url = eventosapp_self_checkin_validate_local_launcher_url( $page_url );
+        $quoted_url = eventosapp_self_checkin_shell_single_quote( $page_url );
+
+        return "#!/bin/bash\n"
+            . "# EventosApp - Lanzador de Kiosko de Autogestion\n"
+            . "# Abre Google Chrome en modo kiosko con impresion silenciosa.\n\n"
+            . "KIOSK_URL={$quoted_url}\n"
+            . "CHROME_BIN=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\"\n\n"
+            . "if [ ! -x \"$CHROME_BIN\" ]; then\n"
+            . "  echo \"Google Chrome no se encontro en /Applications. Instala Google Chrome o ajusta la ruta del lanzador.\"\n"
+            . "  if command -v osascript >/dev/null 2>&1; then\n"
+            . "    osascript -e 'display alert \"EventosApp Kiosko\" message \"Google Chrome no se encontro en /Applications. Instala Google Chrome o ajusta la ruta del lanzador.\"' >/dev/null 2>&1\n"
+            . "  fi\n"
+            . "  exit 1\n"
+            . "fi\n\n"
+            . "\"$CHROME_BIN\" \\\n"
+            . "  --user-data-dir=\"$HOME/Chrome-EventosApp-Kiosko\" \\\n"
+            . "  --kiosk \\\n"
+            . "  --kiosk-printing \\\n"
+            . "  \"$KIOSK_URL\" >/dev/null 2>&1 &\n\n"
+            . "exit 0\n";
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_windows_launcher_content') ) {
+    function eventosapp_self_checkin_windows_launcher_content( $page_url ) {
+        $page_url = eventosapp_self_checkin_validate_local_launcher_url( $page_url );
+        $safe_url = str_replace( [ "\r", "\n", '"' ], [ '', '', '' ], $page_url );
+
+        return "@echo off\r\n"
+            . "setlocal\r\n"
+            . "REM EventosApp - Lanzador de Kiosko de Autogestion\r\n"
+            . "REM Abre Google Chrome en modo kiosko con impresion silenciosa.\r\n\r\n"
+            . "set \"KIOSK_URL={$safe_url}\"\r\n"
+            . "set \"CHROME_EXE=%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe\"\r\n"
+            . "if not exist \"%CHROME_EXE%\" set \"CHROME_EXE=%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe\"\r\n\r\n"
+            . "if not exist \"%CHROME_EXE%\" (\r\n"
+            . "  echo Google Chrome no se encontro en este equipo.\r\n"
+            . "  echo Instala Google Chrome o ajusta la ruta dentro de este archivo.\r\n"
+            . "  pause\r\n"
+            . "  exit /b 1\r\n"
+            . ")\r\n\r\n"
+            . "start \"\" \"%CHROME_EXE%\" --user-data-dir=\"%LOCALAPPDATA%\\EventosAppKiosko\" --kiosk --kiosk-printing \"%KIOSK_URL%\"\r\n"
+            . "exit /b 0\r\n";
+    }
+}
+
 add_shortcode('eventosapp_self_checkin', function( $atts ) {
     if ( function_exists('eventosapp_require_feature') ) {
         eventosapp_require_feature('self_checkin');
@@ -678,6 +798,12 @@ add_shortcode('eventosapp_self_checkin', function( $atts ) {
 .evsc-alert-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
 .evsc-admin-note{margin:16px 0 18px;padding:14px 16px;border-radius:16px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:15px;line-height:1.45;font-weight:700}
 .evsc-admin-note strong{color:#7c2d12}
+.evsc-launcher-box{margin-top:12px;padding:12px;border-radius:14px;background:#fff;border:1px solid #fed7aa;color:#7c2d12}
+.evsc-launcher-title{display:block;margin:0 0 6px;font-size:14px;font-weight:900;color:#7c2d12;text-transform:uppercase;letter-spacing:.03em}
+.evsc-launcher-text{display:block;margin:0 0 10px;font-size:13px;line-height:1.35;color:#9a3412;font-weight:700}
+.evsc-launcher-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.evsc-launcher-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:999px;background:#0f172a;color:#fff!important;text-decoration:none!important;padding:10px 14px;font-size:13px;font-weight:900;line-height:1;touch-action:manipulation}
+.evsc-launcher-btn:hover{filter:brightness(.96);transform:translateY(-1px)}
 html.evsc-kiosk-lock,body.evsc-kiosk-lock{overscroll-behavior:none;overscroll-behavior-x:none;background:#f8fafc}
 body.evsc-kiosk-lock{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
 body.evsc-kiosk-lock input,body.evsc-kiosk-lock textarea,body.evsc-kiosk-lock select,body.evsc-kiosk-lock [contenteditable="true"]{touch-action:manipulation;-webkit-user-select:text;user-select:text}
@@ -1078,6 +1204,10 @@ JS;
     wp_add_inline_script('eventosapp-self-checkin', $js);
     wp_enqueue_script('eventosapp-self-checkin');
 
+    $launcher_page_url = eventosapp_self_checkin_get_current_page_url( $event_id );
+    $launcher_mac_url  = eventosapp_self_checkin_get_launcher_download_url( 'mac', $launcher_page_url );
+    $launcher_win_url  = eventosapp_self_checkin_get_launcher_download_url( 'windows', $launcher_page_url );
+
     ob_start();
     if ( function_exists('eventosapp_active_event_bar') ) {
         eventosapp_active_event_bar();
@@ -1090,7 +1220,15 @@ JS;
         <p class="evsc-subtitle">Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.</p>
         <?php if ( current_user_can('manage_options') ) : ?>
             <div class="evsc-admin-note">
-                <strong>Modo kiosko / impresión silenciosa:</strong> por seguridad del navegador, WordPress no puede activar por sí solo las banderas nativas de Chrome. Este módulo bloquea gestos, intenta pantalla completa y protege la navegación interna, pero la impresión silenciosa real requiere abrir el equipo con Chrome/Edge en modo kiosko o con política empresarial de impresión silenciosa.
+                <strong>Modo kiosko / impresión silenciosa:</strong> por seguridad del navegador, WordPress no puede ejecutar Terminal, CMD ni activar banderas nativas de Chrome directamente desde un botón web. Para evitar errores del asistente, descarga el lanzador del sistema operativo del equipo del kiosko y ejecútalo desde ese equipo; abrirá esta página en Chrome con <code>--kiosk</code> y <code>--kiosk-printing</code>.
+                <div class="evsc-launcher-box">
+                    <span class="evsc-launcher-title">Lanzadores del equipo kiosko</span>
+                    <span class="evsc-launcher-text">Disponibles solo para administradores. Deben descargarse y ejecutarse una vez desde el equipo físico que tendrá la impresora predeterminada.</span>
+                    <div class="evsc-launcher-actions">
+                        <a class="evsc-launcher-btn" href="<?php echo esc_url( $launcher_mac_url ); ?>">Descargar lanzador Mac</a>
+                        <a class="evsc-launcher-btn" href="<?php echo esc_url( $launcher_win_url ); ?>">Descargar lanzador Windows</a>
+                    </div>
+                </div>
             </div>
         <?php endif; ?>
 
@@ -1266,5 +1404,36 @@ add_action('wp_ajax_eventosapp_self_checkin_badge', function() {
 
     $badge_html = eventosapp_get_badge_html_from_event( $event_id, $ticket_id );
     echo eventosapp_self_checkin_prepare_badge_print_html( $badge_html );
+    exit;
+});
+
+add_action('admin_post_eventosapp_self_checkin_download_launcher', function() {
+    if ( ! is_user_logged_in() || ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos para descargar este lanzador.', '', 403);
+    }
+
+    $platform = sanitize_key( $_GET['platform'] ?? '' );
+    if ( ! in_array( $platform, [ 'mac', 'windows' ], true ) ) {
+        wp_die('Plataforma inválida.', '', 400);
+    }
+
+    check_admin_referer( 'eventosapp_self_checkin_download_launcher_' . $platform );
+
+    $raw_url = isset( $_GET['evsc_url'] ) ? rawurldecode( sanitize_text_field( wp_unslash( $_GET['evsc_url'] ) ) ) : '';
+    $page_url = eventosapp_self_checkin_validate_local_launcher_url( $raw_url );
+
+    if ( $platform === 'mac' ) {
+        $filename = 'EventosApp-Kiosko-Autogestion.command';
+        $content  = eventosapp_self_checkin_mac_launcher_content( $page_url );
+    } else {
+        $filename = 'EventosApp-Kiosko-Autogestion.cmd';
+        $content  = eventosapp_self_checkin_windows_launcher_content( $page_url );
+    }
+
+    nocache_headers();
+    header('Content-Type: application/octet-stream; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Content-Length: ' . strlen( $content ));
+    echo $content;
     exit;
 });
