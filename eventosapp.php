@@ -850,6 +850,10 @@ eventosapp_require_first_existing_file([
 ]);
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-dashboard.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-search.php';
+eventosapp_require_first_existing_file([
+    'includes/frontend/eventosapp-self-checkin.php',
+    'eventosapp-self-checkin.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-public-register.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-registration-status-embed.php'; // NUEVO: consulta pública/externa de estado de inscripción
