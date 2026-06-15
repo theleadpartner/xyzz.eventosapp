@@ -25,6 +25,7 @@ function eventosapp_get_pages_config() {
     return wp_parse_args($cfg, [
         'dashboard_page_id'         => 0,
         'front_search_page_id'      => 0,
+        'self_checkin_page_id'      => 0,
         'register_page_id'          => 0,
         'qr_page_id'                => 0,
         'metrics_page_id'           => 0,
@@ -62,6 +63,9 @@ function eventosapp_get_dashboard_url() {
 }
 function eventosapp_get_search_url() {
     return eventosapp_get_configured_page_url('front_search_page_id', '#');
+}
+function eventosapp_get_self_checkin_url() {
+    return eventosapp_get_configured_page_url('self_checkin_page_id', '#');
 }
 function eventosapp_get_register_url() {
     return eventosapp_get_configured_page_url('register_page_id', '#');
@@ -154,6 +158,15 @@ add_action('admin_init', function(){
         'eventosapp_configuracion',
         'eventosapp_pages_section',
         ['key'=>'front_search_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_front_search]</code>']
+    );
+
+    add_settings_field(
+        'self_checkin_page_id',
+        'Página de Autogestión del Asistente',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'self_checkin_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_self_checkin]</code>']
     );
 
     add_settings_field(
@@ -287,6 +300,7 @@ function eventosapp_sanitize_pages_option($input){
     $keys = [
         'dashboard_page_id',
         'front_search_page_id',
+        'self_checkin_page_id',
         'register_page_id',
         'qr_page_id',
         'metrics_page_id',
@@ -348,6 +362,7 @@ function eventosapp_render_configuracion_page(){ ?>
         <ul style="list-style:disc;padding-left:18px">
             <li><code>[eventosapp_dashboard]</code> — Dashboard de gestión.</li>
             <li><code>[eventosapp_front_search]</code> — Check-In manual & Escarapela.</li>
+            <li><code>[eventosapp_self_checkin]</code> — Autogestión del asistente e impresión de escarapela.</li>
             <li><code>[eventosapp_front_register]</code> — Registro manual de asistentes.</li>
             <li><code>[eventosapp_qr_checkin]</code> — Check-In con QR (lector de cámara).</li>
             <li><code>[eventosapp_front_metrics]</code> — Métricas del evento.</li>
@@ -376,6 +391,7 @@ function eventosapp_dashboard_features() {
         'metrics'            => 'Métricas',
         'flow_metrics'       => 'Métricas de Encuestas',
         'search'             => 'Check-In Manual & Escarapela',
+        'self_checkin'       => 'Autogestión del Asistente',
         'register'           => 'Registro Manual de Asistentes',
         'qr'                 => 'Check-In con QR',
         'edit'               => 'Edición de Tickets',
@@ -431,6 +447,7 @@ function eventosapp_default_dashboard_visibility() {
     if (isset($defaults['staff'])) {
         $defaults['staff']['dashboard']     = 1;
         $defaults['staff']['search']        = 1;
+        $defaults['staff']['self_checkin']  = 1;
         $defaults['staff']['qr']            = 1;
         $defaults['staff']['qr_localidad']  = 1;
         $defaults['staff']['qr_sesion']     = 1;
@@ -441,6 +458,7 @@ function eventosapp_default_dashboard_visibility() {
     // Logístico
     if (isset($defaults['logistico'])) {
         $defaults['logistico']['dashboard']     = 1;
+        $defaults['logistico']['self_checkin']  = 1;
         $defaults['logistico']['qr']            = 1;
         $defaults['logistico']['qr_localidad']  = 1;
         $defaults['logistico']['qr_sesion']     = 1;
@@ -601,6 +619,7 @@ function eventosapp_feature_page_map() {
         'metrics'            => 'metrics_page_id',
         'flow_metrics'       => 'flow_metrics_page_id',
         'search'             => 'front_search_page_id',
+        'self_checkin'       => 'self_checkin_page_id',
         'register'           => 'register_page_id',
         'qr'                 => 'qr_page_id',
         'edit'               => 'edit_page_id',
