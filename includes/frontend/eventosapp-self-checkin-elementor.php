@@ -131,6 +131,21 @@ if ( ! function_exists('eventosapp_self_checkin_elementor_resolve_event_id') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_self_checkin_elementor_enqueue_assets') ) {
+    /**
+     * Refuerza la carga del JS/CSS del widget en frontend y en preview de Elementor.
+     * Esto evita que el teclado táctil quede visible pero sin eventos cuando Elementor
+     * no resuelve a tiempo las dependencias declaradas por el widget.
+     */
+    function eventosapp_self_checkin_elementor_enqueue_assets() {
+        if ( eventosapp_self_checkin_elementor_bootstrap_module() && function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+            eventosapp_self_checkin_enqueue_assets();
+        }
+    }
+}
+add_action('elementor/frontend/after_enqueue_scripts', 'eventosapp_self_checkin_elementor_enqueue_assets');
+add_action('elementor/preview/enqueue_scripts', 'eventosapp_self_checkin_elementor_enqueue_assets');
+
 if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
     function eventosapp_self_checkin_register_elementor_widgets( $widgets_manager = null ) {
         static $registered = false;
