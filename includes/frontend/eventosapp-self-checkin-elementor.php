@@ -160,6 +160,22 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     return [ 'eventosapp', 'autogestion', 'checkin', 'kiosko', 'escarapela' ];
                 }
 
+                public function get_style_depends() {
+                    eventosapp_self_checkin_elementor_bootstrap_module();
+                    if ( function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+                        eventosapp_self_checkin_enqueue_assets();
+                    }
+                    return [ 'eventosapp-self-checkin' ];
+                }
+
+                public function get_script_depends() {
+                    eventosapp_self_checkin_elementor_bootstrap_module();
+                    if ( function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+                        eventosapp_self_checkin_enqueue_assets();
+                    }
+                    return [ 'eventosapp-self-checkin' ];
+                }
+
                 protected function register_controls() {
                     $this->start_controls_section('section_content', [
                         'label' => 'Contenido',
@@ -1172,6 +1188,22 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     return [ 'eventosapp', 'kiosko', 'launcher', 'impresion', 'silenciosa', 'chrome' ];
                 }
 
+                public function get_style_depends() {
+                    eventosapp_self_checkin_elementor_bootstrap_module();
+                    if ( function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+                        eventosapp_self_checkin_enqueue_assets();
+                    }
+                    return [ 'eventosapp-self-checkin' ];
+                }
+
+                public function get_script_depends() {
+                    eventosapp_self_checkin_elementor_bootstrap_module();
+                    if ( function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+                        eventosapp_self_checkin_enqueue_assets();
+                    }
+                    return [ 'eventosapp-self-checkin' ];
+                }
+
                 protected function register_controls() {
                     $this->start_controls_section('section_content', [
                         'label' => 'Contenido',
@@ -1204,7 +1236,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label_on'     => 'Sí',
                         'label_off'    => 'No',
                         'return_value' => 'yes',
-                        'default'      => '',
+                        'default'      => 'yes',
                     ]);
 
                     $this->add_control('show_launcher_box', [
@@ -1240,7 +1272,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->add_control('launcher_text', [
                         'label'       => 'Texto de caja',
                         'type'        => \Elementor\Controls_Manager::TEXTAREA,
-                        'default'     => 'Disponibles para usuarios autorizados en este evento. Deben descargarse y ejecutarse una vez desde el equipo físico que tendrá la impresora predeterminada.',
+                        'default'     => 'Disponibles solo para administradores. Deben descargarse y ejecutarse una vez desde el equipo físico que tendrá la impresora predeterminada.',
                         'label_block' => true,
                     ]);
 
@@ -1456,7 +1488,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $event_id = eventosapp_self_checkin_elementor_resolve_event_id( $settings );
 
                     echo eventosapp_self_checkin_render_launcher_block( $event_id, [
-                        'show_for_admin_only' => ( $settings['show_for_admin_only'] ?? '' ) === 'yes',
+                        'show_for_admin_only' => ( $settings['show_for_admin_only'] ?? 'yes' ) === 'yes',
                         'show_launcher_box'   => ( $settings['show_launcher_box'] ?? 'yes' ) === 'yes',
                         'intro_text'          => $settings['intro_text'] ?? 'Modo kiosko / impresión silenciosa:',
                         'description'         => $settings['description'] ?? '',
