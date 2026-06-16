@@ -39,6 +39,8 @@ function eventosapp_get_pages_config() {
         'face_checkin_page_id'      => 0, // NUEVO
         'support_assistance_page_id'   => 0, // Asistencia / Equipo de apoyo
         'support_team_metrics_page_id' => 0, // Métricas equipo de apoyo
+        'expositor_page_id'            => 0, // Módulo Expositor
+        'expositor_gestion_page_id'    => 0, // Gestión de Expositores
     ]);
 }
 
@@ -110,6 +112,14 @@ function eventosapp_get_support_assistance_url() {
 
 function eventosapp_get_support_team_metrics_url() {
     return eventosapp_get_configured_page_url('support_team_metrics_page_id', '#');
+}
+
+function eventosapp_get_expositor_url() {
+    return eventosapp_get_configured_page_url('expositor_page_id', '#');
+}
+
+function eventosapp_get_expositor_gestion_url() {
+    return eventosapp_get_configured_page_url('expositor_gestion_page_id', '#');
 }
 
 
@@ -293,6 +303,24 @@ add_settings_field(
         ['key'=>'support_team_metrics_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_support_team_metrics]</code>']
     );
 
+    add_settings_field(
+        'expositor_page_id',
+        'Página del Módulo Expositor',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'expositor_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_expositor]</code>']
+    );
+
+    add_settings_field(
+        'expositor_gestion_page_id',
+        'Página de Gestión de Expositores',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'expositor_gestion_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_expositor_gestion]</code>']
+    );
+
 });
 
 function eventosapp_sanitize_pages_option($input){
@@ -314,6 +342,8 @@ function eventosapp_sanitize_pages_option($input){
         'face_checkin_page_id', // NUEVO
         'support_assistance_page_id',
         'support_team_metrics_page_id',
+        'expositor_page_id',
+        'expositor_gestion_page_id',
     ];
     foreach ($keys as $k) {
         $out[$k] = isset($input[$k]) ? absint($input[$k]) : 0;
@@ -376,6 +406,8 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_face_checkin]</code> — Check-In por Reconocimiento Facial.</li>
             <li><code>[eventosapp_support_assistance]</code> — Asistencia / Equipo de apoyo.</li>
             <li><code>[eventosapp_support_team_metrics]</code> — Métricas del equipo de apoyo.</li>
+            <li><code>[eventosapp_expositor]</code> — Módulo de entregas del expositor.</li>
+            <li><code>[eventosapp_expositor_gestion]</code> — Gestión/autorización de expositores por organizador.</li>
         </ul>
     </div>
 <?php }
@@ -403,6 +435,8 @@ function eventosapp_dashboard_features() {
         'face_checkin'       => 'Check-In Facial', // NUEVO
         'support_assistance'   => 'Asistencia',
         'support_team_metrics' => 'Métrica de equipo de apoyo',
+        'expositor'            => 'Expositor',
+        'expositor_gestion'    => 'Gestión de Expositores',
     ];
 }
 }
@@ -471,6 +505,12 @@ function eventosapp_default_dashboard_visibility() {
         $defaults['coordinador']['dashboard']          = 1;
         $defaults['coordinador']['checklist']          = 1;
         $defaults['coordinador']['networking_ranking'] = 1;
+    }
+
+    // Expositor: sólo dashboard + módulo Expositor.
+    if (isset($defaults['expositor'])) {
+        $defaults['expositor']['dashboard'] = 1;
+        $defaults['expositor']['expositor'] = 1;
     }
 
     return $defaults;
@@ -631,6 +671,8 @@ function eventosapp_feature_page_map() {
         'face_checkin'       => 'face_checkin_page_id', // NUEVO
         'support_assistance'   => 'support_assistance_page_id',
         'support_team_metrics' => 'support_team_metrics_page_id',
+        'expositor'            => 'expositor_page_id',
+        'expositor_gestion'    => 'expositor_gestion_page_id',
     ];
 }
 }
