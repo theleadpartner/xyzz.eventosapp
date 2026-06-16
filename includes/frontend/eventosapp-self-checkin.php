@@ -978,6 +978,7 @@ body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
 .evsc-fullscreen-trigger-wrap.align-left{justify-content:flex-start}.evsc-fullscreen-trigger-wrap.align-right{justify-content:flex-end}.evsc-fullscreen-trigger-wrap.align-stretch .evsc-fullscreen-trigger{width:100%}
 .evsc-fullscreen-trigger{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:0;border-radius:999px;background:#047857;color:#fff!important;text-decoration:none!important;padding:16px 24px;min-height:58px;font-size:18px;font-weight:900;line-height:1;cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none;box-shadow:0 10px 24px rgba(4,120,87,.2);transition:transform .12s ease,filter .15s ease,background-color .15s ease,color .15s ease,opacity .15s ease}
 .evsc-fullscreen-trigger:hover{filter:brightness(.96);transform:translateY(-1px)}.evsc-fullscreen-trigger:active{transform:translateY(0)}.evsc-fullscreen-trigger.evsc-is-hidden,body.evsc-is-fullscreen .evsc-fullscreen-trigger-wrap[data-hide-on-fullscreen="1"]{display:none!important}
+body.evsc-is-fullscreen .evsc-launcher-module{display:none!important}
 .evsc-keyboard{width:100%;margin:18px 0 4px;padding:14px;border-radius:22px;background:#f1f5f9;border:1px solid #dbe4ee;box-shadow:inset 0 1px 0 rgba(255,255,255,.72)}
 .evsc-keyboard-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;flex-wrap:wrap}.evsc-keyboard-title{display:block;color:#334155;font-size:15px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.evsc-keyboard-toggle{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .evsc-keyboard-mode{border:0;border-radius:999px;background:#e2e8f0;color:#0f172a;padding:9px 14px;font-size:14px;font-weight:900;cursor:pointer;touch-action:manipulation}.evsc-keyboard-mode.is-active{background:#2563eb;color:#fff}
@@ -1009,7 +1010,7 @@ if ( ! function_exists('eventosapp_self_checkin_enqueue_assets') ) {
         wp_enqueue_script('jquery');
 
         if ( ! wp_script_is('eventosapp-self-checkin', 'registered') ) {
-            wp_register_script('eventosapp-self-checkin', '', ['jquery'], null, true);
+            wp_register_script('eventosapp-self-checkin', false, ['jquery'], null, true);
         }
 
         if ( ! wp_script_is('eventosapp-self-checkin', 'enqueued') ) {
@@ -1043,6 +1044,7 @@ jQuery(function($){
     var isFullscreen = !!evscFullscreenElement();
     $('body').toggleClass('evsc-is-fullscreen', isFullscreen);
     $('.evsc-js-fullscreen').toggleClass('evsc-is-hidden', isFullscreen).attr('aria-hidden', isFullscreen ? 'true' : 'false');
+    $('.evsc-launcher-module').attr('aria-hidden', isFullscreen ? 'true' : 'false');
   }
 
   function evscTryFullscreen(){
@@ -1095,6 +1097,52 @@ jQuery(function($){
     } catch(e) {
       evscUpdateFullscreenState();
       return null;
+    }
+  }
+
+  function evscBindPress($base, selector, callback){
+    if(!$base || !$base.length || typeof callback !== 'function'){
+      return;
+    }
+
+    var events = 'pointerup.evscPress touchend.evscPress click.evscPress';
+    var delegate = selector || null;
+    var handler = function(e){
+      var now = Date.now ? Date.now() : (new Date()).getTime();
+      var $target = $(this);
+      var original = e.originalEvent || {};
+      var lastHandled = parseInt($target.data('evscPressHandledAt'), 10) || 0;
+
+      if(e.type === 'pointerup'){
+        if(typeof original.button !== 'undefined' && original.button !== 0){
+          return;
+        }
+        if(typeof original.isPrimary !== 'undefined' && original.isPrimary === false){
+          return;
+        }
+      }
+
+      if(e.type === 'click' && lastHandled && (now - lastHandled) < 650){
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      if((e.type === 'pointerup' || e.type === 'touchend') && lastHandled && (now - lastHandled) < 120){
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      $target.data('evscPressHandledAt', now);
+      e.preventDefault();
+      callback.call(this, e);
+    };
+
+    if(delegate){
+      $base.on(events, delegate, handler);
+    } else {
+      $base.on(events, handler);
     }
   }
 
@@ -1200,8 +1248,7 @@ jQuery(function($){
 
   }
 
-  $(document).on('click', '.evsc-js-fullscreen', function(e){
-    e.preventDefault();
+  evscBindPress($(document), '.evsc-js-fullscreen', function(){
     evscTryFullscreen();
   });
 
@@ -1264,6 +1311,10 @@ jQuery(function($){
     var messages = globalConfig.messages || {};
     var eventId = parseInt($root.data('event-id'), 10) || 0;
     var eventName = String($root.data('event-name') || '');
+    var ajaxUrl = String($root.data('ajax-url') || globalConfig.ajax_url || '');
+    var searchNonce = String($root.data('search-nonce') || globalConfig.search_nonce || '');
+    var confirmNonce = String($root.data('confirm-nonce') || globalConfig.confirm_nonce || '');
+    var printNonce = String($root.data('print-nonce') || globalConfig.print_nonce || '');
     var $input = $root.find('.evsc-js-cc').first();
     var $searchBtn = $root.find('.evsc-js-search').first();
     var $confirmBtn = $root.find('.evsc-js-confirm').first();
@@ -1332,7 +1383,8 @@ jQuery(function($){
     }
 
     function keyboardInsert(value){
-      value = String(value || '').toUpperCase().replace(/[^0-9A-ZÁÉÍÓÚÜÑ]/g, '');
+      value = (value === null || typeof value === 'undefined') ? '' : String(value);
+      value = value.toUpperCase().replace(/[^0-9A-ZÁÉÍÓÚÜÑ]/g, '');
       if(!value){
         return;
       }
@@ -1413,17 +1465,27 @@ jQuery(function($){
 
       $input.attr('inputmode', 'none').attr('virtualkeyboardpolicy', 'manual').attr('data-evsc-touch-keyboard', '1');
 
-      $input.on('pointerdown touchstart', function(){
+      $input.on('pointerdown touchstart', function(evt){
         try {
-          if(window.navigator && window.navigator.maxTouchPoints > 0){
+          var original = evt.originalEvent || evt;
+          var isTouch = (original && original.type === 'touchstart') || (original && original.pointerType === 'touch');
+          if(isTouch && window.navigator && window.navigator.maxTouchPoints > 0){
             $input.prop('readonly', true);
+            window.setTimeout(function(){
+              $input.prop('readonly', false);
+            }, 180);
           }
-        } catch(e) {}
+        } catch(e) {
+          try { $input.prop('readonly', false); } catch(err) {}
+        }
       });
 
-      $keyboard.on('click', '.evsc-js-keyboard-mode', function(e){
-        e.preventDefault();
-        var mode = String($(this).data('mode') || 'numbers');
+      $input.on('blur', function(){
+        try { $input.prop('readonly', false); } catch(e) {}
+      });
+
+      evscBindPress($keyboard, '.evsc-js-keyboard-mode', function(){
+        var mode = String($(this).attr('data-mode') || 'numbers');
         if(mode !== 'letters'){
           mode = 'numbers';
         }
@@ -1433,10 +1495,9 @@ jQuery(function($){
         focusInput();
       });
 
-      $keyboard.on('click', '.evsc-key', function(e){
-        e.preventDefault();
+      evscBindPress($keyboard, '.evsc-key', function(){
         var $key = $(this);
-        var action = String($key.data('action') || '');
+        var action = String($key.attr('data-action') || '');
         if(action === 'backspace'){
           keyboardBackspace();
           return;
@@ -1445,7 +1506,7 @@ jQuery(function($){
           keyboardClear();
           return;
         }
-        keyboardInsert($key.data('key'));
+        keyboardInsert($key.attr('data-key'));
       });
     }
 
@@ -1557,7 +1618,7 @@ jQuery(function($){
       }
     });
 
-    $searchBtn.on('click', function(){
+    evscBindPress($searchBtn, null, function(){
       var searchValue = normalizeIdentifier();
 
       if(isFullscreenExitCode(searchValue)){
@@ -1575,13 +1636,18 @@ jQuery(function($){
         return;
       }
 
+      if(!ajaxUrl || !searchNonce){
+        showStatus('No fue posible iniciar la búsqueda. Recarga la página e intenta nuevamente.', 'err');
+        return;
+      }
+
       $searchBtn.prop('disabled', true).text('Buscando…');
       showStatus(messages.searching || 'Buscando asistente…', '');
       resetSelection(false);
 
-      $.post(globalConfig.ajax_url, {
+      $.post(ajaxUrl, {
         action: 'eventosapp_self_checkin_search',
-        security: globalConfig.search_nonce,
+        security: searchNonce,
         event_id: eventId,
         cedula: searchValue
       }, function(resp){
@@ -1599,7 +1665,7 @@ jQuery(function($){
       });
     });
 
-    $results.on('click', '.evsc-js-result', function(){
+    evscBindPress($results, '.evsc-js-result', function(){
       var ticketId = $(this).data('ticket-id');
       selectedTicket = findRow(ticketId);
       $results.find('.evsc-js-result').removeClass('is-selected');
@@ -1610,18 +1676,23 @@ jQuery(function($){
       showStatus(selectedTicket ? 'Resultado seleccionado. Presiona Confirmar para revisar los datos.' : (messages.select_one || 'Selecciona un resultado.'), selectedTicket ? 'ok' : 'err');
     });
 
-    $confirmBtn.on('click', function(){
+    evscBindPress($confirmBtn, null, function(){
       if(!selectedTicket){
         showStatus(messages.select_one || 'Selecciona un resultado.', 'err');
+        return;
+      }
+
+      if(!ajaxUrl || !confirmNonce){
+        showStatus('No fue posible confirmar la información. Recarga la página e intenta nuevamente.', 'err');
         return;
       }
 
       $confirmBtn.prop('disabled', true).text('Confirmando…');
       showStatus(messages.confirming || 'Confirmando información…', '');
 
-      $.post(globalConfig.ajax_url, {
+      $.post(ajaxUrl, {
         action: 'eventosapp_self_checkin_confirm',
-        security: globalConfig.confirm_nonce,
+        security: confirmNonce,
         event_id: eventId,
         ticket_id: selectedTicket.ticket_id
       }, function(resp){
@@ -1639,18 +1710,23 @@ jQuery(function($){
       });
     });
 
-    $printBtn.on('click', function(){
+    evscBindPress($printBtn, null, function(){
       if(!confirmedTicket){
         showStatus('Primero confirma la información del asistente.', 'err');
+        return;
+      }
+
+      if(!ajaxUrl || !printNonce){
+        showStatus('No fue posible iniciar la impresión. Recarga la página e intenta nuevamente.', 'err');
         return;
       }
 
       $printBtn.prop('disabled', true).text('Imprimiendo…');
       showStatus(messages.printing || 'Marcando check-in e imprimiendo escarapela…', '');
 
-      $.post(globalConfig.ajax_url, {
+      $.post(ajaxUrl, {
         action: 'eventosapp_self_checkin_print',
-        security: globalConfig.print_nonce,
+        security: printNonce,
         event_id: eventId,
         ticket_id: confirmedTicket.ticket_id
       }, function(resp){
@@ -1674,7 +1750,7 @@ jQuery(function($){
       });
     });
 
-    $clearBtn.on('click', function(){
+    evscBindPress($clearBtn, null, function(){
       $input.val('').focus();
       resetSelection(false);
       showStatus('', '');
@@ -1703,6 +1779,9 @@ jQuery(function($){
       window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_fullscreen.default', function($scope){
         evscRunInit($scope);
       });
+      window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_launcher.default', function($scope){
+        evscRunInit($scope);
+      });
     } catch(e) {}
   }
 
@@ -1713,6 +1792,9 @@ jQuery(function($){
           evscRunInit($scope);
         });
         window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_fullscreen.default', function($scope){
+          evscRunInit($scope);
+        });
+        window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_launcher.default', function($scope){
           evscRunInit($scope);
         });
       } catch(e) {}
@@ -1875,7 +1957,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
         ob_start();
         echo eventosapp_self_checkin_inline_style_fallback();
         ?>
-        <div id="<?php echo esc_attr( $uid ); ?>" class="evsc-wrap" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-event-name="<?php echo esc_attr( get_the_title( $event_id ) ); ?>" data-kiosk-lock="<?php echo ! empty( $args['enable_kiosk_lock'] ) ? '1' : '0'; ?>">
+        <div id="<?php echo esc_attr( $uid ); ?>" class="evsc-wrap" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-event-name="<?php echo esc_attr( get_the_title( $event_id ) ); ?>" data-kiosk-lock="<?php echo ! empty( $args['enable_kiosk_lock'] ) ? '1' : '0'; ?>" data-ajax-url="<?php echo esc_url( admin_url('admin-ajax.php') ); ?>" data-search-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_search') ); ?>" data-confirm-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_confirm') ); ?>" data-print-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_print') ); ?>">
             <?php if ( ! empty( $args['logo_url'] ) ) : ?>
                 <div class="evsc-logo-wrap">
                     <img class="evsc-logo" src="<?php echo esc_url( $args['logo_url'] ); ?>" alt="<?php echo esc_attr( $args['logo_alt'] ?: get_the_title( $event_id ) ); ?>">
