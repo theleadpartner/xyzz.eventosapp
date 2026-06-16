@@ -237,6 +237,12 @@ add_shortcode('eventosapp_dashboard', function(){
 	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_staff_access_user_has_any_dashboard_event') ) {
 		$evapp_can_view_dashboard = eventosapp_staff_access_user_has_any_dashboard_event( get_current_user_id() );
 	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_support_user_has_any_event') ) {
+		$evapp_can_view_dashboard = eventosapp_support_user_has_any_event( get_current_user_id() );
+	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_expositor_user_has_any_event') ) {
+		$evapp_can_view_dashboard = eventosapp_expositor_user_has_any_event( get_current_user_id() );
+	}
 
 	if ( ! $evapp_can_view_dashboard ) {
 		return '<p>No tienes permisos para ver este panel.</p>';
