@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
     class EventosApp_Admin_Metabox_Sticky_Menu {
         const POST_TYPE = 'eventosapp_event';
-        const VERSION   = '1.0.1';
+        const VERSION   = '1.0.2';
 
         /**
          * Registra los hooks del módulo.
@@ -208,6 +208,11 @@ if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
     line-height: 1.3;
     text-align: left;
     transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease, color .15s ease;
+}
+
+.eventosapp-metabox-sticky-menu__item[hidden],
+.eventosapp-metabox-sticky-menu__item.is-filtered-out {
+    display: none !important;
 }
 
 .eventosapp-metabox-sticky-menu__item:hover,
@@ -701,6 +706,8 @@ CSS;
             var shouldHide = hasQuery && !matches;
 
             item.hidden = shouldHide;
+            item.classList.toggle('is-filtered-out', shouldHide);
+            item.setAttribute('aria-hidden', shouldHide ? 'true' : 'false');
             setMetaboxFilterState(item.dataset.target, shouldHide);
 
             if (!shouldHide) {
