@@ -937,10 +937,12 @@ if ( ! function_exists('eventosapp_self_checkin_default_css') ) {
 .evsc-status.is-visible{display:block}
 .evsc-status.ok{background:#dcfce7;color:#166534}
 .evsc-status.err{background:#fee2e2;color:#991b1b}
+.evsc-status.loading{background:#dbeafe;color:#1e40af}
 .evsc-results{margin-top:18px;display:grid;gap:12px;width:100%}
 .evsc-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;background:#fff;border:2px solid #e2e8f0;border-radius:20px;padding:18px;box-shadow:0 8px 20px rgba(15,23,42,.05);cursor:pointer;text-align:left;width:100%;color:inherit;font-family:inherit}
 .evsc-result:hover{border-color:#93c5fd}
 .evsc-result.is-selected{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
+.evsc-result.is-selected .evsc-select-label{background:#2563eb;color:#fff!important}
 .evsc-result-name{display:block;font-size:26px;line-height:1.1;font-weight:900;color:#0f172a}
 .evsc-result-meta{display:block;margin-top:8px;color:#475569;font-size:17px;line-height:1.35}
 .evsc-result-chips{display:block;margin-top:8px}
@@ -1331,9 +1333,17 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
     var currentRows = [];
 
     function showStatus(message, type){
-      $status.removeClass('ok err is-visible');
+      $status.removeClass('ok err loading is-visible');
       if(!message){ $status.hide().text(''); return; }
-      $status.addClass('is-visible').addClass(type === 'ok' ? 'ok' : (type === 'err' ? 'err' : '')).text(message).show();
+      var statusClass = '';
+      if(type === 'ok'){
+        statusClass = 'ok';
+      } else if(type === 'err'){
+        statusClass = 'err';
+      } else if(type === 'loading'){
+        statusClass = 'loading';
+      }
+      $status.addClass('is-visible').addClass(statusClass).text(message).show();
     }
 
     function normalizeIdentifier(){
@@ -1642,7 +1652,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       }
 
       $searchBtn.prop('disabled', true).text('Buscando…');
-      showStatus(messages.searching || 'Buscando asistente…', '');
+      showStatus(messages.searching || 'Buscando asistente…', 'loading');
       resetSelection(false);
 
       $.post(ajaxUrl, {
@@ -1688,7 +1698,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       }
 
       $confirmBtn.prop('disabled', true).text('Confirmando…');
-      showStatus(messages.confirming || 'Confirmando información…', '');
+      showStatus(messages.confirming || 'Confirmando información…', 'loading');
 
       $.post(ajaxUrl, {
         action: 'eventosapp_self_checkin_confirm',
@@ -1722,7 +1732,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       }
 
       $printBtn.prop('disabled', true).text('Imprimiendo…');
-      showStatus(messages.printing || 'Marcando check-in e imprimiendo escarapela…', '');
+      showStatus(messages.printing || 'Marcando check-in e imprimiendo escarapela…', 'loading');
 
       $.post(ajaxUrl, {
         action: 'eventosapp_self_checkin_print',
