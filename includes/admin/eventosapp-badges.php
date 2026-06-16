@@ -33,8 +33,9 @@ function eventosapp_get_all_available_fields($evento_id = 0) {
         'nit'         => __('NIT', 'eventosapp'),
         'ciudad'      => __('Ciudad', 'eventosapp'),
         'pais'        => __('País', 'eventosapp'),
-        'localidad'   => __('Localidad', 'eventosapp'),
-        'qr'          => __('QR', 'eventosapp'),
+        'localidad'      => __('Localidad', 'eventosapp'),
+        'qr'             => __('QR', 'eventosapp'),
+        'qr_networking'  => __('QR Networking', 'eventosapp'),
     ];
     
     // Si hay un evento, agregar sus campos adicionales
@@ -49,6 +50,96 @@ function eventosapp_get_all_available_fields($evento_id = 0) {
     }
     
     return $basic_fields;
+}
+
+/**
+ * Detecta los campos del mapeo que deben renderizarse como imagen QR.
+ */
+function eventosapp_badge_is_qr_field($field) {
+    return in_array((string) $field, ['qr', 'qr_networking'], true);
+}
+
+/**
+ * Obtiene el QR de networking/escarapela generado por el QR Manager.
+ * Si todavía no existe, intenta generarlo sin tocar el QR legacy usado por el campo "QR".
+ */
+function eventosapp_get_ticket_networking_qr_url($ticket_id) {
+    $ticket_id = absint($ticket_id);
+    if (!$ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket') {
+        return '';
+    }
+
+    $read_existing_badge_qr = function() use ($ticket_id) {
+        $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+        if (!is_array($all_qr_codes) || empty($all_qr_codes['badge']) || !is_array($all_qr_codes['badge'])) {
+            return '';
+        }
+
+        $badge_qr = $all_qr_codes['badge'];
+        if (empty($badge_qr['url'])) {
+            return '';
+        }
+
+        $qr_url  = (string) $badge_qr['url'];
+        $qr_path = !empty($badge_qr['path']) ? (string) $badge_qr['path'] : '';
+
+        if ($qr_path !== '' && !file_exists($qr_path)) {
+            return '';
+        }
+
+        if ($qr_path !== '' && file_exists($qr_path)) {
+            $separator = (strpos($qr_url, '?') === false) ? '?' : '&';
+            return $qr_url . $separator . 'v=' . filemtime($qr_path);
+        }
+
+        return $qr_url;
+    };
+
+    $existing_url = $read_existing_badge_qr();
+    if ($existing_url !== '') {
+        return $existing_url;
+    }
+
+    if (class_exists('EventosApp_QR_Manager')) {
+        $manager = null;
+
+        if (method_exists('EventosApp_QR_Manager', 'get_instance')) {
+            $manager = EventosApp_QR_Manager::get_instance();
+        } else {
+            global $eventosapp_qr_manager_instance;
+            if (isset($eventosapp_qr_manager_instance) && $eventosapp_qr_manager_instance instanceof EventosApp_QR_Manager) {
+                $manager = $eventosapp_qr_manager_instance;
+            }
+        }
+
+        if ($manager && method_exists($manager, 'generate_qr_code')) {
+            $generated = $manager->generate_qr_code($ticket_id, 'badge');
+            if (is_array($generated) && !empty($generated['url'])) {
+                return (string) $generated['url'];
+            }
+        }
+    }
+
+    return $read_existing_badge_qr();
+}
+
+/**
+ * Renderiza un campo de la escarapela como texto o como imagen QR según corresponda.
+ */
+function eventosapp_badge_render_field_slot($field, $labels, $font_size, $font_weight, $margin, $qr_size) {
+    $field = (string) $field;
+
+    if (eventosapp_badge_is_qr_field($field)) {
+        $qr_src = isset($labels[$field]) ? (string) $labels[$field] : '';
+        if ($qr_src !== '') {
+            $alt = ($field === 'qr_networking') ? __('QR Networking', 'eventosapp') : __('QR', 'eventosapp');
+            echo "<div class='slot' style='margin:" . (int) $margin . "px'><img src='" . esc_url($qr_src) . "' width='" . (int) $qr_size . "' height='" . (int) $qr_size . "' alt='" . esc_attr($alt) . "'></div>";
+            return;
+        }
+    }
+
+    $label_text = isset($labels[$field]) ? $labels[$field] : '';
+    echo "<div class='slot' style='margin:" . (int) $margin . "px; font-size:" . (int) $font_size . "px; font-weight:" . (int) $font_weight . ";'>" . esc_html($label_text) . "</div>";
 }
 
 /**
@@ -382,12 +473,13 @@ function eventosapp_download_badge_handler() {
         $labels['pais']        = $pais    ?: 'País';
         $labels['localidad']   = $localidad ?: 'Localidad';
 
-        // QR
+        // QR legacy y QR Networking para escarapela/networking.
         if ($code && function_exists('eventosapp_get_ticket_qr_url')) {
             $labels['qr'] = eventosapp_get_ticket_qr_url($code);
         } else {
             $labels['qr'] = '';
         }
+        $labels['qr_networking'] = eventosapp_get_ticket_networking_qr_url($ticket_id);
 
         // Campos adicionales del evento
         if (function_exists('eventosapp_get_event_extra_fields')) {
@@ -414,8 +506,9 @@ function eventosapp_download_badge_handler() {
             'nit'         => 'NIT',
             'ciudad'      => 'Ciudad',
             'pais'        => 'País',
-            'localidad'   => 'Localidad',
-            'qr'          => '',
+            'localidad'      => 'Localidad',
+            'qr'             => '',
+            'qr_networking'  => '',
         ];
         
         // Campos adicionales con valores por defecto
@@ -476,24 +569,14 @@ function eventosapp_download_badge_handler() {
             $fs = ($idx===0) ? $cfg['size_large'] : (($idx===1) ? $cfg['size_medium'] : $cfg['size_small']);
             $fw = ($idx===0) ? $cfg['weight_large'] : (($idx===1) ? $cfg['weight_medium'] : $cfg['weight_small']);
             $m  = $cfg['sep_vertical'];
-            if ($field === 'qr' && !empty($labels['qr'])) {
-                echo "<div class='slot' style='margin:{$m}px'><img src='".esc_url($labels['qr'])."' width='{$cfg['qr_size']}' height='{$cfg['qr_size']}' alt='QR'></div>";
-            } else {
-                $label_text = isset($labels[$field]) ? $labels[$field] : '';
-                echo "<div class='slot' style='margin:{$m}px; font-size:{$fs}px; font-weight:{$fw};'>".esc_html($label_text)."</div>";
-            }
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $m, $cfg['qr_size']);
         }
         echo "</div>";
 
         $mh = $cfg['sep_horizontal'];
         echo "<div class='right' style='margin-left:{$mh}px'>";
         if ($right) {
-            if ($right === 'qr' && !empty($labels['qr'])) {
-                echo "<div class='slot' style='margin:{$cfg['sep_vertical']}px'><img src='".esc_url($labels['qr'])."' width='{$cfg['qr_size']}' height='{$cfg['qr_size']}' alt='QR'></div>";
-            } else {
-                $label_text = isset($labels[$right]) ? $labels[$right] : '';
-                echo "<div class='slot' style='margin:{$cfg['sep_vertical']}px; font-size:{$cfg['size_medium']}px; font-weight:{$cfg['weight_medium']};'>".esc_html($label_text)."</div>";
-            }
+            eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size']);
         }
         echo "</div>";
 
@@ -517,24 +600,14 @@ function eventosapp_download_badge_handler() {
             }
             $m  = $cfg['sep_vertical'];
             
-            if ($field === 'qr' && !empty($labels['qr'])) {
-                echo "<div class='slot' style='margin:{$m}px'><img src='".esc_url($labels['qr'])."' width='{$cfg['qr_size']}' height='{$cfg['qr_size']}' alt='QR'></div>";
-            } else {
-                $label_text = isset($labels[$field]) ? $labels[$field] : '';
-                echo "<div class='slot' style='margin:{$m}px; font-size:{$fs}px; font-weight:{$fw};'>".esc_html($label_text)."</div>";
-            }
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $m, $cfg['qr_size']);
         }
         echo "</div>";
 
         $mh = $cfg['sep_horizontal'];
         echo "<div class='right' style='margin-left:{$mh}px'>";
         if ($right) {
-            if ($right === 'qr' && !empty($labels['qr'])) {
-                echo "<div class='slot' style='margin:{$cfg['sep_vertical']}px'><img src='".esc_url($labels['qr'])."' width='{$cfg['qr_size']}' height='{$cfg['qr_size']}' alt='QR'></div>";
-            } else {
-                $label_text = isset($labels[$right]) ? $labels[$right] : '';
-                echo "<div class='slot' style='margin:{$cfg['sep_vertical']}px; font-size:{$cfg['size_medium']}px; font-weight:{$cfg['weight_medium']};'>".esc_html($label_text)."</div>";
-            }
+            eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size']);
         }
         echo "</div>";
 
@@ -542,19 +615,14 @@ function eventosapp_download_badge_handler() {
         // Diseños normales (manillas o escarapelas vertical)
         foreach (array_values($active) as $idx=>$field) {
             $margin = ($cfg['design']==='escarapelas') ? $cfg['sep_vertical'] : $cfg['sep_horizontal'];
-            if ($field==='qr' && !empty($labels['qr'])) {
-                echo "<div class='slot' style='margin:{$margin}px'><img src='".esc_url($labels['qr'])."' width='{$cfg['qr_size']}' height='{$cfg['qr_size']}' alt='QR'></div>";
+            if ($cfg['design']==='escarapelas') {
+                $fs = ($idx===0) ? $cfg['size_large'] : (($idx<=2) ? $cfg['size_medium'] : $cfg['size_small']);
+                $fw = ($idx===0) ? $cfg['weight_large'] : (($idx<=2) ? $cfg['weight_medium'] : $cfg['weight_small']);
             } else {
-                if ($cfg['design']==='escarapelas') {
-                    $fs = ($idx===0) ? $cfg['size_large'] : (($idx<=2) ? $cfg['size_medium'] : $cfg['size_small']);
-                    $fw = ($idx===0) ? $cfg['weight_large'] : (($idx<=2) ? $cfg['weight_medium'] : $cfg['weight_small']);
-                } else {
-                    $fs = $cfg['size_medium'];
-                    $fw = $cfg['weight_medium'];
-                }
-                $label_text = isset($labels[$field]) ? $labels[$field] : '';
-                echo "<div class='slot' style='margin:{$margin}px; font-size:{$fs}px; font-weight:{$fw};'>".esc_html($label_text)."</div>";
+                $fs = $cfg['size_medium'];
+                $fw = $cfg['weight_medium'];
             }
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $margin, $cfg['qr_size']);
         }
     }
 ?>
