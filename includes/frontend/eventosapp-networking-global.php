@@ -617,10 +617,6 @@ add_shortcode('eventosapp_networking_global', function($atts){
           html += '<div class="evapp-netglobal-grid-item"><b>📱 Teléfono</b><span>' + escapeHtml(info.phone) + '</span></div>';
         }
         
-        if (info.localidad) {
-          html += '<div class="evapp-netglobal-grid-item"><b>🎫 Localidad</b><span>' + escapeHtml(info.localidad) + '</span></div>';
-        }
-        
         html += '</div>';
         
         // Botones de acción
@@ -875,10 +871,6 @@ add_shortcode('eventosapp_networking_global', function($atts){
         
         if (info.phone) {
           html += '<div class="evapp-netglobal-grid-item"><b>📱 Teléfono</b><span>' + escapeHtml(info.phone) + '</span></div>';
-        }
-        
-        if (info.localidad) {
-          html += '<div class="evapp-netglobal-grid-item"><b>🎫 Localidad</b><span>' + escapeHtml(info.localidad) + '</span></div>';
         }
         
         html += '</div>';
