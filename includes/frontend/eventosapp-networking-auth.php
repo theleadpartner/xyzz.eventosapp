@@ -335,7 +335,6 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
             html += row('Nombre', d.full_name);
             html += row('Empresa', d.company);
             html += row('Cargo', d.designation);
-            html += row('Localidad', d.localidad);
             html += '</div>';
 
             // === Botones: Descargar contacto (.vcf) + Escanear otro ===
