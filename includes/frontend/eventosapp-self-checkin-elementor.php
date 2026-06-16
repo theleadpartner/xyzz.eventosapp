@@ -195,6 +195,21 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'default'      => 'yes',
                     ]);
 
+                    $this->add_control('logo', [
+                        'label'       => 'Logo superior',
+                        'type'        => \Elementor\Controls_Manager::MEDIA,
+                        'media_types' => [ 'image' ],
+                        'description' => 'Sube el logo que se mostrará arriba del widget de búsqueda e impresión.',
+                    ]);
+
+                    $this->add_control('logo_alt', [
+                        'label'       => 'Texto alternativo del logo',
+                        'type'        => \Elementor\Controls_Manager::TEXT,
+                        'default'     => '',
+                        'label_block' => true,
+                        'condition'   => [ 'logo[url]!' => '' ],
+                    ]);
+
                     $this->add_control('show_kicker', [
                         'label'        => 'Mostrar texto superior',
                         'type'         => \Elementor\Controls_Manager::SWITCHER,
@@ -324,6 +339,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->end_controls_section();
 
                     $this->register_container_style_controls();
+                    $this->register_logo_style_controls();
                     $this->register_header_style_controls();
                     $this->register_event_badge_style_controls();
                     $this->register_panel_style_controls();
@@ -397,6 +413,62 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
                         'name'     => 'wrap_shadow',
                         'selector' => '{{WRAPPER}} .evsc-wrap',
+                    ]);
+
+                    $this->end_controls_section();
+                }
+
+                private function register_logo_style_controls() {
+                    $this->start_controls_section('section_style_logo', [
+                        'label' => 'Logo superior',
+                        'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
+                    ]);
+
+                    $this->add_responsive_control('logo_width', [
+                        'label' => 'Ancho máximo',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', '%', 'vw' ],
+                        'range' => [
+                            'px' => [ 'min' => 40, 'max' => 600 ],
+                            '%'  => [ 'min' => 10, 'max' => 100 ],
+                            'vw' => [ 'min' => 10, 'max' => 100 ],
+                        ],
+                        'selectors' => [
+                            '{{WRAPPER}} .evsc-logo' => 'max-width: {{SIZE}}{{UNIT}};',
+                        ],
+                    ]);
+
+                    $this->add_responsive_control('logo_max_height', [
+                        'label' => 'Altura máxima',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', 'vh' ],
+                        'range' => [ 'px' => [ 'min' => 30, 'max' => 300 ] ],
+                        'selectors' => [
+                            '{{WRAPPER}} .evsc-logo' => 'max-height: {{SIZE}}{{UNIT}};',
+                        ],
+                    ]);
+
+                    $this->add_responsive_control('logo_align', [
+                        'label' => 'Alineación',
+                        'type'  => \Elementor\Controls_Manager::CHOOSE,
+                        'options' => [
+                            'flex-start' => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                            'center'     => [ 'title' => 'Centro', 'icon' => 'eicon-text-align-center' ],
+                            'flex-end'   => [ 'title' => 'Derecha', 'icon' => 'eicon-text-align-right' ],
+                        ],
+                        'default' => 'center',
+                        'selectors' => [
+                            '{{WRAPPER}} .evsc-logo-wrap' => 'justify-content: {{VALUE}};',
+                        ],
+                    ]);
+
+                    $this->add_responsive_control('logo_margin', [
+                        'label' => 'Margen',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [
+                            '{{WRAPPER}} .evsc-logo-wrap' => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};',
+                        ],
                     ]);
 
                     $this->end_controls_section();
@@ -560,8 +632,12 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label' => 'Ancho botón buscar',
                         'type'  => \Elementor\Controls_Manager::SLIDER,
                         'size_units' => [ 'px', '%', 'vw' ],
-                        'range' => [ 'px' => [ 'min' => 120, 'max' => 500 ] ],
-                        'selectors' => [ '{{WRAPPER}} .evsc-search' => 'grid-template-columns: minmax(0,1fr) {{SIZE}}{{UNIT}};' ],
+                        'range' => [
+                            'px' => [ 'min' => 120, 'max' => 760 ],
+                            '%'  => [ 'min' => 20, 'max' => 100 ],
+                            'vw' => [ 'min' => 20, 'max' => 100 ],
+                        ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-search .evsc-js-search' => 'width: {{SIZE}}{{UNIT}}; align-self:center;' ],
                     ]);
 
                     $this->end_controls_section();
@@ -1067,6 +1143,8 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'print_label'       => $settings['print_label'] ?? 'Imprimir escarapela',
                         'kiosk_hint_text'   => $settings['kiosk_hint_text'] ?? '',
                         'fullscreen_label'  => $settings['fullscreen_label'] ?? 'Activar pantalla completa',
+                        'logo_url'          => ! empty( $settings['logo']['url'] ) ? $settings['logo']['url'] : '',
+                        'logo_alt'          => $settings['logo_alt'] ?? '',
                     ] );
                 }
             }
@@ -1126,7 +1204,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label_on'     => 'Sí',
                         'label_off'    => 'No',
                         'return_value' => 'yes',
-                        'default'      => 'yes',
+                        'default'      => '',
                     ]);
 
                     $this->add_control('show_launcher_box', [
@@ -1162,7 +1240,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->add_control('launcher_text', [
                         'label'       => 'Texto de caja',
                         'type'        => \Elementor\Controls_Manager::TEXTAREA,
-                        'default'     => 'Disponibles solo para administradores. Deben descargarse y ejecutarse una vez desde el equipo físico que tendrá la impresora predeterminada.',
+                        'default'     => 'Disponibles para usuarios autorizados en este evento. Deben descargarse y ejecutarse una vez desde el equipo físico que tendrá la impresora predeterminada.',
                         'label_block' => true,
                     ]);
 
@@ -1176,6 +1254,16 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label'   => 'Texto botón Windows',
                         'type'    => \Elementor\Controls_Manager::TEXT,
                         'default' => 'Descargar lanzador Windows',
+                    ]);
+
+                    $this->add_control('show_close_button', [
+                        'label'        => 'Permitir cerrar este bloque',
+                        'type'         => \Elementor\Controls_Manager::SWITCHER,
+                        'label_on'     => 'Sí',
+                        'label_off'    => 'No',
+                        'return_value' => 'yes',
+                        'default'      => 'yes',
+                        'description'  => 'Al cerrarlo, se mantiene oculto aunque se recargue la ventana durante la sesión del navegador.',
                     ]);
 
                     $this->end_controls_section();
@@ -1368,7 +1456,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $event_id = eventosapp_self_checkin_elementor_resolve_event_id( $settings );
 
                     echo eventosapp_self_checkin_render_launcher_block( $event_id, [
-                        'show_for_admin_only' => ( $settings['show_for_admin_only'] ?? 'yes' ) === 'yes',
+                        'show_for_admin_only' => ( $settings['show_for_admin_only'] ?? '' ) === 'yes',
                         'show_launcher_box'   => ( $settings['show_launcher_box'] ?? 'yes' ) === 'yes',
                         'intro_text'          => $settings['intro_text'] ?? 'Modo kiosko / impresión silenciosa:',
                         'description'         => $settings['description'] ?? '',
@@ -1376,6 +1464,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'launcher_text'       => $settings['launcher_text'] ?? '',
                         'mac_label'           => $settings['mac_label'] ?? 'Descargar lanzador Mac',
                         'windows_label'       => $settings['windows_label'] ?? 'Descargar lanzador Windows',
+                        'show_close_button'  => ( $settings['show_close_button'] ?? 'yes' ) === 'yes',
                     ] );
                 }
             }
