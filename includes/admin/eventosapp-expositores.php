@@ -503,7 +503,60 @@ if ( ! function_exists( 'eventosapp_expositor_user_has_assignment_in_event' ) ) 
 
 if ( ! function_exists( 'eventosapp_expositor_user_can_select_event_in_dashboard' ) ) {
     function eventosapp_expositor_user_can_select_event_in_dashboard( $event_id, $user_id = 0 ) {
-        return eventosapp_expositor_user_has_assignment_in_event( $event_id, $user_id );
+        $event_id = absint( $event_id );
+        $user_id  = $user_id ? absint( $user_id ) : get_current_user_id();
+        if ( ! $event_id || ! $user_id || get_post_type( $event_id ) !== 'eventosapp_event' ) return false;
+
+        if ( eventosapp_expositor_user_has_assignment_in_event( $event_id, $user_id ) ) return true;
+
+        // Los gestores de expositores también deben poder activar el evento desde el dashboard.
+        // El acceso real al módulo se vuelve a validar dentro del shortcode correspondiente.
+        if ( function_exists( 'eventosapp_expositor_manager_can_access_event' ) && eventosapp_expositor_manager_can_access_event( $event_id, $user_id ) ) return true;
+
+        return false;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_user_has_any_event' ) ) {
+    function eventosapp_expositor_user_has_any_event( $user_id = 0 ) {
+        $user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+        if ( ! $user_id ) return false;
+
+        static $cache = [];
+        if ( array_key_exists( $user_id, $cache ) ) {
+            return (bool) $cache[ $user_id ];
+        }
+
+        $event_ids = get_posts([
+            'post_type'      => 'eventosapp_event',
+            'post_status'    => ['publish', 'draft', 'pending', 'private'],
+            'posts_per_page' => 500,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                'relation' => 'OR',
+                [
+                    'key'     => '_eventosapp_event_expositores',
+                    'compare' => 'EXISTS',
+                ],
+                [
+                    'key'     => '_eventosapp_expositor_user_map',
+                    'compare' => 'EXISTS',
+                ],
+            ],
+        ]);
+
+        foreach ( $event_ids as $event_id ) {
+            // Aquí se valida únicamente asignación directa para evitar ciclos con eventosapp_role_can()
+            // mientras el dashboard todavía no tiene un evento activo.
+            if ( eventosapp_expositor_user_has_assignment_in_event( (int) $event_id, $user_id ) ) {
+                $cache[ $user_id ] = true;
+                return true;
+            }
+        }
+
+        $cache[ $user_id ] = false;
+        return false;
     }
 }
 
