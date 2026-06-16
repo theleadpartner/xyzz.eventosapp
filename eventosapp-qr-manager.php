@@ -873,6 +873,7 @@ class EventosApp_QR_Manager {
             'badge'         => 'Escarapela Impresa',
             'legacy'        => 'QR Legacy',
             'preprinted'    => 'QR Preimpreso',
+            'self_checkin'  => 'Búsqueda e impresión',
         );
     }
 
