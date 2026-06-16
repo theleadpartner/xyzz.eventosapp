@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
     class EventosApp_Admin_Metabox_Sticky_Menu {
         const POST_TYPE = 'eventosapp_event';
-        const VERSION   = '1.0.0';
+        const VERSION   = '1.0.1';
 
         /**
          * Registra los hooks del módulo.
@@ -250,6 +250,10 @@ if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
     display: none !important;
 }
 
+.postbox.eventosapp-metabox-sticky-menu__filtered-out {
+    display: none !important;
+}
+
 .postbox.eventosapp-metabox-sticky-menu__highlight {
     animation: eventosappMetaboxPulse 1.6s ease-out 1;
     box-shadow: 0 0 0 2px #2271b1, 0 0 0 6px rgba(34, 113, 177, 0.16);
@@ -314,6 +318,7 @@ CSS;
     'use strict';
 
     var cfg = window.EventosAppMetaboxStickyMenu || {};
+    var FILTERED_OUT_CLASS = 'eventosapp-metabox-sticky-menu__filtered-out';
     var state = {
         root: null,
         list: null,
@@ -325,7 +330,8 @@ CSS;
         toggle: null,
         refreshTimer: null,
         observer: null,
-        lastRenderedSignature: ''
+        lastRenderedSignature: '',
+        totalBoxes: 0
     };
 
     function ready(callback) {
@@ -438,6 +444,16 @@ CSS;
         state.toggle = toggle;
 
         search.addEventListener('input', applyFilter);
+        search.addEventListener('keydown', function (event) {
+            var key = event.key || event.keyCode;
+            if (key !== 'Enter' && key !== 13) {
+                return;
+            }
+
+            event.preventDefault();
+            applyFilter();
+            activateFirstVisibleResult();
+        });
         clear.addEventListener('click', function () {
             search.value = '';
             search.focus();
@@ -459,6 +475,19 @@ CSS;
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
             .trim();
+    }
+
+    function textMatchesSearch(haystack, query) {
+        var normalizedHaystack = normalizeText(haystack);
+        var normalizedQuery = normalizeText(query);
+
+        if (!normalizedQuery) {
+            return true;
+        }
+
+        return normalizedQuery.split(/\s+/).every(function (term) {
+            return term && normalizedHaystack.indexOf(term) !== -1;
+        });
     }
 
     function cleanTitleFromElement(titleElement) {
@@ -513,6 +542,10 @@ CSS;
 
         if (!box.classList.contains('postbox')) {
             return false;
+        }
+
+        if (box.classList.contains(FILTERED_OUT_CLASS)) {
+            return true;
         }
 
         var style = window.getComputedStyle(box);
@@ -576,8 +609,8 @@ CSS;
         state.empty.hidden = boxes.length > 0;
         state.noResults.hidden = true;
 
-        var countText = boxes.length + ' ' + (boxes.length === 1 ? (cfg.countSingular || 'metabox visible') : (cfg.countPlural || 'metaboxes visibles'));
-        state.count.textContent = countText;
+        state.totalBoxes = boxes.length;
+        updateCount(boxes.length, boxes.length, false);
 
         boxes.forEach(function (box) {
             var item = createElement('button', {
@@ -586,7 +619,7 @@ CSS;
                 role: 'listitem',
                 dataset: {
                     target: box.id,
-                    search: normalizeText(box.title + ' ' + box.context)
+                    search: normalizeText(box.title + ' ' + box.context + ' ' + box.id)
                 },
                 title: box.title
             });
@@ -606,24 +639,77 @@ CSS;
         applyFilter();
     }
 
+    function updateCount(visibleCount, totalCount, isFiltered) {
+        if (!state.count) {
+            return;
+        }
+
+        var countLabel = visibleCount === 1 ? (cfg.countSingular || 'metabox visible') : (cfg.countPlural || 'metaboxes visibles');
+        if (isFiltered) {
+            state.count.textContent = visibleCount + ' de ' + totalCount + ' ' + countLabel;
+            return;
+        }
+
+        state.count.textContent = totalCount + ' ' + (totalCount === 1 ? (cfg.countSingular || 'metabox visible') : (cfg.countPlural || 'metaboxes visibles'));
+    }
+
+    function setMetaboxFilterState(targetId, shouldHide) {
+        var box = document.getElementById(targetId);
+        if (!box || !box.classList.contains('postbox')) {
+            return;
+        }
+
+        box.classList.toggle(FILTERED_OUT_CLASS, shouldHide);
+        if (shouldHide) {
+            box.setAttribute('aria-hidden', 'true');
+        } else {
+            box.removeAttribute('aria-hidden');
+        }
+    }
+
+    function getVisibleMenuItems() {
+        if (!state.list) {
+            return [];
+        }
+
+        return Array.prototype.slice.call(state.list.querySelectorAll('.eventosapp-metabox-sticky-menu__item')).filter(function (item) {
+            return !item.hidden;
+        });
+    }
+
+    function activateFirstVisibleResult() {
+        var firstVisibleItem = getVisibleMenuItems()[0];
+        if (!firstVisibleItem || !firstVisibleItem.dataset || !firstVisibleItem.dataset.target) {
+            return;
+        }
+
+        scrollToMetabox(firstVisibleItem.dataset.target);
+    }
+
     function applyFilter() {
         if (!state.list || !state.search) {
             return;
         }
 
         var query = normalizeText(state.search.value);
+        var hasQuery = query.length > 0;
         var items = Array.prototype.slice.call(state.list.querySelectorAll('.eventosapp-metabox-sticky-menu__item'));
         var visibleCount = 0;
 
         items.forEach(function (item) {
-            var matches = !query || (item.dataset.search || '').indexOf(query) !== -1;
-            item.hidden = !matches;
-            if (matches) {
+            var matches = textMatchesSearch(item.dataset.search || '', query);
+            var shouldHide = hasQuery && !matches;
+
+            item.hidden = shouldHide;
+            setMetaboxFilterState(item.dataset.target, shouldHide);
+
+            if (!shouldHide) {
                 visibleCount++;
             }
         });
 
-        state.noResults.hidden = !query || visibleCount > 0 || items.length === 0;
+        updateCount(visibleCount, items.length, hasQuery);
+        state.noResults.hidden = !hasQuery || visibleCount > 0 || items.length === 0;
     }
 
     function openMetaboxIfClosed(box) {
