@@ -910,6 +910,10 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-herramientas
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-embed-form.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-edicion-masiva.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-clientes-cpt.php'; // CPT Clientes / Organizadores
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-expositores.php',
+    'eventosapp-expositores.php',
+]); // CPT Expositores / Módulo de entregas comerciales
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-asistentes-cpt.php'; // CPT Asistentes / Personas
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-asistente-ticket-vincular.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-galeria-cpt.php'; // CPT Galerías de Fotos
@@ -1030,6 +1034,11 @@ register_activation_hook(__FILE__, function () {
     if ( function_exists('eventosapp_support_assistance_install_table') ) {
         eventosapp_support_assistance_install_table();
     }
+
+    // Prepara la tabla del módulo Expositores / entregas comerciales.
+    if ( function_exists('eventosapp_expositores_install_tables') ) {
+        eventosapp_expositores_install_tables();
+    }
 });
 
 // En el primer init real, registra reglas (tu plugin ya las agrega con add_action('init', ...)) y flushea
@@ -1131,6 +1140,15 @@ add_action('admin_menu', function() {
         'edit.php?post_type=eventosapp_cliente'
     );
 
+    // Submenú "Expositores"
+    add_submenu_page(
+        'eventosapp_dashboard',
+        'Expositores',
+        'Expositores',
+        'manage_options',
+        'edit.php?post_type=eventosapp_expositor'
+    );
+
 // Submenú "Asistentes"
     add_submenu_page(
         'eventosapp_dashboard',
@@ -1160,6 +1178,7 @@ add_filter('parent_file', function($parent_file) {
         'eventosapp_event',
         'eventosapp_ticket',
         'eventosapp_cliente',
+        'eventosapp_expositor',
         'eventosapp_asistente',
         'eventosapp_galeria',
     ])) {
@@ -1823,6 +1842,7 @@ function eventosapp_ensure_core_roles(){
         'logistico'   => ['name' => 'Logístico',   'caps' => ['read'=>true]],
         'organizador' => ['name' => 'Organizador', 'caps' => ['read'=>true]],
         'coordinador' => ['name' => 'Coordinador', 'caps' => ['read'=>true]],
+        'expositor'   => ['name' => 'Expositor',   'caps' => ['read'=>true]],
     ];
     foreach ($roles as $slug => $data){
         if ( ! get_role($slug) ){
