@@ -32,6 +32,104 @@ if ( ! function_exists('eventosapp_self_checkin_elementor_common_dimension_units
     }
 }
 
+
+if ( ! function_exists('eventosapp_self_checkin_elementor_bootstrap_module') ) {
+    /**
+     * Asegura que las funciones base del módulo de autogestión estén disponibles
+     * también cuando Elementor renderiza el widget desde su editor/AJAX.
+     */
+    function eventosapp_self_checkin_elementor_bootstrap_module() {
+        if ( function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block') ) {
+            return true;
+        }
+
+        $candidates = [];
+        $current_dir = defined('__DIR__') ? __DIR__ : dirname(__FILE__);
+
+        $candidates[] = $current_dir . '/eventosapp-self-checkin.php';
+        $candidates[] = dirname( $current_dir ) . '/frontend/eventosapp-self-checkin.php';
+        $candidates[] = dirname( dirname( $current_dir ) ) . '/includes/frontend/eventosapp-self-checkin.php';
+        $candidates[] = dirname( dirname( $current_dir ) ) . '/eventosapp-self-checkin.php';
+
+        if ( defined('EVENTOSAPP_PLUGIN_DIR') ) {
+            $candidates[] = trailingslashit( EVENTOSAPP_PLUGIN_DIR ) . 'includes/frontend/eventosapp-self-checkin.php';
+            $candidates[] = trailingslashit( EVENTOSAPP_PLUGIN_DIR ) . 'eventosapp-self-checkin.php';
+        }
+
+        if ( function_exists('plugin_dir_path') ) {
+            $plugin_root = dirname( dirname( $current_dir ) );
+            $candidates[] = trailingslashit( $plugin_root ) . 'includes/frontend/eventosapp-self-checkin.php';
+            $candidates[] = trailingslashit( $plugin_root ) . 'eventosapp-self-checkin.php';
+        }
+
+        $candidates = array_values( array_unique( array_filter( $candidates ) ) );
+        foreach ( $candidates as $file ) {
+            if ( is_string( $file ) && file_exists( $file ) && is_readable( $file ) ) {
+                require_once $file;
+                if ( function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block') ) {
+                    return true;
+                }
+            }
+        }
+
+        return function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block');
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_elementor_get_event_options') ) {
+    function eventosapp_self_checkin_elementor_get_event_options() {
+        $options = [
+            0 => 'Evento activo del dashboard',
+        ];
+
+        if ( ! function_exists('get_posts') ) {
+            return $options;
+        }
+
+        $events = get_posts([
+            'post_type'      => 'eventosapp_event',
+            'post_status'    => [ 'publish', 'future', 'draft', 'pending', 'private' ],
+            'posts_per_page' => 200,
+            'orderby'        => 'date',
+            'order'          => 'DESC',
+            'fields'         => 'ids',
+        ]);
+
+        foreach ( (array) $events as $event_id ) {
+            $event_id = absint( $event_id );
+            if ( $event_id ) {
+                $options[ $event_id ] = get_the_title( $event_id ) . ' (#' . $event_id . ')';
+            }
+        }
+
+        return $options;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_elementor_resolve_event_id') ) {
+    function eventosapp_self_checkin_elementor_resolve_event_id( $settings ) {
+        eventosapp_self_checkin_elementor_bootstrap_module();
+
+        $settings = is_array( $settings ) ? $settings : [];
+        $use_active_event = ! isset( $settings['use_active_event'] ) || $settings['use_active_event'] === 'yes';
+
+        if ( $use_active_event && function_exists('eventosapp_self_checkin_get_active_event_id') ) {
+            return absint( eventosapp_self_checkin_get_active_event_id( 0 ) );
+        }
+
+        $event_id = isset( $settings['event_id'] ) ? absint( $settings['event_id'] ) : 0;
+        if ( $event_id ) {
+            return $event_id;
+        }
+
+        if ( function_exists('eventosapp_self_checkin_get_active_event_id') ) {
+            return absint( eventosapp_self_checkin_get_active_event_id( 0 ) );
+        }
+
+        return 0;
+    }
+}
+
 if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
     function eventosapp_self_checkin_register_elementor_widgets( $widgets_manager = null ) {
         static $registered = false;
@@ -68,12 +166,24 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
                     ]);
 
+                    $this->add_control('use_active_event', [
+                        'label'        => 'Usar evento activo del dashboard',
+                        'type'         => \Elementor\Controls_Manager::SWITCHER,
+                        'label_on'     => 'Sí',
+                        'label_off'    => 'No',
+                        'return_value' => 'yes',
+                        'default'      => 'yes',
+                        'description'  => 'Activado: el widget carga dinámicamente el evento que el usuario escogió en el dashboard de gestión.',
+                    ]);
+
                     $this->add_control('event_id', [
-                        'label'       => 'ID del evento específico',
-                        'type'        => \Elementor\Controls_Manager::NUMBER,
+                        'label'       => 'Evento fijo de respaldo',
+                        'type'        => \Elementor\Controls_Manager::SELECT2,
                         'default'     => 0,
-                        'min'         => 0,
-                        'description' => 'Déjalo en 0 para usar el evento activo seleccionado en el dashboard.',
+                        'options'     => eventosapp_self_checkin_elementor_get_event_options(),
+                        'label_block' => true,
+                        'description' => 'Úsalo solo si necesitas dejar este widget amarrado a un evento específico. Para operación normal debe quedar activo el evento del dashboard.',
+                        'condition'   => [ 'use_active_event!' => 'yes' ],
                     ]);
 
                     $this->add_control('show_event_badge', [
@@ -930,13 +1040,13 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                 }
 
                 protected function render() {
-                    if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
-                        echo '<div class="evsc-alert evsc-alert-error">El módulo de autogestión no está cargado.</div>';
+                    if ( ! eventosapp_self_checkin_elementor_bootstrap_module() || ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
+                        echo '<div class="evsc-alert evsc-alert-error">El módulo de autogestión no está cargado. Verifica que el archivo <code>includes/frontend/eventosapp-self-checkin.php</code> esté instalado.</div>';
                         return;
                     }
 
                     $settings = $this->get_settings_for_display();
-                    $event_id = isset( $settings['event_id'] ) ? absint( $settings['event_id'] ) : 0;
+                    $event_id = eventosapp_self_checkin_elementor_resolve_event_id( $settings );
 
                     echo eventosapp_self_checkin_render_main_ui( $event_id, [
                         'show_event_badge'  => ( $settings['show_event_badge'] ?? 'yes' ) === 'yes',
@@ -990,12 +1100,24 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
                     ]);
 
+                    $this->add_control('use_active_event', [
+                        'label'        => 'Usar evento activo del dashboard',
+                        'type'         => \Elementor\Controls_Manager::SWITCHER,
+                        'label_on'     => 'Sí',
+                        'label_off'    => 'No',
+                        'return_value' => 'yes',
+                        'default'      => 'yes',
+                        'description'  => 'Activado: los lanzadores se generan con la URL del módulo y el evento activo de gestión.',
+                    ]);
+
                     $this->add_control('event_id', [
-                        'label'       => 'ID del evento específico',
-                        'type'        => \Elementor\Controls_Manager::NUMBER,
+                        'label'       => 'Evento fijo de respaldo',
+                        'type'        => \Elementor\Controls_Manager::SELECT2,
                         'default'     => 0,
-                        'min'         => 0,
-                        'description' => 'Déjalo en 0 para usar el evento activo o la URL configurada del módulo.',
+                        'options'     => eventosapp_self_checkin_elementor_get_event_options(),
+                        'label_block' => true,
+                        'description' => 'Úsalo solo si necesitas generar lanzadores para un evento específico. Para operación normal debe quedar activo el evento del dashboard.',
+                        'condition'   => [ 'use_active_event!' => 'yes' ],
                     ]);
 
                     $this->add_control('show_for_admin_only', [
@@ -1237,13 +1359,13 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                 }
 
                 protected function render() {
-                    if ( ! function_exists('eventosapp_self_checkin_render_launcher_block') ) {
-                        echo '<div class="evsc-alert evsc-alert-error">El módulo de autogestión no está cargado.</div>';
+                    if ( ! eventosapp_self_checkin_elementor_bootstrap_module() || ! function_exists('eventosapp_self_checkin_render_launcher_block') ) {
+                        echo '<div class="evsc-alert evsc-alert-error">El módulo de autogestión no está cargado. Verifica que el archivo <code>includes/frontend/eventosapp-self-checkin.php</code> esté instalado.</div>';
                         return;
                     }
 
                     $settings = $this->get_settings_for_display();
-                    $event_id = isset( $settings['event_id'] ) ? absint( $settings['event_id'] ) : 0;
+                    $event_id = eventosapp_self_checkin_elementor_resolve_event_id( $settings );
 
                     echo eventosapp_self_checkin_render_launcher_block( $event_id, [
                         'show_for_admin_only' => ( $settings['show_for_admin_only'] ?? 'yes' ) === 'yes',
