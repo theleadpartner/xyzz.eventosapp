@@ -501,6 +501,184 @@ if ( ! function_exists( 'eventosapp_expositor_user_has_assignment_in_event' ) ) 
     }
 }
 
+if ( ! function_exists( 'eventosapp_expositor_user_has_any_assignment' ) ) {
+    /**
+     * Indica si el usuario está asignado directamente a algún expositor en cualquier evento.
+     * No concede permisos por sí sola; sólo se usa para abrir el selector del dashboard.
+     */
+    function eventosapp_expositor_user_has_any_assignment( $user_id = 0 ) {
+        $user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+        if ( ! $user_id ) return false;
+
+        static $cache = [];
+        if ( array_key_exists( $user_id, $cache ) ) {
+            return (bool) $cache[ $user_id ];
+        }
+
+        $event_ids = get_posts( [
+            'post_type'      => 'eventosapp_event',
+            'post_status'    => [ 'publish', 'draft', 'pending', 'private' ],
+            'posts_per_page' => 500,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                [
+                    'key'     => '_eventosapp_expositor_user_map',
+                    'compare' => 'EXISTS',
+                ],
+            ],
+        ] );
+
+        foreach ( $event_ids as $event_id ) {
+            if ( eventosapp_expositor_user_has_assignment_in_event( (int) $event_id, $user_id ) ) {
+                $cache[ $user_id ] = true;
+                return true;
+            }
+        }
+
+        $cache[ $user_id ] = false;
+        return false;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_user_is_event_author' ) ) {
+    function eventosapp_expositor_user_is_event_author( $event_id, $user_id ) {
+        $event = get_post( absint( $event_id ) );
+        return $event && $event->post_type === 'eventosapp_event' && (int) $event->post_author === absint( $user_id );
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_user_is_temp_cogestor' ) ) {
+    function eventosapp_expositor_user_is_temp_cogestor( $event_id, $user_id ) {
+        $event_id = absint( $event_id );
+        $user_id  = absint( $user_id );
+        if ( ! $event_id || ! $user_id ) return false;
+
+        $rows = get_post_meta( $event_id, '_evapp_temp_authors', true );
+        if ( ! is_array( $rows ) ) return false;
+
+        $now = time();
+        foreach ( $rows as $row ) {
+            if ( ! is_array( $row ) || empty( $row['user_id'] ) || (int) $row['user_id'] !== $user_id ) {
+                continue;
+            }
+            $until = isset( $row['until'] ) ? (int) $row['until'] : 0;
+            if ( $until === 0 || $until >= $now ) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_user_has_feature_in_event_without_filters' ) ) {
+    /**
+     * Resuelve permisos de una sección dentro de un evento sin llamar eventosapp_role_can().
+     * Esto evita ciclos con los filtros dinámicos del propio módulo de expositores.
+     */
+    function eventosapp_expositor_user_has_feature_in_event_without_filters( $event_id, $user_id, $feature ) {
+        $event_id = absint( $event_id );
+        $user_id  = absint( $user_id );
+        $feature  = sanitize_key( $feature );
+
+        if ( ! $event_id || ! $user_id || $feature === '' ) return false;
+
+        if ( function_exists( 'eventosapp_staff_access_get_user_feature_value' ) ) {
+            $custom_permission = eventosapp_staff_access_get_user_feature_value( $event_id, $user_id, $feature, null );
+            if ( $custom_permission !== null ) {
+                return (bool) $custom_permission;
+            }
+        }
+
+        $user = get_userdata( $user_id );
+        if ( ! $user || ! $user->exists() ) return false;
+
+        foreach ( (array) $user->roles as $role ) {
+            // El rol Expositor nunca debe abrir Gestión de Expositores por sí solo.
+            if ( $feature === 'expositor_gestion' && $role === 'expositor' ) {
+                continue;
+            }
+
+            if ( function_exists( 'eventosapp_role_can_in_event' ) ) {
+                if ( eventosapp_role_can_in_event( $role, $feature, $event_id ) ) {
+                    return true;
+                }
+                continue;
+            }
+
+            if ( function_exists( 'eventosapp_get_dashboard_visibility' ) ) {
+                $visibility = eventosapp_get_dashboard_visibility();
+                if ( ! empty( $visibility[ $role ][ $feature ] ) ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_user_has_operational_event_access' ) ) {
+    /**
+     * Acceso general al evento para operar Gestión de Expositores.
+     * No toma la asignación como expositor ni la asignación de apoyo/asistencia como permiso de gestión.
+     */
+    function eventosapp_expositor_user_has_operational_event_access( $event_id, $user_id ) {
+        $event_id = absint( $event_id );
+        $user_id  = absint( $user_id );
+        if ( ! $event_id || ! $user_id || get_post_type( $event_id ) !== 'eventosapp_event' ) return false;
+
+        if ( user_can( $user_id, 'manage_options' ) ) return true;
+        if ( eventosapp_expositor_user_is_event_author( $event_id, $user_id ) ) return true;
+        if ( eventosapp_expositor_user_is_temp_cogestor( $event_id, $user_id ) ) return true;
+
+        if ( function_exists( 'eventosapp_staff_access_get_user_feature_value' ) ) {
+            $custom_dashboard = eventosapp_staff_access_get_user_feature_value( $event_id, $user_id, 'dashboard', null );
+            if ( $custom_dashboard !== null && ! (bool) $custom_dashboard ) {
+                return false;
+            }
+            if ( $custom_dashboard !== null && (bool) $custom_dashboard ) {
+                return true;
+            }
+        }
+
+        $staff_assigned = get_post_meta( $event_id, '_evapp_event_staff_assigned', true );
+        if ( is_array( $staff_assigned ) && isset( $staff_assigned[ $user_id ] ) ) {
+            $until = isset( $staff_assigned[ $user_id ]['until'] ) ? (int) $staff_assigned[ $user_id ]['until'] : 0;
+            if ( $until === 0 || $until >= time() ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_manager_can_access_event' ) ) {
+    function eventosapp_expositor_manager_can_access_event( $event_id, $user_id = 0 ) {
+        $event_id = absint( $event_id );
+        $user_id  = $user_id ? absint( $user_id ) : get_current_user_id();
+        if ( ! $event_id || ! $user_id || get_post_type( $event_id ) !== 'eventosapp_event' ) return false;
+
+        if ( user_can( $user_id, 'manage_options' ) ) return true;
+        if ( eventosapp_expositor_user_is_event_author( $event_id, $user_id ) ) return true;
+        if ( eventosapp_expositor_user_is_temp_cogestor( $event_id, $user_id ) ) return true;
+
+        if ( function_exists( 'eventosapp_staff_access_get_user_feature_value' ) ) {
+            $custom_permission = eventosapp_staff_access_get_user_feature_value( $event_id, $user_id, 'expositor_gestion', null );
+            if ( $custom_permission !== null ) {
+                return (bool) $custom_permission;
+            }
+        }
+
+        if ( ! eventosapp_expositor_user_has_operational_event_access( $event_id, $user_id ) ) {
+            return false;
+        }
+
+        return eventosapp_expositor_user_has_feature_in_event_without_filters( $event_id, $user_id, 'expositor_gestion' );
+    }
+}
+
 if ( ! function_exists( 'eventosapp_expositor_user_can_select_event_in_dashboard' ) ) {
     function eventosapp_expositor_user_can_select_event_in_dashboard( $event_id, $user_id = 0 ) {
         $event_id = absint( $event_id );
@@ -508,10 +686,7 @@ if ( ! function_exists( 'eventosapp_expositor_user_can_select_event_in_dashboard
         if ( ! $event_id || ! $user_id || get_post_type( $event_id ) !== 'eventosapp_event' ) return false;
 
         if ( eventosapp_expositor_user_has_assignment_in_event( $event_id, $user_id ) ) return true;
-
-        // Los gestores de expositores también deben poder activar el evento desde el dashboard.
-        // El acceso real al módulo se vuelve a validar dentro del shortcode correspondiente.
-        if ( function_exists( 'eventosapp_expositor_manager_can_access_event' ) && eventosapp_expositor_manager_can_access_event( $event_id, $user_id ) ) return true;
+        if ( eventosapp_expositor_manager_can_access_event( $event_id, $user_id ) ) return true;
 
         return false;
     }
@@ -522,14 +697,18 @@ if ( ! function_exists( 'eventosapp_expositor_user_has_any_event' ) ) {
         $user_id = $user_id ? absint( $user_id ) : get_current_user_id();
         if ( ! $user_id ) return false;
 
-        static $cache = [];
-        if ( array_key_exists( $user_id, $cache ) ) {
-            return (bool) $cache[ $user_id ];
+        if ( eventosapp_expositor_user_has_any_assignment( $user_id ) ) {
+            return true;
         }
 
-        $event_ids = get_posts([
+        static $manager_cache = [];
+        if ( array_key_exists( $user_id, $manager_cache ) ) {
+            return (bool) $manager_cache[ $user_id ];
+        }
+
+        $event_ids = get_posts( [
             'post_type'      => 'eventosapp_event',
-            'post_status'    => ['publish', 'draft', 'pending', 'private'],
+            'post_status'    => [ 'publish', 'draft', 'pending', 'private' ],
             'posts_per_page' => 500,
             'fields'         => 'ids',
             'no_found_rows'  => true,
@@ -544,33 +723,74 @@ if ( ! function_exists( 'eventosapp_expositor_user_has_any_event' ) ) {
                     'compare' => 'EXISTS',
                 ],
             ],
-        ]);
+        ] );
 
         foreach ( $event_ids as $event_id ) {
-            // Aquí se valida únicamente asignación directa para evitar ciclos con eventosapp_role_can()
-            // mientras el dashboard todavía no tiene un evento activo.
-            if ( eventosapp_expositor_user_has_assignment_in_event( (int) $event_id, $user_id ) ) {
-                $cache[ $user_id ] = true;
+            if ( eventosapp_expositor_manager_can_access_event( (int) $event_id, $user_id ) ) {
+                $manager_cache[ $user_id ] = true;
                 return true;
             }
         }
 
-        $cache[ $user_id ] = false;
+        $manager_cache[ $user_id ] = false;
         return false;
     }
 }
 
-if ( ! function_exists( 'eventosapp_expositor_manager_can_access_event' ) ) {
-    function eventosapp_expositor_manager_can_access_event( $event_id, $user_id = 0 ) {
-        $event_id = absint( $event_id );
-        $user_id  = $user_id ? absint( $user_id ) : get_current_user_id();
-        if ( ! $event_id || ! $user_id ) return false;
-        if ( user_can( $user_id, 'manage_options' ) ) return true;
-        if ( function_exists( 'eventosapp_user_can_manage_event' ) && eventosapp_user_can_manage_event( $event_id, $user_id ) ) return true;
-        if ( function_exists( 'eventosapp_role_can' ) && eventosapp_role_can( 'expositor_gestion', $user_id ) ) return true;
-        return false;
+if ( ! function_exists( 'eventosapp_expositor_apply_assignment_scope' ) ) {
+    /**
+     * Aísla a los usuarios asignados desde el metabox Expositores del Evento:
+     * sólo ven Dashboard y Expositor para el evento activo, y el shortcode limita el expositor exacto.
+     */
+    function eventosapp_expositor_apply_assignment_scope( $has_permission, $feature, $user ) {
+        if ( ! $user || ! $user instanceof WP_User || ! $user->exists() ) {
+            return $has_permission;
+        }
+
+        $user_id = absint( $user->ID );
+        if ( ! $user_id ) return $has_permission;
+
+        $active_event = function_exists( 'eventosapp_get_active_event' ) ? absint( eventosapp_get_active_event() ) : 0;
+
+        if ( ! $active_event ) {
+            if ( user_can( $user_id, 'manage_options' ) ) {
+                return $has_permission;
+            }
+
+            if ( eventosapp_expositor_user_has_any_assignment( $user_id ) ) {
+                return in_array( $feature, [ 'dashboard', 'expositor' ], true );
+            }
+
+            if ( $feature === 'dashboard' && eventosapp_expositor_user_has_any_event( $user_id ) ) {
+                return true;
+            }
+
+            return $has_permission;
+        }
+
+        if ( get_post_type( $active_event ) !== 'eventosapp_event' ) {
+            return $has_permission;
+        }
+
+        if ( eventosapp_expositor_manager_can_access_event( $active_event, $user_id ) ) {
+            return $has_permission;
+        }
+
+        $has_assignment = eventosapp_expositor_user_has_assignment_in_event( $active_event, $user_id );
+
+        if ( $has_assignment ) {
+            return in_array( $feature, [ 'dashboard', 'expositor' ], true );
+        }
+
+        // Evita que un usuario con rol Expositor vea el módulo en un evento donde no fue asignado.
+        if ( in_array( 'expositor', (array) $user->roles, true ) && in_array( $feature, [ 'expositor', 'expositor_gestion' ], true ) ) {
+            return false;
+        }
+
+        return $has_permission;
     }
 }
+add_filter( 'eventosapp_role_can', 'eventosapp_expositor_apply_assignment_scope', 1001, 3 );
 
 if ( ! function_exists( 'eventosapp_expositor_current_event_id' ) ) {
     function eventosapp_expositor_current_event_id() {
@@ -582,6 +802,82 @@ if ( ! function_exists( 'eventosapp_expositor_current_event_id' ) ) {
     }
 }
 
+if ( ! function_exists( 'eventosapp_save_event_expositores_config' ) ) {
+    /**
+     * Guarda la configuración evento -> expositores -> usuarios.
+     * La misma lógica se usa desde AJAX y desde el botón Actualizar del evento.
+     */
+    function eventosapp_save_event_expositores_config( $event_id, $enabled, $selected_expositores, $raw_users ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id || get_post_type( $event_id ) !== 'eventosapp_event' ) {
+            return new WP_Error( 'invalid_event', 'Evento inválido.' );
+        }
+
+        $cliente_id = eventosapp_expositor_get_event_cliente_id( $event_id );
+        if ( ! $cliente_id ) {
+            update_post_meta( $event_id, '_eventosapp_expositores_enabled', '0' );
+            update_post_meta( $event_id, '_eventosapp_event_expositores', [] );
+            update_post_meta( $event_id, '_eventosapp_expositor_user_map', [] );
+            return new WP_Error( 'invalid_client', 'Este evento no tiene un cliente/organizador válido. No se pueden asociar expositores.' );
+        }
+
+        $allowed_expositores = array_map( 'absint', eventosapp_expositores_get_by_cliente( $cliente_id ) );
+
+        if ( ! is_array( $selected_expositores ) ) {
+            $selected_expositores = [];
+        }
+
+        $selected = array_values( array_intersect(
+            array_unique( array_filter( array_map( 'absint', $selected_expositores ) ) ),
+            $allowed_expositores
+        ) );
+
+        $raw_users = is_array( $raw_users ) ? $raw_users : [];
+        $user_map  = [];
+
+        foreach ( $selected as $expositor_id ) {
+            $users_for_expositor = [];
+
+            if ( isset( $raw_users[ $expositor_id ] ) && is_array( $raw_users[ $expositor_id ] ) ) {
+                $users_for_expositor = $raw_users[ $expositor_id ];
+            } elseif ( isset( $raw_users[ (string) $expositor_id ] ) && is_array( $raw_users[ (string) $expositor_id ] ) ) {
+                $users_for_expositor = $raw_users[ (string) $expositor_id ];
+            }
+
+            $users_for_expositor = array_values( array_unique( array_filter( array_map( 'absint', $users_for_expositor ) ) ) );
+            $valid_users         = [];
+
+            foreach ( $users_for_expositor as $uid ) {
+                $user = get_user_by( 'id', $uid );
+                if ( ! $user || ! $user->exists() ) {
+                    continue;
+                }
+
+                $valid_users[] = $uid;
+
+                // Se agrega el rol Expositor para que pueda ver el módulo en el frontend.
+                // No se eliminan roles existentes ni se remueve este rol al desasignar,
+                // porque el acceso real queda controlado por el mapa evento/expositor/usuario.
+                if ( ! in_array( 'expositor', (array) $user->roles, true ) ) {
+                    $user->add_role( 'expositor' );
+                }
+            }
+
+            $user_map[ $expositor_id ] = array_values( array_unique( $valid_users ) );
+        }
+
+        update_post_meta( $event_id, '_eventosapp_expositores_enabled', $enabled ? '1' : '0' );
+        update_post_meta( $event_id, '_eventosapp_event_expositores', $selected );
+        update_post_meta( $event_id, '_eventosapp_expositor_user_map', $user_map );
+
+        return [
+            'enabled'     => $enabled ? '1' : '0',
+            'expositores' => $selected,
+            'user_map'    => $user_map,
+        ];
+    }
+}
+
 function eventosapp_event_expositores_metabox( $post ) {
     $event_id   = absint( $post->ID );
     $cliente_id = eventosapp_expositor_get_event_cliente_id( $event_id );
@@ -590,16 +886,22 @@ function eventosapp_event_expositores_metabox( $post ) {
     $user_map   = eventosapp_event_get_expositor_user_map( $event_id );
     $nonce      = wp_create_nonce( 'eventosapp_save_event_expositores_' . $event_id );
 
+    wp_nonce_field( 'eventosapp_save_event_expositores_' . $event_id, '_eventosapp_event_expositores_nonce' );
+
     echo '<style>
         .evapp-expo-box{border:1px solid #dcdcde;border-radius:8px;padding:14px;background:#fff;}
         .evapp-expo-muted{color:#646970;font-size:13px;}
         .evapp-expo-warning{border-left:4px solid #d63638;background:#fcf0f1;padding:10px 12px;margin:8px 0;border-radius:4px;}
+        .evapp-expo-info{border-left:4px solid #2271b1;background:#f0f6fc;padding:10px 12px;margin:8px 0;border-radius:4px;}
         .evapp-expo-success{border-left:4px solid #00a32a;background:#edfaef;padding:10px 12px;margin:8px 0;border-radius:4px;display:none;}
         .evapp-expo-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px;}
         .evapp-expo-card{border:1px solid #e0e0e0;border-radius:8px;padding:12px;background:#fafafa;}
-        .evapp-expo-card h4{margin:0 0 8px;}
-        .evapp-expo-users{width:100%;min-height:86px;}
+        .evapp-expo-card h4{margin:0 0 8px;display:flex;align-items:center;gap:8px;}
+        .evapp-expo-card h4 .dashicons{color:#2271b1;}
+        .evapp-expo-users{width:100%;min-height:96px;}
         .evapp-expo-select-main{width:100%;max-width:100%;min-height:130px;}
+        .evapp-expo-card-hidden{display:none;}
+        .evapp-expo-card-empty{border-style:dashed;background:#fff;color:#646970;}
     </style>';
 
     echo '<div class="evapp-expo-box" id="evapp-event-expositores-box" data-event-id="' . esc_attr( $event_id ) . '" data-nonce="' . esc_attr( $nonce ) . '">';
@@ -616,7 +918,7 @@ function eventosapp_event_expositores_metabox( $post ) {
     $users          = get_users( [ 'orderby' => 'display_name', 'order' => 'ASC', 'number' => 500 ] );
 
     echo '<p><strong>Cliente/Organizador asociado:</strong> ' . esc_html( $cliente_nombre ) . '</p>';
-    echo '<label style="display:block;margin:8px 0 12px;"><input type="checkbox" id="evapp_expositores_enabled" value="1" ' . checked( $enabled, true, false ) . '> Activar módulo de expositores para este evento</label>';
+    echo '<label style="display:block;margin:8px 0 12px;"><input type="checkbox" id="evapp_expositores_enabled" name="_eventosapp_expositores_enabled" value="1" ' . checked( $enabled, true, false ) . '> Activar módulo de expositores para este evento</label>';
 
     if ( empty( $expositores ) ) {
         echo '<div class="evapp-expo-warning"><strong>No hay expositores creados para este cliente.</strong><br>Crea un expositor y asígnalo al cliente <strong>' . esc_html( $cliente_nombre ) . '</strong> para poder seleccionarlo aquí.</div>';
@@ -627,45 +929,62 @@ function eventosapp_event_expositores_metabox( $post ) {
     }
 
     echo '<label for="evapp_event_expositores_select"><strong>Expositores asociados al evento</strong></label>';
-    echo '<select multiple id="evapp_event_expositores_select" class="evapp-expo-select-main">';
+    echo '<select multiple id="evapp_event_expositores_select" name="_eventosapp_event_expositores[]" class="evapp-expo-select-main">';
     foreach ( $expositores as $expositor_id ) {
         $nombre = get_post_meta( $expositor_id, '_expositor_nombre_empresa', true ) ?: get_the_title( $expositor_id );
         echo '<option value="' . esc_attr( $expositor_id ) . '" ' . selected( in_array( $expositor_id, $assigned, true ), true, false ) . '>' . esc_html( $nombre ) . '</option>';
     }
     echo '</select>';
-    echo '<p class="evapp-expo-muted">Sólo aparecen expositores asociados al cliente/organizador de este evento.</p>';
+    echo '<p class="evapp-expo-muted">Sólo aparecen expositores asociados al cliente/organizador de este evento. Mantén presionada la tecla Ctrl/Cmd para seleccionar uno o varios expositores.</p>';
+
+    echo '<div class="evapp-expo-info"><strong>Usuarios por expositor seleccionado</strong><br>Al seleccionar un expositor se habilita su propio espacio para asignar usuarios. Esos usuarios sólo podrán operar el módulo <strong>Expositor</strong> en este evento y únicamente para el expositor donde estén asignados.</div>';
 
     echo '<div class="evapp-expo-grid" id="evapp-expo-user-cards">';
+    echo '<div class="evapp-expo-card evapp-expo-card-empty" id="evapp-expo-empty-card">Selecciona uno o varios expositores para mostrar aquí sus campos de usuarios.</div>';
+
     foreach ( $expositores as $expositor_id ) {
         $nombre   = get_post_meta( $expositor_id, '_expositor_nombre_empresa', true ) ?: get_the_title( $expositor_id );
         $selected = in_array( $expositor_id, $assigned, true );
-        $u_ids    = isset( $user_map[ $expositor_id ] ) ? (array) $user_map[ $expositor_id ] : [];
-        echo '<div class="evapp-expo-card" data-expositor-card="' . esc_attr( $expositor_id ) . '" style="display:' . ( $selected ? 'block' : 'none' ) . ';">';
-        echo '<h4>' . esc_html( $nombre ) . '</h4>';
-        echo '<label><strong>Usuarios con acceso como expositor</strong></label>';
-        echo '<select multiple class="evapp-expo-users" data-expositor-users="' . esc_attr( $expositor_id ) . '">';
+        $u_ids    = isset( $user_map[ $expositor_id ] ) ? array_map( 'absint', (array) $user_map[ $expositor_id ] ) : [];
+
+        echo '<div class="evapp-expo-card' . ( $selected ? '' : ' evapp-expo-card-hidden' ) . '" data-expositor-card="' . esc_attr( $expositor_id ) . '">';
+        echo '<h4><span class="dashicons dashicons-store"></span>' . esc_html( $nombre ) . '</h4>';
+        echo '<label for="evapp_expositor_users_' . esc_attr( $expositor_id ) . '"><strong>Usuarios autorizados para este expositor</strong></label>';
+        echo '<select multiple id="evapp_expositor_users_' . esc_attr( $expositor_id ) . '" name="_eventosapp_expositor_user_map[' . esc_attr( $expositor_id ) . '][]" class="evapp-expo-users" data-expositor-users="' . esc_attr( $expositor_id ) . '">';
         foreach ( $users as $user ) {
-            $label = $user->display_name . ' (' . $user->user_email . ')';
-            echo '<option value="' . esc_attr( $user->ID ) . '" ' . selected( in_array( (int) $user->ID, array_map( 'absint', $u_ids ), true ), true, false ) . '>' . esc_html( $label ) . '</option>';
+            $label = $user->display_name . ' - ' . $user->user_login . ' (' . $user->user_email . ')';
+            echo '<option value="' . esc_attr( $user->ID ) . '" ' . selected( in_array( (int) $user->ID, $u_ids, true ), true, false ) . '>' . esc_html( $label ) . '</option>';
         }
         echo '</select>';
-        echo '<p class="evapp-expo-muted">Estos usuarios sólo necesitan el rol Expositor para ver el módulo Expositor en el dashboard. El guardado lo asigna automáticamente sin quitar otros roles existentes.</p>';
+        echo '<p class="evapp-expo-muted">Para quitar un usuario de este expositor, desmárcalo y guarda. Si este usuario tiene otros roles, no se eliminan; el acceso al expositor queda limitado por esta asignación.</p>';
         echo '</div>';
     }
     echo '</div>';
 
     echo '<p style="margin-top:14px;"><button type="button" class="button button-primary" id="evapp_save_event_expositores">Guardar configuración de expositores</button> <span id="evapp-expo-save-msg" class="evapp-expo-success"></span></p>';
+    echo '<p class="evapp-expo-muted">También puedes usar el botón principal <strong>Actualizar</strong> del evento; los campos tienen nombres internos para guardado normal y el botón azul guarda por AJAX sin salir de esta pantalla.</p>';
     echo '</div>';
     ?>
     <script>
     jQuery(function($){
         function refreshCards(){
             var selected = $('#evapp_event_expositores_select').val() || [];
+            var visibleCount = 0;
+
             $('[data-expositor-card]').each(function(){
-                var id = String($(this).data('expositor-card'));
-                $(this).toggle(selected.indexOf(id) !== -1);
+                var $card = $(this);
+                var id = String($card.data('expositor-card'));
+                var isSelected = selected.indexOf(id) !== -1;
+
+                $card.toggleClass('evapp-expo-card-hidden', !isSelected);
+                if(isSelected){
+                    visibleCount++;
+                }
             });
+
+            $('#evapp-expo-empty-card').toggle(visibleCount === 0);
         }
+
         $('#evapp_event_expositores_select').on('change', refreshCards);
         refreshCards();
 
@@ -676,12 +995,15 @@ function eventosapp_event_expositores_metabox( $post ) {
             var $msg = $('#evapp-expo-save-msg');
             var selected = $('#evapp_event_expositores_select').val() || [];
             var users = {};
+
             $('[data-expositor-users]').each(function(){
                 var eid = String($(this).data('expositor-users'));
-                users[eid] = $(this).val() || [];
+                users[eid] = selected.indexOf(eid) !== -1 ? ($(this).val() || []) : [];
             });
+
             $btn.prop('disabled', true).text('Guardando...');
             $msg.hide().removeClass('notice-error').text('');
+
             $.post(ajaxurl, {
                 action: 'eventosapp_save_event_expositores',
                 event_id: $box.data('event-id'),
@@ -706,6 +1028,24 @@ function eventosapp_event_expositores_metabox( $post ) {
     <?php
 }
 
+add_action( 'save_post_eventosapp_event', function ( $post_id ) {
+    if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
+    if ( wp_is_post_revision( $post_id ) ) return;
+
+    if ( ! isset( $_POST['_eventosapp_event_expositores_nonce'] ) ) return;
+
+    $nonce = sanitize_text_field( wp_unslash( $_POST['_eventosapp_event_expositores_nonce'] ) );
+    if ( ! wp_verify_nonce( $nonce, 'eventosapp_save_event_expositores_' . $post_id ) ) return;
+
+    if ( ! current_user_can( 'edit_post', $post_id ) ) return;
+
+    $enabled   = isset( $_POST['_eventosapp_expositores_enabled'] ) && (string) wp_unslash( $_POST['_eventosapp_expositores_enabled'] ) === '1';
+    $selected  = isset( $_POST['_eventosapp_event_expositores'] ) && is_array( $_POST['_eventosapp_event_expositores'] ) ? wp_unslash( $_POST['_eventosapp_event_expositores'] ) : [];
+    $raw_users = isset( $_POST['_eventosapp_expositor_user_map'] ) && is_array( $_POST['_eventosapp_expositor_user_map'] ) ? wp_unslash( $_POST['_eventosapp_expositor_user_map'] ) : [];
+
+    eventosapp_save_event_expositores_config( $post_id, $enabled, $selected, $raw_users );
+}, 30 );
+
 add_action( 'wp_ajax_eventosapp_save_event_expositores', function () {
     $event_id = absint( $_POST['event_id'] ?? 0 );
     if ( ! $event_id || get_post_type( $event_id ) !== 'eventosapp_event' ) {
@@ -718,38 +1058,15 @@ add_action( 'wp_ajax_eventosapp_save_event_expositores', function () {
         wp_send_json_error( [ 'message' => 'No tienes permisos para editar este evento.' ], 403 );
     }
 
-    $cliente_id = eventosapp_expositor_get_event_cliente_id( $event_id );
-    if ( ! $cliente_id ) {
-        update_post_meta( $event_id, '_eventosapp_expositores_enabled', '0' );
-        update_post_meta( $event_id, '_eventosapp_event_expositores', [] );
-        update_post_meta( $event_id, '_eventosapp_expositor_user_map', [] );
-        wp_send_json_error( [ 'message' => 'Este evento no tiene un cliente/organizador válido. No se pueden asociar expositores.' ], 400 );
-    }
-
-    $allowed_expositores = eventosapp_expositores_get_by_cliente( $cliente_id );
-    $allowed_expositores = array_map( 'absint', $allowed_expositores );
-    $selected            = isset( $_POST['expositores'] ) && is_array( $_POST['expositores'] ) ? array_map( 'absint', wp_unslash( $_POST['expositores'] ) ) : [];
-    $selected            = array_values( array_intersect( array_unique( array_filter( $selected ) ), $allowed_expositores ) );
-
+    $enabled   = isset( $_POST['enabled'] ) && (string) wp_unslash( $_POST['enabled'] ) === '1';
+    $selected  = isset( $_POST['expositores'] ) && is_array( $_POST['expositores'] ) ? wp_unslash( $_POST['expositores'] ) : [];
     $raw_users = isset( $_POST['users'] ) && is_array( $_POST['users'] ) ? wp_unslash( $_POST['users'] ) : [];
-    $user_map  = [];
 
-    foreach ( $selected as $expositor_id ) {
-        $users_for_expositor = isset( $raw_users[ $expositor_id ] ) && is_array( $raw_users[ $expositor_id ] ) ? $raw_users[ $expositor_id ] : [];
-        $users_for_expositor = array_values( array_unique( array_filter( array_map( 'absint', $users_for_expositor ) ) ) );
-        $user_map[ $expositor_id ] = $users_for_expositor;
+    $result = eventosapp_save_event_expositores_config( $event_id, $enabled, $selected, $raw_users );
 
-        foreach ( $users_for_expositor as $uid ) {
-            $user = get_user_by( 'id', $uid );
-            if ( $user && ! in_array( 'expositor', (array) $user->roles, true ) ) {
-                $user->add_role( 'expositor' );
-            }
-        }
+    if ( is_wp_error( $result ) ) {
+        wp_send_json_error( [ 'message' => $result->get_error_message() ], 400 );
     }
-
-    update_post_meta( $event_id, '_eventosapp_expositores_enabled', isset( $_POST['enabled'] ) && (string) $_POST['enabled'] === '1' ? '1' : '0' );
-    update_post_meta( $event_id, '_eventosapp_event_expositores', $selected );
-    update_post_meta( $event_id, '_eventosapp_expositor_user_map', $user_map );
 
     wp_send_json_success( [ 'message' => 'Configuración de expositores guardada correctamente.' ] );
 } );
@@ -826,9 +1143,16 @@ if ( ! function_exists( 'eventosapp_expositor_get_download_permissions' ) ) {
 
 if ( ! function_exists( 'eventosapp_expositor_download_is_allowed' ) ) {
     function eventosapp_expositor_download_is_allowed( $event_id, $expositor_id, $user_id = 0 ) {
+        $event_id     = absint( $event_id );
+        $expositor_id = absint( $expositor_id );
+        $user_id      = $user_id ? absint( $user_id ) : get_current_user_id();
+
+        if ( ! $event_id || ! $expositor_id || ! $user_id ) return false;
         if ( eventosapp_expositor_manager_can_access_event( $event_id, $user_id ) ) return true;
+        if ( ! in_array( $expositor_id, eventosapp_expositor_user_get_expositor_ids_for_event( $event_id, $user_id ), true ) ) return false;
+
         $permissions = eventosapp_expositor_get_download_permissions( $event_id );
-        return ! empty( $permissions[ absint( $expositor_id ) ] );
+        return ! empty( $permissions[ $expositor_id ] );
     }
 }
 
@@ -1563,11 +1887,13 @@ add_action( 'admin_post_eventosapp_expositor_download_csv', function () {
 
     check_admin_referer( 'eventosapp_expositor_download_' . $event_id . '_' . $expositor_id );
 
-    if ( ! eventosapp_expositor_user_can_manage_expositor( $event_id, $expositor_id ) && ! eventosapp_expositor_download_is_allowed( $event_id, $expositor_id ) ) {
+    $user_id = get_current_user_id();
+
+    if ( ! eventosapp_expositor_user_can_manage_expositor( $event_id, $expositor_id, $user_id ) ) {
         wp_die( 'No tienes autorización para descargar esta base de datos.' );
     }
 
-    if ( ! eventosapp_expositor_download_is_allowed( $event_id, $expositor_id ) ) {
+    if ( ! eventosapp_expositor_download_is_allowed( $event_id, $expositor_id, $user_id ) ) {
         wp_die( 'La descarga todavía no fue autorizada por el organizador.' );
     }
 
