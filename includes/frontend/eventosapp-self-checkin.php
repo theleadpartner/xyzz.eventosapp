@@ -977,8 +977,7 @@ body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
 .evsc-fullscreen-trigger-wrap{display:flex;width:100%;max-width:760px;margin:0 auto 16px;align-items:center;justify-content:center;font-family:Arial,Helvetica,sans-serif}
 .evsc-fullscreen-trigger-wrap.align-left{justify-content:flex-start}.evsc-fullscreen-trigger-wrap.align-right{justify-content:flex-end}.evsc-fullscreen-trigger-wrap.align-stretch .evsc-fullscreen-trigger{width:100%}
 .evsc-fullscreen-trigger{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:0;border-radius:999px;background:#047857;color:#fff!important;text-decoration:none!important;padding:16px 24px;min-height:58px;font-size:18px;font-weight:900;line-height:1;cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none;box-shadow:0 10px 24px rgba(4,120,87,.2);transition:transform .12s ease,filter .15s ease,background-color .15s ease,color .15s ease,opacity .15s ease}
-.evsc-fullscreen-trigger:hover{filter:brightness(.96);transform:translateY(-1px)}.evsc-fullscreen-trigger:active{transform:translateY(0)}.evsc-fullscreen-trigger.evsc-is-hidden,body.evsc-is-fullscreen .evsc-fullscreen-trigger-wrap[data-hide-on-fullscreen="1"]{display:none!important}
-body.evsc-is-fullscreen .evsc-launcher-module{display:none!important}
+.evsc-fullscreen-trigger:hover{filter:brightness(.96);transform:translateY(-1px)}.evsc-fullscreen-trigger:active{transform:translateY(0)}.evsc-fullscreen-trigger.evsc-is-hidden,body.evsc-is-fullscreen .evsc-fullscreen-trigger-wrap[data-hide-on-fullscreen="1"]{display:none!important}body.evsc-is-fullscreen .evsc-launcher-module{display:none!important}
 .evsc-keyboard{width:100%;margin:18px 0 4px;padding:14px;border-radius:22px;background:#f1f5f9;border:1px solid #dbe4ee;box-shadow:inset 0 1px 0 rgba(255,255,255,.72)}
 .evsc-keyboard-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;flex-wrap:wrap}.evsc-keyboard-title{display:block;color:#334155;font-size:15px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.evsc-keyboard-toggle{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .evsc-keyboard-mode{border:0;border-radius:999px;background:#e2e8f0;color:#0f172a;padding:9px 14px;font-size:14px;font-weight:900;cursor:pointer;touch-action:manipulation}.evsc-keyboard-mode.is-active{background:#2563eb;color:#fff}
@@ -1005,26 +1004,27 @@ if ( ! function_exists('eventosapp_self_checkin_inline_style_fallback') ) {
     }
 }
 
-if ( ! function_exists('eventosapp_self_checkin_enqueue_assets') ) {
-    function eventosapp_self_checkin_enqueue_assets() {
-        wp_enqueue_script('jquery');
+if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
+    function eventosapp_self_checkin_inline_js() {
+        return <<<'JS'
+(function(){
+  if(window.EvSelfCheckinCoreLoaded || window.EvSelfCheckinCoreBooting){
+    return;
+  }
+  window.EvSelfCheckinCoreBooting = true;
 
-        if ( ! wp_script_is('eventosapp-self-checkin', 'registered') ) {
-            wp_register_script('eventosapp-self-checkin', false, ['jquery'], null, true);
-        }
+  function evscBoot(){
+    if(!window.jQuery){
+      window.setTimeout(evscBoot, 50);
+      return;
+    }
 
-        if ( ! wp_script_is('eventosapp-self-checkin', 'enqueued') ) {
-            wp_localize_script('eventosapp-self-checkin', 'EvSelfCheckin', [
-                'ajax_url'      => admin_url('admin-ajax.php'),
-                'search_nonce'  => wp_create_nonce('eventosapp_self_checkin_search'),
-                'confirm_nonce' => wp_create_nonce('eventosapp_self_checkin_confirm'),
-                'print_nonce'   => wp_create_nonce('eventosapp_self_checkin_print'),
-                'badge_nonce'   => wp_create_nonce('eventosapp_self_checkin_badge'),
-                'messages'      => eventosapp_self_checkin_messages(),
-            ]);
-
-            $js = <<<'JS'
-jQuery(function($){
+    window.jQuery(function($){
+      if(window.EvSelfCheckinCoreLoaded){
+        return;
+      }
+      window.EvSelfCheckinCoreLoaded = true;
+      window.EvSelfCheckinCoreBooting = false;
   var globalConfig = window.EvSelfCheckin || {};
   var kioskGuardsInstalled = false;
   var kioskHistoryArmed = false;
@@ -1804,10 +1804,53 @@ jQuery(function($){
   $(document).on('elementor/popup/show evsc:refresh', function(){
     evscRunInit(document);
   });
-});
-JS;
+    });
+  }
 
+  evscBoot();
+})();
+JS;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_inline_script_fallback') ) {
+    /**
+     * Imprime el JS del módulo dentro del HTML como respaldo para Elementor/WP Rocket.
+     * El script tiene guard interno, por lo que no duplica eventos si también se imprime desde wp_enqueue_script().
+     */
+    function eventosapp_self_checkin_inline_script_fallback() {
+        static $printed = false;
+        if ( $printed ) {
+            return '';
+        }
+        $printed = true;
+        return '<script id="eventosapp-self-checkin-inline-js-fallback">' . eventosapp_self_checkin_inline_js() . '</script>';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+    function eventosapp_self_checkin_enqueue_assets() {
+        static $script_added = false;
+
+        wp_enqueue_script('jquery');
+
+        if ( ! wp_script_is('eventosapp-self-checkin', 'registered') ) {
+            wp_register_script('eventosapp-self-checkin', false, ['jquery'], null, true);
+        }
+
+        if ( ! $script_added ) {
+            wp_localize_script('eventosapp-self-checkin', 'EvSelfCheckin', [
+                'ajax_url'      => admin_url('admin-ajax.php'),
+                'search_nonce'  => wp_create_nonce('eventosapp_self_checkin_search'),
+                'confirm_nonce' => wp_create_nonce('eventosapp_self_checkin_confirm'),
+                'print_nonce'   => wp_create_nonce('eventosapp_self_checkin_print'),
+                'badge_nonce'   => wp_create_nonce('eventosapp_self_checkin_badge'),
+                'messages'      => eventosapp_self_checkin_messages(),
+            ]);
+
+            $js = eventosapp_self_checkin_inline_js();
             wp_add_inline_script('eventosapp-self-checkin', $js);
+            $script_added = true;
         }
 
         wp_enqueue_script('eventosapp-self-checkin');
@@ -1850,6 +1893,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_fullscreen_button') ) {
                 <?php echo esc_html( $args['label'] ); ?>
             </button>
         </div>
+        <?php echo eventosapp_self_checkin_inline_script_fallback(); ?>
         <?php
         return ob_get_clean();
     }
@@ -1902,6 +1946,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_launcher_block') ) {
                 </div>
             <?php endif; ?>
         </div>
+        <?php echo eventosapp_self_checkin_inline_script_fallback(); ?>
         <?php
         return ob_get_clean();
     }
@@ -2035,6 +2080,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
                 </div>
             </div>
         </div>
+        <?php echo eventosapp_self_checkin_inline_script_fallback(); ?>
         <?php
         return ob_get_clean();
     }
