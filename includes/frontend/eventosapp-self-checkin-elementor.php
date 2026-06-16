@@ -881,6 +881,32 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode' => 'background-color: {{VALUE}};' ],
                     ]);
+                    $this->add_control('keyboard_mode_hover_color', [
+                        'label' => 'Texto modo hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode:hover' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_mode_hover_background', [
+                        'label' => 'Fondo modo hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode:hover' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'keyboard_mode_border',
+                        'selector' => '{{WRAPPER}} .evsc-keyboard-mode',
+                    ]);
+                    $this->add_responsive_control('keyboard_mode_radius', [
+                        'label' => 'Radio botones modo',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('keyboard_mode_padding', [
+                        'label' => 'Relleno botones modo',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
                     $this->add_control('keyboard_mode_active_color', [
                         'label' => 'Texto modo activo',
                         'type'  => \Elementor\Controls_Manager::COLOR,
@@ -910,6 +936,30 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label' => 'Fondo tecla',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-key' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_key_hover_color', [
+                        'label' => 'Texto tecla hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key:hover' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_key_hover_background', [
+                        'label' => 'Fondo tecla hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key:hover' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_key_active_color', [
+                        'label' => 'Texto tecla presionada',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key:active' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_key_active_background', [
+                        'label' => 'Fondo tecla presionada',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key:active' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'keyboard_key_border',
+                        'selector' => '{{WRAPPER}} .evsc-key',
                     ]);
                     $this->add_control('keyboard_action_key_color', [
                         'label' => 'Texto tecla acción',
@@ -944,8 +994,13 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
 
                 private function register_button_style_controls() {
                     $this->start_controls_section('section_style_buttons', [
-                        'label' => 'Botones',
+                        'label' => 'Botones de búsqueda',
                         'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
+                    ]);
+
+                    $this->add_control('heading_buttons_general', [
+                        'label' => 'Estilo general',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
                     ]);
 
                     $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
@@ -971,8 +1026,33 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label' => 'Altura mínima general',
                         'type'  => \Elementor\Controls_Manager::SLIDER,
                         'size_units' => [ 'px', 'em', 'rem' ],
-                        'range' => [ 'px' => [ 'min' => 36, 'max' => 180 ] ],
+                        'range' => [ 'px' => [ 'min' => 36, 'max' => 220 ] ],
                         'selectors' => [ '{{WRAPPER}} .evsc-btn' => 'min-height: {{SIZE}}{{UNIT}};' ],
+                    ]);
+
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'buttons_border',
+                        'selector' => '{{WRAPPER}} .evsc-btn',
+                    ]);
+
+                    $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
+                        'name'     => 'buttons_shadow',
+                        'selector' => '{{WRAPPER}} .evsc-btn',
+                    ]);
+
+                    $this->add_responsive_control('actions_gap', [
+                        'label' => 'Separación entre botones',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', 'em', 'rem' ],
+                        'range' => [ 'px' => [ 'min' => 0, 'max' => 100 ] ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-actions' => 'gap: {{SIZE}}{{UNIT}};' ],
+                    ]);
+
+                    $this->add_control('buttons_disabled_opacity', [
+                        'label' => 'Opacidad deshabilitado',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'range' => [ 'px' => [ 'min' => 0.10, 'max' => 1, 'step' => 0.01 ] ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-btn[disabled]' => 'opacity: {{SIZE}};' ],
                     ]);
 
                     $this->add_control('heading_search_button', [
@@ -986,85 +1066,200 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->add_control('search_button_color', [
                         'label' => 'Texto',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-primary' => 'color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-search' => 'color: {{VALUE}};' ],
                     ]);
                     $this->add_control('search_button_background', [
                         'label' => 'Fondo',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-primary' => 'background-color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-search' => 'background-color: {{VALUE}};' ],
                     ]);
                     $this->end_controls_tab();
                     $this->start_controls_tab('search_button_hover', [ 'label' => 'Hover' ]);
                     $this->add_control('search_button_hover_color', [
                         'label' => 'Texto hover',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-primary:hover' => 'color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-search:hover' => 'color: {{VALUE}};' ],
                     ]);
                     $this->add_control('search_button_hover_background', [
                         'label' => 'Fondo hover',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-primary:hover' => 'background-color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-search:hover' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('search_button_active', [ 'label' => 'Activo' ]);
+                    $this->add_control('search_button_active_color', [
+                        'label' => 'Texto activo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-search:active' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('search_button_active_background', [
+                        'label' => 'Fondo activo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-search:active' => 'background-color: {{VALUE}};' ],
                     ]);
                     $this->end_controls_tab();
                     $this->end_controls_tabs();
 
-                    $this->add_control('heading_light_button', [
-                        'label' => 'Botones claros / selección',
+                    $this->add_control('heading_clear_button', [
+                        'label' => 'Botón Limpiar',
                         'type'  => \Elementor\Controls_Manager::HEADING,
                         'separator' => 'before',
                     ]);
 
-                    $this->add_control('light_button_color', [
+                    $this->start_controls_tabs('clear_button_tabs');
+                    $this->start_controls_tab('clear_button_normal', [ 'label' => 'Normal' ]);
+                    $this->add_control('clear_button_color', [
                         'label' => 'Texto',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-light' => 'color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-clear' => 'color: {{VALUE}};' ],
                     ]);
-                    $this->add_control('light_button_background', [
+                    $this->add_control('clear_button_background', [
                         'label' => 'Fondo',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-light' => 'background-color: {{VALUE}};' ],
-                    ]);
-
-                    $this->add_control('heading_success_button', [
-                        'label' => 'Botones confirmar / imprimir',
-                        'type'  => \Elementor\Controls_Manager::HEADING,
-                        'separator' => 'before',
-                    ]);
-
-                    $this->start_controls_tabs('success_button_tabs');
-                    $this->start_controls_tab('success_button_normal', [ 'label' => 'Normal' ]);
-                    $this->add_control('success_button_color', [
-                        'label' => 'Texto',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-success' => 'color: {{VALUE}};' ],
-                    ]);
-                    $this->add_control('success_button_background', [
-                        'label' => 'Fondo',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-success' => 'background-color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-clear' => 'background-color: {{VALUE}};' ],
                     ]);
                     $this->end_controls_tab();
-                    $this->start_controls_tab('success_button_hover', [ 'label' => 'Hover' ]);
-                    $this->add_control('success_button_hover_color', [
+                    $this->start_controls_tab('clear_button_hover', [ 'label' => 'Hover' ]);
+                    $this->add_control('clear_button_hover_color', [
                         'label' => 'Texto hover',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-success:hover' => 'color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-clear:hover' => 'color: {{VALUE}};' ],
                     ]);
-                    $this->add_control('success_button_hover_background', [
+                    $this->add_control('clear_button_hover_background', [
                         'label' => 'Fondo hover',
                         'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-btn-success:hover' => 'background-color: {{VALUE}};' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-clear:hover' => 'background-color: {{VALUE}};' ],
                     ]);
                     $this->end_controls_tab();
                     $this->end_controls_tabs();
 
-                    $this->add_responsive_control('actions_gap', [
-                        'label' => 'Separación entre botones',
-                        'type'  => \Elementor\Controls_Manager::SLIDER,
-                        'size_units' => [ 'px', 'em', 'rem' ],
-                        'range' => [ 'px' => [ 'min' => 0, 'max' => 80 ] ],
-                        'selectors' => [ '{{WRAPPER}} .evsc-actions' => 'gap: {{SIZE}}{{UNIT}};' ],
+                    $this->add_control('heading_confirm_button', [
+                        'label' => 'Botón Confirmar',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
                     ]);
+
+                    $this->start_controls_tabs('confirm_button_tabs');
+                    $this->start_controls_tab('confirm_button_normal', [ 'label' => 'Normal' ]);
+                    $this->add_control('confirm_button_color', [
+                        'label' => 'Texto',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-confirm' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('confirm_button_background', [
+                        'label' => 'Fondo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-confirm' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('confirm_button_hover', [ 'label' => 'Hover' ]);
+                    $this->add_control('confirm_button_hover_color', [
+                        'label' => 'Texto hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-confirm:hover' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('confirm_button_hover_background', [
+                        'label' => 'Fondo hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-confirm:hover' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->end_controls_tabs();
+
+                    $this->add_control('heading_print_button', [
+                        'label' => 'Botón Imprimir escarapela',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
+
+                    $this->start_controls_tabs('print_button_tabs');
+                    $this->start_controls_tab('print_button_normal', [ 'label' => 'Normal' ]);
+                    $this->add_control('print_button_color', [
+                        'label' => 'Texto',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-print' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('print_button_background', [
+                        'label' => 'Fondo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-print' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('print_button_hover', [ 'label' => 'Hover' ]);
+                    $this->add_control('print_button_hover_color', [
+                        'label' => 'Texto hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-print:hover' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('print_button_hover_background', [
+                        'label' => 'Fondo hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-js-print:hover' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->end_controls_tabs();
+
+                    $this->add_control('heading_select_button', [
+                        'label' => 'Botón Seleccionar de resultados',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
+
+                    $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
+                        'name'     => 'select_label_typography',
+                        'selector' => '{{WRAPPER}} .evsc-select-label',
+                    ]);
+                    $this->add_responsive_control('select_label_padding', [
+                        'label' => 'Relleno seleccionar',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-select-label' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('select_label_radius', [
+                        'label' => 'Radio seleccionar',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-select-label' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+
+                    $this->start_controls_tabs('select_label_tabs');
+                    $this->start_controls_tab('select_label_normal', [ 'label' => 'Normal' ]);
+                    $this->add_control('select_label_color', [
+                        'label' => 'Texto',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-select-label' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('select_label_background', [
+                        'label' => 'Fondo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-select-label' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('select_label_hover', [ 'label' => 'Hover' ]);
+                    $this->add_control('select_label_hover_color', [
+                        'label' => 'Texto hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result:hover .evsc-select-label' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('select_label_hover_background', [
+                        'label' => 'Fondo hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result:hover .evsc-select-label' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('select_label_selected', [ 'label' => 'Seleccionado' ]);
+                    $this->add_control('select_label_selected_color', [
+                        'label' => 'Texto seleccionado',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected .evsc-select-label' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('select_label_selected_background', [
+                        'label' => 'Fondo seleccionado',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected .evsc-select-label' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->end_controls_tabs();
 
                     $this->end_controls_section();
                 }
@@ -1075,40 +1270,110 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
                     ]);
 
+                    $this->add_control('heading_status_messages', [
+                        'label' => 'Mensajes de estado',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                    ]);
+
+                    $this->add_responsive_control('status_margin', [
+                        'label' => 'Margen mensaje',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-status' => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('status_padding', [
+                        'label' => 'Relleno mensaje',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-status' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('status_radius', [
+                        'label' => 'Radio mensaje',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-status' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'status_border',
+                        'selector' => '{{WRAPPER}} .evsc-status',
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
+                        'name'     => 'status_shadow',
+                        'selector' => '{{WRAPPER}} .evsc-status',
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
+                        'name'     => 'status_typography',
+                        'selector' => '{{WRAPPER}} .evsc-status',
+                    ]);
+
+                    $this->start_controls_tabs('status_state_tabs');
+                    $this->start_controls_tab('status_state_normal', [ 'label' => 'Normal' ]);
                     $this->add_control('status_background', [
-                        'label' => 'Fondo mensaje normal',
+                        'label' => 'Fondo',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-status' => 'background-color: {{VALUE}};' ],
                     ]);
                     $this->add_control('status_color', [
-                        'label' => 'Texto mensaje normal',
+                        'label' => 'Texto',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-status' => 'color: {{VALUE}};' ],
                     ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('status_state_loading', [ 'label' => 'Cargando' ]);
+                    $this->add_control('status_loading_background', [
+                        'label' => 'Fondo cargando',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-status.loading' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('status_loading_color', [
+                        'label' => 'Texto cargando',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-status.loading' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('status_state_ok', [ 'label' => 'OK' ]);
                     $this->add_control('status_ok_background', [
-                        'label' => 'Fondo mensaje OK',
+                        'label' => 'Fondo OK',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-status.ok' => 'background-color: {{VALUE}};' ],
                     ]);
                     $this->add_control('status_ok_color', [
-                        'label' => 'Texto mensaje OK',
+                        'label' => 'Texto OK',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-status.ok' => 'color: {{VALUE}};' ],
                     ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('status_state_error', [ 'label' => 'Error' ]);
                     $this->add_control('status_error_background', [
-                        'label' => 'Fondo mensaje error',
+                        'label' => 'Fondo error',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-status.err' => 'background-color: {{VALUE}};' ],
                     ]);
                     $this->add_control('status_error_color', [
-                        'label' => 'Texto mensaje error',
+                        'label' => 'Texto error',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-status.err' => 'color: {{VALUE}};' ],
                     ]);
+                    $this->end_controls_tab();
+                    $this->end_controls_tabs();
 
-                    $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
-                        'name'     => 'status_typography',
-                        'selector' => '{{WRAPPER}} .evsc-status',
+                    $this->add_control('heading_results_grid', [
+                        'label' => 'Listado de resultados',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
+                    $this->add_responsive_control('results_margin', [
+                        'label' => 'Margen listado',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-results' => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('results_gap', [
+                        'label' => 'Separación entre resultados',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', 'em', 'rem' ],
+                        'range' => [ 'px' => [ 'min' => 0, 'max' => 80 ] ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-results' => 'gap: {{SIZE}}{{UNIT}};' ],
                     ]);
 
                     $this->add_control('heading_result_card', [
@@ -1116,31 +1381,12 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'type'  => \Elementor\Controls_Manager::HEADING,
                         'separator' => 'before',
                     ]);
-
-                    $this->add_control('result_background', [
-                        'label' => 'Fondo tarjeta',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-result' => 'background-color: {{VALUE}};' ],
-                    ]);
-                    $this->add_control('result_selected_background', [
-                        'label' => 'Fondo seleccionado',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected' => 'background-color: {{VALUE}};' ],
-                    ]);
-                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
-                        'name'     => 'result_border',
-                        'selector' => '{{WRAPPER}} .evsc-result',
-                    ]);
-                    $this->add_control('result_selected_border_color', [
-                        'label' => 'Borde seleccionado',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected' => 'border-color: {{VALUE}};' ],
-                    ]);
-                    $this->add_responsive_control('result_radius', [
-                        'label' => 'Radio tarjeta',
-                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
-                        'size_units' => [ 'px', '%', 'em', 'rem' ],
-                        'selectors' => [ '{{WRAPPER}} .evsc-result' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    $this->add_responsive_control('result_card_gap', [
+                        'label' => 'Separación interna tarjeta',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', 'em', 'rem' ],
+                        'range' => [ 'px' => [ 'min' => 0, 'max' => 80 ] ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-result' => 'gap: {{SIZE}}{{UNIT}};' ],
                     ]);
                     $this->add_responsive_control('result_padding', [
                         'label' => 'Relleno tarjeta',
@@ -1148,15 +1394,78 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
                         'selectors' => [ '{{WRAPPER}} .evsc-result' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
                     ]);
+                    $this->add_responsive_control('result_radius', [
+                        'label' => 'Radio tarjeta',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-result' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'result_border',
+                        'selector' => '{{WRAPPER}} .evsc-result',
+                    ]);
                     $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
                         'name'     => 'result_shadow',
                         'selector' => '{{WRAPPER}} .evsc-result',
                     ]);
+                    $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
+                        'name'     => 'result_selected_shadow',
+                        'selector' => '{{WRAPPER}} .evsc-result.is-selected',
+                    ]);
 
+                    $this->start_controls_tabs('result_state_tabs');
+                    $this->start_controls_tab('result_state_normal', [ 'label' => 'Normal' ]);
+                    $this->add_control('result_background', [
+                        'label' => 'Fondo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('result_border_color', [
+                        'label' => 'Color borde',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result' => 'border-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('result_state_hover', [ 'label' => 'Hover' ]);
+                    $this->add_control('result_hover_background', [
+                        'label' => 'Fondo hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result:hover' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('result_hover_border_color', [
+                        'label' => 'Borde hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result:hover' => 'border-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('result_state_selected', [ 'label' => 'Seleccionado' ]);
+                    $this->add_control('result_selected_background', [
+                        'label' => 'Fondo seleccionado',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('result_selected_border_color', [
+                        'label' => 'Borde seleccionado',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected' => 'border-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->end_controls_tabs();
+
+                    $this->add_control('heading_result_texts', [
+                        'label' => 'Texto de resultado',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
                     $this->add_control('result_name_color', [
                         'label' => 'Color nombre',
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-result-name' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('result_selected_name_color', [
+                        'label' => 'Color nombre seleccionado',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected .evsc-result-name' => 'color: {{VALUE}};' ],
                     ]);
                     $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
                         'name'     => 'result_name_typography',
@@ -1167,25 +1476,85 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'type'  => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [ '{{WRAPPER}} .evsc-result-meta' => 'color: {{VALUE}};' ],
                     ]);
+                    $this->add_control('result_selected_meta_color', [
+                        'label' => 'Color metadatos seleccionado',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result.is-selected .evsc-result-meta' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('result_meta_strong_color', [
+                        'label' => 'Color valores destacados',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-result-meta strong' => 'color: {{VALUE}};' ],
+                    ]);
                     $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
                         'name'     => 'result_meta_typography',
                         'selector' => '{{WRAPPER}} .evsc-result-meta',
                     ]);
 
-                    $this->add_control('chip_background', [
-                        'label' => 'Fondo viñetas',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-chip' => 'background-color: {{VALUE}};' ],
-                    ]);
-                    $this->add_control('chip_color', [
-                        'label' => 'Texto viñetas',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-chip' => 'color: {{VALUE}};' ],
+                    $this->add_control('heading_result_chips', [
+                        'label' => 'Viñetas / estados',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
                     ]);
                     $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
                         'name'     => 'chip_typography',
                         'selector' => '{{WRAPPER}} .evsc-chip',
                     ]);
+                    $this->add_responsive_control('chip_padding', [
+                        'label' => 'Relleno viñetas',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('chip_radius', [
+                        'label' => 'Radio viñetas',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'chip_border',
+                        'selector' => '{{WRAPPER}} .evsc-chip',
+                    ]);
+
+                    $this->start_controls_tabs('chip_state_tabs');
+                    $this->start_controls_tab('chip_state_default', [ 'label' => 'Modalidad' ]);
+                    $this->add_control('chip_background', [
+                        'label' => 'Fondo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('chip_color', [
+                        'label' => 'Texto',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('chip_state_ok', [ 'label' => 'Check-in OK' ]);
+                    $this->add_control('chip_ok_background', [
+                        'label' => 'Fondo OK',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip-ok' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('chip_ok_color', [
+                        'label' => 'Texto OK',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip-ok' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->start_controls_tab('chip_state_warn', [ 'label' => 'Pendiente' ]);
+                    $this->add_control('chip_warn_background', [
+                        'label' => 'Fondo pendiente',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip-warn' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('chip_warn_color', [
+                        'label' => 'Texto pendiente',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-chip-warn' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->end_controls_tabs();
 
                     $this->end_controls_section();
                 }
@@ -1196,6 +1565,27 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
                     ]);
 
+                    $this->add_control('heading_confirm_box', [
+                        'label' => 'Contenedor de confirmación',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                    ]);
+                    $this->add_responsive_control('confirm_max_width', [
+                        'label' => 'Ancho máximo',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', '%', 'vw' ],
+                        'range' => [
+                            'px' => [ 'min' => 280, 'max' => 1600 ],
+                            '%'  => [ 'min' => 20, 'max' => 100 ],
+                            'vw' => [ 'min' => 20, 'max' => 100 ],
+                        ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-confirm' => 'max-width: {{SIZE}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('confirm_margin', [
+                        'label' => 'Margen bloque',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-confirm' => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
                     $this->add_control('confirm_background', [
                         'label' => 'Fondo bloque',
                         'type'  => \Elementor\Controls_Manager::COLOR,
@@ -1213,9 +1603,19 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'size_units' => [ 'px', '%', 'em', 'rem' ],
                         'selectors' => [ '{{WRAPPER}} .evsc-confirm' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
                     ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'confirm_border',
+                        'selector' => '{{WRAPPER}} .evsc-confirm',
+                    ]);
                     $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
                         'name'     => 'confirm_shadow',
                         'selector' => '{{WRAPPER}} .evsc-confirm',
+                    ]);
+
+                    $this->add_control('heading_confirm_title', [
+                        'label' => 'Título de confirmación',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
                     ]);
                     $this->add_control('confirm_heading_color', [
                         'label' => 'Color título',
@@ -1226,12 +1626,57 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'name'     => 'confirm_heading_typography',
                         'selector' => '{{WRAPPER}} .evsc-confirm h3',
                     ]);
+                    $this->add_responsive_control('confirm_heading_margin', [
+                        'label' => 'Margen título',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-confirm h3' => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('confirm_heading_align', [
+                        'label' => 'Alineación título',
+                        'type'  => \Elementor\Controls_Manager::CHOOSE,
+                        'options' => [
+                            'left' => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                            'center' => [ 'title' => 'Centro', 'icon' => 'eicon-text-align-center' ],
+                            'right' => [ 'title' => 'Derecha', 'icon' => 'eicon-text-align-right' ],
+                        ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-confirm h3' => 'text-align: {{VALUE}};' ],
+                    ]);
+
+                    $this->add_control('heading_confirm_grid', [
+                        'label' => 'Cuadrícula de datos',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
                     $this->add_responsive_control('confirm_grid_gap', [
                         'label' => 'Separación datos',
                         'type'  => \Elementor\Controls_Manager::SLIDER,
                         'size_units' => [ 'px', 'em', 'rem' ],
-                        'range' => [ 'px' => [ 'min' => 0, 'max' => 80 ] ],
+                        'range' => [ 'px' => [ 'min' => 0, 'max' => 100 ] ],
                         'selectors' => [ '{{WRAPPER}} .evsc-confirm-grid' => 'gap: {{SIZE}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('confirm_grid_margin', [
+                        'label' => 'Margen cuadrícula',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-confirm-grid' => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('confirm_grid_columns', [
+                        'label' => 'Columnas',
+                        'type'  => \Elementor\Controls_Manager::SELECT,
+                        'options' => [
+                            '1' => '1 columna',
+                            '2' => '2 columnas',
+                            '3' => '3 columnas',
+                            '4' => '4 columnas',
+                        ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-confirm-grid' => 'grid-template-columns: repeat({{VALUE}}, minmax(0, 1fr));' ],
+                    ]);
+
+                    $this->add_control('heading_confirm_data', [
+                        'label' => 'Tarjetas de datos',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
                     ]);
                     $this->add_control('data_background', [
                         'label' => 'Fondo dato',
@@ -1254,6 +1699,10 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
                         'selectors' => [ '{{WRAPPER}} .evsc-data' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
                     ]);
+                    $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
+                        'name'     => 'data_shadow',
+                        'selector' => '{{WRAPPER}} .evsc-data',
+                    ]);
                     $this->add_control('data_label_color', [
                         'label' => 'Color etiqueta dato',
                         'type'  => \Elementor\Controls_Manager::COLOR,
@@ -1262,6 +1711,12 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
                         'name'     => 'data_label_typography',
                         'selector' => '{{WRAPPER}} .evsc-data-label',
+                    ]);
+                    $this->add_responsive_control('data_label_margin', [
+                        'label' => 'Margen etiqueta dato',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-data-label' => 'margin: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
                     ]);
                     $this->add_control('data_value_color', [
                         'label' => 'Color valor dato',
