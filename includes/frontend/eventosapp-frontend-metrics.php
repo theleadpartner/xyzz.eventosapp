@@ -106,6 +106,7 @@ if ( ! function_exists('eventosapp_metrics_qr_label_from_log_entry') ) {
                 'virtual_access' => 'Acceso virtual',
                 'face'           => 'Reconocimiento facial',
                 'face_checkin'   => 'Reconocimiento facial',
+                'self_checkin'   => 'Búsqueda e impresión',
             ];
 
             if (isset($labels[$type])) {
@@ -694,6 +695,7 @@ if ( ! function_exists('eventosapp_metrics_build_default_payload') ) {
             'Acceso virtual'     => 0,
             'QR Legacy'          => 0,
             'QR Preimpreso'      => 0,
+            'Búsqueda e impresión' => 0,
         ];
 
         $all_localidades = eventosapp_metrics_normalize_localidades_list(get_post_meta($event_id, '_eventosapp_localidades', true));
