@@ -16,39 +16,42 @@ add_action('add_meta_boxes', function () {
 });
 
 /**
- * NUEVA FUNCIÓN: Obtiene todos los campos disponibles para un evento (básicos + extras)
+ * Obtiene todos los campos disponibles para un evento (básicos + extras).
  */
 function eventosapp_get_all_available_fields($evento_id = 0) {
-    // Campos básicos del ticket
+    // Campos básicos del ticket.
     $basic_fields = [
-        'none'        => __('Ninguno', 'eventosapp'),
-        'full_name'   => __('Nombres + Apellidos', 'eventosapp'),
-        'nombre'      => __('Nombre', 'eventosapp'),
-        'apellido'    => __('Apellido', 'eventosapp'),
-        'company'     => __('Nombre de la Empresa', 'eventosapp'),
-        'designation' => __('Cargo', 'eventosapp'),
-        'cc_id'       => __('CC_ID', 'eventosapp'),
-        'email'       => __('Email', 'eventosapp'),
-        'telefono'    => __('Teléfono', 'eventosapp'),
-        'nit'         => __('NIT', 'eventosapp'),
-        'ciudad'      => __('Ciudad', 'eventosapp'),
-        'pais'        => __('País', 'eventosapp'),
+        'none'           => __('Ninguno', 'eventosapp'),
+        'full_name'      => __('Nombres + Apellidos', 'eventosapp'),
+        'nombre'         => __('Nombre', 'eventosapp'),
+        'apellido'       => __('Apellido', 'eventosapp'),
+        'company'        => __('Nombre de la Empresa', 'eventosapp'),
+        'designation'    => __('Cargo', 'eventosapp'),
+        'cc_id'          => __('CC_ID', 'eventosapp'),
+        'email'          => __('Email', 'eventosapp'),
+        'telefono'       => __('Teléfono', 'eventosapp'),
+        'nit'            => __('NIT', 'eventosapp'),
+        'ciudad'         => __('Ciudad', 'eventosapp'),
+        'pais'           => __('País', 'eventosapp'),
         'localidad'      => __('Localidad', 'eventosapp'),
         'qr'             => __('QR', 'eventosapp'),
         'qr_networking'  => __('QR Networking', 'eventosapp'),
     ];
-    
-    // Si hay un evento, agregar sus campos adicionales
+
+    // Si hay un evento, agregar sus campos adicionales.
     if ($evento_id && function_exists('eventosapp_get_event_extra_fields')) {
         $extra_fields = eventosapp_get_event_extra_fields($evento_id);
         if (!empty($extra_fields)) {
             foreach ($extra_fields as $field) {
-                $key = 'extra_' . $field['key'];
+                if (empty($field['key']) || empty($field['label'])) {
+                    continue;
+                }
+                $key = 'extra_' . sanitize_key($field['key']);
                 $basic_fields[$key] = $field['label'] . ' (campo adicional)';
             }
         }
     }
-    
+
     return $basic_fields;
 }
 
@@ -60,8 +63,64 @@ function eventosapp_badge_is_qr_field($field) {
 }
 
 /**
+ * Obtiene la instancia actual del QR Manager sin depender de un singleton.
+ */
+function eventosapp_badge_get_qr_manager_instance() {
+    global $eventosapp_qr_manager_instance;
+
+    if (isset($eventosapp_qr_manager_instance) && $eventosapp_qr_manager_instance instanceof EventosApp_QR_Manager) {
+        return $eventosapp_qr_manager_instance;
+    }
+
+    if (class_exists('EventosApp_QR_Manager')) {
+        $eventosapp_qr_manager_instance = new EventosApp_QR_Manager();
+        return $eventosapp_qr_manager_instance;
+    }
+
+    return null;
+}
+
+/**
+ * Lee la URL pública de la imagen PNG de un QR guardado en _eventosapp_qr_codes.
+ */
+function eventosapp_badge_read_stored_qr_image_url($ticket_id, $type = 'badge') {
+    $ticket_id = absint($ticket_id);
+    $type      = sanitize_key($type);
+
+    if (!$ticket_id || $type === '') {
+        return '';
+    }
+
+    $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+    if (!is_array($all_qr_codes) || empty($all_qr_codes[$type]) || !is_array($all_qr_codes[$type])) {
+        return '';
+    }
+
+    $qr_data = $all_qr_codes[$type];
+    if (empty($qr_data['url'])) {
+        return '';
+    }
+
+    $qr_url  = (string) $qr_data['url'];
+    $qr_path = !empty($qr_data['path']) ? (string) $qr_data['path'] : '';
+
+    if ($qr_path !== '' && !file_exists($qr_path)) {
+        return '';
+    }
+
+    if ($qr_path !== '' && file_exists($qr_path)) {
+        $separator = (strpos($qr_url, '?') === false) ? '?' : '&';
+        return $qr_url . $separator . 'v=' . filemtime($qr_path);
+    }
+
+    return $qr_url;
+}
+
+/**
  * Obtiene el QR de networking/escarapela generado por el QR Manager.
- * Si todavía no existe, intenta generarlo sin tocar el QR legacy usado por el campo "QR".
+ *
+ * Este QR corresponde al tipo interno "badge" del QR Manager y codifica una URL
+ * hacia /networking/global con event + ticketid + código de seguridad.
  */
 function eventosapp_get_ticket_networking_qr_url($ticket_id) {
     $ticket_id = absint($ticket_id);
@@ -69,86 +128,222 @@ function eventosapp_get_ticket_networking_qr_url($ticket_id) {
         return '';
     }
 
-    $read_existing_badge_qr = function() use ($ticket_id) {
-        $all_qr_codes = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
-        if (!is_array($all_qr_codes) || empty($all_qr_codes['badge']) || !is_array($all_qr_codes['badge'])) {
-            return '';
-        }
-
-        $badge_qr = $all_qr_codes['badge'];
-        if (empty($badge_qr['url'])) {
-            return '';
-        }
-
-        $qr_url  = (string) $badge_qr['url'];
-        $qr_path = !empty($badge_qr['path']) ? (string) $badge_qr['path'] : '';
-
-        if ($qr_path !== '' && !file_exists($qr_path)) {
-            return '';
-        }
-
-        if ($qr_path !== '' && file_exists($qr_path)) {
-            $separator = (strpos($qr_url, '?') === false) ? '?' : '&';
-            return $qr_url . $separator . 'v=' . filemtime($qr_path);
-        }
-
-        return $qr_url;
-    };
-
-    $existing_url = $read_existing_badge_qr();
+    $existing_url = eventosapp_badge_read_stored_qr_image_url($ticket_id, 'badge');
     if ($existing_url !== '') {
         return $existing_url;
     }
 
-    if (class_exists('EventosApp_QR_Manager')) {
-        $manager = null;
-
-        if (method_exists('EventosApp_QR_Manager', 'get_instance')) {
-            $manager = EventosApp_QR_Manager::get_instance();
-        } else {
-            global $eventosapp_qr_manager_instance;
-            if (isset($eventosapp_qr_manager_instance) && $eventosapp_qr_manager_instance instanceof EventosApp_QR_Manager) {
-                $manager = $eventosapp_qr_manager_instance;
+    $manager = eventosapp_badge_get_qr_manager_instance();
+    if ($manager && method_exists($manager, 'generate_qr_code')) {
+        $generated = $manager->generate_qr_code($ticket_id, 'badge');
+        if (is_array($generated) && !empty($generated['url'])) {
+            $qr_url  = (string) $generated['url'];
+            $qr_path = !empty($generated['path']) ? (string) $generated['path'] : '';
+            if ($qr_path !== '' && file_exists($qr_path)) {
+                $separator = (strpos($qr_url, '?') === false) ? '?' : '&';
+                return $qr_url . $separator . 'v=' . filemtime($qr_path);
             }
+            return $qr_url;
+        }
+    }
+
+    return eventosapp_badge_read_stored_qr_image_url($ticket_id, 'badge');
+}
+
+/**
+ * Busca un ticket por su ID público eventosapp_ticketID.
+ */
+function eventosapp_badge_find_ticket_by_public_key($ticket_key) {
+    $ticket_key = trim((string) $ticket_key);
+    if ($ticket_key === '') {
+        return 0;
+    }
+
+    $found = get_posts([
+        'post_type'   => 'eventosapp_ticket',
+        'post_status' => 'any',
+        'numberposts' => 1,
+        'fields'      => 'ids',
+        'meta_key'    => 'eventosapp_ticketID',
+        'meta_value'  => $ticket_key,
+    ]);
+
+    return !empty($found) ? absint($found[0]) : 0;
+}
+
+/**
+ * Resuelve el evento desde post_id/event_id/evento_id/event o desde el ticket.
+ */
+function eventosapp_badge_resolve_event_id($ticket_id = 0) {
+    $event_candidates = ['post_id', 'event_id', 'evento_id', 'event'];
+
+    foreach ($event_candidates as $key) {
+        if (!isset($_GET[$key])) {
+            continue;
         }
 
-        if ($manager && method_exists($manager, 'generate_qr_code')) {
-            $generated = $manager->generate_qr_code($ticket_id, 'badge');
-            if (is_array($generated) && !empty($generated['url'])) {
-                return (string) $generated['url'];
+        $raw = sanitize_text_field(wp_unslash($_GET[$key]));
+        if ($raw === '') {
+            continue;
+        }
+
+        if (preg_match('/^(\d+)/', $raw, $matches)) {
+            $event_id = absint($matches[1]);
+            if ($event_id) {
+                return $event_id;
             }
         }
     }
 
-    return $read_existing_badge_qr();
+    $ticket_id = absint($ticket_id);
+    if ($ticket_id) {
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if ($event_id) {
+            return $event_id;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * Resuelve el ticket recibido por ID numérico o por ID público tk...
+ */
+function eventosapp_badge_resolve_ticket_id() {
+    $ticket_id_raw = isset($_GET['ticket_id']) ? sanitize_text_field(wp_unslash($_GET['ticket_id'])) : '';
+    $ticket_id     = absint($ticket_id_raw);
+
+    if ($ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket') {
+        return $ticket_id;
+    }
+
+    if ($ticket_id_raw !== '') {
+        $found_by_public = eventosapp_badge_find_ticket_by_public_key($ticket_id_raw);
+        if ($found_by_public) {
+            return $found_by_public;
+        }
+    }
+
+    $ticket_key = isset($_GET['ticket_key']) ? sanitize_text_field(wp_unslash($_GET['ticket_key'])) : '';
+    if ($ticket_key !== '') {
+        return eventosapp_badge_find_ticket_by_public_key($ticket_key);
+    }
+
+    return 0;
+}
+
+/**
+ * Arma los valores que se pueden imprimir en la escarapela.
+ */
+function eventosapp_badge_build_labels($evento_id, $ticket_id = 0) {
+    $evento_id = absint($evento_id);
+    $ticket_id = absint($ticket_id);
+
+    $labels = [
+        'full_name'      => 'Nombres + Apellidos',
+        'nombre'         => 'Nombre',
+        'apellido'       => 'Apellido',
+        'company'        => 'Nombre de la Empresa',
+        'designation'    => 'Cargo',
+        'cc_id'          => 'CC_ID',
+        'email'          => 'Email',
+        'telefono'       => 'Teléfono',
+        'nit'            => 'NIT',
+        'ciudad'         => 'Ciudad',
+        'pais'           => 'País',
+        'localidad'      => 'Localidad',
+        'qr'             => '',
+        'qr_networking'  => '',
+    ];
+
+    if ($ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket') {
+        $nombre    = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
+        $apell     = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
+        $empresa   = get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true);
+        $cargo     = get_post_meta($ticket_id, '_eventosapp_asistente_cargo', true);
+        $cc        = get_post_meta($ticket_id, '_eventosapp_asistente_cc', true);
+        $email     = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
+        $tel       = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
+        $nit       = get_post_meta($ticket_id, '_eventosapp_asistente_nit', true);
+        $ciudad    = get_post_meta($ticket_id, '_eventosapp_asistente_ciudad', true);
+        $pais      = get_post_meta($ticket_id, '_eventosapp_asistente_pais', true);
+        $localidad = get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
+        $code      = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+
+        $labels['full_name']   = trim($nombre . ' ' . $apell) ?: $labels['full_name'];
+        $labels['nombre']      = $nombre    ?: $labels['nombre'];
+        $labels['apellido']    = $apell     ?: $labels['apellido'];
+        $labels['company']     = $empresa   ?: $labels['company'];
+        $labels['designation'] = $cargo     ?: $labels['designation'];
+        $labels['cc_id']       = $cc        ?: $labels['cc_id'];
+        $labels['email']       = $email     ?: $labels['email'];
+        $labels['telefono']    = $tel       ?: $labels['telefono'];
+        $labels['nit']         = $nit       ?: $labels['nit'];
+        $labels['ciudad']      = $ciudad    ?: $labels['ciudad'];
+        $labels['pais']        = $pais      ?: $labels['pais'];
+        $labels['localidad']   = $localidad ?: $labels['localidad'];
+
+        // QR existente / legacy del ticket. Se conserva sin cambios.
+        if ($code && function_exists('eventosapp_get_ticket_qr_url')) {
+            $labels['qr'] = eventosapp_get_ticket_qr_url($code);
+        }
+
+        // QR Networking: imagen PNG del QR tipo badge que apunta a /networking/global.
+        $labels['qr_networking'] = eventosapp_get_ticket_networking_qr_url($ticket_id);
+    }
+
+    if ($evento_id && function_exists('eventosapp_get_event_extra_fields')) {
+        $extra_fields = eventosapp_get_event_extra_fields($evento_id);
+        if (!empty($extra_fields)) {
+            foreach ($extra_fields as $field) {
+                if (empty($field['key']) || empty($field['label'])) {
+                    continue;
+                }
+                $key = 'extra_' . sanitize_key($field['key']);
+                $value = ($ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket')
+                    ? get_post_meta($ticket_id, '_eventosapp_extra_' . sanitize_key($field['key']), true)
+                    : '';
+                $labels[$key] = $value ?: $field['label'];
+            }
+        }
+    }
+
+    return $labels;
 }
 
 /**
  * Renderiza un campo de la escarapela como texto o como imagen QR según corresponda.
  */
 function eventosapp_badge_render_field_slot($field, $labels, $font_size, $font_weight, $margin, $qr_size) {
-    $field = (string) $field;
+    $field       = (string) $field;
+    $font_size   = absint($font_size);
+    $font_weight = absint($font_weight);
+    $margin      = absint($margin);
+    $qr_size     = absint($qr_size);
 
     if (eventosapp_badge_is_qr_field($field)) {
         $qr_src = isset($labels[$field]) ? (string) $labels[$field] : '';
         if ($qr_src !== '') {
             $alt = ($field === 'qr_networking') ? __('QR Networking', 'eventosapp') : __('QR', 'eventosapp');
-            echo "<div class='slot' style='margin:" . (int) $margin . "px'><img src='" . esc_url($qr_src) . "' width='" . (int) $qr_size . "' height='" . (int) $qr_size . "' alt='" . esc_attr($alt) . "'></div>";
+            echo "<div class='slot slot-qr slot-" . esc_attr($field) . "' style='margin:" . $margin . "px'><img src='" . esc_url($qr_src) . "' width='" . $qr_size . "' height='" . $qr_size . "' alt='" . esc_attr($alt) . "'></div>";
             return;
         }
+
+        echo "<div class='slot slot-qr-empty slot-" . esc_attr($field) . "' style='margin:" . $margin . "px'></div>";
+        return;
     }
 
     $label_text = isset($labels[$field]) ? $labels[$field] : '';
-    echo "<div class='slot' style='margin:" . (int) $margin . "px; font-size:" . (int) $font_size . "px; font-weight:" . (int) $font_weight . ";'>" . esc_html($label_text) . "</div>";
+    echo "<div class='slot' style='margin:" . $margin . "px; font-size:" . $font_size . "px; font-weight:" . $font_weight . ";'>" . esc_html($label_text) . "</div>";
 }
 
 /**
- * Render del metabox
+ * Render del metabox.
  */
 function eventosapp_render_badge_metabox($post) {
     wp_nonce_field('eventosapp_save_badge_settings', 'eventosapp_badge_nonce');
 
-    // Valores guardados (con defaults)
+    // Valores guardados (con defaults).
     $design   = get_post_meta($post->ID, 'eventosapp_badge_design', true) ?: 'manillas';
 
     $order_fields = [];
@@ -156,7 +351,7 @@ function eventosapp_render_badge_metabox($post) {
         $order_fields[$i] = get_post_meta($post->ID, "eventosapp_field_order_{$i}", true) ?: 'none';
     }
 
-	$width          = (int) (get_post_meta($post->ID, 'eventosapp_badge_width', true) ?: 374);
+    $width          = (int) (get_post_meta($post->ID, 'eventosapp_badge_width', true) ?: 374);
     $height         = (int) (get_post_meta($post->ID, 'eventosapp_badge_height', true) ?: 208);
     $size_large     = (int) (get_post_meta($post->ID, 'eventosapp_badge_size_large', true) ?: 24);
     $size_medium    = (int) (get_post_meta($post->ID, 'eventosapp_badge_size_medium', true) ?: 18);
@@ -171,12 +366,12 @@ function eventosapp_render_badge_metabox($post) {
     if ($border_width === '' || $border_width === null) $border_width = 0;
     $border_width   = (int) $border_width;
 
-    // Campo para vista previa con el ID público del ticket (tk...)
+    // Campo para vista previa con el ID público del ticket (tk...).
     $preview_ticket_key = get_post_meta($post->ID, 'eventosapp_badge_ticket_key', true) ?: '';
 
-    // Obtener todos los campos disponibles (básicos + extras del evento)
+    // Obtener todos los campos disponibles (básicos + extras del evento).
     $options = eventosapp_get_all_available_fields($post->ID);
-    
+
     $weights = [100,200,300,400,500,600,700,800];
     ?>
     <table class="form-table"><tbody>
@@ -295,9 +490,8 @@ function eventosapp_render_badge_metabox($post) {
     <?php
 }
 
-
 /**
- * Guardado del metabox (priority independiente)
+ * Guardado del metabox.
  */
 add_action('save_post_eventosapp_event', function($post_id){
     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
@@ -342,18 +536,17 @@ add_action('save_post_eventosapp_event', function($post_id){
     if (isset($_POST['eventosapp_badge_border_width'])) {
         update_post_meta($post_id, 'eventosapp_badge_border_width', max(0, absint($_POST['eventosapp_badge_border_width'])));
     }
-	// Antes guardabas ..._badge_ticket_id como absint
-	if (isset($_POST['eventosapp_badge_ticket_key'])) {
-		update_post_meta(
-			$post_id,
-			'eventosapp_badge_ticket_key',
-			sanitize_text_field($_POST['eventosapp_badge_ticket_key'])
-		);
-	}
+    if (isset($_POST['eventosapp_badge_ticket_key'])) {
+        update_post_meta(
+            $post_id,
+            'eventosapp_badge_ticket_key',
+            sanitize_text_field($_POST['eventosapp_badge_ticket_key'])
+        );
+    }
 }, 22);
 
 /**
- * Helper público para jalar la configuración desde cualquier parte
+ * Helper público para jalar la configuración desde cualquier parte.
  */
 function eventosapp_get_badge_settings($evento_id) {
     $get = function($k,$def=null) use ($evento_id){
@@ -383,7 +576,7 @@ function eventosapp_get_badge_settings($evento_id) {
 }
 
 /**
- * Helper para generar URL firmada de impresión desde admin
+ * Helper para generar URL firmada de impresión desde admin.
  */
 function eventosapp_badge_print_url($evento_id, $ticket = '') {
     $args = [
@@ -399,129 +592,19 @@ function eventosapp_badge_print_url($evento_id, $ticket = '') {
     return wp_nonce_url($url, 'eventosapp_download_badge');
 }
 
-
 /**
- * AJAX admin: imprimir/descargar escarapela
- * (protegido: requiere capacidad de editar el evento)
+ * Imprime el HTML final de la escarapela usando la configuración guardada.
  */
-add_action('wp_ajax_eventosapp_download_badge', 'eventosapp_download_badge_handler');
-// Opcional: permite usarlo también sin sesión (si lo necesitas en front),
-// pero recuerda que el nonce ya es obligatorio.
-add_action('wp_ajax_nopriv_eventosapp_download_badge', 'eventosapp_download_badge_handler');
+function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = true) {
+    $evento_id = absint($evento_id);
+    $ticket_id = absint($ticket_id);
 
-function eventosapp_download_badge_handler() {
-    if ( empty($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'eventosapp_download_badge') ) {
-        wp_die('Nonce inválido', '', 403);
+    if (!$evento_id) {
+        wp_die('Evento inválido', '', 400);
     }
 
-    $evento_id  = absint($_GET['post_id'] ?? 0);
-    $ticket_id  = absint($_GET['ticket_id'] ?? 0);
-    $ticket_key = isset($_GET['ticket_key']) ? sanitize_text_field(wp_unslash($_GET['ticket_key'])) : '';
-
-    if (!$evento_id) wp_die('Evento inválido', '', 400);
-
-    // Si viene desde admin-ajax, valida permiso; si lo llamas desde front y quieres permitir público, comenta esta línea.
-    if (!current_user_can('edit_post', $evento_id)) wp_die('Sin permisos.', '', 403);
-
-    // Si llega ticket_key (tk...), buscar el post del ticket por meta eventosapp_ticketID
-    if (!$ticket_id && $ticket_key) {
-        $found = get_posts([
-            'post_type'   => 'eventosapp_ticket',
-            'post_status' => 'any',
-            'numberposts' => 1,
-            'fields'      => 'ids',
-            'meta_key'    => 'eventosapp_ticketID',
-            'meta_value'  => $ticket_key,
-        ]);
-        if (!empty($found)) {
-            $ticket_id = (int)$found[0];
-        }
-    }
-
-    // Config
-    $cfg = eventosapp_get_badge_settings($evento_id);
-
-    // Labels base - inicializar array vacío
-    $labels = [];
-
-    // Si viene ticket, tomar datos reales del CPT eventosapp_ticket
-    if ($ticket_id && get_post_type($ticket_id) === 'eventosapp_ticket') {
-        $nombre   = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
-        $apell    = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
-        $empresa  = get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true);
-        $cargo    = get_post_meta($ticket_id, '_eventosapp_asistente_cargo', true);
-        $cc       = get_post_meta($ticket_id, '_eventosapp_asistente_cc', true);
-        $email    = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
-        $tel      = get_post_meta($ticket_id, '_eventosapp_asistente_tel', true);
-        $nit      = get_post_meta($ticket_id, '_eventosapp_asistente_nit', true);
-        $ciudad   = get_post_meta($ticket_id, '_eventosapp_asistente_ciudad', true);
-        $pais     = get_post_meta($ticket_id, '_eventosapp_asistente_pais', true);
-        $localidad= get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true);
-        $code     = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
-
-        // Campos básicos
-        $labels['full_name']   = trim($nombre . ' ' . $apell) ?: 'Nombres + Apellidos';
-        $labels['nombre']      = $nombre ?: 'Nombre';
-        $labels['apellido']    = $apell ?: 'Apellido';
-        $labels['company']     = $empresa ?: 'Nombre de la Empresa';
-        $labels['designation'] = $cargo   ?: 'Cargo';
-        $labels['cc_id']       = $cc      ?: 'CC_ID';
-        $labels['email']       = $email   ?: 'Email';
-        $labels['telefono']    = $tel     ?: 'Teléfono';
-        $labels['nit']         = $nit     ?: 'NIT';
-        $labels['ciudad']      = $ciudad  ?: 'Ciudad';
-        $labels['pais']        = $pais    ?: 'País';
-        $labels['localidad']   = $localidad ?: 'Localidad';
-
-        // QR legacy y QR Networking para escarapela/networking.
-        if ($code && function_exists('eventosapp_get_ticket_qr_url')) {
-            $labels['qr'] = eventosapp_get_ticket_qr_url($code);
-        } else {
-            $labels['qr'] = '';
-        }
-        $labels['qr_networking'] = eventosapp_get_ticket_networking_qr_url($ticket_id);
-
-        // Campos adicionales del evento
-        if (function_exists('eventosapp_get_event_extra_fields')) {
-            $extra_fields = eventosapp_get_event_extra_fields($evento_id);
-            if (!empty($extra_fields)) {
-                foreach ($extra_fields as $field) {
-                    $key = 'extra_' . $field['key'];
-                    $value = get_post_meta($ticket_id, '_eventosapp_extra_' . $field['key'], true);
-                    $labels[$key] = $value ?: $field['label'];
-                }
-            }
-        }
-    } else {
-        // Valores por defecto si no hay ticket
-        $labels = [
-            'full_name'   => 'Nombres + Apellidos',
-            'nombre'      => 'Nombre',
-            'apellido'    => 'Apellido',
-            'company'     => 'Nombre de la Empresa',
-            'designation' => 'Cargo',
-            'cc_id'       => 'CC_ID',
-            'email'       => 'Email',
-            'telefono'    => 'Teléfono',
-            'nit'         => 'NIT',
-            'ciudad'      => 'Ciudad',
-            'pais'        => 'País',
-            'localidad'      => 'Localidad',
-            'qr'             => '',
-            'qr_networking'  => '',
-        ];
-        
-        // Campos adicionales con valores por defecto
-        if (function_exists('eventosapp_get_event_extra_fields')) {
-            $extra_fields = eventosapp_get_event_extra_fields($evento_id);
-            if (!empty($extra_fields)) {
-                foreach ($extra_fields as $field) {
-                    $key = 'extra_' . $field['key'];
-                    $labels[$key] = $field['label'];
-                }
-            }
-        }
-    }
+    $cfg    = eventosapp_get_badge_settings($evento_id);
+    $labels = eventosapp_badge_build_labels($evento_id, $ticket_id);
 
     $flex_dir = ($cfg['design'] === 'escarapelas') ? 'column' : 'row';
 
@@ -536,7 +619,7 @@ function eventosapp_download_badge_handler() {
   html,body{margin:0;padding:0;height:100%}
   body{display:flex;align-items:center;justify-content:center;font-family:Arial,Helvetica,sans-serif}
   .badge{
-    <?php echo ($cfg['border_width']>0 ? "border:{$cfg['border_width']}px solid #000;" : "border:none;"); ?>
+    <?php echo ($cfg['border_width']>0 ? "border:" . (int) $cfg['border_width'] . "px solid #000;" : "border:none;"); ?>
     display:flex; flex-direction:<?php echo esc_attr($flex_dir); ?>;
     align-items:stretch; justify-content:center;
     width:<?php echo (int)$cfg['width']; ?>px; height:<?php echo (int)$cfg['height']; ?>px;
@@ -545,6 +628,8 @@ function eventosapp_download_badge_handler() {
   .left,.right{display:flex; flex-direction:column; justify-content:center; height:100%;}
   .right{align-items:center;}
   .slot{line-height:1.15;}
+  .slot-qr{display:flex;align-items:center;justify-content:center;}
+  .slot-qr img{display:block;max-width:100%;height:auto;}
   @media print {
     @page { margin: 8mm; }
   }
@@ -560,7 +645,7 @@ function eventosapp_download_badge_handler() {
     }
 
     if ($cfg['design'] === 'escarapelas_split') {
-        // Diseño split 3 izq / 1 der (ORIGINAL)
+        // Diseño split 3 izq / 1 der.
         $left  = array_slice($active, 0, 3);
         $right = $active[3] ?? null;
 
@@ -568,12 +653,11 @@ function eventosapp_download_badge_handler() {
         foreach ($left as $idx=>$field) {
             $fs = ($idx===0) ? $cfg['size_large'] : (($idx===1) ? $cfg['size_medium'] : $cfg['size_small']);
             $fw = ($idx===0) ? $cfg['weight_large'] : (($idx===1) ? $cfg['weight_medium'] : $cfg['weight_small']);
-            $m  = $cfg['sep_vertical'];
-            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $m, $cfg['qr_size']);
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $cfg['sep_vertical'], $cfg['qr_size']);
         }
         echo "</div>";
 
-        $mh = $cfg['sep_horizontal'];
+        $mh = absint($cfg['sep_horizontal']);
         echo "<div class='right' style='margin-left:{$mh}px'>";
         if ($right) {
             eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size']);
@@ -581,13 +665,12 @@ function eventosapp_download_badge_handler() {
         echo "</div>";
 
     } elseif ($cfg['design'] === 'escarapelas_split_4') {
-        // NUEVO DISEÑO: split 4 izq / 1 der
+        // Diseño split 4 izq / 1 der.
         $left  = array_slice($active, 0, 4);
         $right = $active[4] ?? null;
 
         echo "<div class='left'>";
         foreach ($left as $idx=>$field) {
-            // Tamaños: primero grande, segundo y tercero medianos, cuarto pequeño
             if ($idx === 0) {
                 $fs = $cfg['size_large'];
                 $fw = $cfg['weight_large'];
@@ -598,13 +681,11 @@ function eventosapp_download_badge_handler() {
                 $fs = $cfg['size_small'];
                 $fw = $cfg['weight_small'];
             }
-            $m  = $cfg['sep_vertical'];
-            
-            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $m, $cfg['qr_size']);
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $cfg['sep_vertical'], $cfg['qr_size']);
         }
         echo "</div>";
 
-        $mh = $cfg['sep_horizontal'];
+        $mh = absint($cfg['sep_horizontal']);
         echo "<div class='right' style='margin-left:{$mh}px'>";
         if ($right) {
             eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size']);
@@ -612,7 +693,7 @@ function eventosapp_download_badge_handler() {
         echo "</div>";
 
     } else {
-        // Diseños normales (manillas o escarapelas vertical)
+        // Diseños normales (manillas o escarapelas vertical).
         foreach (array_values($active) as $idx=>$field) {
             $margin = ($cfg['design']==='escarapelas') ? $cfg['sep_vertical'] : $cfg['sep_horizontal'];
             if ($cfg['design']==='escarapelas') {
@@ -627,9 +708,82 @@ function eventosapp_download_badge_handler() {
     }
 ?>
 </div>
+<?php if ($auto_print): ?>
 <script>window.print();</script>
+<?php endif; ?>
 </body>
 </html>
 <?php
     exit;
+}
+
+/**
+ * AJAX admin: imprimir/descargar escarapela desde el metabox del evento.
+ */
+add_action('wp_ajax_eventosapp_download_badge', 'eventosapp_download_badge_handler');
+add_action('wp_ajax_nopriv_eventosapp_download_badge', 'eventosapp_download_badge_handler');
+
+function eventosapp_download_badge_handler() {
+    if ( empty($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'eventosapp_download_badge') ) {
+        wp_die('Nonce inválido', '', 403);
+    }
+
+    $ticket_id = eventosapp_badge_resolve_ticket_id();
+    $evento_id = eventosapp_badge_resolve_event_id($ticket_id);
+
+    if (!$evento_id) wp_die('Evento inválido', '', 400);
+
+    // El botón del metabox es administrativo y mantiene validación por capacidad.
+    if (!current_user_can('edit_post', $evento_id)) wp_die('Sin permisos.', '', 403);
+
+    eventosapp_badge_output_html($evento_id, $ticket_id, true);
+}
+
+/**
+ * AJAX compatible con el render usado por búsqueda/impresión y kiosko.
+ *
+ * Se registra con prioridad 1 para que este render centralizado use la misma
+ * configuración del metabox y también soporte QR Networking.
+ */
+add_action('wp_ajax_eventosapp_render_badge', 'eventosapp_render_badge_handler', 1);
+add_action('wp_ajax_nopriv_eventosapp_render_badge', 'eventosapp_render_badge_handler', 1);
+
+function eventosapp_render_badge_handler() {
+    $ticket_id = eventosapp_badge_resolve_ticket_id();
+    $evento_id = eventosapp_badge_resolve_event_id($ticket_id);
+
+    if (!$evento_id) wp_die('Evento inválido', '', 400);
+
+    $nonce = '';
+    if (isset($_GET['nonce'])) {
+        $nonce = sanitize_text_field(wp_unslash($_GET['nonce']));
+    } elseif (isset($_GET['_wpnonce'])) {
+        $nonce = sanitize_text_field(wp_unslash($_GET['_wpnonce']));
+    }
+
+    $nonce_ok = false;
+    if ($nonce !== '') {
+        $nonce_actions = [
+            'eventosapp_render_badge',
+            'eventosapp_download_badge',
+            'eventosapp_self_checkin',
+            'eventosapp_self_checkin_nonce',
+            'eventosapp_badge',
+        ];
+        foreach ($nonce_actions as $action) {
+            if (wp_verify_nonce($nonce, $action)) {
+                $nonce_ok = true;
+                break;
+            }
+        }
+    }
+
+    $can_edit_event  = current_user_can('edit_post', $evento_id);
+    $can_edit_ticket = ($ticket_id && current_user_can('edit_post', $ticket_id));
+
+    if (!$nonce_ok && !$can_edit_event && !$can_edit_ticket) {
+        wp_die('Nonce inválido', '', 403);
+    }
+
+    eventosapp_badge_output_html($evento_id, $ticket_id, true);
 }
