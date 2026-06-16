@@ -250,6 +250,142 @@ if ( ! function_exists('eventosapp_self_checkin_validate_cc') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_self_checkin_sanitize_search_value') ) {
+    function eventosapp_self_checkin_sanitize_search_value( $value ) {
+        if ( is_array( $value ) || is_object( $value ) ) {
+            $value = '';
+        }
+
+        $value = sanitize_text_field( wp_unslash( (string) $value ) );
+        $value = preg_replace('/[^\p{L}\p{N}\s]+/u', '', $value);
+        if ( ! is_string( $value ) ) {
+            $value = '';
+        }
+        $value = preg_replace('/\s+/u', ' ', trim( $value ));
+        if ( ! is_string( $value ) ) {
+            $value = '';
+        }
+
+        if ( function_exists('mb_substr') ) {
+            return mb_substr( $value, 0, 80, 'UTF-8' );
+        }
+
+        return substr( $value, 0, 80 );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_validate_identifier') ) {
+    function eventosapp_self_checkin_validate_identifier( $value ) {
+        $identifier = eventosapp_self_checkin_sanitize_search_value( $value );
+
+        if ( $identifier === '' ) {
+            return new WP_Error('empty_identifier', 'Ingresa un dato para buscar.');
+        }
+
+        $compact = preg_replace('/\s+/u', '', $identifier);
+        if ( ! is_string( $compact ) ) {
+            $compact = '';
+        }
+
+        if ( preg_match('/^\d+$/', $compact) ) {
+            return eventosapp_self_checkin_validate_cc( $compact );
+        }
+
+        $len = function_exists('mb_strlen') ? mb_strlen( $compact, 'UTF-8' ) : strlen( $compact );
+        if ( $len < 2 || $len > 80 ) {
+            return new WP_Error('invalid_identifier', 'Ingresa mínimo 2 letras o una cédula de 5 a 30 números.');
+        }
+
+        return $identifier;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_find_tickets_by_text') ) {
+    function eventosapp_self_checkin_find_tickets_by_text( $search_value, $event_id, $limit = 10 ) {
+        global $wpdb;
+
+        $search_value = eventosapp_self_checkin_sanitize_search_value( $search_value );
+        $event_id     = absint( $event_id );
+        $limit        = max(1, min(20, absint( $limit )));
+
+        if ( $search_value === '' || ! $event_id ) {
+            return [];
+        }
+
+        $compact = preg_replace('/\s+/u', '', $search_value);
+        if ( is_string( $compact ) && preg_match('/^\d+$/', $compact) ) {
+            return eventosapp_self_checkin_find_tickets_by_cc( $compact, $event_id, $limit );
+        }
+
+        $cache_key = 'evapp_self_text_v1_' . md5( $event_id . '|' . $search_value . '|' . $limit );
+        $cached = wp_cache_get( $cache_key, 'eventosapp_self_checkin' );
+        if ( is_array( $cached ) ) {
+            return array_map('intval', $cached);
+        }
+
+        $like = '%' . $wpdb->esc_like( $search_value ) . '%';
+        $meta_keys = [
+            '_eventosapp_asistente_nombre',
+            '_eventosapp_asistente_apellido',
+            '_eventosapp_asistente_email',
+            '_eventosapp_asistente_telefono',
+            '_eventosapp_asistente_empresa',
+            '_eventosapp_asistente_cargo',
+            '_eventosapp_asistente_cc',
+            '_evapp_search_cc',
+        ];
+        $meta_keys = array_values( array_unique( array_filter( $meta_keys ) ) );
+        $placeholders = implode( ',', array_fill( 0, count( $meta_keys ), '%s' ) );
+
+        $sql = "
+            SELECT DISTINCT p.ID
+              FROM {$wpdb->posts} p
+              INNER JOIN {$wpdb->postmeta} event_pm
+                      ON event_pm.post_id = p.ID
+                     AND event_pm.meta_key = %s
+                     AND event_pm.meta_value = %s
+              LEFT JOIN {$wpdb->postmeta} search_pm
+                     ON search_pm.post_id = p.ID
+                    AND search_pm.meta_key IN ({$placeholders})
+             WHERE p.post_type = %s
+               AND p.post_status NOT IN ('trash','auto-draft','inherit')
+               AND (
+                    p.post_title LIKE %s
+                    OR search_pm.meta_value LIKE %s
+               )
+             ORDER BY p.ID DESC
+             LIMIT %d
+        ";
+
+        $params = array_merge(
+            [ '_eventosapp_ticket_evento_id', (string) $event_id ],
+            $meta_keys,
+            [ 'eventosapp_ticket', $like, $like, $limit ]
+        );
+
+        $ids = $wpdb->get_col( eventosapp_self_checkin_prepare( $sql, $params ) );
+        $ids = array_slice( array_values( array_unique( array_map('intval', (array) $ids ) ) ), 0, $limit );
+
+        wp_cache_set( $cache_key, $ids, 'eventosapp_self_checkin', 30 );
+
+        return $ids;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_find_tickets_by_identifier') ) {
+    function eventosapp_self_checkin_find_tickets_by_identifier( $identifier, $event_id, $limit = 10 ) {
+        $identifier = eventosapp_self_checkin_sanitize_search_value( $identifier );
+        $compact = preg_replace('/\s+/u', '', $identifier);
+
+        if ( is_string( $compact ) && preg_match('/^\d+$/', $compact) ) {
+            return eventosapp_self_checkin_find_tickets_by_cc( $compact, $event_id, $limit );
+        }
+
+        return eventosapp_self_checkin_find_tickets_by_text( $identifier, $event_id, $limit );
+    }
+}
+
 if ( ! function_exists('eventosapp_self_checkin_prepare') ) {
     function eventosapp_self_checkin_prepare( $sql, $params = [] ) {
         global $wpdb;
@@ -750,9 +886,9 @@ if ( ! function_exists('eventosapp_self_checkin_windows_launcher_content') ) {
 if ( ! function_exists('eventosapp_self_checkin_messages') ) {
     function eventosapp_self_checkin_messages() {
         return [
-            'cc_required' => 'Ingresa una cédula válida de 5 a 30 números.',
+            'cc_required' => 'Ingresa una cédula de 5 a 30 números o mínimo 2 letras para buscar.',
             'searching'   => 'Buscando asistente…',
-            'no_results'  => 'No se encontró ningún asistente con esa cédula en este evento.',
+            'no_results'  => 'No se encontró ningún asistente con ese dato en este evento.',
             'select_one'  => 'Selecciona un resultado para continuar.',
             'confirming'  => 'Confirmando información…',
             'printing'    => 'Marcando check-in e imprimiendo escarapela…',
@@ -838,8 +974,16 @@ body.evsc-kiosk-lock input,body.evsc-kiosk-lock textarea,body.evsc-kiosk-lock se
 body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
 .evsc-kiosk-hint{display:none;margin:0 0 16px;padding:12px 14px;border-radius:14px;background:#ecfdf5;color:#065f46;border:1px solid #bbf7d0;font-size:14px;line-height:1.4;font-weight:800;text-align:center}
 .evsc-kiosk-hint.is-visible{display:block}
-.evsc-fullscreen-btn{display:inline-flex;margin:8px auto 0;border:0;border-radius:999px;background:#047857;color:#fff;padding:8px 12px;font-size:13px;font-weight:900;cursor:pointer;touch-action:manipulation}
-@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-logo{max-width:180px;max-height:90px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}}
+.evsc-fullscreen-trigger-wrap{display:flex;width:100%;max-width:760px;margin:0 auto 16px;align-items:center;justify-content:center;font-family:Arial,Helvetica,sans-serif}
+.evsc-fullscreen-trigger-wrap.align-left{justify-content:flex-start}.evsc-fullscreen-trigger-wrap.align-right{justify-content:flex-end}.evsc-fullscreen-trigger-wrap.align-stretch .evsc-fullscreen-trigger{width:100%}
+.evsc-fullscreen-trigger{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:0;border-radius:999px;background:#047857;color:#fff!important;text-decoration:none!important;padding:16px 24px;min-height:58px;font-size:18px;font-weight:900;line-height:1;cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none;box-shadow:0 10px 24px rgba(4,120,87,.2);transition:transform .12s ease,filter .15s ease,background-color .15s ease,color .15s ease,opacity .15s ease}
+.evsc-fullscreen-trigger:hover{filter:brightness(.96);transform:translateY(-1px)}.evsc-fullscreen-trigger:active{transform:translateY(0)}.evsc-fullscreen-trigger.evsc-is-hidden,body.evsc-is-fullscreen .evsc-fullscreen-trigger-wrap[data-hide-on-fullscreen="1"]{display:none!important}
+.evsc-keyboard{width:100%;margin:18px 0 4px;padding:14px;border-radius:22px;background:#f1f5f9;border:1px solid #dbe4ee;box-shadow:inset 0 1px 0 rgba(255,255,255,.72)}
+.evsc-keyboard-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;flex-wrap:wrap}.evsc-keyboard-title{display:block;color:#334155;font-size:15px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.evsc-keyboard-toggle{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.evsc-keyboard-mode{border:0;border-radius:999px;background:#e2e8f0;color:#0f172a;padding:9px 14px;font-size:14px;font-weight:900;cursor:pointer;touch-action:manipulation}.evsc-keyboard-mode.is-active{background:#2563eb;color:#fff}
+.evsc-keyboard-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(7,minmax(0,1fr));display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-numbers{display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-letters{display:grid}
+.evsc-key{display:inline-flex;align-items:center;justify-content:center;min-height:58px;border:0;border-radius:16px;background:#fff;color:#0f172a;font-size:22px;font-weight:900;line-height:1;box-shadow:0 3px 10px rgba(15,23,42,.08);cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none}.evsc-key:hover{filter:brightness(.97)}.evsc-key:active{transform:translateY(1px)}.evsc-key-action{background:#dbeafe;color:#1d4ed8;font-size:16px}.evsc-key-wide{grid-column:span 2}
+@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-logo{max-width:180px;max-height:90px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}.evsc-fullscreen-trigger-wrap{max-width:100%;align-items:stretch}.evsc-fullscreen-trigger{width:100%;min-height:64px}.evsc-keyboard{padding:12px;border-radius:18px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(5,minmax(0,1fr))}.evsc-key{min-height:54px;font-size:20px}.evsc-key-action{font-size:15px}}
 CSS;
     }
 }
@@ -891,17 +1035,67 @@ jQuery(function($){
     return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable === true;
   }
 
+  function evscFullscreenElement(){
+    return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || null;
+  }
+
+  function evscUpdateFullscreenState(){
+    var isFullscreen = !!evscFullscreenElement();
+    $('body').toggleClass('evsc-is-fullscreen', isFullscreen);
+    $('.evsc-js-fullscreen').toggleClass('evsc-is-hidden', isFullscreen).attr('aria-hidden', isFullscreen ? 'true' : 'false');
+  }
+
   function evscTryFullscreen(){
     var docEl = document.documentElement;
-    if(!docEl || document.fullscreenElement || !docEl.requestFullscreen){
-      return;
+    if(!docEl || evscFullscreenElement()){
+      evscUpdateFullscreenState();
+      return null;
     }
+
+    var requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.msRequestFullscreen;
+    if(!requestFn){
+      evscUpdateFullscreenState();
+      return null;
+    }
+
     try {
-      var request = docEl.requestFullscreen({navigationUI:'hide'});
-      if(request && request.catch){
-        request.catch(function(){});
+      var request = requestFn.call(docEl, {navigationUI:'hide'});
+      if(request && request.then){
+        request.then(evscUpdateFullscreenState).catch(function(){ evscUpdateFullscreenState(); });
+      } else {
+        setTimeout(evscUpdateFullscreenState, 120);
       }
-    } catch(e) {}
+      return request || null;
+    } catch(e) {
+      evscUpdateFullscreenState();
+      return null;
+    }
+  }
+
+  function evscExitFullscreen(){
+    if(!evscFullscreenElement()){
+      evscUpdateFullscreenState();
+      return null;
+    }
+
+    var exitFn = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+    if(!exitFn){
+      evscUpdateFullscreenState();
+      return null;
+    }
+
+    try {
+      var result = exitFn.call(document);
+      if(result && result.then){
+        result.then(evscUpdateFullscreenState).catch(function(){ evscUpdateFullscreenState(); });
+      } else {
+        setTimeout(evscUpdateFullscreenState, 120);
+      }
+      return result || null;
+    } catch(e) {
+      evscUpdateFullscreenState();
+      return null;
+    }
   }
 
   function evscArmHistoryTrap(){
@@ -1004,10 +1198,6 @@ jQuery(function($){
       evscArmHistoryTrap();
     });
 
-    setTimeout(evscTryFullscreen, 350);
-    document.addEventListener('pointerdown', function(){
-      evscTryFullscreen();
-    }, true);
   }
 
   $(document).on('click', '.evsc-js-fullscreen', function(e){
@@ -1015,11 +1205,9 @@ jQuery(function($){
     evscTryFullscreen();
   });
 
-  document.addEventListener('fullscreenchange', function(){
-    if(document.fullscreenElement){
-      $('.evsc-kiosk-hint').removeClass('is-visible');
-    }
-  });
+  document.addEventListener('fullscreenchange', evscUpdateFullscreenState);
+  document.addEventListener('webkitfullscreenchange', evscUpdateFullscreenState);
+  document.addEventListener('MSFullscreenChange', evscUpdateFullscreenState);
 
   window.addEventListener('message', function(evt){
     try {
@@ -1085,6 +1273,8 @@ jQuery(function($){
     var $confirm = $root.find('.evsc-js-confirm-box').first();
     var $confirmData = $root.find('.evsc-js-confirm-data').first();
     var $printBtn = $root.find('.evsc-js-print').first();
+    var $keyboard = $root.find('.evsc-js-keyboard').first();
+    var touchKeyboardEnabled = $keyboard.length > 0;
     var selectedTicket = null;
     var confirmedTicket = null;
     var currentRows = [];
@@ -1095,15 +1285,168 @@ jQuery(function($){
       $status.addClass('is-visible').addClass(type === 'ok' ? 'ok' : (type === 'err' ? 'err' : '')).text(message).show();
     }
 
-    function normalizeCc(){
-      var value = ($input.val() || '').replace(/\D+/g, '');
+    function normalizeIdentifier(){
+      var value = String($input.val() || '').toUpperCase();
+      value = value.replace(/[^0-9A-ZÁÉÍÓÚÜÑ\s]/g, '');
+      value = value.replace(/\s+/g, ' ');
+      if(value.length > 80){
+        value = value.substring(0, 80);
+      }
       $input.val(value);
-      return value;
+      return $.trim(value);
     }
 
-    function validCc(){
-      var cc = normalizeCc();
-      return cc.length >= 5 && cc.length <= 30;
+    function validIdentifier(){
+      var identifier = normalizeIdentifier();
+      var compact = identifier.replace(/\s+/g, '');
+      if(/^\d+$/.test(compact)){
+        return compact.length >= 5 && compact.length <= 30;
+      }
+      return compact.length >= 2 && compact.length <= 80;
+    }
+
+    function isFullscreenExitCode(value){
+      return $.trim(String(value || '')) === '000000';
+    }
+
+    function setCaretToEnd(){
+      try {
+        var el = $input.get(0);
+        if(el && typeof el.setSelectionRange === 'function'){
+          var len = String(el.value || '').length;
+          el.setSelectionRange(len, len);
+        }
+      } catch(e) {}
+    }
+
+    function focusInput(){
+      try {
+        var el = $input.get(0);
+        if(el && typeof el.focus === 'function'){
+          el.focus({preventScroll:true});
+        }
+      } catch(e) {
+        try { $input.focus(); } catch(err) {}
+      }
+      setCaretToEnd();
+    }
+
+    function keyboardInsert(value){
+      value = String(value || '').toUpperCase().replace(/[^0-9A-ZÁÉÍÓÚÜÑ]/g, '');
+      if(!value){
+        return;
+      }
+
+      var el = $input.get(0);
+      var current = String($input.val() || '');
+      var start = current.length;
+      var end = current.length;
+
+      try {
+        if(el && typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number'){
+          start = el.selectionStart;
+          end = el.selectionEnd;
+        }
+      } catch(e) {}
+
+      var next = current.substring(0, start) + value + current.substring(end);
+      if(next.length > 80){
+        next = next.substring(0, 80);
+      }
+
+      $input.val(next);
+      normalizeIdentifier();
+      resetSelection(false);
+      showStatus('', '');
+      focusInput();
+
+      try {
+        var pos = Math.min(start + value.length, String($input.val() || '').length);
+        if(el && typeof el.setSelectionRange === 'function'){
+          el.setSelectionRange(pos, pos);
+        }
+      } catch(e) {}
+    }
+
+    function keyboardBackspace(){
+      var el = $input.get(0);
+      var current = String($input.val() || '');
+      var start = current.length;
+      var end = current.length;
+
+      try {
+        if(el && typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number'){
+          start = el.selectionStart;
+          end = el.selectionEnd;
+        }
+      } catch(e) {}
+
+      if(start === end && start > 0){
+        start--;
+      }
+
+      $input.val(current.substring(0, start) + current.substring(end));
+      normalizeIdentifier();
+      resetSelection(false);
+      showStatus('', '');
+      focusInput();
+
+      try {
+        if(el && typeof el.setSelectionRange === 'function'){
+          el.setSelectionRange(start, start);
+        }
+      } catch(e) {}
+    }
+
+    function keyboardClear(){
+      $input.val('');
+      normalizeIdentifier();
+      resetSelection(false);
+      showStatus('', '');
+      focusInput();
+    }
+
+    function initTouchKeyboard(){
+      if(!touchKeyboardEnabled){
+        return;
+      }
+
+      $input.attr('inputmode', 'none').attr('virtualkeyboardpolicy', 'manual').attr('data-evsc-touch-keyboard', '1');
+
+      $input.on('pointerdown touchstart', function(){
+        try {
+          if(window.navigator && window.navigator.maxTouchPoints > 0){
+            $input.prop('readonly', true);
+          }
+        } catch(e) {}
+      });
+
+      $keyboard.on('click', '.evsc-js-keyboard-mode', function(e){
+        e.preventDefault();
+        var mode = String($(this).data('mode') || 'numbers');
+        if(mode !== 'letters'){
+          mode = 'numbers';
+        }
+        $keyboard.attr('data-mode', mode);
+        $keyboard.find('.evsc-js-keyboard-mode').removeClass('is-active').attr('aria-pressed', 'false');
+        $(this).addClass('is-active').attr('aria-pressed', 'true');
+        focusInput();
+      });
+
+      $keyboard.on('click', '.evsc-key', function(e){
+        e.preventDefault();
+        var $key = $(this);
+        var action = String($key.data('action') || '');
+        if(action === 'backspace'){
+          keyboardBackspace();
+          return;
+        }
+        if(action === 'clear'){
+          keyboardClear();
+          return;
+        }
+        keyboardInsert($key.data('key'));
+      });
     }
 
     function resetSelection(keepResults){
@@ -1179,22 +1522,55 @@ jQuery(function($){
       $('html, body').animate({scrollTop: $confirm.offset().top - 20}, 220);
     }
 
+    initTouchKeyboard();
+
     $input.on('input', function(){
-      normalizeCc();
+      normalizeIdentifier();
       resetSelection(false);
       showStatus('', '');
     });
 
     $input.on('keydown', function(e){
-      if(e.key === 'Enter'){
+      var key = String(e.key || '');
+
+      if(key === 'Enter'){
         e.preventDefault();
         $searchBtn.trigger('click');
+        return;
+      }
+
+      if(touchKeyboardEnabled && $input.prop('readonly')){
+        if(key === 'Backspace'){
+          e.preventDefault();
+          keyboardBackspace();
+          return;
+        }
+        if(key === 'Delete' || key === 'Escape'){
+          e.preventDefault();
+          keyboardClear();
+          return;
+        }
+        if(/^[0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]$/.test(key)){
+          e.preventDefault();
+          keyboardInsert(key);
+        }
       }
     });
 
     $searchBtn.on('click', function(){
-      if(!validCc()){
-        showStatus(messages.cc_required || 'Ingresa una cédula válida.', 'err');
+      var searchValue = normalizeIdentifier();
+
+      if(isFullscreenExitCode(searchValue)){
+        evscExitFullscreen();
+        $input.val('');
+        resetSelection(false);
+        showStatus('Modo pantalla completa cerrado.', 'ok');
+        setTimeout(function(){ focusInput(); }, 160);
+        return;
+      }
+
+      if(!validIdentifier()){
+        showStatus(messages.cc_required || 'Ingresa un dato válido para buscar.', 'err');
         resetSelection(false);
         return;
       }
@@ -1207,7 +1583,7 @@ jQuery(function($){
         action: 'eventosapp_self_checkin_search',
         security: globalConfig.search_nonce,
         event_id: eventId,
-        cedula: normalizeCc()
+        cedula: searchValue
       }, function(resp){
         if(resp && resp.success){
           showStatus('', '');
@@ -1309,6 +1685,7 @@ jQuery(function($){
     var $scope = scope && scope.jquery ? scope : $(scope || document);
     evscInstallKioskGuards();
     evscInitLauncherDismiss($scope);
+    evscUpdateFullscreenState();
 
     $scope.filter('.evsc-wrap').add($scope.find('.evsc-wrap')).each(function(){
       initSelfCheckin($(this));
@@ -1323,6 +1700,9 @@ jQuery(function($){
       window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_ui.default', function($scope){
         evscRunInit($scope);
       });
+      window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_fullscreen.default', function($scope){
+        evscRunInit($scope);
+      });
     } catch(e) {}
   }
 
@@ -1330,6 +1710,9 @@ jQuery(function($){
     if(window.elementorFrontend && window.elementorFrontend.hooks){
       try {
         window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_ui.default', function($scope){
+          evscRunInit($scope);
+        });
+        window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_fullscreen.default', function($scope){
           evscRunInit($scope);
         });
       } catch(e) {}
@@ -1354,6 +1737,39 @@ JS;
         }
 
         wp_enqueue_style('eventosapp-self-checkin');
+    }
+}
+
+
+if ( ! function_exists('eventosapp_self_checkin_render_fullscreen_button') ) {
+    function eventosapp_self_checkin_render_fullscreen_button( $args = [] ) {
+        $defaults = [
+            'label'              => 'Activar pantalla completa',
+            'align'              => 'center',
+            'hide_on_fullscreen' => true,
+            'extra_class'        => '',
+        ];
+        $args = wp_parse_args( (array) $args, $defaults );
+
+        eventosapp_self_checkin_enqueue_assets();
+
+        $align = sanitize_key( $args['align'] );
+        if ( ! in_array( $align, [ 'left', 'center', 'right', 'stretch' ], true ) ) {
+            $align = 'center';
+        }
+
+        $classes = trim( 'evsc-fullscreen-trigger-wrap align-' . $align . ' ' . sanitize_html_class( $args['extra_class'] ) );
+
+        ob_start();
+        echo eventosapp_self_checkin_inline_style_fallback();
+        ?>
+        <div class="<?php echo esc_attr( $classes ); ?>" data-hide-on-fullscreen="<?php echo ! empty( $args['hide_on_fullscreen'] ) ? '1' : '0'; ?>">
+            <button type="button" class="evsc-fullscreen-trigger evsc-js-fullscreen" data-label="<?php echo esc_attr( $args['label'] ); ?>">
+                <?php echo esc_html( $args['label'] ); ?>
+            </button>
+        </div>
+        <?php
+        return ob_get_clean();
     }
 }
 
@@ -1431,6 +1847,12 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
             'show_subtitle'          => true,
             'show_kiosk_hint'        => true,
             'enable_kiosk_lock'      => true,
+            'show_touch_keyboard'    => true,
+            'touch_keyboard_title'   => 'Teclado táctil',
+            'touch_keyboard_numbers_label' => 'Números',
+            'touch_keyboard_letters_label' => 'Letras',
+            'touch_keyboard_backspace_label' => 'Borrar',
+            'touch_keyboard_clear_label' => 'Limpiar',
             'kicker'                 => 'Autogestión',
             'title'                  => 'Identificación del asistente',
             'subtitle'               => 'Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.',
@@ -1475,7 +1897,6 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
             <?php if ( ! empty( $args['show_kiosk_hint'] ) ) : ?>
                 <div class="evsc-kiosk-hint">
                     <?php echo esc_html( $args['kiosk_hint_text'] ); ?>
-                    <button type="button" class="evsc-fullscreen-btn evsc-js-fullscreen"><?php echo esc_html( $args['fullscreen_label'] ); ?></button>
                 </div>
             <?php endif; ?>
 
@@ -1483,10 +1904,37 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
                 <div class="evsc-search">
                     <div class="evsc-field">
                         <label for="<?php echo esc_attr( $uid ); ?>-cc"><?php echo esc_html( $args['field_label'] ); ?></label>
-                        <input id="<?php echo esc_attr( $uid ); ?>-cc" class="evsc-input evsc-js-cc" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="30" autocomplete="off" placeholder="<?php echo esc_attr( $args['placeholder'] ); ?>" aria-label="<?php echo esc_attr( $args['field_label'] ); ?>">
+                        <input id="<?php echo esc_attr( $uid ); ?>-cc" class="evsc-input evsc-js-cc" type="text" inputmode="none" maxlength="80" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="<?php echo esc_attr( $args['placeholder'] ); ?>" aria-label="<?php echo esc_attr( $args['field_label'] ); ?>">
                     </div>
                     <button type="button" class="evsc-btn evsc-btn-primary evsc-js-search" data-label="<?php echo esc_attr( $args['search_label'] ); ?>"><?php echo esc_html( $args['search_label'] ); ?></button>
                 </div>
+
+                <?php if ( ! empty( $args['show_touch_keyboard'] ) ) : ?>
+                    <div class="evsc-keyboard evsc-js-keyboard" data-mode="numbers" aria-label="<?php echo esc_attr( $args['touch_keyboard_title'] ); ?>">
+                        <div class="evsc-keyboard-head">
+                            <span class="evsc-keyboard-title"><?php echo esc_html( $args['touch_keyboard_title'] ); ?></span>
+                            <div class="evsc-keyboard-toggle" role="group" aria-label="Modo de teclado">
+                                <button type="button" class="evsc-keyboard-mode evsc-js-keyboard-mode is-active" data-mode="numbers" aria-pressed="true"><?php echo esc_html( $args['touch_keyboard_numbers_label'] ); ?></button>
+                                <button type="button" class="evsc-keyboard-mode evsc-js-keyboard-mode" data-mode="letters" aria-pressed="false"><?php echo esc_html( $args['touch_keyboard_letters_label'] ); ?></button>
+                            </div>
+                        </div>
+                        <div class="evsc-keyboard-grid evsc-keyboard-numbers">
+                            <?php foreach ( [ '1', '2', '3', '4', '5', '6', '7', '8', '9' ] as $key ) : ?>
+                                <button type="button" class="evsc-key" data-key="<?php echo esc_attr( $key ); ?>"><?php echo esc_html( $key ); ?></button>
+                            <?php endforeach; ?>
+                            <button type="button" class="evsc-key evsc-key-action" data-action="backspace"><?php echo esc_html( $args['touch_keyboard_backspace_label'] ); ?></button>
+                            <button type="button" class="evsc-key" data-key="0">0</button>
+                            <button type="button" class="evsc-key evsc-key-action" data-action="clear"><?php echo esc_html( $args['touch_keyboard_clear_label'] ); ?></button>
+                        </div>
+                        <div class="evsc-keyboard-grid evsc-keyboard-letters">
+                            <?php foreach ( [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'Ñ', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z' ] as $key ) : ?>
+                                <button type="button" class="evsc-key" data-key="<?php echo esc_attr( $key ); ?>"><?php echo esc_html( $key ); ?></button>
+                            <?php endforeach; ?>
+                            <button type="button" class="evsc-key evsc-key-action evsc-key-wide" data-action="backspace"><?php echo esc_html( $args['touch_keyboard_backspace_label'] ); ?></button>
+                            <button type="button" class="evsc-key evsc-key-action evsc-key-wide" data-action="clear"><?php echo esc_html( $args['touch_keyboard_clear_label'] ); ?></button>
+                        </div>
+                    </div>
+                <?php endif; ?>
 
                 <div class="evsc-status evsc-js-status" role="status" aria-live="polite"></div>
                 <div class="evsc-results evsc-js-results" aria-live="polite"></div>
@@ -1532,6 +1980,21 @@ add_shortcode('eventosapp_self_checkin', function( $atts ) {
     return ob_get_clean();
 });
 
+
+add_shortcode('eventosapp_self_checkin_fullscreen_button', function( $atts ) {
+    $atts = shortcode_atts([
+        'label'              => 'Activar pantalla completa',
+        'align'              => 'center',
+        'hide_on_fullscreen' => '1',
+    ], $atts, 'eventosapp_self_checkin_fullscreen_button');
+
+    return eventosapp_self_checkin_render_fullscreen_button([
+        'label'              => $atts['label'],
+        'align'              => $atts['align'],
+        'hide_on_fullscreen' => $atts['hide_on_fullscreen'] !== '0',
+    ]);
+});
+
 add_action('wp_ajax_eventosapp_self_checkin_search', function() {
     if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('self_checkin') ) {
         wp_send_json_error(['message' => 'Permisos insuficientes.'], 403);
@@ -1544,12 +2007,12 @@ add_action('wp_ajax_eventosapp_self_checkin_search', function() {
         wp_send_json_error(['message' => 'No tienes permisos para este evento.'], 403);
     }
 
-    $cedula = eventosapp_self_checkin_validate_cc( $_POST['cedula'] ?? '' );
-    if ( is_wp_error( $cedula ) ) {
-        wp_send_json_error(['message' => $cedula->get_error_message()], 400);
+    $identifier = eventosapp_self_checkin_validate_identifier( $_POST['cedula'] ?? '' );
+    if ( is_wp_error( $identifier ) ) {
+        wp_send_json_error(['message' => $identifier->get_error_message()], 400);
     }
 
-    $ticket_ids = eventosapp_self_checkin_find_tickets_by_cc( $cedula, $event_id, 10 );
+    $ticket_ids = eventosapp_self_checkin_find_tickets_by_identifier( $identifier, $event_id, 10 );
     if ( ! empty( $ticket_ids ) ) {
         update_meta_cache('post', $ticket_ids);
     }
