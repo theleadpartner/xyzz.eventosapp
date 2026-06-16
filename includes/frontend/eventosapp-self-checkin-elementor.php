@@ -4,6 +4,7 @@
  *
  * Widgets:
  * - EventosApp Autogestión: Búsqueda e Impresión
+ * - EventosApp Autogestión: Botón Pantalla Completa
  * - EventosApp Autogestión: Kiosko / Impresión Silenciosa
  */
 
@@ -39,7 +40,7 @@ if ( ! function_exists('eventosapp_self_checkin_elementor_bootstrap_module') ) {
      * también cuando Elementor renderiza el widget desde su editor/AJAX.
      */
     function eventosapp_self_checkin_elementor_bootstrap_module() {
-        if ( function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block') ) {
+        if ( function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block') && function_exists('eventosapp_self_checkin_render_fullscreen_button') ) {
             return true;
         }
 
@@ -66,13 +67,13 @@ if ( ! function_exists('eventosapp_self_checkin_elementor_bootstrap_module') ) {
         foreach ( $candidates as $file ) {
             if ( is_string( $file ) && file_exists( $file ) && is_readable( $file ) ) {
                 require_once $file;
-                if ( function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block') ) {
+                if ( function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block') && function_exists('eventosapp_self_checkin_render_fullscreen_button') ) {
                     return true;
                 }
             }
         }
 
-        return function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block');
+        return function_exists('eventosapp_self_checkin_render_main_ui') && function_exists('eventosapp_self_checkin_render_launcher_block') && function_exists('eventosapp_self_checkin_render_fullscreen_button');
     }
 }
 
@@ -350,6 +351,58 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label'   => 'Texto botón pantalla completa',
                         'type'    => \Elementor\Controls_Manager::TEXT,
                         'default' => 'Activar pantalla completa',
+                        'description' => 'Se conserva por compatibilidad. El botón manual ahora se agrega con el widget separado “EventosApp Autogestión - Pantalla Completa”.',
+                    ]);
+
+                    $this->add_control('heading_touch_keyboard', [
+                        'label' => 'Teclado táctil',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
+
+                    $this->add_control('show_touch_keyboard', [
+                        'label'        => 'Mostrar teclado táctil',
+                        'type'         => \Elementor\Controls_Manager::SWITCHER,
+                        'label_on'     => 'Sí',
+                        'label_off'    => 'No',
+                        'return_value' => 'yes',
+                        'default'      => 'yes',
+                    ]);
+
+                    $this->add_control('touch_keyboard_title', [
+                        'label'       => 'Título teclado',
+                        'type'        => \Elementor\Controls_Manager::TEXT,
+                        'default'     => 'Teclado táctil',
+                        'label_block' => true,
+                        'condition'   => [ 'show_touch_keyboard' => 'yes' ],
+                    ]);
+
+                    $this->add_control('touch_keyboard_numbers_label', [
+                        'label'     => 'Etiqueta modo números',
+                        'type'      => \Elementor\Controls_Manager::TEXT,
+                        'default'   => 'Números',
+                        'condition' => [ 'show_touch_keyboard' => 'yes' ],
+                    ]);
+
+                    $this->add_control('touch_keyboard_letters_label', [
+                        'label'     => 'Etiqueta modo letras',
+                        'type'      => \Elementor\Controls_Manager::TEXT,
+                        'default'   => 'Letras',
+                        'condition' => [ 'show_touch_keyboard' => 'yes' ],
+                    ]);
+
+                    $this->add_control('touch_keyboard_backspace_label', [
+                        'label'     => 'Etiqueta borrar',
+                        'type'      => \Elementor\Controls_Manager::TEXT,
+                        'default'   => 'Borrar',
+                        'condition' => [ 'show_touch_keyboard' => 'yes' ],
+                    ]);
+
+                    $this->add_control('touch_keyboard_clear_label', [
+                        'label'     => 'Etiqueta limpiar teclado',
+                        'type'      => \Elementor\Controls_Manager::TEXT,
+                        'default'   => 'Limpiar',
+                        'condition' => [ 'show_touch_keyboard' => 'yes' ],
                     ]);
 
                     $this->end_controls_section();
@@ -360,6 +413,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->register_event_badge_style_controls();
                     $this->register_panel_style_controls();
                     $this->register_input_style_controls();
+                    $this->register_keyboard_style_controls();
                     $this->register_button_style_controls();
                     $this->register_result_style_controls();
                     $this->register_confirm_style_controls();
@@ -747,6 +801,127 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->end_controls_section();
                 }
 
+
+                private function register_keyboard_style_controls() {
+                    $this->start_controls_section('section_style_keyboard', [
+                        'label' => 'Teclado táctil',
+                        'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
+                    ]);
+
+                    $this->add_control('keyboard_background', [
+                        'label' => 'Fondo teclado',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'keyboard_border',
+                        'selector' => '{{WRAPPER}} .evsc-keyboard',
+                    ]);
+                    $this->add_responsive_control('keyboard_radius', [
+                        'label' => 'Radio teclado',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('keyboard_padding', [
+                        'label' => 'Relleno teclado',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('keyboard_gap', [
+                        'label' => 'Separación teclas',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', 'em', 'rem' ],
+                        'range' => [ 'px' => [ 'min' => 0, 'max' => 40 ] ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-grid' => 'gap: {{SIZE}}{{UNIT}};' ],
+                    ]);
+                    $this->add_control('keyboard_title_color', [
+                        'label' => 'Color título',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-title' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
+                        'name'     => 'keyboard_title_typography',
+                        'selector' => '{{WRAPPER}} .evsc-keyboard-title',
+                    ]);
+
+                    $this->add_control('heading_keyboard_modes', [
+                        'label' => 'Selector números / letras',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
+                    $this->add_control('keyboard_mode_color', [
+                        'label' => 'Texto modo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_mode_background', [
+                        'label' => 'Fondo modo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_mode_active_color', [
+                        'label' => 'Texto modo activo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode.is-active' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_mode_active_background', [
+                        'label' => 'Fondo modo activo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-keyboard-mode.is-active' => 'background-color: {{VALUE}};' ],
+                    ]);
+
+                    $this->add_control('heading_keyboard_keys', [
+                        'label' => 'Teclas',
+                        'type'  => \Elementor\Controls_Manager::HEADING,
+                        'separator' => 'before',
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
+                        'name'     => 'keyboard_key_typography',
+                        'selector' => '{{WRAPPER}} .evsc-key',
+                    ]);
+                    $this->add_control('keyboard_key_color', [
+                        'label' => 'Texto tecla',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_key_background', [
+                        'label' => 'Fondo tecla',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_action_key_color', [
+                        'label' => 'Texto tecla acción',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key-action' => 'color: {{VALUE}};' ],
+                    ]);
+                    $this->add_control('keyboard_action_key_background', [
+                        'label' => 'Fondo tecla acción',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-key-action' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->add_responsive_control('keyboard_key_min_height', [
+                        'label' => 'Alto mínimo tecla',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', 'em', 'rem' ],
+                        'range' => [ 'px' => [ 'min' => 34, 'max' => 120 ] ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-key' => 'min-height: {{SIZE}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('keyboard_key_radius', [
+                        'label' => 'Radio tecla',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-key' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
+                        'name'     => 'keyboard_key_shadow',
+                        'selector' => '{{WRAPPER}} .evsc-key',
+                    ]);
+
+                    $this->end_controls_section();
+                }
+
                 private function register_button_style_controls() {
                     $this->start_controls_section('section_style_buttons', [
                         'label' => 'Botones',
@@ -1117,17 +1292,6 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
                         'selectors' => [ '{{WRAPPER}} .evsc-kiosk-hint' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
                     ]);
-                    $this->add_control('fullscreen_button_background', [
-                        'label' => 'Fondo botón pantalla completa',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-btn' => 'background-color: {{VALUE}};' ],
-                    ]);
-                    $this->add_control('fullscreen_button_color', [
-                        'label' => 'Texto botón pantalla completa',
-                        'type'  => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-btn' => 'color: {{VALUE}};' ],
-                    ]);
-
                     $this->end_controls_section();
                 }
 
@@ -1147,6 +1311,12 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'show_subtitle'     => ( $settings['show_subtitle'] ?? 'yes' ) === 'yes',
                         'show_kiosk_hint'   => ( $settings['show_kiosk_hint'] ?? 'yes' ) === 'yes',
                         'enable_kiosk_lock' => ( $settings['enable_kiosk_lock'] ?? 'yes' ) === 'yes',
+                        'show_touch_keyboard' => ( $settings['show_touch_keyboard'] ?? 'yes' ) === 'yes',
+                        'touch_keyboard_title' => $settings['touch_keyboard_title'] ?? 'Teclado táctil',
+                        'touch_keyboard_numbers_label' => $settings['touch_keyboard_numbers_label'] ?? 'Números',
+                        'touch_keyboard_letters_label' => $settings['touch_keyboard_letters_label'] ?? 'Letras',
+                        'touch_keyboard_backspace_label' => $settings['touch_keyboard_backspace_label'] ?? 'Borrar',
+                        'touch_keyboard_clear_label' => $settings['touch_keyboard_clear_label'] ?? 'Limpiar',
                         'kicker'            => $settings['kicker'] ?? 'Autogestión',
                         'title'             => $settings['title'] ?? 'Identificación del asistente',
                         'subtitle'          => $settings['subtitle'] ?? '',
@@ -1162,6 +1332,167 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'logo_url'          => ! empty( $settings['logo']['url'] ) ? $settings['logo']['url'] : '',
                         'logo_alt'          => $settings['logo_alt'] ?? '',
                     ] );
+                }
+            }
+        }
+
+
+        if ( ! class_exists('EventosApp_Self_Checkin_Fullscreen_Elementor_Widget') ) {
+            class EventosApp_Self_Checkin_Fullscreen_Elementor_Widget extends \Elementor\Widget_Base {
+                public function get_name() {
+                    return 'eventosapp_self_checkin_fullscreen';
+                }
+
+                public function get_title() {
+                    return 'EventosApp Autogestión - Pantalla Completa';
+                }
+
+                public function get_icon() {
+                    return 'eicon-frame-expand';
+                }
+
+                public function get_categories() {
+                    return [ 'eventosapp' ];
+                }
+
+                public function get_keywords() {
+                    return [ 'eventosapp', 'autogestion', 'pantalla completa', 'fullscreen', 'kiosko' ];
+                }
+
+                public function get_style_depends() {
+                    eventosapp_self_checkin_elementor_bootstrap_module();
+                    if ( function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+                        eventosapp_self_checkin_enqueue_assets();
+                    }
+                    return [ 'eventosapp-self-checkin' ];
+                }
+
+                public function get_script_depends() {
+                    eventosapp_self_checkin_elementor_bootstrap_module();
+                    if ( function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+                        eventosapp_self_checkin_enqueue_assets();
+                    }
+                    return [ 'eventosapp-self-checkin' ];
+                }
+
+                protected function register_controls() {
+                    $this->start_controls_section('section_content', [
+                        'label' => 'Contenido',
+                        'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                    ]);
+
+                    $this->add_control('label', [
+                        'label'       => 'Texto del botón',
+                        'type'        => \Elementor\Controls_Manager::TEXT,
+                        'default'     => 'Activar pantalla completa',
+                        'label_block' => true,
+                    ]);
+
+                    $this->add_responsive_control('align', [
+                        'label' => 'Alineación',
+                        'type'  => \Elementor\Controls_Manager::CHOOSE,
+                        'options' => [
+                            'left'    => [ 'title' => 'Izquierda', 'icon' => 'eicon-text-align-left' ],
+                            'center'  => [ 'title' => 'Centro', 'icon' => 'eicon-text-align-center' ],
+                            'right'   => [ 'title' => 'Derecha', 'icon' => 'eicon-text-align-right' ],
+                            'stretch' => [ 'title' => 'Completo', 'icon' => 'eicon-h-align-stretch' ],
+                        ],
+                        'default' => 'center',
+                    ]);
+
+                    $this->add_control('hide_on_fullscreen', [
+                        'label'        => 'Ocultar al entrar en pantalla completa',
+                        'type'         => \Elementor\Controls_Manager::SWITCHER,
+                        'label_on'     => 'Sí',
+                        'label_off'    => 'No',
+                        'return_value' => 'yes',
+                        'default'      => 'yes',
+                    ]);
+
+                    $this->end_controls_section();
+
+                    $this->start_controls_section('section_style_button', [
+                        'label' => 'Botón',
+                        'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
+                    ]);
+
+                    $this->add_group_control( \Elementor\Group_Control_Typography::get_type(), [
+                        'name'     => 'button_typography',
+                        'selector' => '{{WRAPPER}} .evsc-fullscreen-trigger',
+                    ]);
+
+                    $this->start_controls_tabs('button_tabs');
+                    $this->start_controls_tab('button_normal', [ 'label' => 'Normal' ]);
+                    $this->add_control('button_color', [
+                        'label' => 'Texto',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-trigger' => 'color: {{VALUE}} !important;' ],
+                    ]);
+                    $this->add_control('button_background', [
+                        'label' => 'Fondo',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-trigger' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+
+                    $this->start_controls_tab('button_hover', [ 'label' => 'Hover' ]);
+                    $this->add_control('button_hover_color', [
+                        'label' => 'Texto hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-trigger:hover' => 'color: {{VALUE}} !important;' ],
+                    ]);
+                    $this->add_control('button_hover_background', [
+                        'label' => 'Fondo hover',
+                        'type'  => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-trigger:hover' => 'background-color: {{VALUE}};' ],
+                    ]);
+                    $this->end_controls_tab();
+                    $this->end_controls_tabs();
+
+                    $this->add_responsive_control('button_padding', [
+                        'label' => 'Relleno',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => eventosapp_self_checkin_elementor_common_dimension_units(),
+                        'separator' => 'before',
+                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-trigger' => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_responsive_control('button_min_height', [
+                        'label' => 'Alto mínimo',
+                        'type'  => \Elementor\Controls_Manager::SLIDER,
+                        'size_units' => [ 'px', 'em', 'rem' ],
+                        'range' => [ 'px' => [ 'min' => 34, 'max' => 140 ] ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-trigger' => 'min-height: {{SIZE}}{{UNIT}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Border::get_type(), [
+                        'name'     => 'button_border',
+                        'selector' => '{{WRAPPER}} .evsc-fullscreen-trigger',
+                    ]);
+                    $this->add_responsive_control('button_radius', [
+                        'label' => 'Radio',
+                        'type'  => \Elementor\Controls_Manager::DIMENSIONS,
+                        'size_units' => [ 'px', '%', 'em', 'rem' ],
+                        'selectors' => [ '{{WRAPPER}} .evsc-fullscreen-trigger' => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}};' ],
+                    ]);
+                    $this->add_group_control( \Elementor\Group_Control_Box_Shadow::get_type(), [
+                        'name'     => 'button_shadow',
+                        'selector' => '{{WRAPPER}} .evsc-fullscreen-trigger',
+                    ]);
+
+                    $this->end_controls_section();
+                }
+
+                protected function render() {
+                    if ( ! eventosapp_self_checkin_elementor_bootstrap_module() || ! function_exists('eventosapp_self_checkin_render_fullscreen_button') ) {
+                        echo '<div class="evsc-alert evsc-alert-error">El módulo de autogestión no está cargado. Verifica que el archivo <code>includes/frontend/eventosapp-self-checkin.php</code> esté instalado.</div>';
+                        return;
+                    }
+
+                    $settings = $this->get_settings_for_display();
+                    echo eventosapp_self_checkin_render_fullscreen_button([
+                        'label'              => $settings['label'] ?? 'Activar pantalla completa',
+                        'align'              => $settings['align'] ?? 'center',
+                        'hide_on_fullscreen' => ( $settings['hide_on_fullscreen'] ?? 'yes' ) === 'yes',
+                    ]);
                 }
             }
         }
@@ -1504,6 +1835,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
 
         if ( is_object( $widgets_manager ) && method_exists( $widgets_manager, 'register' ) ) {
             $widgets_manager->register( new EventosApp_Self_Checkin_UI_Elementor_Widget() );
+            $widgets_manager->register( new EventosApp_Self_Checkin_Fullscreen_Elementor_Widget() );
             $widgets_manager->register( new EventosApp_Self_Checkin_Launcher_Elementor_Widget() );
             $registered = true;
             return;
@@ -1513,6 +1845,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
             $legacy_manager = \Elementor\Plugin::instance()->widgets_manager;
             if ( method_exists( $legacy_manager, 'register_widget_type' ) ) {
                 $legacy_manager->register_widget_type( new EventosApp_Self_Checkin_UI_Elementor_Widget() );
+                $legacy_manager->register_widget_type( new EventosApp_Self_Checkin_Fullscreen_Elementor_Widget() );
                 $legacy_manager->register_widget_type( new EventosApp_Self_Checkin_Launcher_Elementor_Widget() );
                 $registered = true;
             }
