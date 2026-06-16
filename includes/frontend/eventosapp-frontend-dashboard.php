@@ -98,6 +98,21 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<path d="M3 20c.8-3.2 2.5-5 5-5s4.2 1.8 5 5M13 19c.5-2.3 1.8-3.7 4-3.7 1.8 0 3.1 1 4 3.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 				</svg>';
 
+			case 'expositor':
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M4 9h16l-1-4H5L4 9Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+					<path d="M5 9v10h14V9M8 19v-6h4v6M14 13h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+					<path d="M4 9c.4 1.4 1.4 2 2.5 2S8.6 10.4 9 9c.4 1.4 1.4 2 2.5 2S13.6 10.4 14 9c.4 1.4 1.4 2 2.5 2S18.6 10.4 19 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+				</svg>';
+
+			case 'expositor-gestion':
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M4 9h16l-1-4H5L4 9Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+					<path d="M5 9v10h14V9M8 19v-5h4v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+					<circle cx="17" cy="16" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+					<path d="M16 16l1 1 2-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+				</svg>';
+
 			default:
 				return '';
 		}
@@ -274,6 +289,8 @@ add_shortcode('eventosapp_dashboard', function(){
 		$url_face_checkin   = function_exists('eventosapp_get_face_checkin_url')          ? eventosapp_get_face_checkin_url()          : '#';
 		$url_support_assist = function_exists('eventosapp_get_support_assistance_url')    ? eventosapp_get_support_assistance_url()    : '#';
 		$url_support_stats  = function_exists('eventosapp_get_support_team_metrics_url')  ? eventosapp_get_support_team_metrics_url()  : '#';
+		$url_expositor      = function_exists('eventosapp_get_expositor_url')             ? eventosapp_get_expositor_url()             : '#';
+		$url_expo_gestion   = function_exists('eventosapp_get_expositor_gestion_url')     ? eventosapp_get_expositor_gestion_url()     : '#';
 
 		?>
 		<div class="evapp-grid" role="navigation" aria-label="Panel de acciones del evento">
@@ -382,6 +399,20 @@ add_shortcode('eventosapp_dashboard', function(){
                 </a>
             <?php endif; ?>
 
+            <?php if (eventosapp_role_can('expositor')): ?>
+                <a class="evapp-card" href="<?php echo esc_url($url_expositor); ?>" aria-label="Expositor">
+                    <?php echo eventosapp_dashboard_icon('expositor'); ?>
+                    <span class="evapp-title">Expositor</span>
+                </a>
+            <?php endif; ?>
+
+            <?php if (eventosapp_role_can('expositor_gestion')): ?>
+                <a class="evapp-card" href="<?php echo esc_url($url_expo_gestion); ?>" aria-label="Gestión de Expositores">
+                    <?php echo eventosapp_dashboard_icon('expositor-gestion'); ?>
+                    <span class="evapp-title">Gestión de Expositores</span>
+                </a>
+            <?php endif; ?>
+
 		</div>
 		<?php
 
@@ -410,6 +441,10 @@ add_shortcode('eventosapp_dashboard', function(){
 			}
 
 			if ( function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event($ev->ID, $user_id) ) {
+				return true;
+			}
+
+			if ( function_exists('eventosapp_expositor_user_can_select_event_in_dashboard') && eventosapp_expositor_user_can_select_event_in_dashboard($ev->ID, $user_id) ) {
 				return true;
 			}
 
