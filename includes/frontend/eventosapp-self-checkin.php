@@ -131,14 +131,50 @@ if ( ! function_exists('eventosapp_self_checkin_current_user_label') ) {
 
 if ( ! function_exists('eventosapp_self_checkin_get_active_event_id') ) {
     function eventosapp_self_checkin_get_active_event_id( $requested_event_id = 0 ) {
-        $requested_event_id = absint( $requested_event_id );
+        $candidates = [];
 
+        $requested_event_id = absint( $requested_event_id );
         if ( $requested_event_id ) {
-            return $requested_event_id;
+            $candidates[] = $requested_event_id;
+        }
+
+        /*
+         * Permite que el widget de Elementor sea realmente dinámico.
+         * Si no se define un evento fijo, toma el evento activo que el usuario
+         * seleccionó en el dashboard de gestión. En algunos contextos de vista
+         * previa de Elementor el valor puede llegar por request, por eso se
+         * revisan estos nombres sin reemplazar la función central existente.
+         */
+        $request_keys = [
+            'event_id',
+            'evapp_event_id',
+            'eventosapp_event_id',
+            'eventosapp_active_event',
+            'active_event_id',
+        ];
+
+        foreach ( $request_keys as $key ) {
+            if ( isset( $_REQUEST[ $key ] ) ) {
+                $maybe = absint( wp_unslash( $_REQUEST[ $key ] ) );
+                if ( $maybe ) {
+                    $candidates[] = $maybe;
+                }
+            }
         }
 
         if ( function_exists('eventosapp_get_active_event') ) {
-            return absint( eventosapp_get_active_event() );
+            $active = absint( eventosapp_get_active_event() );
+            if ( $active ) {
+                $candidates[] = $active;
+            }
+        }
+
+        $candidates = array_values( array_unique( array_filter( array_map( 'absint', $candidates ) ) ) );
+
+        foreach ( $candidates as $event_id ) {
+            if ( $event_id && get_post_type( $event_id ) === 'eventosapp_event' ) {
+                return $event_id;
+            }
         }
 
         return 0;
@@ -604,7 +640,7 @@ if ( ! function_exists('eventosapp_self_checkin_get_current_page_url') ) {
 
         if ( function_exists('eventosapp_get_self_checkin_url') ) {
             $configured_url = eventosapp_get_self_checkin_url();
-            if ( $configured_url ) {
+            if ( $configured_url && $configured_url !== '#' ) {
                 return esc_url_raw( $configured_url );
             }
         }
@@ -711,37 +747,9 @@ if ( ! function_exists('eventosapp_self_checkin_windows_launcher_content') ) {
     }
 }
 
-add_shortcode('eventosapp_self_checkin', function( $atts ) {
-    if ( function_exists('eventosapp_require_feature') ) {
-        eventosapp_require_feature('self_checkin');
-    }
-
-    $atts = shortcode_atts([
-        'event_id' => 0,
-    ], $atts, 'eventosapp_self_checkin');
-
-    $event_id = eventosapp_self_checkin_get_active_event_id( $atts['event_id'] );
-
-    if ( ! $event_id ) {
-        $dashboard_url = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
-        return '<div class="evsc-alert evsc-alert-warn">Debes escoger un <strong>evento</strong> para activar la autogestión. Ve al <a href="'.esc_url($dashboard_url).'">dashboard</a>, selecciónalo y vuelve aquí.</div>';
-    }
-
-    if ( ! eventosapp_self_checkin_user_can_event( $event_id ) ) {
-        return '<div class="evsc-alert evsc-alert-error">No tienes permisos para usar la autogestión en este evento.</div>';
-    }
-
-    wp_enqueue_script('jquery');
-    wp_register_script('eventosapp-self-checkin', '', ['jquery'], null, true);
-    wp_localize_script('eventosapp-self-checkin', 'EvSelfCheckin', [
-        'ajax_url'       => admin_url('admin-ajax.php'),
-        'search_nonce'   => wp_create_nonce('eventosapp_self_checkin_search'),
-        'confirm_nonce'  => wp_create_nonce('eventosapp_self_checkin_confirm'),
-        'print_nonce'    => wp_create_nonce('eventosapp_self_checkin_print'),
-        'badge_nonce'    => wp_create_nonce('eventosapp_self_checkin_badge'),
-        'event_id'       => $event_id,
-        'event_name'     => get_the_title( $event_id ),
-        'messages'       => [
+if ( ! function_exists('eventosapp_self_checkin_messages') ) {
+    function eventosapp_self_checkin_messages() {
+        return [
             'cc_required' => 'Ingresa una cédula válida de 5 a 30 números.',
             'searching'   => 'Buscando asistente…',
             'no_results'  => 'No se encontró ningún asistente con esa cédula en este evento.',
@@ -749,92 +757,32 @@ add_shortcode('eventosapp_self_checkin', function( $atts ) {
             'confirming'  => 'Confirmando información…',
             'printing'    => 'Marcando check-in e imprimiendo escarapela…',
             'net_error'   => 'Error de conexión. Intenta nuevamente.',
-        ],
-    ]);
+        ];
+    }
+}
 
-    $css = <<<'CSS'
-.evsc-wrap{max-width:1100px;margin:0 auto;padding:18px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:24px;box-shadow:0 12px 34px rgba(15,23,42,.08);font-family:Arial,Helvetica,sans-serif;color:#0f172a}
-.evsc-kicker{margin:0 0 6px;color:#2563eb;font-size:18px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
-.evsc-title{margin:0;color:#0f172a;font-size:36px;line-height:1.05;font-weight:900}
-.evsc-subtitle{margin:8px 0 20px;color:#475569;font-size:18px;line-height:1.35}
-.evsc-event{display:inline-flex;align-items:center;gap:8px;margin-bottom:18px;padding:10px 14px;border-radius:999px;background:#e0f2fe;color:#075985;font-size:17px;font-weight:800}
-.evsc-panel{background:#fff;border:1px solid #e2e8f0;border-radius:22px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.06)}
-.evsc-search{display:grid;grid-template-columns:1fr 220px;gap:14px;align-items:end}
-.evsc-field label{display:block;margin:0 0 8px;color:#334155;font-size:18px;font-weight:800}
-.evsc-input{width:100%;box-sizing:border-box;border:2px solid #cbd5e1;border-radius:18px;background:#fff;color:#0f172a;font-size:34px;font-weight:900;letter-spacing:.04em;padding:18px 20px;min-height:82px;outline:none;box-shadow:inset 0 2px 4px rgba(15,23,42,.04)}
-.evsc-input:focus{border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.14)}
-.evsc-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:70px;border:0;border-radius:18px;padding:18px 26px;font-size:22px;font-weight:900;line-height:1.1;text-decoration:none;cursor:pointer;transition:transform .12s ease,filter .15s ease,background-color .15s ease,opacity .15s ease;touch-action:manipulation}
-.evsc-btn:hover{filter:brightness(.96);transform:translateY(-1px)}
-.evsc-btn:active{transform:translateY(0)}
-.evsc-btn[disabled]{opacity:.45;cursor:not-allowed;transform:none;filter:none}
-.evsc-btn-primary{background:#2563eb;color:#fff}
-.evsc-btn-success{background:#16a34a;color:#fff}
-.evsc-btn-dark{background:#0f172a;color:#fff}
-.evsc-btn-light{background:#e2e8f0;color:#0f172a}
-.evsc-actions{display:flex;gap:14px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
-.evsc-status{margin-top:14px;padding:14px 16px;border-radius:16px;background:#f1f5f9;color:#334155;font-size:18px;font-weight:700;display:none}
-.evsc-status.is-visible{display:block}
-.evsc-status.ok{background:#dcfce7;color:#166534}
-.evsc-status.err{background:#fee2e2;color:#991b1b}
-.evsc-results{margin-top:18px;display:grid;gap:12px}
-.evsc-result{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;background:#fff;border:2px solid #e2e8f0;border-radius:20px;padding:18px;box-shadow:0 8px 20px rgba(15,23,42,.05);cursor:pointer}
-.evsc-result:hover{border-color:#93c5fd}
-.evsc-result.is-selected{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
-.evsc-result-name{font-size:26px;line-height:1.1;font-weight:900;color:#0f172a}
-.evsc-result-meta{margin-top:8px;color:#475569;font-size:17px;line-height:1.35}
-.evsc-chip{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:14px;font-weight:900;background:#e2e8f0;color:#334155;margin:3px 6px 3px 0}
-.evsc-chip-ok{background:#dcfce7;color:#166534}
-.evsc-chip-warn{background:#fef3c7;color:#92400e}
-.evsc-confirm{display:none;margin-top:20px;background:#0f172a;color:#fff;border-radius:24px;padding:22px;box-shadow:0 14px 32px rgba(15,23,42,.22)}
-.evsc-confirm.is-visible{display:block}
-.evsc-confirm h3{margin:0 0 12px;color:#fff;font-size:32px;line-height:1.1;font-weight:900}
-.evsc-confirm-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}
-.evsc-data{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.16);border-radius:18px;padding:14px}
-.evsc-data-label{display:block;color:#bfdbfe;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
-.evsc-data-value{display:block;color:#fff;font-size:22px;font-weight:900;word-break:break-word}
-.evsc-print-frame{position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none}
-.evsc-alert{max-width:900px;margin:16px auto;padding:14px 16px;border-radius:14px;font-size:17px;font-weight:700}
-.evsc-alert-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
-.evsc-alert-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
-.evsc-admin-note{margin:16px 0 18px;padding:14px 16px;border-radius:16px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:15px;line-height:1.45;font-weight:700}
-.evsc-admin-note strong{color:#7c2d12}
-.evsc-launcher-box{margin-top:12px;padding:12px;border-radius:14px;background:#fff;border:1px solid #fed7aa;color:#7c2d12}
-.evsc-launcher-title{display:block;margin:0 0 6px;font-size:14px;font-weight:900;color:#7c2d12;text-transform:uppercase;letter-spacing:.03em}
-.evsc-launcher-text{display:block;margin:0 0 10px;font-size:13px;line-height:1.35;color:#9a3412;font-weight:700}
-.evsc-launcher-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.evsc-launcher-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:999px;background:#0f172a;color:#fff!important;text-decoration:none!important;padding:10px 14px;font-size:13px;font-weight:900;line-height:1;touch-action:manipulation}
-.evsc-launcher-btn:hover{filter:brightness(.96);transform:translateY(-1px)}
-html.evsc-kiosk-lock,body.evsc-kiosk-lock{overscroll-behavior:none;overscroll-behavior-x:none;background:#f8fafc}
-body.evsc-kiosk-lock{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
-body.evsc-kiosk-lock input,body.evsc-kiosk-lock textarea,body.evsc-kiosk-lock select,body.evsc-kiosk-lock [contenteditable="true"]{touch-action:manipulation;-webkit-user-select:text;user-select:text}
-body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
-.evsc-kiosk-hint{display:none;margin:0 0 14px;padding:12px 14px;border-radius:14px;background:#ecfdf5;color:#065f46;border:1px solid #bbf7d0;font-size:14px;line-height:1.4;font-weight:800}
-.evsc-kiosk-hint.is-visible{display:block}
-.evsc-fullscreen-btn{display:inline-flex;margin-left:8px;border:0;border-radius:999px;background:#047857;color:#fff;padding:8px 12px;font-size:13px;font-weight:900;cursor:pointer;touch-action:manipulation}
-@media(max-width:800px){.evsc-wrap{padding:14px;border-radius:18px}.evsc-title{font-size:30px}.evsc-search{grid-template-columns:1fr}.evsc-input{font-size:28px;min-height:74px}.evsc-btn{width:100%;min-height:68px}.evsc-result{grid-template-columns:1fr}.evsc-actions{justify-content:stretch}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-result-name{font-size:23px}}
-CSS;
+if ( ! function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+    function eventosapp_self_checkin_enqueue_assets() {
+        wp_enqueue_script('jquery');
 
-    wp_register_style('eventosapp-self-checkin', false, [], null);
-    wp_add_inline_style('eventosapp-self-checkin', $css);
-    wp_enqueue_style('eventosapp-self-checkin');
+        if ( ! wp_script_is('eventosapp-self-checkin', 'registered') ) {
+            wp_register_script('eventosapp-self-checkin', '', ['jquery'], null, true);
+        }
 
-    $js = <<<'JS'
+        if ( ! wp_script_is('eventosapp-self-checkin', 'enqueued') ) {
+            wp_localize_script('eventosapp-self-checkin', 'EvSelfCheckin', [
+                'ajax_url'      => admin_url('admin-ajax.php'),
+                'search_nonce'  => wp_create_nonce('eventosapp_self_checkin_search'),
+                'confirm_nonce' => wp_create_nonce('eventosapp_self_checkin_confirm'),
+                'print_nonce'   => wp_create_nonce('eventosapp_self_checkin_print'),
+                'badge_nonce'   => wp_create_nonce('eventosapp_self_checkin_badge'),
+                'messages'      => eventosapp_self_checkin_messages(),
+            ]);
+
+            $js = <<<'JS'
 jQuery(function($){
-  var $root = $('#evsc-wrap');
-  if(!$root.length) return;
-
-  var $input = $('#evsc-cc');
-  var $searchBtn = $('#evsc-search-btn');
-  var $confirmBtn = $('#evsc-confirm-btn');
-  var $clearBtn = $('#evsc-clear-btn');
-  var $results = $('#evsc-results');
-  var $status = $('#evsc-status');
-  var $confirm = $('#evsc-confirm');
-  var $confirmData = $('#evsc-confirm-data');
-  var $printBtn = $('#evsc-print-btn');
-  var selectedTicket = null;
-  var confirmedTicket = null;
-  var currentRows = [];
+  var globalConfig = window.EvSelfCheckin || {};
+  var kioskGuardsInstalled = false;
   var kioskHistoryArmed = false;
   var kioskLastTouch = {x:0, y:0, edge:false};
 
@@ -876,12 +824,17 @@ jQuery(function($){
   }
 
   function evscInstallKioskGuards(){
+    if(kioskGuardsInstalled || !$('.evsc-wrap[data-kiosk-lock="1"]').length){
+      return;
+    }
+    kioskGuardsInstalled = true;
+
     $('html, body').addClass('evsc-kiosk-lock');
     evscArmHistoryTrap();
 
     try {
       if(window.navigator && window.navigator.maxTouchPoints > 0){
-        $('#evsc-kiosk-hint').addClass('is-visible');
+        $('.evsc-kiosk-hint').addClass('is-visible');
       }
     } catch(e) {}
 
@@ -951,30 +904,28 @@ jQuery(function($){
     window.addEventListener('pageshow', function(){
       evscArmHistoryTrap();
     });
+
+    setTimeout(evscTryFullscreen, 350);
+    document.addEventListener('pointerdown', function(){
+      evscTryFullscreen();
+    }, true);
   }
 
-  evscInstallKioskGuards();
-
-  setTimeout(evscTryFullscreen, 350);
-  document.addEventListener('pointerdown', function(){
-    evscTryFullscreen();
-  }, true);
-
-  $(document).on('click', '#evsc-fullscreen-btn', function(e){
+  $(document).on('click', '.evsc-js-fullscreen', function(e){
     e.preventDefault();
     evscTryFullscreen();
   });
 
   document.addEventListener('fullscreenchange', function(){
     if(document.fullscreenElement){
-      $('#evsc-kiosk-hint').removeClass('is-visible');
+      $('.evsc-kiosk-hint').removeClass('is-visible');
     }
   });
 
   window.addEventListener('message', function(evt){
     try {
       if(evt && evt.data && evt.data.type === 'eventosapp_self_checkin_afterprint'){
-        $('.evsc-print-frame').first().remove();
+        $('.evsc-print-frame').remove();
       }
     } catch(e) {}
   });
@@ -984,286 +935,512 @@ jQuery(function($){
     return $('<div>').text(String(value)).html();
   }
 
-  function showStatus(message, type){
-    $status.removeClass('ok err is-visible');
-    if(!message){ $status.hide().text(''); return; }
-    $status.addClass('is-visible').addClass(type === 'ok' ? 'ok' : (type === 'err' ? 'err' : '')).text(message).show();
-  }
+  function initSelfCheckin($root){
+    if(!$root.length || $root.data('evscReady')) return;
+    $root.data('evscReady', true);
 
-  function normalizeCc(){
-    var value = ($input.val() || '').replace(/\D+/g, '');
-    $input.val(value);
-    return value;
-  }
+    var messages = globalConfig.messages || {};
+    var eventId = parseInt($root.data('event-id'), 10) || 0;
+    var eventName = String($root.data('event-name') || '');
+    var $input = $root.find('.evsc-js-cc').first();
+    var $searchBtn = $root.find('.evsc-js-search').first();
+    var $confirmBtn = $root.find('.evsc-js-confirm').first();
+    var $clearBtn = $root.find('.evsc-js-clear').first();
+    var $results = $root.find('.evsc-js-results').first();
+    var $status = $root.find('.evsc-js-status').first();
+    var $confirm = $root.find('.evsc-js-confirm-box').first();
+    var $confirmData = $root.find('.evsc-js-confirm-data').first();
+    var $printBtn = $root.find('.evsc-js-print').first();
+    var selectedTicket = null;
+    var confirmedTicket = null;
+    var currentRows = [];
 
-  function validCc(){
-    var cc = normalizeCc();
-    return cc.length >= 5 && cc.length <= 30;
-  }
-
-  function resetSelection(keepResults){
-    selectedTicket = null;
-    confirmedTicket = null;
-    $confirmBtn.prop('disabled', true);
-    $printBtn.prop('disabled', true);
-    $confirm.removeClass('is-visible');
-    $confirmData.empty();
-    if(!keepResults){
-      currentRows = [];
-      $results.empty();
-    }
-  }
-
-  function chip(text, cls){
-    return '<span class="evsc-chip '+(cls||'')+'">'+escHtml(text)+'</span>';
-  }
-
-  function renderResults(rows){
-    resetSelection(true);
-    currentRows = $.isArray(rows) ? rows : [];
-
-    if(!currentRows.length){
-      $results.html('<div class="evsc-status is-visible err">'+escHtml(EvSelfCheckin.messages.no_results)+'</div>');
-      return;
+    function showStatus(message, type){
+      $status.removeClass('ok err is-visible');
+      if(!message){ $status.hide().text(''); return; }
+      $status.addClass('is-visible').addClass(type === 'ok' ? 'ok' : (type === 'err' ? 'err' : '')).text(message).show();
     }
 
-    var html = '';
-    $.each(currentRows, function(i, it){
-      var checked = it.already_checked === true || it.today_status === 'checked_in';
-      html += '<button type="button" class="evsc-result" data-ticket-id="'+escHtml(it.ticket_id)+'">'
-           +    '<span>'
-           +      '<span class="evsc-result-name">'+escHtml(it.full_name || 'Asistente sin nombre')+'</span>'
-           +      '<span class="evsc-result-meta">'
-           +        'Cédula: <strong>'+escHtml(it.cc || '—')+'</strong><br>'
-           +        'Localidad: <strong>'+escHtml(it.localidad || '—')+'</strong> · Ticket: <strong>'+escHtml(it.ticket_pub || '—')+'</strong><br>'
-           +        'Empresa: <strong>'+escHtml(it.company || '—')+'</strong>'
-           +      '</span>'
-           +      '<span style="display:block;margin-top:8px;">'
-           +        chip(it.modalidad_label || 'Presencial', '')
-           +        (checked ? chip('Check-in ya registrado', 'evsc-chip-ok') : chip('Pendiente de check-in', 'evsc-chip-warn'))
-           +      '</span>'
-           +    '</span>'
-           +    '<span class="evsc-btn evsc-btn-light">Seleccionar</span>'
-           +  '</button>';
-    });
-    $results.html(html);
-  }
-
-  function findRow(ticketId){
-    ticketId = parseInt(ticketId, 10);
-    for(var i=0; i<currentRows.length; i++){
-      if(parseInt(currentRows[i].ticket_id, 10) === ticketId) return currentRows[i];
+    function normalizeCc(){
+      var value = ($input.val() || '').replace(/\D+/g, '');
+      $input.val(value);
+      return value;
     }
-    return null;
-  }
 
-  function renderConfirm(it){
-    confirmedTicket = it;
-    $confirmData.html(
-      '<div class="evsc-data"><span class="evsc-data-label">Nombre</span><span class="evsc-data-value">'+escHtml(it.full_name || '—')+'</span></div>'+
-      '<div class="evsc-data"><span class="evsc-data-label">Cédula</span><span class="evsc-data-value">'+escHtml(it.cc || '—')+'</span></div>'+
-      '<div class="evsc-data"><span class="evsc-data-label">Localidad</span><span class="evsc-data-value">'+escHtml(it.localidad || '—')+'</span></div>'+
-      '<div class="evsc-data"><span class="evsc-data-label">Empresa</span><span class="evsc-data-value">'+escHtml(it.company || '—')+'</span></div>'+
-      '<div class="evsc-data"><span class="evsc-data-label">Cargo</span><span class="evsc-data-value">'+escHtml(it.designation || '—')+'</span></div>'+
-      '<div class="evsc-data"><span class="evsc-data-label">Ticket</span><span class="evsc-data-value">'+escHtml(it.ticket_pub || '—')+'</span></div>'+
-      '<div class="evsc-data"><span class="evsc-data-label">Evento</span><span class="evsc-data-value">'+escHtml(it.event_name || EvSelfCheckin.event_name || '—')+'</span></div>'+
-      '<div class="evsc-data"><span class="evsc-data-label">Estado</span><span class="evsc-data-value">'+(it.already_checked ? 'Check-in registrado' : 'Listo para imprimir')+'</span></div>'
-    );
-    $confirm.addClass('is-visible');
-    $printBtn.prop('disabled', false);
-    $('html, body').animate({scrollTop: $confirm.offset().top - 20}, 220);
-  }
-
-  $input.on('input', function(){
-    normalizeCc();
-    resetSelection(false);
-    showStatus('', '');
-  });
-
-  $input.on('keydown', function(e){
-    if(e.key === 'Enter'){
-      e.preventDefault();
-      $searchBtn.trigger('click');
+    function validCc(){
+      var cc = normalizeCc();
+      return cc.length >= 5 && cc.length <= 30;
     }
-  });
 
-  $searchBtn.on('click', function(){
-    if(!validCc()){
-      showStatus(EvSelfCheckin.messages.cc_required, 'err');
+    function resetSelection(keepResults){
+      selectedTicket = null;
+      confirmedTicket = null;
+      $confirmBtn.prop('disabled', true);
+      $printBtn.prop('disabled', true);
+      $confirm.removeClass('is-visible');
+      $confirmData.empty();
+      if(!keepResults){
+        currentRows = [];
+        $results.empty();
+      }
+    }
+
+    function chip(text, cls){
+      return '<span class="evsc-chip '+(cls||'')+'">'+escHtml(text)+'</span>';
+    }
+
+    function renderResults(rows){
+      resetSelection(true);
+      currentRows = $.isArray(rows) ? rows : [];
+
+      if(!currentRows.length){
+        $results.html('<div class="evsc-status is-visible err">'+escHtml(messages.no_results || 'No se encontraron resultados.')+'</div>');
+        return;
+      }
+
+      var html = '';
+      $.each(currentRows, function(i, it){
+        var checked = it.already_checked === true || it.today_status === 'checked_in';
+        html += '<button type="button" class="evsc-result evsc-js-result" data-ticket-id="'+escHtml(it.ticket_id)+'">'
+             +    '<span>'
+             +      '<span class="evsc-result-name">'+escHtml(it.full_name || 'Asistente sin nombre')+'</span>'
+             +      '<span class="evsc-result-meta">'
+             +        'Cédula: <strong>'+escHtml(it.cc || '—')+'</strong><br>'
+             +        'Localidad: <strong>'+escHtml(it.localidad || '—')+'</strong> · Ticket: <strong>'+escHtml(it.ticket_pub || '—')+'</strong><br>'
+             +        'Empresa: <strong>'+escHtml(it.company || '—')+'</strong>'
+             +      '</span>'
+             +      '<span class="evsc-result-chips">'
+             +        chip(it.modalidad_label || 'Presencial', '')
+             +        (checked ? chip('Check-in ya registrado', 'evsc-chip-ok') : chip('Pendiente de check-in', 'evsc-chip-warn'))
+             +      '</span>'
+             +    '</span>'
+             +    '<span class="evsc-btn evsc-btn-light evsc-select-label">Seleccionar</span>'
+             +  '</button>';
+      });
+      $results.html(html);
+    }
+
+    function findRow(ticketId){
+      ticketId = parseInt(ticketId, 10);
+      for(var i=0; i<currentRows.length; i++){
+        if(parseInt(currentRows[i].ticket_id, 10) === ticketId) return currentRows[i];
+      }
+      return null;
+    }
+
+    function renderConfirm(it){
+      confirmedTicket = it;
+      $confirmData.html(
+        '<div class="evsc-data"><span class="evsc-data-label">Nombre</span><span class="evsc-data-value">'+escHtml(it.full_name || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Cédula</span><span class="evsc-data-value">'+escHtml(it.cc || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Localidad</span><span class="evsc-data-value">'+escHtml(it.localidad || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Empresa</span><span class="evsc-data-value">'+escHtml(it.company || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Cargo</span><span class="evsc-data-value">'+escHtml(it.designation || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Ticket</span><span class="evsc-data-value">'+escHtml(it.ticket_pub || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Evento</span><span class="evsc-data-value">'+escHtml(it.event_name || eventName || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Estado</span><span class="evsc-data-value">'+(it.already_checked ? 'Check-in registrado' : 'Listo para imprimir')+'</span></div>'
+      );
+      $confirm.addClass('is-visible');
+      $printBtn.prop('disabled', false);
+      $('html, body').animate({scrollTop: $confirm.offset().top - 20}, 220);
+    }
+
+    $input.on('input', function(){
+      normalizeCc();
       resetSelection(false);
-      return;
-    }
-
-    $searchBtn.prop('disabled', true).text('Buscando…');
-    showStatus(EvSelfCheckin.messages.searching, '');
-    resetSelection(false);
-
-    $.post(EvSelfCheckin.ajax_url, {
-      action: 'eventosapp_self_checkin_search',
-      security: EvSelfCheckin.search_nonce,
-      event_id: EvSelfCheckin.event_id,
-      cedula: normalizeCc()
-    }, function(resp){
-      if(resp && resp.success){
-        showStatus('', '');
-        renderResults(resp.data && resp.data.results ? resp.data.results : []);
-      } else {
-        var msg = resp && resp.data && resp.data.message ? resp.data.message : EvSelfCheckin.messages.no_results;
-        showStatus(msg, 'err');
-      }
-    }, 'json').fail(function(){
-      showStatus(EvSelfCheckin.messages.net_error, 'err');
-    }).always(function(){
-      $searchBtn.prop('disabled', false).text('Buscar');
+      showStatus('', '');
     });
-  });
 
-  $(document).on('click', '.evsc-result', function(){
-    var ticketId = $(this).data('ticket-id');
-    selectedTicket = findRow(ticketId);
-    $('.evsc-result').removeClass('is-selected');
-    $(this).addClass('is-selected');
-    $confirmBtn.prop('disabled', !selectedTicket);
-    $confirm.removeClass('is-visible');
-    $printBtn.prop('disabled', true);
-    showStatus(selectedTicket ? 'Resultado seleccionado. Presiona Confirmar para revisar los datos.' : EvSelfCheckin.messages.select_one, selectedTicket ? 'ok' : 'err');
-  });
-
-  $confirmBtn.on('click', function(){
-    if(!selectedTicket){
-      showStatus(EvSelfCheckin.messages.select_one, 'err');
-      return;
-    }
-
-    $confirmBtn.prop('disabled', true).text('Confirmando…');
-    showStatus(EvSelfCheckin.messages.confirming, '');
-
-    $.post(EvSelfCheckin.ajax_url, {
-      action: 'eventosapp_self_checkin_confirm',
-      security: EvSelfCheckin.confirm_nonce,
-      event_id: EvSelfCheckin.event_id,
-      ticket_id: selectedTicket.ticket_id
-    }, function(resp){
-      if(resp && resp.success && resp.data && resp.data.ticket){
-        showStatus('Datos confirmados. Ya puedes imprimir la escarapela.', 'ok');
-        renderConfirm(resp.data.ticket);
-      } else {
-        var msg = resp && resp.data && resp.data.message ? resp.data.message : 'No fue posible confirmar el asistente.';
-        showStatus(msg, 'err');
+    $input.on('keydown', function(e){
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        $searchBtn.trigger('click');
       }
-    }, 'json').fail(function(){
-      showStatus(EvSelfCheckin.messages.net_error, 'err');
-    }).always(function(){
-      $confirmBtn.prop('disabled', !selectedTicket).text('Confirmar');
     });
-  });
 
-  $printBtn.on('click', function(){
-    if(!confirmedTicket){
-      showStatus('Primero confirma la información del asistente.', 'err');
-      return;
-    }
-
-    $printBtn.prop('disabled', true).text('Imprimiendo…');
-    showStatus(EvSelfCheckin.messages.printing, '');
-
-    $.post(EvSelfCheckin.ajax_url, {
-      action: 'eventosapp_self_checkin_print',
-      security: EvSelfCheckin.print_nonce,
-      event_id: EvSelfCheckin.event_id,
-      ticket_id: confirmedTicket.ticket_id
-    }, function(resp){
-      if(resp && resp.success && resp.data && resp.data.print_url){
-        showStatus(resp.data.already ? 'El check-in ya estaba registrado. Se enviará la escarapela a impresión.' : 'Check-in registrado. Se enviará la escarapela a impresión.', 'ok');
-        var $frame = $('<iframe class="evsc-print-frame" aria-hidden="true"></iframe>');
-        $('body').append($frame);
-        $frame.attr('src', resp.data.print_url);
-        setTimeout(function(){ $frame.remove(); }, 20000);
-        confirmedTicket.already_checked = true;
-      } else {
-        var msg = resp && resp.data && resp.data.message ? resp.data.message : 'No fue posible imprimir la escarapela.';
-        showStatus(msg, 'err');
+    $searchBtn.on('click', function(){
+      if(!validCc()){
+        showStatus(messages.cc_required || 'Ingresa una cédula válida.', 'err');
+        resetSelection(false);
+        return;
       }
-    }, 'json').fail(function(xhr){
-      var msg = EvSelfCheckin.messages.net_error;
-      try { if(xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message){ msg = xhr.responseJSON.data.message; } } catch(e){}
-      showStatus(msg, 'err');
-    }).always(function(){
-      $printBtn.prop('disabled', false).text('Imprimir escarapela');
+
+      $searchBtn.prop('disabled', true).text('Buscando…');
+      showStatus(messages.searching || 'Buscando asistente…', '');
+      resetSelection(false);
+
+      $.post(globalConfig.ajax_url, {
+        action: 'eventosapp_self_checkin_search',
+        security: globalConfig.search_nonce,
+        event_id: eventId,
+        cedula: normalizeCc()
+      }, function(resp){
+        if(resp && resp.success){
+          showStatus('', '');
+          renderResults(resp.data && resp.data.results ? resp.data.results : []);
+        } else {
+          var msg = resp && resp.data && resp.data.message ? resp.data.message : (messages.no_results || 'No se encontraron resultados.');
+          showStatus(msg, 'err');
+        }
+      }, 'json').fail(function(){
+        showStatus(messages.net_error || 'Error de conexión. Intenta nuevamente.', 'err');
+      }).always(function(){
+        $searchBtn.prop('disabled', false).text($searchBtn.data('label') || 'Buscar');
+      });
     });
+
+    $results.on('click', '.evsc-js-result', function(){
+      var ticketId = $(this).data('ticket-id');
+      selectedTicket = findRow(ticketId);
+      $results.find('.evsc-js-result').removeClass('is-selected');
+      $(this).addClass('is-selected');
+      $confirmBtn.prop('disabled', !selectedTicket);
+      $confirm.removeClass('is-visible');
+      $printBtn.prop('disabled', true);
+      showStatus(selectedTicket ? 'Resultado seleccionado. Presiona Confirmar para revisar los datos.' : (messages.select_one || 'Selecciona un resultado.'), selectedTicket ? 'ok' : 'err');
+    });
+
+    $confirmBtn.on('click', function(){
+      if(!selectedTicket){
+        showStatus(messages.select_one || 'Selecciona un resultado.', 'err');
+        return;
+      }
+
+      $confirmBtn.prop('disabled', true).text('Confirmando…');
+      showStatus(messages.confirming || 'Confirmando información…', '');
+
+      $.post(globalConfig.ajax_url, {
+        action: 'eventosapp_self_checkin_confirm',
+        security: globalConfig.confirm_nonce,
+        event_id: eventId,
+        ticket_id: selectedTicket.ticket_id
+      }, function(resp){
+        if(resp && resp.success && resp.data && resp.data.ticket){
+          showStatus('Datos confirmados. Ya puedes imprimir la escarapela.', 'ok');
+          renderConfirm(resp.data.ticket);
+        } else {
+          var msg = resp && resp.data && resp.data.message ? resp.data.message : 'No fue posible confirmar el asistente.';
+          showStatus(msg, 'err');
+        }
+      }, 'json').fail(function(){
+        showStatus(messages.net_error || 'Error de conexión. Intenta nuevamente.', 'err');
+      }).always(function(){
+        $confirmBtn.prop('disabled', !selectedTicket).text($confirmBtn.data('label') || 'Confirmar');
+      });
+    });
+
+    $printBtn.on('click', function(){
+      if(!confirmedTicket){
+        showStatus('Primero confirma la información del asistente.', 'err');
+        return;
+      }
+
+      $printBtn.prop('disabled', true).text('Imprimiendo…');
+      showStatus(messages.printing || 'Marcando check-in e imprimiendo escarapela…', '');
+
+      $.post(globalConfig.ajax_url, {
+        action: 'eventosapp_self_checkin_print',
+        security: globalConfig.print_nonce,
+        event_id: eventId,
+        ticket_id: confirmedTicket.ticket_id
+      }, function(resp){
+        if(resp && resp.success && resp.data && resp.data.print_url){
+          showStatus(resp.data.already ? 'El check-in ya estaba registrado. Se enviará la escarapela a impresión.' : 'Check-in registrado. Se enviará la escarapela a impresión.', 'ok');
+          var $frame = $('<iframe class="evsc-print-frame" aria-hidden="true"></iframe>');
+          $('body').append($frame);
+          $frame.attr('src', resp.data.print_url);
+          setTimeout(function(){ $frame.remove(); }, 20000);
+          confirmedTicket.already_checked = true;
+        } else {
+          var msg = resp && resp.data && resp.data.message ? resp.data.message : 'No fue posible imprimir la escarapela.';
+          showStatus(msg, 'err');
+        }
+      }, 'json').fail(function(xhr){
+        var msg = messages.net_error || 'Error de conexión. Intenta nuevamente.';
+        try { if(xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message){ msg = xhr.responseJSON.data.message; } } catch(e){}
+        showStatus(msg, 'err');
+      }).always(function(){
+        $printBtn.prop('disabled', false).text($printBtn.data('label') || 'Imprimir escarapela');
+      });
+    });
+
+    $clearBtn.on('click', function(){
+      $input.val('').focus();
+      resetSelection(false);
+      showStatus('', '');
+    });
+  }
+
+  function evscRunInit(scope){
+    var $scope = scope && scope.jquery ? scope : $(scope || document);
+    evscInstallKioskGuards();
+
+    $scope.filter('.evsc-wrap').add($scope.find('.evsc-wrap')).each(function(){
+      initSelfCheckin($(this));
+    });
+  }
+
+  window.EvSelfCheckinInit = evscRunInit;
+  evscRunInit(document);
+
+  if(window.elementorFrontend && window.elementorFrontend.hooks){
+    try {
+      window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_ui.default', function($scope){
+        evscRunInit($scope);
+      });
+    } catch(e) {}
+  }
+
+  $(window).on('elementor/frontend/init', function(){
+    if(window.elementorFrontend && window.elementorFrontend.hooks){
+      try {
+        window.elementorFrontend.hooks.addAction('frontend/element_ready/eventosapp_self_checkin_ui.default', function($scope){
+          evscRunInit($scope);
+        });
+      } catch(e) {}
+    }
   });
 
-  $clearBtn.on('click', function(){
-    $input.val('').focus();
-    resetSelection(false);
-    showStatus('', '');
+  $(document).on('elementor/popup/show evsc:refresh', function(){
+    evscRunInit(document);
   });
 });
 JS;
 
-    wp_add_inline_script('eventosapp-self-checkin', $js);
-    wp_enqueue_script('eventosapp-self-checkin');
+            wp_add_inline_script('eventosapp-self-checkin', $js);
+        }
 
-    $launcher_page_url = eventosapp_self_checkin_get_current_page_url( $event_id );
-    $launcher_mac_url  = eventosapp_self_checkin_get_launcher_download_url( 'mac', $launcher_page_url );
-    $launcher_win_url  = eventosapp_self_checkin_get_launcher_download_url( 'windows', $launcher_page_url );
+        wp_enqueue_script('eventosapp-self-checkin');
+
+        if ( ! wp_style_is('eventosapp-self-checkin', 'registered') ) {
+            $css = <<<'CSS'
+.evsc-wrap{max-width:1100px;margin:0 auto;padding:18px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:24px;box-shadow:0 12px 34px rgba(15,23,42,.08);font-family:Arial,Helvetica,sans-serif;color:#0f172a}
+.evsc-kicker{margin:0 0 6px;color:#2563eb;font-size:18px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
+.evsc-title{margin:0;color:#0f172a;font-size:36px;line-height:1.05;font-weight:900}
+.evsc-subtitle{margin:8px 0 20px;color:#475569;font-size:18px;line-height:1.35}
+.evsc-event{display:inline-flex;align-items:center;gap:8px;margin-bottom:18px;padding:10px 14px;border-radius:999px;background:#e0f2fe;color:#075985;font-size:17px;font-weight:800}
+.evsc-panel{background:#fff;border:1px solid #e2e8f0;border-radius:22px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.06)}
+.evsc-search{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:14px;align-items:end}
+.evsc-field label{display:block;margin:0 0 8px;color:#334155;font-size:18px;font-weight:800}
+.evsc-input{width:100%;box-sizing:border-box;border:2px solid #cbd5e1;border-radius:18px;background:#fff;color:#0f172a;font-size:34px;font-weight:900;letter-spacing:.04em;padding:18px 20px;min-height:82px;outline:none;box-shadow:inset 0 2px 4px rgba(15,23,42,.04)}
+.evsc-input:focus{border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.14)}
+.evsc-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:70px;border:0;border-radius:18px;padding:18px 26px;font-size:22px;font-weight:900;line-height:1.1;text-decoration:none;cursor:pointer;transition:transform .12s ease,filter .15s ease,background-color .15s ease,opacity .15s ease,color .15s ease;touch-action:manipulation}
+.evsc-btn:hover{filter:brightness(.96);transform:translateY(-1px)}
+.evsc-btn:active{transform:translateY(0)}
+.evsc-btn[disabled]{opacity:.45;cursor:not-allowed;transform:none;filter:none}
+.evsc-btn-primary{background:#2563eb;color:#fff}
+.evsc-btn-success{background:#16a34a;color:#fff}
+.evsc-btn-dark{background:#0f172a;color:#fff}
+.evsc-btn-light{background:#e2e8f0;color:#0f172a}
+.evsc-actions{display:flex;gap:14px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
+.evsc-status{margin-top:14px;padding:14px 16px;border-radius:16px;background:#f1f5f9;color:#334155;font-size:18px;font-weight:700;display:none}
+.evsc-status.is-visible{display:block}
+.evsc-status.ok{background:#dcfce7;color:#166534}
+.evsc-status.err{background:#fee2e2;color:#991b1b}
+.evsc-results{margin-top:18px;display:grid;gap:12px}
+.evsc-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;background:#fff;border:2px solid #e2e8f0;border-radius:20px;padding:18px;box-shadow:0 8px 20px rgba(15,23,42,.05);cursor:pointer;text-align:left;width:100%;color:inherit}
+.evsc-result:hover{border-color:#93c5fd}
+.evsc-result.is-selected{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
+.evsc-result-name{display:block;font-size:26px;line-height:1.1;font-weight:900;color:#0f172a}
+.evsc-result-meta{display:block;margin-top:8px;color:#475569;font-size:17px;line-height:1.35}
+.evsc-result-chips{display:block;margin-top:8px}
+.evsc-chip{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:14px;font-weight:900;background:#e2e8f0;color:#334155;margin:3px 6px 3px 0}
+.evsc-chip-ok{background:#dcfce7;color:#166534}
+.evsc-chip-warn{background:#fef3c7;color:#92400e}
+.evsc-confirm{display:none;margin-top:20px;background:#0f172a;color:#fff;border-radius:24px;padding:22px;box-shadow:0 14px 32px rgba(15,23,42,.22)}
+.evsc-confirm.is-visible{display:block}
+.evsc-confirm h3{margin:0 0 12px;color:#fff;font-size:32px;line-height:1.1;font-weight:900}
+.evsc-confirm-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}
+.evsc-data{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.16);border-radius:18px;padding:14px}
+.evsc-data-label{display:block;color:#bfdbfe;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
+.evsc-data-value{display:block;color:#fff;font-size:22px;font-weight:900;word-break:break-word}
+.evsc-print-frame{position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none}
+.evsc-alert{max-width:900px;margin:16px auto;padding:14px 16px;border-radius:14px;font-size:17px;font-weight:700}
+.evsc-alert-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
+.evsc-alert-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.evsc-admin-note{margin:16px 0 18px;padding:14px 16px;border-radius:16px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:15px;line-height:1.45;font-weight:700}
+.evsc-admin-note strong{color:#7c2d12}
+.evsc-launcher-box{margin-top:12px;padding:12px;border-radius:14px;background:#fff;border:1px solid #fed7aa;color:#7c2d12}
+.evsc-launcher-title{display:block;margin:0 0 6px;font-size:14px;font-weight:900;color:#7c2d12;text-transform:uppercase;letter-spacing:.03em}
+.evsc-launcher-text{display:block;margin:0 0 10px;font-size:13px;line-height:1.35;color:#9a3412;font-weight:700}
+.evsc-launcher-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.evsc-launcher-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:999px;background:#0f172a;color:#fff!important;text-decoration:none!important;padding:10px 14px;font-size:13px;font-weight:900;line-height:1;touch-action:manipulation;transition:transform .12s ease,filter .15s ease,background-color .15s ease,color .15s ease}
+.evsc-launcher-btn:hover{filter:brightness(.96);transform:translateY(-1px)}
+html.evsc-kiosk-lock,body.evsc-kiosk-lock{overscroll-behavior:none;overscroll-behavior-x:none;background:#f8fafc}
+body.evsc-kiosk-lock{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+body.evsc-kiosk-lock input,body.evsc-kiosk-lock textarea,body.evsc-kiosk-lock select,body.evsc-kiosk-lock [contenteditable="true"]{touch-action:manipulation;-webkit-user-select:text;user-select:text}
+body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
+.evsc-kiosk-hint{display:none;margin:0 0 14px;padding:12px 14px;border-radius:14px;background:#ecfdf5;color:#065f46;border:1px solid #bbf7d0;font-size:14px;line-height:1.4;font-weight:800}
+.evsc-kiosk-hint.is-visible{display:block}
+.evsc-fullscreen-btn{display:inline-flex;margin-left:8px;border:0;border-radius:999px;background:#047857;color:#fff;padding:8px 12px;font-size:13px;font-weight:900;cursor:pointer;touch-action:manipulation}
+@media(max-width:800px){.evsc-wrap{padding:14px;border-radius:18px}.evsc-title{font-size:30px}.evsc-search{grid-template-columns:1fr}.evsc-input{font-size:28px;min-height:74px}.evsc-btn{width:100%;min-height:68px}.evsc-result{grid-template-columns:1fr}.evsc-actions{justify-content:stretch}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}}
+CSS;
+            wp_register_style('eventosapp-self-checkin', false, [], null);
+            wp_add_inline_style('eventosapp-self-checkin', $css);
+        }
+
+        wp_enqueue_style('eventosapp-self-checkin');
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_render_launcher_block') ) {
+    function eventosapp_self_checkin_render_launcher_block( $event_id = 0, $args = [] ) {
+        $event_id = absint( $event_id );
+        $defaults = [
+            'show_for_admin_only' => true,
+            'show_launcher_box'   => true,
+            'intro_text'          => 'Modo kiosko / impresión silenciosa:',
+            'description'         => 'por seguridad del navegador, WordPress no puede ejecutar Terminal, CMD ni activar banderas nativas de Chrome directamente desde un botón web. Para evitar errores del asistente, descarga el lanzador del sistema operativo del equipo del kiosko y ejecútalo desde ese equipo; abrirá esta página en Chrome con <code>--kiosk</code> y <code>--kiosk-printing</code>.',
+            'launcher_title'      => 'Lanzadores del equipo kiosko',
+            'launcher_text'       => 'Disponibles solo para administradores. Deben descargarse y ejecutarse una vez desde el equipo físico que tendrá la impresora predeterminada.',
+            'mac_label'           => 'Descargar lanzador Mac',
+            'windows_label'       => 'Descargar lanzador Windows',
+        ];
+        $args = wp_parse_args( (array) $args, $defaults );
+
+        if ( ! empty( $args['show_for_admin_only'] ) && ! current_user_can('manage_options') ) {
+            return '';
+        }
+
+        eventosapp_self_checkin_enqueue_assets();
+
+        $launcher_page_url = eventosapp_self_checkin_get_current_page_url( $event_id );
+        $launcher_mac_url  = eventosapp_self_checkin_get_launcher_download_url( 'mac', $launcher_page_url );
+        $launcher_win_url  = eventosapp_self_checkin_get_launcher_download_url( 'windows', $launcher_page_url );
+
+        ob_start();
+        ?>
+        <div class="evsc-admin-note evsc-launcher-module">
+            <strong><?php echo esc_html( $args['intro_text'] ); ?></strong>
+            <?php echo wp_kses_post( ' ' . $args['description'] ); ?>
+            <?php if ( ! empty( $args['show_launcher_box'] ) ) : ?>
+                <div class="evsc-launcher-box">
+                    <span class="evsc-launcher-title"><?php echo esc_html( $args['launcher_title'] ); ?></span>
+                    <span class="evsc-launcher-text"><?php echo esc_html( $args['launcher_text'] ); ?></span>
+                    <div class="evsc-launcher-actions">
+                        <a class="evsc-launcher-btn" href="<?php echo esc_url( $launcher_mac_url ); ?>"><?php echo esc_html( $args['mac_label'] ); ?></a>
+                        <a class="evsc-launcher-btn" href="<?php echo esc_url( $launcher_win_url ); ?>"><?php echo esc_html( $args['windows_label'] ); ?></a>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
+    function eventosapp_self_checkin_render_main_ui( $event_id = 0, $args = [] ) {
+        $event_id = eventosapp_self_checkin_get_active_event_id( $event_id );
+
+        if ( ! $event_id ) {
+            $dashboard_url = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
+            return '<div class="evsc-alert evsc-alert-warn">Debes escoger un <strong>evento</strong> para activar la autogestión. Ve al <a href="'.esc_url($dashboard_url).'">dashboard</a>, selecciónalo y vuelve aquí.</div>';
+        }
+
+        if ( ! eventosapp_self_checkin_user_can_event( $event_id ) ) {
+            return '<div class="evsc-alert evsc-alert-error">No tienes permisos para usar la autogestión en este evento.</div>';
+        }
+
+        $defaults = [
+            'show_event_badge'       => true,
+            'show_kicker'            => true,
+            'show_title'             => true,
+            'show_subtitle'          => true,
+            'show_kiosk_hint'        => true,
+            'enable_kiosk_lock'      => true,
+            'kicker'                 => 'Autogestión',
+            'title'                  => 'Identificación del asistente',
+            'subtitle'               => 'Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.',
+            'field_label'            => 'Cédula de ciudadanía',
+            'placeholder'            => 'Ej: 1234567890',
+            'search_label'           => 'Buscar',
+            'clear_label'            => 'Limpiar',
+            'confirm_label'          => 'Confirmar',
+            'confirm_heading'        => 'Confirma tu información',
+            'print_label'            => 'Imprimir escarapela',
+            'kiosk_hint_text'        => 'Modo kiosko asistido activo: los gestos de atrás/adelante quedan bloqueados dentro de la página.',
+            'fullscreen_label'       => 'Activar pantalla completa',
+        ];
+        $args = wp_parse_args( (array) $args, $defaults );
+
+        eventosapp_self_checkin_enqueue_assets();
+
+        $uid = function_exists('wp_unique_id') ? wp_unique_id('evsc-') : ( 'evsc-' . uniqid() );
+
+        ob_start();
+        ?>
+        <div id="<?php echo esc_attr( $uid ); ?>" class="evsc-wrap" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-event-name="<?php echo esc_attr( get_the_title( $event_id ) ); ?>" data-kiosk-lock="<?php echo ! empty( $args['enable_kiosk_lock'] ) ? '1' : '0'; ?>">
+            <?php if ( ! empty( $args['show_event_badge'] ) ) : ?>
+                <div class="evsc-event">Evento activo: <?php echo esc_html( get_the_title( $event_id ) ); ?></div>
+            <?php endif; ?>
+            <?php if ( ! empty( $args['show_kicker'] ) && $args['kicker'] !== '' ) : ?>
+                <p class="evsc-kicker"><?php echo esc_html( $args['kicker'] ); ?></p>
+            <?php endif; ?>
+            <?php if ( ! empty( $args['show_title'] ) && $args['title'] !== '' ) : ?>
+                <h2 class="evsc-title"><?php echo esc_html( $args['title'] ); ?></h2>
+            <?php endif; ?>
+            <?php if ( ! empty( $args['show_subtitle'] ) && $args['subtitle'] !== '' ) : ?>
+                <p class="evsc-subtitle"><?php echo esc_html( $args['subtitle'] ); ?></p>
+            <?php endif; ?>
+
+            <?php if ( ! empty( $args['show_kiosk_hint'] ) ) : ?>
+                <div class="evsc-kiosk-hint">
+                    <?php echo esc_html( $args['kiosk_hint_text'] ); ?>
+                    <button type="button" class="evsc-fullscreen-btn evsc-js-fullscreen"><?php echo esc_html( $args['fullscreen_label'] ); ?></button>
+                </div>
+            <?php endif; ?>
+
+            <div class="evsc-panel">
+                <div class="evsc-search">
+                    <div class="evsc-field">
+                        <label for="<?php echo esc_attr( $uid ); ?>-cc"><?php echo esc_html( $args['field_label'] ); ?></label>
+                        <input id="<?php echo esc_attr( $uid ); ?>-cc" class="evsc-input evsc-js-cc" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="30" autocomplete="off" placeholder="<?php echo esc_attr( $args['placeholder'] ); ?>" aria-label="<?php echo esc_attr( $args['field_label'] ); ?>">
+                    </div>
+                    <button type="button" class="evsc-btn evsc-btn-primary evsc-js-search" data-label="<?php echo esc_attr( $args['search_label'] ); ?>"><?php echo esc_html( $args['search_label'] ); ?></button>
+                </div>
+
+                <div class="evsc-status evsc-js-status" role="status" aria-live="polite"></div>
+                <div class="evsc-results evsc-js-results" aria-live="polite"></div>
+
+                <div class="evsc-actions">
+                    <button type="button" class="evsc-btn evsc-btn-light evsc-js-clear"><?php echo esc_html( $args['clear_label'] ); ?></button>
+                    <button type="button" class="evsc-btn evsc-btn-success evsc-js-confirm" data-label="<?php echo esc_attr( $args['confirm_label'] ); ?>" disabled><?php echo esc_html( $args['confirm_label'] ); ?></button>
+                </div>
+            </div>
+
+            <div class="evsc-confirm evsc-js-confirm-box" aria-live="polite">
+                <h3><?php echo esc_html( $args['confirm_heading'] ); ?></h3>
+                <div class="evsc-confirm-grid evsc-js-confirm-data"></div>
+                <div class="evsc-actions">
+                    <button type="button" class="evsc-btn evsc-btn-success evsc-js-print" data-label="<?php echo esc_attr( $args['print_label'] ); ?>" disabled><?php echo esc_html( $args['print_label'] ); ?></button>
+                </div>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+}
+
+add_shortcode('eventosapp_self_checkin', function( $atts ) {
+    if ( function_exists('eventosapp_require_feature') ) {
+        eventosapp_require_feature('self_checkin');
+    }
+
+    $atts = shortcode_atts([
+        'event_id' => 0,
+    ], $atts, 'eventosapp_self_checkin');
+
+    $event_id = eventosapp_self_checkin_get_active_event_id( $atts['event_id'] );
 
     ob_start();
     if ( function_exists('eventosapp_active_event_bar') ) {
         eventosapp_active_event_bar();
     }
-    ?>
-    <div id="evsc-wrap" class="evsc-wrap" data-event-id="<?php echo esc_attr( $event_id ); ?>">
-        <div class="evsc-event">Evento activo: <?php echo esc_html( get_the_title( $event_id ) ); ?></div>
-        <p class="evsc-kicker">Autogestión</p>
-        <h2 class="evsc-title">Identificación del asistente</h2>
-        <p class="evsc-subtitle">Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.</p>
-        <?php if ( current_user_can('manage_options') ) : ?>
-            <div class="evsc-admin-note">
-                <strong>Modo kiosko / impresión silenciosa:</strong> por seguridad del navegador, WordPress no puede ejecutar Terminal, CMD ni activar banderas nativas de Chrome directamente desde un botón web. Para evitar errores del asistente, descarga el lanzador del sistema operativo del equipo del kiosko y ejecútalo desde ese equipo; abrirá esta página en Chrome con <code>--kiosk</code> y <code>--kiosk-printing</code>.
-                <div class="evsc-launcher-box">
-                    <span class="evsc-launcher-title">Lanzadores del equipo kiosko</span>
-                    <span class="evsc-launcher-text">Disponibles solo para administradores. Deben descargarse y ejecutarse una vez desde el equipo físico que tendrá la impresora predeterminada.</span>
-                    <div class="evsc-launcher-actions">
-                        <a class="evsc-launcher-btn" href="<?php echo esc_url( $launcher_mac_url ); ?>">Descargar lanzador Mac</a>
-                        <a class="evsc-launcher-btn" href="<?php echo esc_url( $launcher_win_url ); ?>">Descargar lanzador Windows</a>
-                    </div>
-                </div>
-            </div>
-        <?php endif; ?>
-
-        <div id="evsc-kiosk-hint" class="evsc-kiosk-hint">
-            Modo kiosko asistido activo: los gestos de atrás/adelante quedan bloqueados dentro de la página.
-            <button id="evsc-fullscreen-btn" type="button" class="evsc-fullscreen-btn">Activar pantalla completa</button>
-        </div>
-
-        <div class="evsc-panel">
-            <div class="evsc-search">
-                <div class="evsc-field">
-                    <label for="evsc-cc">Cédula de ciudadanía</label>
-                    <input id="evsc-cc" class="evsc-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="30" autocomplete="off" placeholder="Ej: 1234567890" aria-label="Cédula de ciudadanía">
-                </div>
-                <button id="evsc-search-btn" type="button" class="evsc-btn evsc-btn-primary">Buscar</button>
-            </div>
-
-            <div id="evsc-status" class="evsc-status" role="status" aria-live="polite"></div>
-            <div id="evsc-results" class="evsc-results" aria-live="polite"></div>
-
-            <div class="evsc-actions">
-                <button id="evsc-clear-btn" type="button" class="evsc-btn evsc-btn-light">Limpiar</button>
-                <button id="evsc-confirm-btn" type="button" class="evsc-btn evsc-btn-success" disabled>Confirmar</button>
-            </div>
-        </div>
-
-        <div id="evsc-confirm" class="evsc-confirm" aria-live="polite">
-            <h3>Confirma tu información</h3>
-            <div id="evsc-confirm-data" class="evsc-confirm-grid"></div>
-            <div class="evsc-actions">
-                <button id="evsc-print-btn" type="button" class="evsc-btn evsc-btn-success" disabled>Imprimir escarapela</button>
-            </div>
-        </div>
-    </div>
-    <?php
+    if ( $event_id ) {
+        echo eventosapp_self_checkin_render_launcher_block( $event_id, [ 'show_for_admin_only' => true ] );
+    }
+    echo eventosapp_self_checkin_render_main_ui( $event_id );
     return ob_get_clean();
 });
 
