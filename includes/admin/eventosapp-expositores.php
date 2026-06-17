@@ -507,6 +507,80 @@ if ( ! function_exists( 'eventosapp_expositor_user_can_select_event_in_dashboard
     }
 }
 
+
+if ( ! function_exists( 'eventosapp_expositor_user_has_any_event' ) ) {
+    function eventosapp_expositor_user_has_any_event( $user_id = 0 ) {
+        $user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+        if ( ! $user_id ) return false;
+
+        $events = get_posts( [
+            'post_type'      => 'eventosapp_event',
+            'post_status'    => 'any',
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+        ] );
+
+        foreach ( $events as $event_id ) {
+            $status = get_post_status( $event_id );
+            if ( in_array( $status, [ 'trash', 'auto-draft' ], true ) ) continue;
+
+            if ( eventosapp_expositor_user_has_assignment_in_event( $event_id, $user_id ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_dashboard_allowed_features' ) ) {
+    function eventosapp_expositor_dashboard_allowed_features() {
+        return [ 'dashboard', 'expositor' ];
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_apply_dashboard_isolation' ) ) {
+    function eventosapp_expositor_apply_dashboard_isolation( $has_permission, $feature, $user ) {
+        if ( ! $user || ! $user instanceof WP_User || empty( $user->ID ) ) {
+            return $has_permission;
+        }
+
+        $user_id = absint( $user->ID );
+
+        // El administrador principal conserva siempre sus permisos globales.
+        if ( user_can( $user_id, 'manage_options' ) ) {
+            return $has_permission;
+        }
+
+        $active_event = 0;
+        if ( function_exists( 'eventosapp_get_active_event' ) ) {
+            $active_event = absint( eventosapp_get_active_event() );
+        }
+
+        $allowed_features = eventosapp_expositor_dashboard_allowed_features();
+
+        if ( $active_event ) {
+            if ( eventosapp_expositor_user_has_assignment_in_event( $active_event, $user_id ) ) {
+                return in_array( $feature, $allowed_features, true );
+            }
+
+            if ( eventosapp_expositor_user_has_any_event( $user_id ) ) {
+                return $feature === 'dashboard';
+            }
+
+            return $has_permission;
+        }
+
+        if ( eventosapp_expositor_user_has_any_event( $user_id ) ) {
+            return in_array( $feature, $allowed_features, true );
+        }
+
+        return $has_permission;
+    }
+}
+add_filter( 'eventosapp_role_can', 'eventosapp_expositor_apply_dashboard_isolation', 10000, 3 );
+
 if ( ! function_exists( 'eventosapp_expositor_manager_can_access_event' ) ) {
     function eventosapp_expositor_manager_can_access_event( $event_id, $user_id = 0 ) {
         $event_id = absint( $event_id );
