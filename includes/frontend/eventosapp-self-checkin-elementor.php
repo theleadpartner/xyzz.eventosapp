@@ -5,6 +5,7 @@
  * Widgets:
  * - EventosApp Autogestión: Búsqueda e Impresión
  * - EventosApp Autogestión: Botón Pantalla Completa
+ * - EventosApp Autogestión: Logos adicionales
  * - EventosApp Autogestión: Kiosko / Impresión Silenciosa
  */
 
@@ -1971,6 +1972,84 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                 }
             }
         }
+        if ( ! class_exists('EventosApp_Self_Checkin_Extra_Logos_Elementor_Widget') ) {
+            class EventosApp_Self_Checkin_Extra_Logos_Elementor_Widget extends \Elementor\Widget_Base {
+                public function get_name() {
+                    return 'eventosapp_self_checkin_additional_logos';
+                }
+
+                public function get_title() {
+                    return 'EventosApp Autogestión - Logos adicionales';
+                }
+
+                public function get_icon() {
+                    return 'eicon-gallery-grid';
+                }
+
+                public function get_categories() {
+                    return [ 'eventosapp' ];
+                }
+
+                public function get_keywords() {
+                    return [ 'eventosapp', 'autogestion', 'kiosko', 'logos', 'patrocinadores', 'aliados' ];
+                }
+
+                public function get_style_depends() {
+                    eventosapp_self_checkin_elementor_bootstrap_module();
+                    if ( function_exists('eventosapp_self_checkin_enqueue_assets') ) {
+                        eventosapp_self_checkin_enqueue_assets();
+                    }
+                    return [ 'eventosapp-self-checkin' ];
+                }
+
+                protected function register_controls() {
+                    $this->start_controls_section('section_content', [
+                        'label' => 'Contenido',
+                        'tab'   => \Elementor\Controls_Manager::TAB_CONTENT,
+                    ]);
+
+                    $this->add_control('use_active_event', [
+                        'label'        => 'Usar evento activo del dashboard',
+                        'type'         => \Elementor\Controls_Manager::SWITCHER,
+                        'label_on'     => 'Sí',
+                        'label_off'    => 'No',
+                        'return_value' => 'yes',
+                        'default'      => 'yes',
+                        'description'  => 'Activado: el widget toma los logos adicionales configurados en el evento activo.',
+                    ]);
+
+                    $this->add_control('event_id', [
+                        'label'       => 'Evento fijo de respaldo',
+                        'type'        => \Elementor\Controls_Manager::SELECT2,
+                        'default'     => 0,
+                        'options'     => eventosapp_self_checkin_elementor_get_event_options(),
+                        'label_block' => true,
+                        'condition'   => [ 'use_active_event!' => 'yes' ],
+                    ]);
+
+                    $this->add_control('admin_note', [
+                        'type'            => \Elementor\Controls_Manager::RAW_HTML,
+                        'raw'             => 'Este widget no guarda logos desde Elementor. Los logos, el tamaño del contenedor y el tamaño máximo de cada imagen se administran en el metabox del evento: Autogestión Kiosko - Personalización.',
+                        'content_classes' => 'elementor-panel-alert elementor-panel-alert-info',
+                    ]);
+
+                    $this->end_controls_section();
+                }
+
+                protected function render() {
+                    if ( ! eventosapp_self_checkin_elementor_bootstrap_module() || ! function_exists('eventosapp_self_checkin_render_additional_logos') ) {
+                        echo '<div class="evsc-alert evsc-alert-error">El módulo de logos adicionales de autogestión no está cargado. Verifica que el archivo <code>includes/frontend/eventosapp-self-checkin.php</code> esté instalado.</div>';
+                        return;
+                    }
+
+                    $settings = $this->get_settings_for_display();
+                    $event_id = eventosapp_self_checkin_elementor_resolve_event_id( $settings );
+
+                    echo eventosapp_self_checkin_render_additional_logos( $event_id );
+                }
+            }
+        }
+
 
         if ( ! class_exists('EventosApp_Self_Checkin_Launcher_Elementor_Widget') ) {
             class EventosApp_Self_Checkin_Launcher_Elementor_Widget extends \Elementor\Widget_Base {
@@ -2311,6 +2390,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
         if ( is_object( $widgets_manager ) && method_exists( $widgets_manager, 'register' ) ) {
             $widgets_manager->register( new EventosApp_Self_Checkin_UI_Elementor_Widget() );
             $widgets_manager->register( new EventosApp_Self_Checkin_Fullscreen_Elementor_Widget() );
+            $widgets_manager->register( new EventosApp_Self_Checkin_Extra_Logos_Elementor_Widget() );
             $widgets_manager->register( new EventosApp_Self_Checkin_Launcher_Elementor_Widget() );
             $registered = true;
             return;
@@ -2321,6 +2401,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
             if ( method_exists( $legacy_manager, 'register_widget_type' ) ) {
                 $legacy_manager->register_widget_type( new EventosApp_Self_Checkin_UI_Elementor_Widget() );
                 $legacy_manager->register_widget_type( new EventosApp_Self_Checkin_Fullscreen_Elementor_Widget() );
+                $legacy_manager->register_widget_type( new EventosApp_Self_Checkin_Extra_Logos_Elementor_Widget() );
                 $legacy_manager->register_widget_type( new EventosApp_Self_Checkin_Launcher_Elementor_Widget() );
                 $registered = true;
             }
