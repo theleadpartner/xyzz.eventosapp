@@ -104,6 +104,27 @@ add_shortcode('eventosapp_networking_global', function($atts){
     // Nonces para AJAX
     $nonce_auth = wp_create_nonce('eventosapp_netglobal_auth');
     $nonce_log  = wp_create_nonce('eventosapp_netglobal_log');
+
+    // Campos de autenticación configurados por evento.
+    // Si el evento no tiene configuración, se conserva cédula + apellido.
+    $auth_field_keys = function_exists('eventosapp_get_event_networking_global_auth_fields')
+        ? eventosapp_get_event_networking_global_auth_fields($event_id)
+        : [ 'cc', 'apellido' ];
+    $auth_field_options = function_exists('eventosapp_networking_global_auth_field_options')
+        ? eventosapp_networking_global_auth_field_options()
+        : [
+            'cc'       => [ 'label' => 'Cédula', 'type' => 'text', 'placeholder' => 'Ej: 1020304050', 'help' => 'Escribe tal cual como está en tu inscripción.' ],
+            'apellido' => [ 'label' => 'Apellido', 'type' => 'text', 'placeholder' => 'Ej: Pérez o García', 'help' => 'Escribe tal cual como está en tu inscripción.' ],
+        ];
+    $auth_form_fields = [];
+    foreach ($auth_field_keys as $field_key) {
+        if (isset($auth_field_options[$field_key])) {
+            $auth_form_fields[$field_key] = $auth_field_options[$field_key];
+        }
+    }
+    if (empty($auth_form_fields)) {
+        $auth_form_fields = array_intersect_key($auth_field_options, array_flip([ 'cc', 'apellido' ]));
+    }
     
     ob_start(); ?>
     <style>
@@ -163,21 +184,28 @@ add_shortcode('eventosapp_networking_global', function($atts){
 
         <!-- Paso 1: Autenticación -->
         <div id="evappNetGlobalAuth">
-          <div class="evapp-netglobal-field">
-            <label>Cédula</label>
-            <input type="text" id="evappAuthCC" class="evapp-netglobal-input" placeholder="Ej: 1020304050">
-            <small class="evapp-netglobal-help">
-              Escribe tal cual como está en tu inscripción.
-            </small>
-          </div>
-          
-          <div class="evapp-netglobal-field">
-            <label>Apellido</label>
-            <input type="text" id="evappAuthLast" class="evapp-netglobal-input" placeholder="Ej: Pérez o García">
-            <small class="evapp-netglobal-help">
-              Escribe tal cual como está en tu inscripción.
-            </small>
-          </div>
+          <?php foreach ($auth_form_fields as $field_key => $field): ?>
+            <?php
+              $field_label = $field['label'] ?? $field_key;
+              $field_type  = $field['type'] ?? 'text';
+              $field_help  = $field['help'] ?? 'Escribe tal cual como está en tu inscripción.';
+            ?>
+            <div class="evapp-netglobal-field">
+              <label for="evappAuthField_<?php echo esc_attr($field_key); ?>"><?php echo esc_html($field_label); ?></label>
+              <input
+                type="<?php echo esc_attr($field_type); ?>"
+                id="evappAuthField_<?php echo esc_attr($field_key); ?>"
+                class="evapp-netglobal-input evapp-netglobal-auth-input"
+                data-field="<?php echo esc_attr($field_key); ?>"
+                data-label="<?php echo esc_attr($field_label); ?>"
+                placeholder="<?php echo esc_attr($field['placeholder'] ?? ''); ?>"
+                autocomplete="off"
+              >
+              <small class="evapp-netglobal-help">
+                <?php echo esc_html($field_help); ?>
+              </small>
+            </div>
+          <?php endforeach; ?>
           
           <button type="button" id="evappAuthBtn" class="evapp-netglobal-btn">Confirmar identidad</button>
           
@@ -234,8 +262,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
       const authSection = document.getElementById('evappNetGlobalAuth');
       const scanSection = document.getElementById('evappNetGlobalScan');
       const resultSection = document.getElementById('evappNetGlobalResult');
-      const ccInput = document.getElementById('evappAuthCC');
-      const lastInput = document.getElementById('evappAuthLast');
+      const authInputs = Array.prototype.slice.call(document.querySelectorAll('.evapp-netglobal-auth-input'));
       const authBtn = document.getElementById('evappAuthBtn');
       const authMsg = document.getElementById('evappAuthMsg');
       const scanWelcome = document.getElementById('evappScanWelcome');
@@ -710,8 +737,10 @@ add_shortcode('eventosapp_networking_global', function($atts){
             resultSection.style.display = 'none';
             authMsg.innerHTML = '<span class="evapp-netglobal-bad">⚠️ Por favor escanea un código QR para continuar</span>';
             authBtn.style.display = 'none';
-            ccInput.parentElement.style.display = 'none';
-            lastInput.parentElement.style.display = 'none';
+            authInputs.forEach(function(input){
+              const wrap = input.closest('.evapp-netglobal-field');
+              if (wrap) wrap.style.display = 'none';
+            });
           }
         }
       }
@@ -747,13 +776,32 @@ add_shortcode('eventosapp_networking_global', function($atts){
 
       // ========== AUTENTICACIÓN ==========
 
+      function getAuthPayload(){
+        const authData = {};
+        const missingLabels = [];
+
+        authInputs.forEach(function(input){
+          const field = input.dataset.field || '';
+          const label = input.dataset.label || 'campo requerido';
+          const value = (input.value || '').trim();
+
+          if (!field) return;
+          authData[field] = value;
+
+          if (!value) {
+            missingLabels.push(label);
+          }
+        });
+
+        return { authData, missingLabels };
+      }
+
       if (authBtn) {
         authBtn.addEventListener('click', function(){
-          const cc = ccInput.value.trim();
-          const last = lastInput.value.trim();
+          const payloadData = getAuthPayload();
 
-          if (!cc || !last) {
-            authMsg.textContent = 'Completa cédula y apellido.';
+          if (payloadData.missingLabels.length) {
+            authMsg.textContent = 'Completa: ' + payloadData.missingLabels.join(', ') + '.';
             authMsg.className = 'evapp-netglobal-bad';
             return;
           }
@@ -762,16 +810,21 @@ add_shortcode('eventosapp_networking_global', function($atts){
           authMsg.className = 'evapp-netglobal-help';
           authMsg.textContent = 'Validando…';
 
+          const requestBody = new URLSearchParams({
+            action: 'eventosapp_netglobal_identify',
+            _wpnonce: authNonce,
+            event_id: eventID,
+            auth_data: JSON.stringify(payloadData.authData)
+          });
+
+          // Compatibilidad con versiones anteriores del endpoint.
+          if (payloadData.authData.cc) requestBody.append('cc', payloadData.authData.cc);
+          if (payloadData.authData.apellido) requestBody.append('last_name', payloadData.authData.apellido);
+
           fetch(ajaxURL, {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: new URLSearchParams({
-              action: 'eventosapp_netglobal_identify',
-              _wpnonce: authNonce,
-              event_id: eventID,
-              cc: cc,
-              last_name: last
-            })
+            body: requestBody
           })
           .then(r => r.json())
           .then(data => {
@@ -804,6 +857,15 @@ add_shortcode('eventosapp_networking_global', function($atts){
             authMsg.className = 'evapp-netglobal-bad';
             authMsg.textContent = 'Error de red.';
             authBtn.disabled = false;
+          });
+        });
+
+        authInputs.forEach(function(input){
+          input.addEventListener('keydown', function(event){
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              authBtn.click();
+            }
           });
         });
       }
@@ -950,60 +1012,109 @@ add_action('wp_ajax_nopriv_eventosapp_netglobal_identify', 'eventosapp_netglobal
 function eventosapp_netglobal_identify_handler(){
     check_ajax_referer('eventosapp_netglobal_auth');
 
-    $event_id  = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
-    $cc        = isset($_POST['cc']) ? sanitize_text_field($_POST['cc']) : '';
-    $last_name = isset($_POST['last_name']) ? sanitize_text_field($_POST['last_name']) : '';
+    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
 
-    if (!$event_id || !$cc || !$last_name) {
-        wp_send_json_error(['message' => 'Datos incompletos']);
+    if (!$event_id || get_post_type($event_id) !== 'eventosapp_event') {
+        wp_send_json_error(['message' => 'Evento inválido']);
     }
 
-    // Buscar ticket que coincida
-    $args = [
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'publish',
-        'posts_per_page' => 1,
-        'meta_query'     => [
-            'relation' => 'AND',
-            [
-                'key'   => '_eventosapp_ticket_evento_id',
-                'value' => $event_id,
-                'type'  => 'NUMERIC'
-            ],
-            [
-                'key'     => '_eventosapp_asistente_cc',
-                'value'   => $cc,
-                'compare' => '='
-            ],
-        ]
-    ];
+    $configured_fields = function_exists('eventosapp_get_event_networking_global_auth_fields')
+        ? eventosapp_get_event_networking_global_auth_fields($event_id)
+        : [ 'cc', 'apellido' ];
 
-    $query = new WP_Query($args);
+    $field_options = function_exists('eventosapp_networking_global_auth_field_options')
+        ? eventosapp_networking_global_auth_field_options()
+        : [
+            'cc'       => [ 'label' => 'Cédula' ],
+            'apellido' => [ 'label' => 'Apellido' ],
+        ];
 
-    if (!$query->have_posts()) {
-        wp_send_json_error(['message' => 'No se encontró registro con esa cédula en este evento']);
+    $auth_data = [];
+    if (isset($_POST['auth_data'])) {
+        $raw_auth_data = wp_unslash($_POST['auth_data']);
+        $decoded_auth_data = json_decode((string) $raw_auth_data, true);
+        if (is_array($decoded_auth_data)) {
+            foreach ($decoded_auth_data as $field => $value) {
+                $auth_data[sanitize_key($field)] = sanitize_text_field($value);
+            }
+        }
     }
 
-    $ticket = $query->posts[0];
-    $ticket_id = $ticket->ID;
+    // Compatibilidad con el envío anterior: cédula + apellido.
+    if (empty($auth_data)) {
+        $auth_data = [
+            'cc'       => isset($_POST['cc']) ? sanitize_text_field(wp_unslash($_POST['cc'])) : '',
+            'apellido' => isset($_POST['last_name']) ? sanitize_text_field(wp_unslash($_POST['last_name'])) : '',
+        ];
+    }
 
-    // Validar apellido usando el campo correcto (singular)
-    $stored_last = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
-    
-    // Comparación flexible: normalizar y comparar
-    $stored_last_normalized = strtolower(trim($stored_last));
-    $input_last_normalized = strtolower(trim($last_name));
-    
-    if ($stored_last_normalized !== $input_last_normalized) {
-        wp_send_json_error(['message' => 'El apellido no coincide']);
+    $missing_labels = [];
+    foreach ($configured_fields as $field) {
+        $value = $auth_data[$field] ?? '';
+        $normalized = function_exists('eventosapp_normalize_networking_global_auth_value')
+            ? eventosapp_normalize_networking_global_auth_value($value, $field)
+            : strtolower(trim((string) $value));
+
+        if ($normalized === '') {
+            $missing_labels[] = $field_options[$field]['label'] ?? $field;
+        }
+    }
+
+    if (!empty($missing_labels)) {
+        wp_send_json_error(['message' => 'Completa: ' . implode(', ', $missing_labels) . '.']);
+    }
+
+    if (function_exists('eventosapp_find_ticket_by_networking_global_auth')) {
+        $ticket_id = eventosapp_find_ticket_by_networking_global_auth($event_id, $auth_data, $configured_fields);
+    } else {
+        // Fallback defensivo para instalaciones que todavía no tengan el helper global cargado.
+        $ticket_id = 0;
+        $cc        = $auth_data['cc'] ?? '';
+        $last_name = $auth_data['apellido'] ?? '';
+
+        if ($cc && $last_name) {
+            $query = new WP_Query([
+                'post_type'      => 'eventosapp_ticket',
+                'post_status'    => 'publish',
+                'posts_per_page' => 1,
+                'meta_query'     => [
+                    'relation' => 'AND',
+                    [
+                        'key'   => '_eventosapp_ticket_evento_id',
+                        'value' => $event_id,
+                        'type'  => 'NUMERIC',
+                    ],
+                    [
+                        'key'     => '_eventosapp_asistente_cc',
+                        'value'   => $cc,
+                        'compare' => '=',
+                    ],
+                ],
+            ]);
+
+            if ($query->have_posts()) {
+                $candidate_id = $query->posts[0]->ID;
+                $stored_last  = get_post_meta($candidate_id, '_eventosapp_asistente_apellido', true);
+                if (strtolower(trim($stored_last)) === strtolower(trim($last_name))) {
+                    $ticket_id = $candidate_id;
+                }
+            }
+        }
+    }
+
+    if (!$ticket_id) {
+        $labels = [];
+        foreach ($configured_fields as $field) {
+            $labels[] = $field_options[$field]['label'] ?? $field;
+        }
+        wp_send_json_error(['message' => 'No se encontró un registro que coincida con: ' . implode(', ', $labels) . '.']);
     }
 
     wp_send_json_success([
-        'ticket_id' => $ticket_id,
+        'ticket_id' => absint($ticket_id),
         'message'   => 'Identificación exitosa'
     ]);
 }
-
 /**
  * AJAX: Obtener datos del ticket escaneado
  */
