@@ -1387,7 +1387,7 @@ add_action('admin_enqueue_scripts', function(){
     if ( $screen && $screen->post_type === 'eventosapp_event' ) {
         wp_enqueue_style('wp-color-picker');
         wp_enqueue_script('wp-color-picker');
-        // wp_enqueue_media(); // <-- necesario para el frame de la biblioteca si vas a usar Media Library
+        wp_enqueue_media(); // Necesario para seleccionar fondos y logos del kiosko desde la Biblioteca de Medios.
     }
 });
 
@@ -1537,6 +1537,15 @@ add_action('add_meta_boxes', function() {
         'eventosapp_networking_global_auth_evento',
         'Autenticación Networking Global',
         'eventosapp_render_metabox_networking_global_auth',
+        'eventosapp_event',
+        'normal',
+        'default'
+    );
+
+    add_meta_box(
+        'eventosapp_self_checkin_design_evento',
+        'Autogestión Kiosko - Personalización',
+        'eventosapp_render_metabox_self_checkin_design',
         'eventosapp_event',
         'normal',
         'default'
@@ -2060,6 +2069,327 @@ function eventosapp_render_metabox_networking_global_auth($post) {
     <?php
 }
 
+/**
+ * Metabox: Personalización del módulo de Autogestión Kiosko.
+ * Permite definir tema, fondo, logo principal y logos adicionales por evento.
+ */
+function eventosapp_render_metabox_self_checkin_design($post) {
+    $config = function_exists('eventosapp_self_checkin_get_design_config')
+        ? eventosapp_self_checkin_get_design_config($post->ID)
+        : [];
+
+    $theme                  = $config['theme'] ?? 'light';
+    $background_type        = $config['background_type'] ?? 'default';
+    $background_color       = $config['background_color'] ?? '';
+    $background_image_url   = $config['background_image_url'] ?? '';
+    $background_image_id    = absint(get_post_meta($post->ID, '_eventosapp_self_checkin_background_image_id', true));
+    $background_size        = $config['background_size'] ?? 'cover';
+    $background_position    = $config['background_position'] ?? 'center center';
+    $background_repeat      = $config['background_repeat'] ?? 'no-repeat';
+    $background_attachment  = $config['background_attachment'] ?? 'scroll';
+    $background_class       = $config['background_class'] ?? 'eventosapp-self-checkin-bg';
+    $main_logo_url          = $config['main_logo_url'] ?? '';
+    $main_logo_id           = absint($config['main_logo_id'] ?? get_post_meta($post->ID, '_eventosapp_self_checkin_main_logo_id', true));
+    $main_logo_width        = absint(get_post_meta($post->ID, '_eventosapp_self_checkin_main_logo_width', true)) ?: 220;
+    $main_logo_max_height   = absint(get_post_meta($post->ID, '_eventosapp_self_checkin_main_logo_max_height', true)) ?: 120;
+    $extra_logos            = $config['extra_logos'] ?? [];
+    $extra_box_width        = absint(get_post_meta($post->ID, '_eventosapp_self_checkin_extra_logos_box_width', true)) ?: 760;
+    $extra_box_height       = absint(get_post_meta($post->ID, '_eventosapp_self_checkin_extra_logos_box_height', true)) ?: 120;
+    $extra_gap              = absint(get_post_meta($post->ID, '_eventosapp_self_checkin_extra_logos_gap', true)) ?: 18;
+    $extra_logo_max_height  = absint(get_post_meta($post->ID, '_eventosapp_self_checkin_extra_logo_max_height', true)) ?: 72;
+
+    $positions = [
+        'left top'      => 'Arriba izquierda',
+        'center top'    => 'Arriba centro',
+        'right top'     => 'Arriba derecha',
+        'left center'   => 'Centro izquierda',
+        'center center' => 'Centro centro',
+        'right center'  => 'Centro derecha',
+        'left bottom'   => 'Abajo izquierda',
+        'center bottom' => 'Abajo centro',
+        'right bottom'  => 'Abajo derecha',
+    ];
+
+    wp_nonce_field('eventosapp_self_checkin_design_guardar', 'eventosapp_self_checkin_design_nonce');
+    ?>
+    <style>
+        .evapp-kiosk-design-box{border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;padding:14px;margin:10px 0;color:#111827}
+        .evapp-kiosk-design-title{margin:0 0 8px;font-weight:800;color:#1e3a8a;font-size:14px;text-transform:uppercase;letter-spacing:.03em}
+        .evapp-kiosk-design-help{margin:0 0 12px;color:#1f4f82;font-size:12px;line-height:1.45}
+        .evapp-kiosk-design-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:10px}
+        .evapp-kiosk-field{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px}
+        .evapp-kiosk-field label{display:block;font-weight:700;margin:0 0 6px;color:#111827}
+        .evapp-kiosk-field small{display:block;color:#6b7280;line-height:1.35;margin-top:5px}
+        .evapp-kiosk-field input[type="text"],.evapp-kiosk-field input[type="number"],.evapp-kiosk-field select{width:100%;max-width:100%}
+        .evapp-kiosk-upload-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+        .evapp-kiosk-preview{display:flex;align-items:center;justify-content:center;width:150px;min-height:74px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;margin-top:8px;overflow:hidden;padding:8px;color:#64748b;font-size:12px;text-align:center}
+        .evapp-kiosk-preview img{display:block;max-width:100%;max-height:90px;width:auto;height:auto;object-fit:contain}
+        .evapp-kiosk-logos-list{display:grid;gap:10px;margin-top:10px}
+        .evapp-kiosk-logo-item{display:grid;grid-template-columns:150px minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #e5e7eb;background:#fff;border-radius:10px;padding:10px}
+        .evapp-kiosk-logo-fields{display:grid;gap:8px}
+        .evapp-kiosk-class-pill{display:inline-block;background:#0f172a;color:#fff;border-radius:999px;padding:4px 8px;font-family:monospace;font-size:12px}
+        @media(max-width:782px){.evapp-kiosk-logo-item{grid-template-columns:1fr}.evapp-kiosk-preview{width:100%}}
+    </style>
+
+    <div class="evapp-kiosk-design-box">
+        <p class="evapp-kiosk-design-title">Tema visual del panel</p>
+        <p class="evapp-kiosk-design-help">Esta configuración aplica solo para este evento. El widget de búsqueda e impresión toma estos colores automáticamente, salvo que un control de estilo de Elementor lo sobrescriba de forma específica.</p>
+        <div class="evapp-kiosk-design-grid">
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_theme">Modo de colores</label>
+                <select id="eventosapp_self_checkin_theme" name="eventosapp_self_checkin_theme">
+                    <option value="light" <?php selected($theme, 'light'); ?>>Modo claro - Fondo blanco</option>
+                    <option value="dark" <?php selected($theme, 'dark'); ?>>Modo oscuro - Fondo oscuro</option>
+                </select>
+                <small>El modo claro usa paneles blancos y textos oscuros. El modo oscuro usa paneles oscuros, textos claros y botones optimizados para fondos oscuros.</small>
+            </div>
+        </div>
+    </div>
+
+    <div class="evapp-kiosk-design-box">
+        <p class="evapp-kiosk-design-title">Control del fondo</p>
+        <p class="evapp-kiosk-design-help">Agrega la clase <span class="evapp-kiosk-class-pill"><?php echo esc_html($background_class); ?></span> al contenedor o sección de Elementor que debe tomar este fondo.</p>
+        <div class="evapp-kiosk-design-grid">
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_background_class">Clase del contenedor en Elementor</label>
+                <input type="text" id="eventosapp_self_checkin_background_class" name="eventosapp_self_checkin_background_class" value="<?php echo esc_attr($background_class); ?>" placeholder="eventosapp-self-checkin-bg">
+                <small>Escribe la clase sin punto. En Elementor debes poner la misma clase en Avanzado &gt; Clases CSS.</small>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_background_type">Tipo de fondo</label>
+                <select id="eventosapp_self_checkin_background_type" name="eventosapp_self_checkin_background_type">
+                    <option value="default" <?php selected($background_type, 'default'); ?>>Automático según modo</option>
+                    <option value="color" <?php selected($background_type, 'color'); ?>>Color</option>
+                    <option value="image" <?php selected($background_type, 'image'); ?>>Imagen</option>
+                </select>
+                <small>Si escoges color y lo dejas vacío, se usará el color por defecto del modo seleccionado.</small>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_background_color">Color de fondo</label>
+                <input type="text" class="evapp-kiosk-color" id="eventosapp_self_checkin_background_color" name="eventosapp_self_checkin_background_color" value="<?php echo esc_attr($background_color); ?>" placeholder="#ffffff">
+                <small>Opcional. Déjalo vacío para usar el color automático del modo claro u oscuro.</small>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label>Imagen de fondo</label>
+                <input type="hidden" id="eventosapp_self_checkin_background_image_id" name="eventosapp_self_checkin_background_image_id" value="<?php echo esc_attr($background_image_id); ?>">
+                <input type="text" id="eventosapp_self_checkin_background_image_url" name="eventosapp_self_checkin_background_image_url" value="<?php echo esc_attr($background_image_url); ?>" placeholder="URL de imagen">
+                <div class="evapp-kiosk-upload-row" style="margin-top:8px;">
+                    <button type="button" class="button evapp-kiosk-upload" data-target-url="#eventosapp_self_checkin_background_image_url" data-target-id="#eventosapp_self_checkin_background_image_id" data-preview="#eventosapp_self_checkin_background_image_preview">Subir / elegir imagen</button>
+                    <button type="button" class="button evapp-kiosk-clear-media" data-target-url="#eventosapp_self_checkin_background_image_url" data-target-id="#eventosapp_self_checkin_background_image_id" data-preview="#eventosapp_self_checkin_background_image_preview">Quitar</button>
+                </div>
+                <div class="evapp-kiosk-preview" id="eventosapp_self_checkin_background_image_preview">
+                    <?php echo $background_image_url ? '<img src="'.esc_url($background_image_url).'" alt="Fondo kiosko">' : 'Sin imagen'; ?>
+                </div>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_background_size">Tamaño de imagen</label>
+                <select id="eventosapp_self_checkin_background_size" name="eventosapp_self_checkin_background_size">
+                    <option value="cover" <?php selected($background_size, 'cover'); ?>>Cover - cubrir todo</option>
+                    <option value="contain" <?php selected($background_size, 'contain'); ?>>Contain - mostrar completa</option>
+                    <option value="auto" <?php selected($background_size, 'auto'); ?>>Auto - tamaño original</option>
+                </select>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_background_position">Posición de imagen</label>
+                <select id="eventosapp_self_checkin_background_position" name="eventosapp_self_checkin_background_position">
+                    <?php foreach ($positions as $value => $label): ?>
+                        <option value="<?php echo esc_attr($value); ?>" <?php selected($background_position, $value); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_background_repeat">Repetición</label>
+                <select id="eventosapp_self_checkin_background_repeat" name="eventosapp_self_checkin_background_repeat">
+                    <option value="no-repeat" <?php selected($background_repeat, 'no-repeat'); ?>>No repetir</option>
+                    <option value="repeat" <?php selected($background_repeat, 'repeat'); ?>>Repetir</option>
+                    <option value="repeat-x" <?php selected($background_repeat, 'repeat-x'); ?>>Repetir horizontal</option>
+                    <option value="repeat-y" <?php selected($background_repeat, 'repeat-y'); ?>>Repetir vertical</option>
+                </select>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_background_attachment">Comportamiento</label>
+                <select id="eventosapp_self_checkin_background_attachment" name="eventosapp_self_checkin_background_attachment">
+                    <option value="scroll" <?php selected($background_attachment, 'scroll'); ?>>Normal / scroll</option>
+                    <option value="fixed" <?php selected($background_attachment, 'fixed'); ?>>Fijo</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="evapp-kiosk-design-box">
+        <p class="evapp-kiosk-design-title">Logo principal</p>
+        <p class="evapp-kiosk-design-help">Este logo se usará automáticamente en el widget de búsqueda e impresión cuando el widget de Elementor no tenga un logo propio configurado.</p>
+        <div class="evapp-kiosk-design-grid">
+            <div class="evapp-kiosk-field">
+                <label>Imagen del logo principal</label>
+                <input type="hidden" id="eventosapp_self_checkin_main_logo_id" name="eventosapp_self_checkin_main_logo_id" value="<?php echo esc_attr($main_logo_id); ?>">
+                <input type="text" id="eventosapp_self_checkin_main_logo_url" name="eventosapp_self_checkin_main_logo_url" value="<?php echo esc_attr($main_logo_url); ?>" placeholder="URL del logo principal">
+                <div class="evapp-kiosk-upload-row" style="margin-top:8px;">
+                    <button type="button" class="button evapp-kiosk-upload" data-target-url="#eventosapp_self_checkin_main_logo_url" data-target-id="#eventosapp_self_checkin_main_logo_id" data-preview="#eventosapp_self_checkin_main_logo_preview">Subir / elegir logo</button>
+                    <button type="button" class="button evapp-kiosk-clear-media" data-target-url="#eventosapp_self_checkin_main_logo_url" data-target-id="#eventosapp_self_checkin_main_logo_id" data-preview="#eventosapp_self_checkin_main_logo_preview">Quitar</button>
+                </div>
+                <div class="evapp-kiosk-preview" id="eventosapp_self_checkin_main_logo_preview">
+                    <?php echo $main_logo_url ? '<img src="'.esc_url($main_logo_url).'" alt="Logo principal">' : 'Sin logo'; ?>
+                </div>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_main_logo_width">Ancho máximo del logo principal</label>
+                <input type="number" min="40" max="1000" step="1" id="eventosapp_self_checkin_main_logo_width" name="eventosapp_self_checkin_main_logo_width" value="<?php echo esc_attr($main_logo_width); ?>">
+                <small>En píxeles. La altura queda automática para conservar proporciones.</small>
+            </div>
+
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_main_logo_max_height">Alto máximo del logo principal</label>
+                <input type="number" min="24" max="600" step="1" id="eventosapp_self_checkin_main_logo_max_height" name="eventosapp_self_checkin_main_logo_max_height" value="<?php echo esc_attr($main_logo_max_height); ?>">
+                <small>Evita que un logo muy vertical rompa el layout.</small>
+            </div>
+        </div>
+    </div>
+
+    <div class="evapp-kiosk-design-box">
+        <p class="evapp-kiosk-design-title">Logos adicionales</p>
+        <p class="evapp-kiosk-design-help">Agrega logos de patrocinadores, aliados o marcas. El nuevo widget de Elementor <strong>EventosApp Autogestión - Logos adicionales</strong> tomará estos datos automáticamente.</p>
+        <div class="evapp-kiosk-design-grid">
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_extra_logos_box_width">Ancho del contenedor de logos</label>
+                <input type="number" min="120" max="2400" step="1" id="eventosapp_self_checkin_extra_logos_box_width" name="eventosapp_self_checkin_extra_logos_box_width" value="<?php echo esc_attr($extra_box_width); ?>">
+                <small>En píxeles. El contenedor siempre se ajusta al 100% disponible si la pantalla es menor.</small>
+            </div>
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_extra_logos_box_height">Alto mínimo del contenedor</label>
+                <input type="number" min="40" max="800" step="1" id="eventosapp_self_checkin_extra_logos_box_height" name="eventosapp_self_checkin_extra_logos_box_height" value="<?php echo esc_attr($extra_box_height); ?>">
+            </div>
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_extra_logos_gap">Separación entre logos</label>
+                <input type="number" min="0" max="200" step="1" id="eventosapp_self_checkin_extra_logos_gap" name="eventosapp_self_checkin_extra_logos_gap" value="<?php echo esc_attr($extra_gap); ?>">
+            </div>
+            <div class="evapp-kiosk-field">
+                <label for="eventosapp_self_checkin_extra_logo_max_height">Alto máximo de cada logo</label>
+                <input type="number" min="20" max="500" step="1" id="eventosapp_self_checkin_extra_logo_max_height" name="eventosapp_self_checkin_extra_logo_max_height" value="<?php echo esc_attr($extra_logo_max_height); ?>">
+                <small>Cada imagen conserva sus proporciones y se acomoda automáticamente.</small>
+            </div>
+        </div>
+
+        <div id="evapp-kiosk-extra-logos-list" class="evapp-kiosk-logos-list">
+            <?php foreach ($extra_logos as $index => $logo):
+                $logo_id  = absint($logo['id'] ?? 0);
+                $logo_url = esc_url($logo['url'] ?? '');
+                $logo_alt = sanitize_text_field($logo['alt'] ?? '');
+                if (!$logo_url) { continue; }
+                ?>
+                <div class="evapp-kiosk-logo-item" data-index="<?php echo esc_attr($index); ?>">
+                    <div class="evapp-kiosk-preview evapp-kiosk-extra-preview"><img src="<?php echo esc_url($logo_url); ?>" alt="<?php echo esc_attr($logo_alt); ?>"></div>
+                    <div class="evapp-kiosk-logo-fields">
+                        <input type="hidden" class="evapp-kiosk-extra-id" name="eventosapp_self_checkin_extra_logos[<?php echo esc_attr($index); ?>][id]" value="<?php echo esc_attr($logo_id); ?>">
+                        <input type="text" class="evapp-kiosk-extra-url" name="eventosapp_self_checkin_extra_logos[<?php echo esc_attr($index); ?>][url]" value="<?php echo esc_attr($logo_url); ?>" placeholder="URL del logo">
+                        <input type="text" class="evapp-kiosk-extra-alt" name="eventosapp_self_checkin_extra_logos[<?php echo esc_attr($index); ?>][alt]" value="<?php echo esc_attr($logo_alt); ?>" placeholder="Texto alternativo opcional">
+                        <div class="evapp-kiosk-upload-row">
+                            <button type="button" class="button evapp-kiosk-upload-extra">Subir / elegir logo</button>
+                            <button type="button" class="button evapp-kiosk-remove-extra">Eliminar</button>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+        <p><button type="button" class="button button-primary" id="evapp-kiosk-add-extra-logo">Agregar logo adicional</button></p>
+    </div>
+
+    <script type="text/html" id="evapp-kiosk-extra-logo-template">
+        <div class="evapp-kiosk-logo-item" data-index="__INDEX__">
+            <div class="evapp-kiosk-preview evapp-kiosk-extra-preview">Sin logo</div>
+            <div class="evapp-kiosk-logo-fields">
+                <input type="hidden" class="evapp-kiosk-extra-id" name="eventosapp_self_checkin_extra_logos[__INDEX__][id]" value="">
+                <input type="text" class="evapp-kiosk-extra-url" name="eventosapp_self_checkin_extra_logos[__INDEX__][url]" value="" placeholder="URL del logo">
+                <input type="text" class="evapp-kiosk-extra-alt" name="eventosapp_self_checkin_extra_logos[__INDEX__][alt]" value="" placeholder="Texto alternativo opcional">
+                <div class="evapp-kiosk-upload-row">
+                    <button type="button" class="button evapp-kiosk-upload-extra">Subir / elegir logo</button>
+                    <button type="button" class="button evapp-kiosk-remove-extra">Eliminar</button>
+                </div>
+            </div>
+        </div>
+    </script>
+
+    <script>
+    (function($){
+        function evappOpenMediaFrame(args){
+            var frame = wp.media({
+                title: 'Seleccionar imagen',
+                button: { text: 'Usar esta imagen' },
+                multiple: false,
+                library: { type: 'image' }
+            });
+            frame.on('select', function(){
+                var attachment = frame.state().get('selection').first().toJSON();
+                if (!attachment || !attachment.url) return;
+                if (args.$url && args.$url.length) args.$url.val(attachment.url).trigger('change');
+                if (args.$id && args.$id.length) args.$id.val(attachment.id || '');
+                if (args.$preview && args.$preview.length) args.$preview.html('<img src="'+ attachment.url +'" alt="">');
+            });
+            frame.open();
+        }
+
+        $('.evapp-kiosk-color').each(function(){
+            if ($(this).wpColorPicker) {
+                $(this).wpColorPicker();
+            }
+        });
+
+        $(document).on('click', '.evapp-kiosk-upload', function(e){
+            e.preventDefault();
+            var $btn = $(this);
+            evappOpenMediaFrame({
+                $url: $($btn.data('target-url')),
+                $id: $($btn.data('target-id')),
+                $preview: $($btn.data('preview'))
+            });
+        });
+
+        $(document).on('click', '.evapp-kiosk-clear-media', function(e){
+            e.preventDefault();
+            var $btn = $(this);
+            $($btn.data('target-url')).val('');
+            $($btn.data('target-id')).val('');
+            $($btn.data('preview')).html('Sin imagen');
+        });
+
+        var extraIndex = <?php echo (int) (count($extra_logos) + 1); ?>;
+        $('#evapp-kiosk-add-extra-logo').on('click', function(e){
+            e.preventDefault();
+            var tpl = $('#evapp-kiosk-extra-logo-template').html().replace(/__INDEX__/g, extraIndex++);
+            $('#evapp-kiosk-extra-logos-list').append(tpl);
+        });
+
+        $(document).on('click', '.evapp-kiosk-upload-extra', function(e){
+            e.preventDefault();
+            var $item = $(this).closest('.evapp-kiosk-logo-item');
+            evappOpenMediaFrame({
+                $url: $item.find('.evapp-kiosk-extra-url'),
+                $id: $item.find('.evapp-kiosk-extra-id'),
+                $preview: $item.find('.evapp-kiosk-extra-preview')
+            });
+        });
+
+        $(document).on('click', '.evapp-kiosk-remove-extra', function(e){
+            e.preventDefault();
+            $(this).closest('.evapp-kiosk-logo-item').remove();
+        });
+
+        $('#eventosapp_self_checkin_background_class').on('input', function(){
+            $('.evapp-kiosk-class-pill').text($(this).val() || 'eventosapp-self-checkin-bg');
+        });
+    })(jQuery);
+    </script>
+    <?php
+}
+
 
 
 /**
@@ -2225,6 +2555,99 @@ function eventosapp_save_networking_global_auth_metabox($post_id) {
     }
 
     update_post_meta($post_id, '_eventosapp_networking_global_auth_fields', $fields);
+}
+
+/**
+ * Guardar configuración visual del módulo de Autogestión Kiosko por evento.
+ */
+add_action('save_post_eventosapp_event', 'eventosapp_save_self_checkin_design_metabox', 30);
+function eventosapp_save_self_checkin_design_metabox($post_id) {
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    if (!current_user_can('edit_post', $post_id)) return;
+
+    if (!isset($_POST['eventosapp_self_checkin_design_nonce']) || !wp_verify_nonce($_POST['eventosapp_self_checkin_design_nonce'], 'eventosapp_self_checkin_design_guardar')) {
+        return;
+    }
+
+    $theme = isset($_POST['eventosapp_self_checkin_theme']) ? sanitize_key(wp_unslash($_POST['eventosapp_self_checkin_theme'])) : 'light';
+    if (!in_array($theme, ['light', 'dark'], true)) {
+        $theme = 'light';
+    }
+    update_post_meta($post_id, '_eventosapp_self_checkin_theme', $theme);
+
+    $background_type = isset($_POST['eventosapp_self_checkin_background_type']) ? sanitize_key(wp_unslash($_POST['eventosapp_self_checkin_background_type'])) : 'default';
+    if (!in_array($background_type, ['default', 'color', 'image'], true)) {
+        $background_type = 'default';
+    }
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_type', $background_type);
+
+    $background_color = isset($_POST['eventosapp_self_checkin_background_color']) ? sanitize_hex_color(wp_unslash($_POST['eventosapp_self_checkin_background_color'])) : '';
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_color', $background_color ?: '');
+
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_image_id', absint($_POST['eventosapp_self_checkin_background_image_id'] ?? 0));
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_image_url', esc_url_raw(wp_unslash($_POST['eventosapp_self_checkin_background_image_url'] ?? '')));
+
+    $background_size = isset($_POST['eventosapp_self_checkin_background_size']) ? sanitize_key(wp_unslash($_POST['eventosapp_self_checkin_background_size'])) : 'cover';
+    if (!in_array($background_size, ['cover', 'contain', 'auto'], true)) {
+        $background_size = 'cover';
+    }
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_size', $background_size);
+
+    $allowed_positions = [
+        'left top', 'center top', 'right top',
+        'left center', 'center center', 'right center',
+        'left bottom', 'center bottom', 'right bottom',
+    ];
+    $background_position = isset($_POST['eventosapp_self_checkin_background_position']) ? sanitize_text_field(wp_unslash($_POST['eventosapp_self_checkin_background_position'])) : 'center center';
+    if (!in_array($background_position, $allowed_positions, true)) {
+        $background_position = 'center center';
+    }
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_position', $background_position);
+
+    $background_repeat = isset($_POST['eventosapp_self_checkin_background_repeat']) ? sanitize_key(wp_unslash($_POST['eventosapp_self_checkin_background_repeat'])) : 'no-repeat';
+    if (!in_array($background_repeat, ['no-repeat', 'repeat', 'repeat-x', 'repeat-y'], true)) {
+        $background_repeat = 'no-repeat';
+    }
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_repeat', $background_repeat);
+
+    $background_attachment = isset($_POST['eventosapp_self_checkin_background_attachment']) ? sanitize_key(wp_unslash($_POST['eventosapp_self_checkin_background_attachment'])) : 'scroll';
+    if (!in_array($background_attachment, ['scroll', 'fixed'], true)) {
+        $background_attachment = 'scroll';
+    }
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_attachment', $background_attachment);
+
+    $background_class = isset($_POST['eventosapp_self_checkin_background_class']) ? wp_unslash($_POST['eventosapp_self_checkin_background_class']) : 'eventosapp-self-checkin-bg';
+    $background_class = function_exists('eventosapp_self_checkin_clean_background_class') ? eventosapp_self_checkin_clean_background_class($background_class) : sanitize_html_class(ltrim((string) $background_class, '.'));
+    update_post_meta($post_id, '_eventosapp_self_checkin_background_class', $background_class ?: 'eventosapp-self-checkin-bg');
+
+    update_post_meta($post_id, '_eventosapp_self_checkin_main_logo_id', absint($_POST['eventosapp_self_checkin_main_logo_id'] ?? 0));
+    update_post_meta($post_id, '_eventosapp_self_checkin_main_logo_url', esc_url_raw(wp_unslash($_POST['eventosapp_self_checkin_main_logo_url'] ?? '')));
+    update_post_meta($post_id, '_eventosapp_self_checkin_main_logo_width', min(1000, max(40, absint($_POST['eventosapp_self_checkin_main_logo_width'] ?? 220))));
+    update_post_meta($post_id, '_eventosapp_self_checkin_main_logo_max_height', min(600, max(24, absint($_POST['eventosapp_self_checkin_main_logo_max_height'] ?? 120))));
+
+    update_post_meta($post_id, '_eventosapp_self_checkin_extra_logos_box_width', min(2400, max(120, absint($_POST['eventosapp_self_checkin_extra_logos_box_width'] ?? 760))));
+    update_post_meta($post_id, '_eventosapp_self_checkin_extra_logos_box_height', min(800, max(40, absint($_POST['eventosapp_self_checkin_extra_logos_box_height'] ?? 120))));
+    update_post_meta($post_id, '_eventosapp_self_checkin_extra_logos_gap', min(200, max(0, absint($_POST['eventosapp_self_checkin_extra_logos_gap'] ?? 18))));
+    update_post_meta($post_id, '_eventosapp_self_checkin_extra_logo_max_height', min(500, max(20, absint($_POST['eventosapp_self_checkin_extra_logo_max_height'] ?? 72))));
+
+    $extra_logos = [];
+    if (!empty($_POST['eventosapp_self_checkin_extra_logos']) && is_array($_POST['eventosapp_self_checkin_extra_logos'])) {
+        foreach ($_POST['eventosapp_self_checkin_extra_logos'] as $logo) {
+            if (!is_array($logo)) {
+                continue;
+            }
+            $url = esc_url_raw(wp_unslash($logo['url'] ?? ''));
+            if (!$url) {
+                continue;
+            }
+            $extra_logos[] = [
+                'id'  => absint($logo['id'] ?? 0),
+                'url' => $url,
+                'alt' => sanitize_text_field(wp_unslash($logo['alt'] ?? '')),
+            ];
+        }
+    }
+    update_post_meta($post_id, '_eventosapp_self_checkin_extra_logos', $extra_logos);
 }
 
 // ===== Asegurar roles base de EventosApp =====
