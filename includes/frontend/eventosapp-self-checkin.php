@@ -897,6 +897,365 @@ if ( ! function_exists('eventosapp_self_checkin_messages') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_self_checkin_design_color_presets') ) {
+    /**
+     * Paletas preestablecidas para el módulo de autogestión.
+     * Cada evento solo escoge modo claro u oscuro; los valores se aplican con variables CSS
+     * para no romper los controles visuales existentes de Elementor.
+     */
+    function eventosapp_self_checkin_design_color_presets() {
+        return [
+            'light' => [
+                'page_bg'            => '#ffffff',
+                'wrap_bg'            => '#f8fafc',
+                'wrap_border'        => '#e2e8f0',
+                'text'               => '#0f172a',
+                'muted'              => '#475569',
+                'kicker'             => '#2563eb',
+                'event_bg'           => '#e0f2fe',
+                'event_text'         => '#075985',
+                'panel_bg'           => '#ffffff',
+                'panel_border'       => '#e2e8f0',
+                'input_bg'           => '#ffffff',
+                'input_border'       => '#cbd5e1',
+                'input_focus'        => '#2563eb',
+                'input_placeholder'  => '#64748b',
+                'primary_bg'         => '#2563eb',
+                'primary_hover'      => '#1d4ed8',
+                'primary_text'       => '#ffffff',
+                'success_bg'         => '#16a34a',
+                'success_hover'      => '#15803d',
+                'success_text'       => '#ffffff',
+                'light_btn_bg'       => '#e2e8f0',
+                'light_btn_hover'    => '#cbd5e1',
+                'light_btn_text'     => '#0f172a',
+                'status_bg'          => '#f1f5f9',
+                'status_text'        => '#334155',
+                'keyboard_bg'        => '#f1f5f9',
+                'keyboard_border'    => '#dbe4ee',
+                'keyboard_key_bg'    => '#ffffff',
+                'keyboard_key_text'  => '#0f172a',
+                'confirm_bg'         => '#0f172a',
+                'confirm_text'       => '#ffffff',
+                'data_bg'            => 'rgba(255,255,255,.09)',
+                'data_border'        => 'rgba(255,255,255,.16)',
+                'data_label'         => '#bfdbfe',
+            ],
+            'dark' => [
+                'page_bg'            => '#020617',
+                'wrap_bg'            => '#0f172a',
+                'wrap_border'        => '#334155',
+                'text'               => '#f8fafc',
+                'muted'              => '#cbd5e1',
+                'kicker'             => '#93c5fd',
+                'event_bg'           => '#1e3a8a',
+                'event_text'         => '#dbeafe',
+                'panel_bg'           => '#111827',
+                'panel_border'       => '#334155',
+                'input_bg'           => '#020617',
+                'input_border'       => '#475569',
+                'input_focus'        => '#60a5fa',
+                'input_placeholder'  => '#94a3b8',
+                'primary_bg'         => '#60a5fa',
+                'primary_hover'      => '#3b82f6',
+                'primary_text'       => '#0f172a',
+                'success_bg'         => '#22c55e',
+                'success_hover'      => '#16a34a',
+                'success_text'       => '#052e16',
+                'light_btn_bg'       => '#334155',
+                'light_btn_hover'    => '#475569',
+                'light_btn_text'     => '#f8fafc',
+                'status_bg'          => '#1f2937',
+                'status_text'        => '#e5e7eb',
+                'keyboard_bg'        => '#1e293b',
+                'keyboard_border'    => '#334155',
+                'keyboard_key_bg'    => '#0f172a',
+                'keyboard_key_text'  => '#f8fafc',
+                'confirm_bg'         => '#020617',
+                'confirm_text'       => '#f8fafc',
+                'data_bg'            => 'rgba(148,163,184,.12)',
+                'data_border'        => 'rgba(148,163,184,.28)',
+                'data_label'         => '#93c5fd',
+            ],
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_css_px_value') ) {
+    function eventosapp_self_checkin_css_px_value( $value, $default = '', $min = 0, $max = 2000 ) {
+        $value = is_numeric( $value ) ? (int) $value : absint( preg_replace('/[^0-9]/', '', (string) $value ) );
+        if ( $value <= 0 ) {
+            return $default;
+        }
+        if ( $min > 0 && $value < $min ) {
+            $value = $min;
+        }
+        if ( $max > 0 && $value > $max ) {
+            $value = $max;
+        }
+        return $value . 'px';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_clean_background_class') ) {
+    function eventosapp_self_checkin_clean_background_class( $class ) {
+        $class = trim( (string) $class );
+        $class = ltrim( $class, '.' );
+        $parts = preg_split('/\s+/', $class);
+        $class = ! empty( $parts[0] ) ? sanitize_html_class( $parts[0] ) : '';
+        return $class ?: 'eventosapp-self-checkin-bg';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_get_design_config') ) {
+    function eventosapp_self_checkin_get_design_config( $event_id ) {
+        $event_id = absint( $event_id );
+        $presets  = eventosapp_self_checkin_design_color_presets();
+
+        $theme = $event_id ? sanitize_key( get_post_meta( $event_id, '_eventosapp_self_checkin_theme', true ) ) : 'light';
+        if ( ! isset( $presets[ $theme ] ) ) {
+            $theme = 'light';
+        }
+
+        $background_type = $event_id ? sanitize_key( get_post_meta( $event_id, '_eventosapp_self_checkin_background_type', true ) ) : 'default';
+        if ( ! in_array( $background_type, [ 'default', 'color', 'image' ], true ) ) {
+            $background_type = 'default';
+        }
+
+        $background_color = $event_id ? sanitize_hex_color( get_post_meta( $event_id, '_eventosapp_self_checkin_background_color', true ) ) : '';
+        $background_image = $event_id ? esc_url_raw( get_post_meta( $event_id, '_eventosapp_self_checkin_background_image_url', true ) ) : '';
+
+        $background_size = $event_id ? sanitize_key( get_post_meta( $event_id, '_eventosapp_self_checkin_background_size', true ) ) : 'cover';
+        if ( ! in_array( $background_size, [ 'cover', 'contain', 'auto' ], true ) ) {
+            $background_size = 'cover';
+        }
+
+        $allowed_positions = [
+            'left top', 'center top', 'right top',
+            'left center', 'center center', 'right center',
+            'left bottom', 'center bottom', 'right bottom',
+        ];
+        $background_position = $event_id ? sanitize_text_field( get_post_meta( $event_id, '_eventosapp_self_checkin_background_position', true ) ) : 'center center';
+        if ( ! in_array( $background_position, $allowed_positions, true ) ) {
+            $background_position = 'center center';
+        }
+
+        $background_repeat = $event_id ? sanitize_key( get_post_meta( $event_id, '_eventosapp_self_checkin_background_repeat', true ) ) : 'no-repeat';
+        if ( ! in_array( $background_repeat, [ 'no-repeat', 'repeat', 'repeat-x', 'repeat-y' ], true ) ) {
+            $background_repeat = 'no-repeat';
+        }
+
+        $background_attachment = $event_id ? sanitize_key( get_post_meta( $event_id, '_eventosapp_self_checkin_background_attachment', true ) ) : 'scroll';
+        if ( ! in_array( $background_attachment, [ 'scroll', 'fixed' ], true ) ) {
+            $background_attachment = 'scroll';
+        }
+
+        $extra_logos = $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_extra_logos', true ) : [];
+        if ( ! is_array( $extra_logos ) ) {
+            $extra_logos = [];
+        }
+
+        $clean_extra_logos = [];
+        foreach ( $extra_logos as $logo ) {
+            if ( ! is_array( $logo ) ) {
+                continue;
+            }
+            $url = ! empty( $logo['url'] ) ? esc_url_raw( $logo['url'] ) : '';
+            if ( ! $url ) {
+                continue;
+            }
+            $clean_extra_logos[] = [
+                'id'  => ! empty( $logo['id'] ) ? absint( $logo['id'] ) : 0,
+                'url' => $url,
+                'alt' => ! empty( $logo['alt'] ) ? sanitize_text_field( $logo['alt'] ) : '',
+            ];
+        }
+
+        return [
+            'event_id'               => $event_id,
+            'theme'                  => $theme,
+            'colors'                 => $presets[ $theme ],
+            'background_type'        => $background_type,
+            'background_color'       => $background_color,
+            'background_image_url'   => $background_image,
+            'background_size'        => $background_size,
+            'background_position'    => $background_position,
+            'background_repeat'      => $background_repeat,
+            'background_attachment'  => $background_attachment,
+            'background_class'       => eventosapp_self_checkin_clean_background_class( $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_background_class', true ) : '' ),
+            'main_logo_id'           => $event_id ? absint( get_post_meta( $event_id, '_eventosapp_self_checkin_main_logo_id', true ) ) : 0,
+            'main_logo_url'          => $event_id ? esc_url_raw( get_post_meta( $event_id, '_eventosapp_self_checkin_main_logo_url', true ) ) : '',
+            'main_logo_width'        => eventosapp_self_checkin_css_px_value( $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_main_logo_width', true ) : '', '220px', 40, 1000 ),
+            'main_logo_max_height'   => eventosapp_self_checkin_css_px_value( $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_main_logo_max_height', true ) : '', '120px', 24, 600 ),
+            'extra_logos'            => $clean_extra_logos,
+            'extra_logos_box_width'  => eventosapp_self_checkin_css_px_value( $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_extra_logos_box_width', true ) : '', '760px', 120, 2400 ),
+            'extra_logos_box_height' => eventosapp_self_checkin_css_px_value( $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_extra_logos_box_height', true ) : '', '120px', 40, 800 ),
+            'extra_logos_gap'        => eventosapp_self_checkin_css_px_value( $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_extra_logos_gap', true ) : '', '18px', 0, 200 ),
+            'extra_logo_max_height'  => eventosapp_self_checkin_css_px_value( $event_id ? get_post_meta( $event_id, '_eventosapp_self_checkin_extra_logo_max_height', true ) : '', '72px', 20, 500 ),
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_design_style_attr') ) {
+    function eventosapp_self_checkin_design_style_attr( $config ) {
+        if ( ! is_array( $config ) ) {
+            return '';
+        }
+
+        $colors = isset( $config['colors'] ) && is_array( $config['colors'] ) ? $config['colors'] : [];
+        $map = [
+            'wrap_bg'           => '--evsc-wrap-bg',
+            'wrap_border'       => '--evsc-wrap-border',
+            'text'              => '--evsc-text',
+            'muted'             => '--evsc-muted',
+            'kicker'            => '--evsc-kicker',
+            'event_bg'          => '--evsc-event-bg',
+            'event_text'        => '--evsc-event-text',
+            'panel_bg'          => '--evsc-panel-bg',
+            'panel_border'      => '--evsc-panel-border',
+            'input_bg'          => '--evsc-input-bg',
+            'input_border'      => '--evsc-input-border',
+            'input_focus'       => '--evsc-input-focus',
+            'input_placeholder' => '--evsc-input-placeholder',
+            'primary_bg'        => '--evsc-primary-bg',
+            'primary_hover'     => '--evsc-primary-hover',
+            'primary_text'      => '--evsc-primary-text',
+            'success_bg'        => '--evsc-success-bg',
+            'success_hover'     => '--evsc-success-hover',
+            'success_text'      => '--evsc-success-text',
+            'light_btn_bg'      => '--evsc-light-btn-bg',
+            'light_btn_hover'   => '--evsc-light-btn-hover',
+            'light_btn_text'    => '--evsc-light-btn-text',
+            'status_bg'         => '--evsc-status-bg',
+            'status_text'       => '--evsc-status-text',
+            'keyboard_bg'       => '--evsc-keyboard-bg',
+            'keyboard_border'   => '--evsc-keyboard-border',
+            'keyboard_key_bg'   => '--evsc-key-bg',
+            'keyboard_key_text' => '--evsc-key-text',
+            'confirm_bg'        => '--evsc-confirm-bg',
+            'confirm_text'      => '--evsc-confirm-text',
+            'data_bg'           => '--evsc-data-bg',
+            'data_border'       => '--evsc-data-border',
+            'data_label'        => '--evsc-data-label',
+        ];
+
+        $style = [];
+        foreach ( $map as $key => $var ) {
+            if ( isset( $colors[ $key ] ) && $colors[ $key ] !== '' ) {
+                $style[] = $var . ':' . $colors[ $key ];
+            }
+        }
+
+        if ( ! empty( $config['main_logo_width'] ) ) {
+            $style[] = '--evsc-main-logo-width:' . $config['main_logo_width'];
+        }
+        if ( ! empty( $config['main_logo_max_height'] ) ) {
+            $style[] = '--evsc-main-logo-max-height:' . $config['main_logo_max_height'];
+        }
+
+        return implode( ';', $style );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_background_style_fallback') ) {
+    function eventosapp_self_checkin_background_style_fallback( $event_id ) {
+        static $printed = [];
+
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return '';
+        }
+
+        if ( isset( $printed[ $event_id ] ) ) {
+            return '';
+        }
+        $printed[ $event_id ] = true;
+
+        $config = eventosapp_self_checkin_get_design_config( $event_id );
+        $class  = eventosapp_self_checkin_clean_background_class( $config['background_class'] ?? '' );
+        $colors = $config['colors'] ?? [];
+
+        $bg_color = ! empty( $config['background_color'] ) ? $config['background_color'] : ( $colors['page_bg'] ?? '#ffffff' );
+        $rules = [
+            'background-color:' . $bg_color,
+            'background-repeat:' . ( $config['background_repeat'] ?? 'no-repeat' ),
+            'background-position:' . ( $config['background_position'] ?? 'center center' ),
+            'background-size:' . ( $config['background_size'] ?? 'cover' ),
+            'background-attachment:' . ( $config['background_attachment'] ?? 'scroll' ),
+        ];
+
+        if ( ( $config['background_type'] ?? 'default' ) === 'image' && ! empty( $config['background_image_url'] ) ) {
+            $rules[] = 'background-image:url("' . esc_url( $config['background_image_url'] ) . '")';
+        } else {
+            $rules[] = 'background-image:none';
+        }
+
+        $css  = '.' . $class . '{' . implode( ';', $rules ) . ';}';
+        $css .= 'body.evsc-kiosk-lock{background-color:' . $bg_color . ';}';
+
+        return '<style id="eventosapp-self-checkin-background-' . esc_attr( $event_id ) . '">' . $css . '</style>';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_extra_logos_style_attr') ) {
+    function eventosapp_self_checkin_extra_logos_style_attr( $config ) {
+        if ( ! is_array( $config ) ) {
+            return '';
+        }
+        $style = [];
+        foreach ( [
+            'extra_logos_box_width'  => '--evsc-extra-logos-width',
+            'extra_logos_box_height' => '--evsc-extra-logos-min-height',
+            'extra_logos_gap'        => '--evsc-extra-logos-gap',
+            'extra_logo_max_height'  => '--evsc-extra-logo-max-height',
+        ] as $key => $var ) {
+            if ( ! empty( $config[ $key ] ) ) {
+                $style[] = $var . ':' . $config[ $key ];
+            }
+        }
+        return implode( ';', $style );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_render_additional_logos') ) {
+    function eventosapp_self_checkin_render_additional_logos( $event_id = 0, $args = [] ) {
+        $event_id = eventosapp_self_checkin_get_active_event_id( $event_id );
+        if ( ! $event_id ) {
+            return current_user_can('edit_posts') ? eventosapp_self_checkin_inline_style_fallback() . '<div class="evsc-alert evsc-alert-warn">Debes escoger un evento para mostrar los logos adicionales de autogestión.</div>' : '';
+        }
+
+        $config = eventosapp_self_checkin_get_design_config( $event_id );
+        $logos  = $config['extra_logos'] ?? [];
+
+        if ( empty( $logos ) ) {
+            return current_user_can('edit_post', $event_id) ? eventosapp_self_checkin_inline_style_fallback() . '<div class="evsc-alert evsc-alert-warn">Este evento todavía no tiene logos adicionales configurados en el metabox de Autogestión Kiosko.</div>' : '';
+        }
+
+        eventosapp_self_checkin_enqueue_assets();
+
+        $defaults = [
+            'extra_class' => '',
+        ];
+        $args = wp_parse_args( (array) $args, $defaults );
+        $classes = trim( 'evsc-extra-logos ' . sanitize_html_class( $args['extra_class'] ) );
+        $style   = eventosapp_self_checkin_extra_logos_style_attr( $config );
+
+        ob_start();
+        echo eventosapp_self_checkin_inline_style_fallback();
+        echo eventosapp_self_checkin_background_style_fallback( $event_id );
+        ?>
+        <div class="<?php echo esc_attr( $classes ); ?>" style="<?php echo esc_attr( $style ); ?>" data-event-id="<?php echo esc_attr( $event_id ); ?>">
+            <?php foreach ( $logos as $logo ) : ?>
+                <span class="evsc-extra-logo-item">
+                    <img class="evsc-extra-logo" src="<?php echo esc_url( $logo['url'] ); ?>" alt="<?php echo esc_attr( $logo['alt'] ?: get_the_title( $event_id ) ); ?>" loading="lazy">
+                </span>
+            <?php endforeach; ?>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+}
+
 
 if ( ! function_exists('eventosapp_self_checkin_default_css') ) {
     /**
@@ -985,7 +1344,18 @@ body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
 .evsc-keyboard-mode{border:0;border-radius:999px;background:#e2e8f0;color:#0f172a;padding:9px 14px;font-size:14px;font-weight:900;cursor:pointer;touch-action:manipulation}.evsc-keyboard-mode.is-active{background:#2563eb;color:#fff}
 .evsc-keyboard-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(7,minmax(0,1fr));display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-numbers{display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-letters{display:grid}
 .evsc-key{display:inline-flex;align-items:center;justify-content:center;min-height:58px;border:0;border-radius:16px;background:#fff;color:#0f172a;font-size:22px;font-weight:900;line-height:1;box-shadow:0 3px 10px rgba(15,23,42,.08);cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none}.evsc-key:hover{filter:brightness(.97)}.evsc-key:active{transform:translateY(1px)}.evsc-key-action{background:#dbeafe;color:#1d4ed8;font-size:16px}.evsc-key-wide{grid-column:span 2}
-@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-logo{max-width:180px;max-height:90px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}.evsc-fullscreen-trigger-wrap{max-width:100%;align-items:stretch}.evsc-fullscreen-trigger{width:100%;min-height:64px}.evsc-keyboard{padding:12px;border-radius:18px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(5,minmax(0,1fr))}.evsc-key{min-height:54px;font-size:20px}.evsc-key-action{font-size:15px}}
+@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}.evsc-fullscreen-trigger-wrap{max-width:100%;align-items:stretch}.evsc-fullscreen-trigger{width:100%;min-height:64px}.evsc-keyboard{padding:12px;border-radius:18px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(5,minmax(0,1fr))}.evsc-key{min-height:54px;font-size:20px}.evsc-key-action{font-size:15px}}
+.evsc-wrap{background:var(--evsc-wrap-bg,#f8fafc)!important;border-color:var(--evsc-wrap-border,#e2e8f0)!important;color:var(--evsc-text,#0f172a)!important}
+.evsc-logo{max-width:var(--evsc-main-logo-width,220px)!important;max-height:var(--evsc-main-logo-max-height,120px)!important;width:auto!important;height:auto!important;object-fit:contain!important}
+.evsc-kicker{color:var(--evsc-kicker,#2563eb)!important}.evsc-title{color:var(--evsc-text,#0f172a)!important}.evsc-subtitle{color:var(--evsc-muted,#475569)!important}
+.evsc-event{background:var(--evsc-event-bg,#e0f2fe)!important;color:var(--evsc-event-text,#075985)!important}.evsc-panel{background:var(--evsc-panel-bg,#fff)!important;border-color:var(--evsc-panel-border,#e2e8f0)!important}
+.evsc-field label,.evsc-keyboard-title{color:var(--evsc-muted,#334155)!important}.evsc-input{background:var(--evsc-input-bg,#fff)!important;border-color:var(--evsc-input-border,#cbd5e1)!important;color:var(--evsc-text,#0f172a)!important}.evsc-input:focus{border-color:var(--evsc-input-focus,#2563eb)!important;box-shadow:0 0 0 4px color-mix(in srgb,var(--evsc-input-focus,#2563eb) 20%,transparent)!important}.evsc-input::placeholder{color:var(--evsc-input-placeholder,#64748b)!important}
+.evsc-btn-primary,.evsc-result.is-selected .evsc-select-label,.evsc-keyboard-mode.is-active{background:var(--evsc-primary-bg,#2563eb)!important;color:var(--evsc-primary-text,#fff)!important}.evsc-btn-primary:hover,.evsc-keyboard-mode.is-active:hover{background:var(--evsc-primary-hover,#1d4ed8)!important}.evsc-btn-success{background:var(--evsc-success-bg,#16a34a)!important;color:var(--evsc-success-text,#fff)!important}.evsc-btn-success:hover{background:var(--evsc-success-hover,#15803d)!important}.evsc-btn-light{background:var(--evsc-light-btn-bg,#e2e8f0)!important;color:var(--evsc-light-btn-text,#0f172a)!important}.evsc-btn-light:hover{background:var(--evsc-light-btn-hover,#cbd5e1)!important}
+.evsc-status{background:var(--evsc-status-bg,#f1f5f9)!important;color:var(--evsc-status-text,#334155)!important}.evsc-result{background:var(--evsc-panel-bg,#fff)!important;border-color:var(--evsc-panel-border,#e2e8f0)!important;color:var(--evsc-text,#0f172a)!important}.evsc-result:hover{border-color:var(--evsc-input-focus,#93c5fd)!important}.evsc-result.is-selected{border-color:var(--evsc-primary-bg,#2563eb)!important;background:color-mix(in srgb,var(--evsc-primary-bg,#2563eb) 10%,var(--evsc-panel-bg,#fff))!important}.evsc-result-name{color:var(--evsc-text,#0f172a)!important}.evsc-result-meta{color:var(--evsc-muted,#475569)!important}.evsc-chip{background:var(--evsc-light-btn-bg,#e2e8f0)!important;color:var(--evsc-light-btn-text,#334155)!important}
+.evsc-confirm{background:var(--evsc-confirm-bg,#0f172a)!important;color:var(--evsc-confirm-text,#fff)!important}.evsc-confirm h3,.evsc-data-value{color:var(--evsc-confirm-text,#fff)!important}.evsc-data{background:var(--evsc-data-bg,rgba(255,255,255,.09))!important;border-color:var(--evsc-data-border,rgba(255,255,255,.16))!important}.evsc-data-label{color:var(--evsc-data-label,#bfdbfe)!important}
+.evsc-keyboard{background:var(--evsc-keyboard-bg,#f1f5f9)!important;border-color:var(--evsc-keyboard-border,#dbe4ee)!important}.evsc-key,.evsc-keyboard-mode{background:var(--evsc-key-bg,#fff)!important;color:var(--evsc-key-text,#0f172a)!important}.evsc-key-action{background:var(--evsc-light-btn-bg,#dbeafe)!important;color:var(--evsc-light-btn-text,#1d4ed8)!important}
+.evsc-extra-logos{box-sizing:border-box;width:var(--evsc-extra-logos-width,760px);max-width:100%;min-height:var(--evsc-extra-logos-min-height,120px);margin:0 auto;display:flex;align-items:center;justify-content:center;gap:var(--evsc-extra-logos-gap,18px);flex-wrap:wrap;padding:12px;text-align:center}.evsc-extra-logos *,.evsc-extra-logos *::before,.evsc-extra-logos *::after{box-sizing:border-box}.evsc-extra-logo-item{display:flex;align-items:center;justify-content:center;min-width:0;flex:0 1 auto}.evsc-extra-logo{display:block;width:auto;height:auto;max-width:100%;max-height:var(--evsc-extra-logo-max-height,72px);object-fit:contain}
+@media(max-width:800px){.evsc-extra-logos{width:100%;gap:calc(var(--evsc-extra-logos-gap,18px) * .75);padding:10px}.evsc-extra-logo{max-height:min(var(--evsc-extra-logo-max-height,72px),64px)}}
 CSS;
     }
 }
@@ -2005,14 +2375,22 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
         ];
         $args = wp_parse_args( (array) $args, $defaults );
 
+        $design_config = eventosapp_self_checkin_get_design_config( $event_id );
+        if ( empty( $args['logo_url'] ) && ! empty( $design_config['main_logo_url'] ) ) {
+            $args['logo_url'] = $design_config['main_logo_url'];
+        }
+        $design_style = eventosapp_self_checkin_design_style_attr( $design_config );
+        $theme_class  = 'evsc-theme-' . sanitize_html_class( $design_config['theme'] ?? 'light' );
+
         eventosapp_self_checkin_enqueue_assets();
 
         $uid = function_exists('wp_unique_id') ? wp_unique_id('evsc-') : ( 'evsc-' . uniqid() );
 
         ob_start();
         echo eventosapp_self_checkin_inline_style_fallback();
+        echo eventosapp_self_checkin_background_style_fallback( $event_id );
         ?>
-        <div id="<?php echo esc_attr( $uid ); ?>" class="evsc-wrap" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-event-name="<?php echo esc_attr( get_the_title( $event_id ) ); ?>" data-kiosk-lock="<?php echo ! empty( $args['enable_kiosk_lock'] ) ? '1' : '0'; ?>" data-ajax-url="<?php echo esc_url( admin_url('admin-ajax.php') ); ?>" data-search-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_search') ); ?>" data-confirm-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_confirm') ); ?>" data-print-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_print') ); ?>">
+        <div id="<?php echo esc_attr( $uid ); ?>" class="evsc-wrap <?php echo esc_attr( $theme_class ); ?>" style="<?php echo esc_attr( $design_style ); ?>" data-theme="<?php echo esc_attr( $design_config['theme'] ?? 'light' ); ?>" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-event-name="<?php echo esc_attr( get_the_title( $event_id ) ); ?>" data-kiosk-lock="<?php echo ! empty( $args['enable_kiosk_lock'] ) ? '1' : '0'; ?>" data-ajax-url="<?php echo esc_url( admin_url('admin-ajax.php') ); ?>" data-search-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_search') ); ?>" data-confirm-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_confirm') ); ?>" data-print-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_print') ); ?>">
             <?php if ( ! empty( $args['logo_url'] ) ) : ?>
                 <div class="evsc-logo-wrap">
                     <img class="evsc-logo" src="<?php echo esc_url( $args['logo_url'] ); ?>" alt="<?php echo esc_attr( $args['logo_alt'] ?: get_the_title( $event_id ) ); ?>">
@@ -2116,6 +2494,14 @@ add_shortcode('eventosapp_self_checkin', function( $atts ) {
     }
     echo eventosapp_self_checkin_render_main_ui( $event_id );
     return ob_get_clean();
+});
+
+add_shortcode('eventosapp_self_checkin_additional_logos', function( $atts ) {
+    $atts = shortcode_atts([
+        'event_id' => 0,
+    ], $atts, 'eventosapp_self_checkin_additional_logos');
+
+    return eventosapp_self_checkin_render_additional_logos( $atts['event_id'] );
 });
 
 
