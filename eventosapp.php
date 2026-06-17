@@ -160,6 +160,299 @@ if ( ! function_exists('eventosapp_ticket_is_virtual') ) {
 }
 
 /**
+ * Helpers globales para la autenticación del Networking Global.
+ *
+ * Cada evento puede definir qué datos del ticket debe escribir el asistente
+ * antes de iniciar su sesión de networking. Si el evento no tiene configuración,
+ * se conserva el comportamiento histórico: cédula + apellido.
+ */
+if ( ! function_exists('eventosapp_networking_global_auth_field_options') ) {
+    function eventosapp_networking_global_auth_field_options() {
+        return [
+            'cc' => [
+                'label'       => 'Cédula',
+                'meta_key'    => '_eventosapp_asistente_cc',
+                'type'        => 'text',
+                'placeholder' => 'Ej: 1020304050',
+                'help'        => 'Escribe tu número de identificación tal como aparece en la inscripción.',
+            ],
+            'apellido' => [
+                'label'       => 'Apellido',
+                'meta_key'    => '_eventosapp_asistente_apellido',
+                'type'        => 'text',
+                'placeholder' => 'Ej: Pérez o García',
+                'help'        => 'Escribe tu apellido tal como aparece en la inscripción.',
+            ],
+            'nombre' => [
+                'label'       => 'Primer Nombre',
+                'meta_key'    => '_eventosapp_asistente_nombre',
+                'type'        => 'text',
+                'placeholder' => 'Ej: Juan',
+                'help'        => 'Escribe tu primer nombre registrado.',
+            ],
+            'email' => [
+                'label'       => 'Email',
+                'meta_key'    => '_eventosapp_asistente_email',
+                'type'        => 'email',
+                'placeholder' => 'Ej: nombre@correo.com',
+                'help'        => 'Escribe el correo usado en tu inscripción.',
+            ],
+            'telefono' => [
+                'label'       => 'Número de Contacto',
+                'meta_key'    => '_eventosapp_asistente_tel',
+                'type'        => 'text',
+                'placeholder' => 'Ej: 3001234567',
+                'help'        => 'Escribe tu teléfono registrado.',
+            ],
+            'empresa' => [
+                'label'       => 'Nombre de Empresa',
+                'meta_key'    => '_eventosapp_asistente_empresa',
+                'type'        => 'text',
+                'placeholder' => 'Ej: Empresa S.A.S.',
+                'help'        => 'Escribe la empresa registrada en tu ticket.',
+            ],
+            'nit' => [
+                'label'       => 'NIT',
+                'meta_key'    => '_eventosapp_asistente_nit',
+                'type'        => 'text',
+                'placeholder' => 'Ej: 900123456',
+                'help'        => 'Escribe el NIT registrado.',
+            ],
+            'cargo' => [
+                'label'       => 'Cargo',
+                'meta_key'    => '_eventosapp_asistente_cargo',
+                'type'        => 'text',
+                'placeholder' => 'Ej: Gerente Comercial',
+                'help'        => 'Escribe el cargo registrado.',
+            ],
+            'ciudad' => [
+                'label'       => 'Ciudad',
+                'meta_key'    => '_eventosapp_asistente_ciudad',
+                'type'        => 'text',
+                'placeholder' => 'Ej: Barranquilla',
+                'help'        => 'Escribe la ciudad registrada.',
+            ],
+            'pais' => [
+                'label'       => 'País',
+                'meta_key'    => '_eventosapp_asistente_pais',
+                'type'        => 'text',
+                'placeholder' => 'Ej: Colombia',
+                'help'        => 'Escribe el país registrado.',
+            ],
+            'localidad' => [
+                'label'       => 'Localidad',
+                'meta_key'    => '_eventosapp_asistente_localidad',
+                'type'        => 'text',
+                'placeholder' => 'Ej: VIP',
+                'help'        => 'Escribe la localidad registrada en tu ticket.',
+            ],
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_networking_global_auth_default_fields') ) {
+    function eventosapp_networking_global_auth_default_fields() {
+        return [ 'cc', 'apellido' ];
+    }
+}
+
+if ( ! function_exists('eventosapp_normalize_networking_global_auth_fields') ) {
+    function eventosapp_normalize_networking_global_auth_fields( $fields ) {
+        $options = eventosapp_networking_global_auth_field_options();
+
+        if ( is_string( $fields ) ) {
+            $decoded = json_decode( $fields, true );
+            if ( is_array( $decoded ) ) {
+                $fields = $decoded;
+            } else {
+                $fields = array_map( 'trim', explode( ',', $fields ) );
+            }
+        }
+
+        if ( ! is_array( $fields ) ) {
+            $fields = [];
+        }
+
+        $clean = [];
+        foreach ( $fields as $field ) {
+            $field = sanitize_key( (string) $field );
+            if ( isset( $options[ $field ] ) && ! in_array( $field, $clean, true ) ) {
+                $clean[] = $field;
+            }
+        }
+
+        if ( empty( $clean ) ) {
+            $clean = eventosapp_networking_global_auth_default_fields();
+        }
+
+        return $clean;
+    }
+}
+
+if ( ! function_exists('eventosapp_get_event_networking_global_auth_fields') ) {
+    function eventosapp_get_event_networking_global_auth_fields( $event_id ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return eventosapp_networking_global_auth_default_fields();
+        }
+
+        $stored = get_post_meta( $event_id, '_eventosapp_networking_global_auth_fields', true );
+        if ( empty( $stored ) ) {
+            return eventosapp_networking_global_auth_default_fields();
+        }
+
+        return eventosapp_normalize_networking_global_auth_fields( $stored );
+    }
+}
+
+if ( ! function_exists('eventosapp_networking_global_auth_get_field_labels') ) {
+    function eventosapp_networking_global_auth_get_field_labels( $fields ) {
+        $options = eventosapp_networking_global_auth_field_options();
+        $labels  = [];
+
+        foreach ( eventosapp_normalize_networking_global_auth_fields( $fields ) as $field ) {
+            if ( isset( $options[ $field ]['label'] ) ) {
+                $labels[] = $options[ $field ]['label'];
+            }
+        }
+
+        return $labels;
+    }
+}
+
+if ( ! function_exists('eventosapp_networking_global_auth_meta_key') ) {
+    function eventosapp_networking_global_auth_meta_key( $field ) {
+        $options = eventosapp_networking_global_auth_field_options();
+        $field   = sanitize_key( (string) $field );
+        return $options[ $field ]['meta_key'] ?? '';
+    }
+}
+
+if ( ! function_exists('eventosapp_normalize_networking_global_auth_value') ) {
+    function eventosapp_normalize_networking_global_auth_value( $value, $field = '' ) {
+        if ( is_array( $value ) || is_object( $value ) ) {
+            return '';
+        }
+
+        $field = sanitize_key( (string) $field );
+        $value = trim( sanitize_text_field( wp_unslash( (string) $value ) ) );
+
+        if ( $field === 'email' ) {
+            return strtolower( sanitize_email( $value ) );
+        }
+
+        $value = remove_accents( $value );
+        $value = strtolower( $value );
+        $value = preg_replace( '/\s+/u', ' ', $value );
+        $value = trim( $value );
+
+        if ( in_array( $field, [ 'cc', 'nit', 'telefono' ], true ) ) {
+            $value = preg_replace( '/[^a-z0-9]/', '', $value );
+        }
+
+        return $value;
+    }
+}
+
+if ( ! function_exists('eventosapp_networking_global_auth_values_match') ) {
+    function eventosapp_networking_global_auth_values_match( $stored, $submitted, $field ) {
+        return eventosapp_normalize_networking_global_auth_value( $stored, $field ) === eventosapp_normalize_networking_global_auth_value( $submitted, $field );
+    }
+}
+
+if ( ! function_exists('eventosapp_find_ticket_by_networking_global_auth') ) {
+    function eventosapp_find_ticket_by_networking_global_auth( $event_id, $submitted_fields, $configured_fields = [] ) {
+        $event_id          = absint( $event_id );
+        $configured_fields = eventosapp_normalize_networking_global_auth_fields( $configured_fields );
+        $options           = eventosapp_networking_global_auth_field_options();
+
+        if ( ! $event_id || ! is_array( $submitted_fields ) || empty( $configured_fields ) ) {
+            return 0;
+        }
+
+        $submitted = [];
+        foreach ( $configured_fields as $field ) {
+            $submitted[ $field ] = isset( $submitted_fields[ $field ] ) ? (string) $submitted_fields[ $field ] : '';
+            if ( eventosapp_normalize_networking_global_auth_value( $submitted[ $field ], $field ) === '' ) {
+                return 0;
+            }
+        }
+
+        $anchor_field = '';
+        foreach ( [ 'cc', 'email', 'telefono', 'nit' ] as $candidate ) {
+            if ( in_array( $candidate, $configured_fields, true ) && ! empty( $options[ $candidate ]['meta_key'] ) ) {
+                $anchor_field = $candidate;
+                break;
+            }
+        }
+
+        $base_meta_query = [
+            'relation' => 'AND',
+            [
+                'key'   => '_eventosapp_ticket_evento_id',
+                'value' => $event_id,
+                'type'  => 'NUMERIC',
+            ],
+        ];
+
+        $queries_to_try = [];
+        if ( $anchor_field ) {
+            $anchor_value = $submitted[ $anchor_field ];
+            if ( $anchor_field === 'email' ) {
+                $anchor_value = sanitize_email( $anchor_value );
+            }
+            $queries_to_try[] = array_merge( $base_meta_query, [
+                [
+                    'key'     => $options[ $anchor_field ]['meta_key'],
+                    'value'   => $anchor_value,
+                    'compare' => '=',
+                ],
+            ] );
+        }
+        $queries_to_try[] = $base_meta_query;
+
+        foreach ( $queries_to_try as $index => $meta_query ) {
+            $ticket_ids = get_posts( [
+                'post_type'      => 'eventosapp_ticket',
+                'post_status'    => 'publish',
+                'posts_per_page' => -1,
+                'fields'         => 'ids',
+                'no_found_rows'  => true,
+                'meta_query'     => $meta_query,
+            ] );
+
+            if ( empty( $ticket_ids ) && $index === 0 ) {
+                continue;
+            }
+
+            foreach ( $ticket_ids as $ticket_id ) {
+                $all_match = true;
+
+                foreach ( $configured_fields as $field ) {
+                    $meta_key = $options[ $field ]['meta_key'] ?? '';
+                    if ( ! $meta_key ) {
+                        $all_match = false;
+                        break;
+                    }
+
+                    $stored = get_post_meta( $ticket_id, $meta_key, true );
+                    if ( ! eventosapp_networking_global_auth_values_match( $stored, $submitted[ $field ], $field ) ) {
+                        $all_match = false;
+                        break;
+                    }
+                }
+
+                if ( $all_match ) {
+                    return absint( $ticket_id );
+                }
+            }
+        }
+
+        return 0;
+    }
+}
+
+/**
  * Helpers globales de check-in presencial/virtual.
  *
  * Mantiene intacto el check-in presencial existente (_eventosapp_checkin_status)
@@ -1239,6 +1532,15 @@ add_action('add_meta_boxes', function() {
         'normal',
         'default'
     );
+
+    add_meta_box(
+        'eventosapp_networking_global_auth_evento',
+        'Autenticación Networking Global',
+        'eventosapp_render_metabox_networking_global_auth',
+        'eventosapp_event',
+        'normal',
+        'default'
+    );
 });
 
 
@@ -1698,6 +2000,69 @@ function eventosapp_render_metabox_localidades($post) {
 
 
 /**
+ * Metabox: Autenticación del Networking Global.
+ * Permite definir por evento qué campos del ticket se usarán para iniciar sesión
+ * en la página /networking/global/.
+ */
+function eventosapp_render_metabox_networking_global_auth($post) {
+    $options = function_exists('eventosapp_networking_global_auth_field_options') ? eventosapp_networking_global_auth_field_options() : [];
+    $selected = function_exists('eventosapp_get_event_networking_global_auth_fields')
+        ? eventosapp_get_event_networking_global_auth_fields($post->ID)
+        : [ 'cc', 'apellido' ];
+
+    if (empty($options)) {
+        echo '<p style="color:#b32d2e;">No se pudieron cargar los campos disponibles para autenticación.</p>';
+        return;
+    }
+
+    wp_nonce_field('eventosapp_networking_global_auth_guardar', 'eventosapp_networking_global_auth_nonce');
+    ?>
+    <style>
+        .evapp-netauth-box { border:1px solid #dbeafe; background:#eff6ff; border-radius:10px; padding:14px; margin:10px 0; }
+        .evapp-netauth-title { margin:0 0 8px; font-weight:700; color:#1e3a8a; }
+        .evapp-netauth-help { margin:0 0 12px; color:#1f4f82; font-size:12px; line-height:1.45; }
+        .evapp-netauth-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px 14px; }
+        .evapp-netauth-item { display:flex; align-items:flex-start; gap:8px; background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:10px; }
+        .evapp-netauth-item input { margin-top:2px; }
+        .evapp-netauth-item strong { display:block; color:#111827; }
+        .evapp-netauth-item small { display:block; color:#6b7280; line-height:1.35; margin-top:2px; }
+        .evapp-netauth-warning { margin:12px 0 0; background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; padding:10px; border-radius:8px; font-size:12px; line-height:1.45; }
+    </style>
+
+    <div class="evapp-netauth-box">
+        <p class="evapp-netauth-title">Campos requeridos para autenticar al asistente</p>
+        <p class="evapp-netauth-help">
+            Esta configuración aplica únicamente para este evento. El formulario público de Networking Global solicitará solo los campos marcados aquí. Si no seleccionas ninguno, se conservará el comportamiento por defecto: <strong>Cédula + Apellido</strong>.
+        </p>
+
+        <div class="evapp-netauth-grid">
+            <?php foreach ($options as $key => $field): ?>
+                <label class="evapp-netauth-item" for="eventosapp_networking_global_auth_field_<?php echo esc_attr($key); ?>">
+                    <input
+                        type="checkbox"
+                        id="eventosapp_networking_global_auth_field_<?php echo esc_attr($key); ?>"
+                        name="eventosapp_networking_global_auth_fields[]"
+                        value="<?php echo esc_attr($key); ?>"
+                        <?php checked(in_array($key, $selected, true)); ?>
+                    >
+                    <span>
+                        <strong><?php echo esc_html($field['label'] ?? $key); ?></strong>
+                        <small><?php echo esc_html($field['help'] ?? 'Campo disponible para validar identidad.'); ?></small>
+                    </span>
+                </label>
+            <?php endforeach; ?>
+        </div>
+
+        <div class="evapp-netauth-warning">
+            Recomendación aplicada: mantén al menos un campo único como <strong>Cédula</strong>, <strong>Email</strong>, <strong>Teléfono</strong> o <strong>NIT</strong> para evitar coincidencias entre asistentes con nombres o apellidos iguales.
+        </div>
+    </div>
+    <?php
+}
+
+
+
+/**
  * 3. Guardar los valores de la metabox (incluye Wallet por evento)
  */
 add_action('save_post_eventosapp_event', function($post_id) {
@@ -1830,6 +2195,37 @@ add_action('save_post_eventosapp_event', function($post_id) {
         delete_post_meta($post_id, '_eventosapp_apple_hex_label');
     }
 }, 20);
+
+/**
+ * Guardar configuración por evento de autenticación para Networking Global.
+ * Se mantiene separado del guardado principal para no depender de otros metaboxes.
+ */
+add_action('save_post_eventosapp_event', 'eventosapp_save_networking_global_auth_metabox', 25);
+function eventosapp_save_networking_global_auth_metabox($post_id) {
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    if (!current_user_can('edit_post', $post_id)) return;
+
+    if (!isset($_POST['eventosapp_networking_global_auth_nonce']) || !wp_verify_nonce($_POST['eventosapp_networking_global_auth_nonce'], 'eventosapp_networking_global_auth_guardar')) {
+        return;
+    }
+
+    $fields = [];
+    if (!empty($_POST['eventosapp_networking_global_auth_fields']) && is_array($_POST['eventosapp_networking_global_auth_fields'])) {
+        foreach ($_POST['eventosapp_networking_global_auth_fields'] as $field) {
+            $fields[] = sanitize_key(wp_unslash($field));
+        }
+    }
+
+    $fields = function_exists('eventosapp_normalize_networking_global_auth_fields')
+        ? eventosapp_normalize_networking_global_auth_fields($fields)
+        : array_values(array_unique(array_filter($fields)));
+
+    if (empty($fields)) {
+        $fields = [ 'cc', 'apellido' ];
+    }
+
+    update_post_meta($post_id, '_eventosapp_networking_global_auth_fields', $fields);
+}
 
 // ===== Asegurar roles base de EventosApp =====
 add_action('init', function(){
