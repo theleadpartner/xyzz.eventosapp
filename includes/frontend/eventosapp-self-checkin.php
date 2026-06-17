@@ -926,15 +926,25 @@ if ( ! function_exists('eventosapp_self_checkin_design_color_presets') ) {
                 'success_bg'         => '#16a34a',
                 'success_hover'      => '#15803d',
                 'success_text'       => '#ffffff',
-                'light_btn_bg'       => '#e2e8f0',
-                'light_btn_hover'    => '#cbd5e1',
+                'light_btn_bg'       => '#cbd5e1',
+                'light_btn_hover'    => '#94a3b8',
                 'light_btn_text'     => '#0f172a',
                 'status_bg'          => '#f1f5f9',
                 'status_text'        => '#334155',
-                'keyboard_bg'        => '#f1f5f9',
-                'keyboard_border'    => '#dbe4ee',
+                'keyboard_bg'        => '#eaf2ff',
+                'keyboard_border'    => '#bfdbfe',
                 'keyboard_key_bg'    => '#ffffff',
                 'keyboard_key_text'  => '#0f172a',
+                'keyboard_key_border'=> '#93c5fd',
+                'keyboard_key_hover' => '#dbeafe',
+                'keyboard_key_shadow'=> 'rgba(37,99,235,.18)',
+                'keyboard_action_bg' => '#2563eb',
+                'keyboard_action_hover' => '#1d4ed8',
+                'keyboard_action_text'  => '#ffffff',
+                'keyboard_action_border'=> '#1d4ed8',
+                'keyboard_mode_bg'   => '#dbeafe',
+                'keyboard_mode_hover'=> '#bfdbfe',
+                'keyboard_mode_text' => '#1e3a8a',
                 'confirm_bg'         => '#0f172a',
                 'confirm_text'       => '#ffffff',
                 'data_bg'            => 'rgba(255,255,255,.09)',
@@ -962,15 +972,25 @@ if ( ! function_exists('eventosapp_self_checkin_design_color_presets') ) {
                 'success_bg'         => '#22c55e',
                 'success_hover'      => '#16a34a',
                 'success_text'       => '#052e16',
-                'light_btn_bg'       => '#334155',
-                'light_btn_hover'    => '#475569',
+                'light_btn_bg'       => '#475569',
+                'light_btn_hover'    => '#64748b',
                 'light_btn_text'     => '#f8fafc',
                 'status_bg'          => '#1f2937',
                 'status_text'        => '#e5e7eb',
-                'keyboard_bg'        => '#1e293b',
-                'keyboard_border'    => '#334155',
-                'keyboard_key_bg'    => '#0f172a',
-                'keyboard_key_text'  => '#f8fafc',
+                'keyboard_bg'        => '#111c31',
+                'keyboard_border'    => '#3b82f6',
+                'keyboard_key_bg'    => '#1e40af',
+                'keyboard_key_text'  => '#ffffff',
+                'keyboard_key_border'=> '#60a5fa',
+                'keyboard_key_hover' => '#2563eb',
+                'keyboard_key_shadow'=> 'rgba(96,165,250,.22)',
+                'keyboard_action_bg' => '#475569',
+                'keyboard_action_hover' => '#64748b',
+                'keyboard_action_text'  => '#ffffff',
+                'keyboard_action_border'=> '#94a3b8',
+                'keyboard_mode_bg'   => '#334155',
+                'keyboard_mode_hover'=> '#475569',
+                'keyboard_mode_text' => '#f8fafc',
                 'confirm_bg'         => '#020617',
                 'confirm_text'       => '#f8fafc',
                 'data_bg'            => 'rgba(148,163,184,.12)',
@@ -1128,11 +1148,21 @@ if ( ! function_exists('eventosapp_self_checkin_design_style_attr') ) {
             'light_btn_text'    => '--evsc-light-btn-text',
             'status_bg'         => '--evsc-status-bg',
             'status_text'       => '--evsc-status-text',
-            'keyboard_bg'       => '--evsc-keyboard-bg',
-            'keyboard_border'   => '--evsc-keyboard-border',
-            'keyboard_key_bg'   => '--evsc-key-bg',
-            'keyboard_key_text' => '--evsc-key-text',
-            'confirm_bg'        => '--evsc-confirm-bg',
+            'keyboard_bg'            => '--evsc-keyboard-bg',
+            'keyboard_border'        => '--evsc-keyboard-border',
+            'keyboard_key_bg'        => '--evsc-key-bg',
+            'keyboard_key_text'      => '--evsc-key-text',
+            'keyboard_key_border'    => '--evsc-key-border',
+            'keyboard_key_hover'     => '--evsc-key-hover',
+            'keyboard_key_shadow'    => '--evsc-key-shadow',
+            'keyboard_action_bg'     => '--evsc-key-action-bg',
+            'keyboard_action_hover'  => '--evsc-key-action-hover',
+            'keyboard_action_text'   => '--evsc-key-action-text',
+            'keyboard_action_border' => '--evsc-key-action-border',
+            'keyboard_mode_bg'       => '--evsc-key-mode-bg',
+            'keyboard_mode_hover'    => '--evsc-key-mode-hover',
+            'keyboard_mode_text'     => '--evsc-key-mode-text',
+            'confirm_bg'             => '--evsc-confirm-bg',
             'confirm_text'      => '--evsc-confirm-text',
             'data_bg'           => '--evsc-data-bg',
             'data_border'       => '--evsc-data-border',
@@ -1228,7 +1258,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_additional_logos') ) {
         $logos  = $config['extra_logos'] ?? [];
 
         if ( empty( $logos ) ) {
-            return current_user_can('edit_post', $event_id) ? eventosapp_self_checkin_inline_style_fallback() . '<div class="evsc-alert evsc-alert-warn">Este evento todavía no tiene logos adicionales configurados en el metabox de Autogestión Kiosko.</div>' : '';
+            return '';
         }
 
         eventosapp_self_checkin_enqueue_assets();
@@ -1353,7 +1383,7 @@ body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
 .evsc-btn-primary,.evsc-result.is-selected .evsc-select-label,.evsc-keyboard-mode.is-active{background:var(--evsc-primary-bg,#2563eb)!important;color:var(--evsc-primary-text,#fff)!important}.evsc-btn-primary:hover,.evsc-keyboard-mode.is-active:hover{background:var(--evsc-primary-hover,#1d4ed8)!important}.evsc-btn-success{background:var(--evsc-success-bg,#16a34a)!important;color:var(--evsc-success-text,#fff)!important}.evsc-btn-success:hover{background:var(--evsc-success-hover,#15803d)!important}.evsc-btn-light{background:var(--evsc-light-btn-bg,#e2e8f0)!important;color:var(--evsc-light-btn-text,#0f172a)!important}.evsc-btn-light:hover{background:var(--evsc-light-btn-hover,#cbd5e1)!important}
 .evsc-status{background:var(--evsc-status-bg,#f1f5f9)!important;color:var(--evsc-status-text,#334155)!important}.evsc-result{background:var(--evsc-panel-bg,#fff)!important;border-color:var(--evsc-panel-border,#e2e8f0)!important;color:var(--evsc-text,#0f172a)!important}.evsc-result:hover{border-color:var(--evsc-input-focus,#93c5fd)!important}.evsc-result.is-selected{border-color:var(--evsc-primary-bg,#2563eb)!important;background:color-mix(in srgb,var(--evsc-primary-bg,#2563eb) 10%,var(--evsc-panel-bg,#fff))!important}.evsc-result-name{color:var(--evsc-text,#0f172a)!important}.evsc-result-meta{color:var(--evsc-muted,#475569)!important}.evsc-chip{background:var(--evsc-light-btn-bg,#e2e8f0)!important;color:var(--evsc-light-btn-text,#334155)!important}
 .evsc-confirm{background:var(--evsc-confirm-bg,#0f172a)!important;color:var(--evsc-confirm-text,#fff)!important}.evsc-confirm h3,.evsc-data-value{color:var(--evsc-confirm-text,#fff)!important}.evsc-data{background:var(--evsc-data-bg,rgba(255,255,255,.09))!important;border-color:var(--evsc-data-border,rgba(255,255,255,.16))!important}.evsc-data-label{color:var(--evsc-data-label,#bfdbfe)!important}
-.evsc-keyboard{background:var(--evsc-keyboard-bg,#f1f5f9)!important;border-color:var(--evsc-keyboard-border,#dbe4ee)!important}.evsc-key,.evsc-keyboard-mode{background:var(--evsc-key-bg,#fff)!important;color:var(--evsc-key-text,#0f172a)!important}.evsc-key-action{background:var(--evsc-light-btn-bg,#dbeafe)!important;color:var(--evsc-light-btn-text,#1d4ed8)!important}
+.evsc-keyboard{background:var(--evsc-keyboard-bg,#f1f5f9)!important;border-color:var(--evsc-keyboard-border,#dbe4ee)!important}.evsc-key,.evsc-keyboard-mode{background:var(--evsc-key-bg,#fff)!important;color:var(--evsc-key-text,#0f172a)!important;border:1px solid var(--evsc-key-border,transparent)!important;box-shadow:0 6px 16px var(--evsc-key-shadow,rgba(15,23,42,.12))!important}.evsc-key:hover,.evsc-keyboard-mode:hover{background:var(--evsc-key-hover,#e0f2fe)!important;filter:none!important}.evsc-key-action{background:var(--evsc-key-action-bg,var(--evsc-light-btn-bg,#dbeafe))!important;color:var(--evsc-key-action-text,var(--evsc-light-btn-text,#1d4ed8))!important;border-color:var(--evsc-key-action-border,var(--evsc-key-border,transparent))!important}.evsc-key-action:hover{background:var(--evsc-key-action-hover,var(--evsc-light-btn-hover,#bfdbfe))!important}.evsc-keyboard-mode{background:var(--evsc-key-mode-bg,var(--evsc-key-bg,#fff))!important;color:var(--evsc-key-mode-text,var(--evsc-key-text,#0f172a))!important;box-shadow:none!important}.evsc-keyboard-mode:hover{background:var(--evsc-key-mode-hover,var(--evsc-key-hover,#e0f2fe))!important}.evsc-keyboard-mode.is-active{border-color:var(--evsc-primary-bg,#2563eb)!important;box-shadow:0 6px 16px var(--evsc-key-shadow,rgba(15,23,42,.12))!important}.evsc-keyboard-mode.is-active:hover{background:var(--evsc-primary-hover,#1d4ed8)!important}
 .evsc-extra-logos{box-sizing:border-box;width:var(--evsc-extra-logos-width,760px);max-width:100%;min-height:var(--evsc-extra-logos-min-height,120px);margin:0 auto;display:flex;align-items:center;justify-content:center;gap:var(--evsc-extra-logos-gap,18px);flex-wrap:wrap;padding:12px;text-align:center}.evsc-extra-logos *,.evsc-extra-logos *::before,.evsc-extra-logos *::after{box-sizing:border-box}.evsc-extra-logo-item{display:flex;align-items:center;justify-content:center;min-width:0;flex:0 1 auto}.evsc-extra-logo{display:block;width:auto;height:auto;max-width:100%;max-height:var(--evsc-extra-logo-max-height,72px);object-fit:contain}
 @media(max-width:800px){.evsc-extra-logos{width:100%;gap:calc(var(--evsc-extra-logos-gap,18px) * .75);padding:10px}.evsc-extra-logo{max-height:min(var(--evsc-extra-logo-max-height,72px),64px)}}
 CSS;
