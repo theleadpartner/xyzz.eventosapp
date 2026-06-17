@@ -223,6 +223,50 @@ if ( ! function_exists('eventosapp_print_dashboard_css') ) {
 }
 
 
+
+/**
+ * Helper central para validar si el usuario puede activar o conservar un evento
+ * dentro del dashboard. Se mantiene aquí para que el dashboard no dependa sólo
+ * de permisos globales por rol cuando existen asignaciones específicas por evento.
+ */
+if ( ! function_exists('eventosapp_dashboard_user_can_select_event') ) {
+	function eventosapp_dashboard_user_can_select_event( $event_id, $user_id = 0 ) {
+		$event_id = absint( $event_id );
+		$user_id  = $user_id ? absint( $user_id ) : get_current_user_id();
+
+		if ( ! $event_id || ! $user_id || get_post_type( $event_id ) !== 'eventosapp_event' ) {
+			return false;
+		}
+
+		if ( current_user_can('manage_options') ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_staff_access_user_can_select_event_in_dashboard') && eventosapp_staff_access_user_can_select_event_in_dashboard($event_id, $user_id) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_support_user_can_select_event_in_dashboard') && eventosapp_support_user_can_select_event_in_dashboard($event_id, $user_id) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event($event_id, $user_id) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_expositor_user_can_select_event_in_dashboard') && eventosapp_expositor_user_can_select_event_in_dashboard($event_id, $user_id) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_user_can_manage_event') && eventosapp_user_can_manage_event($event_id, $user_id) ) {
+			return true;
+		}
+
+		$post = get_post( $event_id );
+		return $post && (int) $post->post_author === $user_id;
+	}
+}
+
 /**
  * Shortcode principal del dashboard.
  * Uso: [eventosapp_dashboard]
@@ -236,6 +280,12 @@ add_shortcode('eventosapp_dashboard', function(){
 	$evapp_can_view_dashboard = function_exists('eventosapp_role_can') && eventosapp_role_can('dashboard');
 	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_staff_access_user_has_any_dashboard_event') ) {
 		$evapp_can_view_dashboard = eventosapp_staff_access_user_has_any_dashboard_event( get_current_user_id() );
+	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_support_user_has_any_event') ) {
+		$evapp_can_view_dashboard = eventosapp_support_user_has_any_event( get_current_user_id() );
+	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_expositor_user_has_any_event') ) {
+		$evapp_can_view_dashboard = eventosapp_expositor_user_has_any_event( get_current_user_id() );
 	}
 
 	if ( ! $evapp_can_view_dashboard ) {
@@ -261,7 +311,18 @@ add_shortcode('eventosapp_dashboard', function(){
 	ob_start();
 	echo '<div class="evapp-dashboard">';
 
-	$active_event = function_exists('eventosapp_get_active_event') ? eventosapp_get_active_event() : 0;
+	$current_user_id = get_current_user_id();
+	$active_event    = function_exists('eventosapp_get_active_event') ? absint( eventosapp_get_active_event() ) : 0;
+
+	if ( $active_event && function_exists('eventosapp_dashboard_user_can_select_event') && ! eventosapp_dashboard_user_can_select_event( $active_event, $current_user_id ) ) {
+		if ( function_exists('eventosapp_clear_active_event') ) {
+			eventosapp_clear_active_event();
+		}
+		$active_event = 0;
+		if ( $msg === '' ) {
+			$msg = '<div class="notice notice-error" style="padding:8px;margin:10px 0;"><strong>Error:</strong> No puedes gestionar este evento.</div>';
+		}
+	}
 
 	if ( $active_event ) {
 		// Estilos una sola vez
@@ -430,29 +491,9 @@ add_shortcode('eventosapp_dashboard', function(){
 		$all_events = get_posts($query_args);
 
 		$events = array_values(array_filter($all_events, function($ev){
-			$user_id = get_current_user_id();
-
-			if ( function_exists('eventosapp_staff_access_user_can_select_event_in_dashboard') && eventosapp_staff_access_user_can_select_event_in_dashboard($ev->ID, $user_id) ) {
-				return true;
-			}
-
-			if ( function_exists('eventosapp_support_user_can_select_event_in_dashboard') && eventosapp_support_user_can_select_event_in_dashboard($ev->ID, $user_id) ) {
-				return true;
-			}
-
-			if ( function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event($ev->ID, $user_id) ) {
-				return true;
-			}
-
-			if ( function_exists('eventosapp_expositor_user_can_select_event_in_dashboard') && eventosapp_expositor_user_can_select_event_in_dashboard($ev->ID, $user_id) ) {
-				return true;
-			}
-
-			if ( function_exists('eventosapp_user_can_manage_event') && eventosapp_user_can_manage_event($ev->ID, $user_id) ) {
-				return true;
-			}
-
-			return current_user_can('manage_options') || (int)$ev->post_author === $user_id;
+			return function_exists('eventosapp_dashboard_user_can_select_event')
+				? eventosapp_dashboard_user_can_select_event($ev->ID, get_current_user_id())
+				: ( current_user_can('manage_options') || (int)$ev->post_author === get_current_user_id() );
 		}));
 
 		echo '<div style="background:#f6f7f7;border:1px solid #e1e1e1;padding:14px;border-radius:8px;">';
