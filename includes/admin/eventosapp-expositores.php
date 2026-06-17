@@ -1120,12 +1120,21 @@ if ( ! function_exists( 'eventosapp_expositor_get_products' ) ) {
         $out = [];
         foreach ( $products as $product ) {
             if ( ! is_array( $product ) || empty( $product['id'] ) ) continue;
-            $id         = sanitize_key( $product['id'] );
+
+            $id        = sanitize_key( $product['id'] );
+            $max_limit = isset( $product['limit_per_attendee'] ) && $product['limit_per_attendee'] !== '' ? max( 0, absint( $product['limit_per_attendee'] ) ) : 1;
+            $min_limit = isset( $product['min_per_attendee'] ) && $product['min_per_attendee'] !== '' ? max( 0, absint( $product['min_per_attendee'] ) ) : 1;
+
+            if ( $max_limit > 0 && $min_limit > $max_limit ) {
+                $min_limit = $max_limit;
+            }
+
             $out[ $id ] = [
                 'id'                 => $id,
                 'name'               => sanitize_text_field( $product['name'] ?? '' ),
                 'inventory'          => isset( $product['inventory'] ) && $product['inventory'] !== '' ? max( 0, absint( $product['inventory'] ) ) : '',
-                'limit_per_attendee' => isset( $product['limit_per_attendee'] ) && $product['limit_per_attendee'] !== '' ? max( 0, absint( $product['limit_per_attendee'] ) ) : 1,
+                'min_per_attendee'   => $min_limit,
+                'limit_per_attendee' => $max_limit,
                 'active'             => empty( $product['active'] ) ? '0' : '1',
                 'created_at'         => sanitize_text_field( $product['created_at'] ?? current_time( 'mysql' ) ),
             ];
@@ -1298,20 +1307,66 @@ add_action( 'wp_ajax_eventosapp_expositor_save_product', function () {
     }
 
     $inventory_raw = isset( $_POST['inventory'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['inventory'] ) ) ) : '';
+    $min_raw       = isset( $_POST['min_per_attendee'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['min_per_attendee'] ) ) ) : '1';
     $limit_raw     = isset( $_POST['limit_per_attendee'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['limit_per_attendee'] ) ) ) : '1';
+
+    $inventory = $inventory_raw === '' ? '' : max( 0, absint( $inventory_raw ) );
+    $min_limit = $min_raw === '' ? 1 : max( 0, absint( $min_raw ) );
+    $max_limit = $limit_raw === '' ? 1 : max( 0, absint( $limit_raw ) );
+
+    if ( $max_limit > 0 && $min_limit > $max_limit ) {
+        wp_send_json_error( [ 'message' => 'La entrega mínima no puede ser mayor que la entrega máxima por asistente.' ], 400 );
+    }
 
     $products = eventosapp_expositor_get_products( $event_id, $expositor_id );
     $products[ $product_id ] = [
         'id'                 => $product_id,
         'name'               => $name,
-        'inventory'          => $inventory_raw === '' ? '' : max( 0, absint( $inventory_raw ) ),
-        'limit_per_attendee' => $limit_raw === '' ? 1 : max( 0, absint( $limit_raw ) ),
+        'inventory'          => $inventory,
+        'min_per_attendee'   => $min_limit,
+        'limit_per_attendee' => $max_limit,
         'active'             => isset( $_POST['active'] ) && (string) $_POST['active'] === '0' ? '0' : '1',
         'created_at'         => isset( $products[ $product_id ]['created_at'] ) ? $products[ $product_id ]['created_at'] : current_time( 'mysql' ),
     ];
 
     eventosapp_expositor_save_products( $event_id, $expositor_id, $products );
-    wp_send_json_success( [ 'message' => 'Producto guardado correctamente.', 'products_html' => eventosapp_expositor_render_products_table( $event_id, $expositor_id, false ) ] );
+    wp_send_json_success( [
+        'message'          => 'Producto guardado correctamente.',
+        'products_html'    => eventosapp_expositor_render_products_table( $event_id, $expositor_id, false ),
+        'products_options' => eventosapp_expositor_get_products_select_options_html( $event_id, $expositor_id ),
+        'total_products'   => count( eventosapp_expositor_get_products( $event_id, $expositor_id ) ),
+        'product_id'       => $product_id,
+    ] );
+} );
+
+add_action( 'wp_ajax_eventosapp_expositor_delete_product', function () {
+    $event_id     = absint( $_POST['event_id'] ?? 0 );
+    $expositor_id = absint( $_POST['expositor_id'] ?? 0 );
+    $product_id   = sanitize_key( wp_unslash( $_POST['product_id'] ?? '' ) );
+    check_ajax_referer( 'eventosapp_expositor_front_' . $event_id, 'nonce' );
+
+    if ( ! eventosapp_expositor_user_can_manage_expositor( $event_id, $expositor_id ) ) {
+        wp_send_json_error( [ 'message' => 'No tienes permisos para administrar este expositor.' ], 403 );
+    }
+
+    if ( ! $product_id ) {
+        wp_send_json_error( [ 'message' => 'Producto inválido.' ], 400 );
+    }
+
+    $products = eventosapp_expositor_get_products( $event_id, $expositor_id );
+    if ( ! isset( $products[ $product_id ] ) ) {
+        wp_send_json_error( [ 'message' => 'El producto ya no existe o fue eliminado.' ], 404 );
+    }
+
+    unset( $products[ $product_id ] );
+    eventosapp_expositor_save_products( $event_id, $expositor_id, $products );
+
+    wp_send_json_success( [
+        'message'          => 'Producto eliminado correctamente. Las entregas históricas se conservan en la base de datos.',
+        'products_html'    => eventosapp_expositor_render_products_table( $event_id, $expositor_id, false ),
+        'products_options' => eventosapp_expositor_get_products_select_options_html( $event_id, $expositor_id ),
+        'total_products'   => count( eventosapp_expositor_get_products( $event_id, $expositor_id ) ),
+    ] );
 } );
 
 add_action( 'wp_ajax_eventosapp_expositor_validate_qr', function () {
@@ -1464,36 +1519,98 @@ function eventosapp_expositor_front_css() {
     $printed = true;
     ?>
     <style>
-        .evapp-expositor-module{--evapp-blue:#2F73B5;--evapp-border:#dfe3e8;--evapp-soft:#f6f8fb;font-family:inherit;}
-        .evapp-expositor-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px;}
-        .evapp-expositor-header h2{margin:0 0 4px;font-size:28px;line-height:1.15;}
-        .evapp-expositor-muted{color:#637083;font-size:14px;}
-        .evapp-expositor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:16px 0;}
-        .evapp-expositor-card{border:1px solid var(--evapp-border);border-radius:14px;background:#fff;padding:16px;box-shadow:0 3px 14px rgba(0,0,0,.04);}
+        .evapp-expositor-module{--evapp-blue:#2F73B5;--evapp-blue-dark:#275f95;--evapp-border:#dfe3e8;--evapp-soft:#f6f8fb;--evapp-text:#1f2937;--evapp-muted:#667085;font-family:inherit;color:var(--evapp-text);box-sizing:border-box;}
+        .evapp-expositor-module *{box-sizing:border-box;}
+        .evapp-expositor-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin:0 0 12px;}
+        .evapp-expositor-header h2{margin:0 0 4px;font-size:26px;line-height:1.1;}
+        .evapp-expositor-muted{color:#637083;font-size:14px;line-height:1.45;}
+        .evapp-expositor-switch{min-width:240px;}
+        .evapp-expositor-switch label{display:block;margin:0 0 5px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;color:#667085;}
+        .evapp-expositor-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 12px;}
+        .evapp-expositor-stat-card{border:1px solid var(--evapp-border);border-radius:16px;background:#fff;padding:12px;box-shadow:0 2px 10px rgba(15,23,42,.045);min-width:0;}
+        .evapp-expositor-stat-card h3{margin:0 0 7px;font-size:12px;line-height:1.15;text-transform:uppercase;letter-spacing:.45px;color:#667085;}
+        .evapp-expositor-stat{font-size:28px;font-weight:850;color:var(--evapp-blue);line-height:1;}
+        .evapp-expositor-stat-card .evapp-expositor-btn{width:100%;min-height:38px;padding:9px 10px;font-size:14px;}
+        .evapp-expositor-app{border:1px solid var(--evapp-border);border-radius:18px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.055);overflow:hidden;}
+        .evapp-expositor-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px;background:#f7f9fc;border-bottom:1px solid var(--evapp-border);position:sticky;top:0;z-index:5;}
+        .evapp-expositor-tab{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;border:1px solid #d7dce2;border-radius:14px;background:#fff;color:#344054!important;text-decoration:none;padding:11px 10px;font-size:15px;font-weight:850;line-height:1.1;cursor:pointer;box-shadow:0 1px 4px rgba(15,23,42,.03);}
+        .evapp-expositor-tab:hover{background:#eef5ff;color:#1f4f82!important;}
+        .evapp-expositor-tab.is-active{background:var(--evapp-blue);border-color:var(--evapp-blue);color:#fff!important;box-shadow:0 6px 14px rgba(47,115,181,.22);}
+        .evapp-expositor-panels{height:calc(100svh - 330px);min-height:430px;max-height:760px;overflow:hidden;background:#fff;}
+        .evapp-expositor-panel{display:none;height:100%;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:14px;scroll-behavior:smooth;}
+        .evapp-expositor-panel.is-active{display:block;}
+        .evapp-expositor-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0 0 12px;}
+        .evapp-expositor-panel-head h3{margin:0 0 3px;font-size:20px;line-height:1.2;}
+        .evapp-expositor-card{border:1px solid var(--evapp-border);border-radius:16px;background:#fff;padding:14px;box-shadow:0 3px 14px rgba(0,0,0,.035);}
+        .evapp-expositor-card + .evapp-expositor-card{margin-top:12px;}
         .evapp-expositor-card h3{margin:0 0 10px;font-size:18px;}
-        .evapp-expositor-stat{font-size:34px;font-weight:800;color:var(--evapp-blue);line-height:1;}
         .evapp-expositor-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0;}
-        .evapp-expositor-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:10px;background:var(--evapp-blue);color:#fff!important;text-decoration:none;padding:10px 14px;font-weight:700;cursor:pointer;line-height:1.2;}
-        .evapp-expositor-btn:hover{background:#275f95;color:#fff!important;}
+        .evapp-expositor-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:12px;background:var(--evapp-blue);color:#fff!important;text-decoration:none;padding:11px 14px;font-weight:800;cursor:pointer;line-height:1.2;min-height:42px;text-align:center;}
+        .evapp-expositor-btn:hover{background:var(--evapp-blue-dark);color:#fff!important;}
         .evapp-expositor-btn.secondary{background:#eef2f7;color:#1f2937!important;border:1px solid #d7dce2;}
         .evapp-expositor-btn.secondary:hover{background:#e3e8ef;color:#1f2937!important;}
         .evapp-expositor-btn.danger{background:#d63638;}
+        .evapp-expositor-btn.danger:hover{background:#b42324;}
         .evapp-expositor-btn[disabled]{opacity:.55;cursor:not-allowed;}
-        .evapp-expositor-input,.evapp-expositor-select{width:100%;border:1px solid #cfd6df;border-radius:10px;padding:10px 12px;background:#fff;box-sizing:border-box;}
-        .evapp-expositor-form-grid{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:10px;align-items:end;}
-        .evapp-expositor-field label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.4px;font-weight:800;color:#667085;margin-bottom:5px;}
+        .evapp-expositor-input,.evapp-expositor-select{width:100%;border:1px solid #cfd6df;border-radius:12px;padding:11px 12px;background:#fff;box-sizing:border-box;min-height:44px;font-size:16px;}
+        .evapp-expositor-form-grid{display:grid;grid-template-columns:1.5fr .75fr .75fr .75fr .75fr;gap:10px;align-items:end;}
+        .evapp-expositor-qr-grid{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:end;}
+        .evapp-expositor-field label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.45px;font-weight:850;color:#667085;margin-bottom:5px;line-height:1.25;}
+        .evapp-expositor-field small{display:block;margin-top:4px;color:#667085;font-size:12px;line-height:1.35;}
         .evapp-expositor-table{width:100%;border-collapse:collapse;font-size:14px;}
         .evapp-expositor-table th,.evapp-expositor-table td{border-bottom:1px solid #edf0f3;padding:9px;text-align:left;vertical-align:middle;}
         .evapp-expositor-table th{font-size:12px;text-transform:uppercase;color:#667085;background:#f8fafc;}
-        .evapp-expositor-notice{border-radius:12px;padding:12px 14px;margin:12px 0;border:1px solid #d7e2f2;background:#f4f8ff;}
+        .evapp-expositor-products-list{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px;}
+        .evapp-expositor-product-card{border:1px solid #e2e8f0;border-radius:15px;background:#fbfcfe;padding:12px;}
+        .evapp-expositor-product-main{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
+        .evapp-expositor-product-title{font-weight:850;font-size:15px;line-height:1.25;word-break:break-word;}
+        .evapp-expositor-product-code{display:block;margin-top:3px;font-size:11px;color:#667085;word-break:break-all;}
+        .evapp-expositor-product-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:10px;}
+        .evapp-expositor-chip{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:7px 8px;min-width:0;}
+        .evapp-expositor-chip span{display:block;font-size:10px;font-weight:850;letter-spacing:.35px;text-transform:uppercase;color:#667085;line-height:1.1;}
+        .evapp-expositor-chip strong{display:block;margin-top:3px;font-size:13px;color:#1f2937;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .evapp-expositor-product-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
+        .evapp-expositor-product-actions .evapp-expositor-btn{min-height:38px;padding:8px 10px;font-size:14px;}
+        .evapp-expositor-notice{border-radius:14px;padding:12px 14px;margin:12px 0;border:1px solid #d7e2f2;background:#f4f8ff;line-height:1.45;}
         .evapp-expositor-notice.error{border-color:#f0b7b8;background:#fff5f5;color:#7f1d1d;}
         .evapp-expositor-notice.success{border-color:#b7e2c1;background:#f0fff4;color:#14532d;}
-        .evapp-expositor-scanner{display:none;border:1px solid var(--evapp-border);border-radius:14px;background:#0f172a;padding:12px;margin:12px 0;color:#fff;}
-        .evapp-expositor-scanner video{width:100%;max-height:420px;background:#000;border-radius:10px;display:block;}
-        .evapp-expositor-attendee{display:none;border:1px solid #bfd4f0;background:#f7fbff;border-radius:14px;padding:14px;margin:12px 0;}
+        .evapp-expositor-scanner{display:none;border:1px solid var(--evapp-border);border-radius:16px;background:#0f172a;padding:12px;margin:12px 0;color:#fff;}
+        .evapp-expositor-scanner video{width:100%;max-height:46svh;background:#000;border-radius:12px;display:block;object-fit:cover;}
+        .evapp-expositor-attendee{display:none;border:1px solid #bfd4f0;background:#f7fbff;border-radius:16px;padding:14px;margin:12px 0;}
         .evapp-expositor-attendee h3{margin:0 0 6px;}
-        .evapp-expositor-badge{display:inline-flex;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:800;background:#edf2f7;color:#344054;}
-        @media(max-width:900px){.evapp-expositor-grid{grid-template-columns:1fr;}.evapp-expositor-form-grid{grid-template-columns:1fr;}.evapp-expositor-header{display:block;}}
+        .evapp-expositor-badge{display:inline-flex;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:850;background:#edf2f7;color:#344054;white-space:nowrap;}
+        .evapp-expositor-badge.is-active{background:#e7f8ef;color:#166534;}
+        .evapp-expositor-badge.is-inactive{background:#fff1f2;color:#9f1239;}
+        .evapp-expositor-empty{border:1px dashed #cbd5e1;border-radius:15px;background:#f8fafc;padding:16px;color:#667085;line-height:1.45;}
+        @media(max-width:900px){
+            .evapp-expositor-header{display:block;margin-bottom:10px;}
+            .evapp-expositor-header h2{font-size:24px;}
+            .evapp-expositor-switch{min-width:0;margin-top:10px;}
+            .evapp-expositor-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}
+            .evapp-expositor-stat-card{padding:10px 8px;border-radius:14px;}
+            .evapp-expositor-stat-card h3{font-size:10px;margin-bottom:6px;}
+            .evapp-expositor-stat{font-size:24px;}
+            .evapp-expositor-stat-card .evapp-expositor-btn{font-size:12px;min-height:34px;border-radius:10px;padding:7px 6px;}
+            .evapp-expositor-panels{height:calc(100svh - 300px);min-height:390px;max-height:none;}
+            .evapp-expositor-panel{padding:12px;}
+            .evapp-expositor-panel-head{display:block;}
+            .evapp-expositor-form-grid,.evapp-expositor-qr-grid{grid-template-columns:1fr;}
+            .evapp-expositor-actions{display:grid;grid-template-columns:1fr;gap:8px;}
+            .evapp-expositor-actions .evapp-expositor-input{max-width:none!important;}
+            .evapp-expositor-btn{width:100%;}
+            .evapp-expositor-product-meta{grid-template-columns:repeat(2,minmax(0,1fr));}
+            .evapp-expositor-product-main{display:block;}
+            .evapp-expositor-table{display:block;overflow-x:auto;white-space:nowrap;}
+        }
+        @media(max-width:420px){
+            .evapp-expositor-module{margin-left:-2px;margin-right:-2px;}
+            .evapp-expositor-stats{gap:6px;}
+            .evapp-expositor-stat-card h3{font-size:9.5px;letter-spacing:.2px;}
+            .evapp-expositor-stat{font-size:22px;}
+            .evapp-expositor-tabs{gap:6px;padding:8px;}
+            .evapp-expositor-tab{font-size:14px;padding:10px 7px;border-radius:12px;}
+            .evapp-expositor-panels{height:calc(100svh - 285px);min-height:360px;}
+        }
     </style>
     <?php
 }
@@ -1503,22 +1620,36 @@ function eventosapp_expositor_render_products_table( $event_id, $expositor_id, $
     ob_start();
 
     if ( empty( $products ) ) {
-        echo '<p class="evapp-expositor-muted">Todavía no has creado productos o consumibles para entregar.</p>';
+        echo '<div class="evapp-expositor-empty">Todavía no has creado productos o consumibles para entregar.</div>';
     } else {
-        echo '<table class="evapp-expositor-table"><thead><tr><th>Producto</th><th>Inventario</th><th>Límite por asistente</th><th>Entregados</th><th>Estado</th></tr></thead><tbody>';
+        echo '<div class="evapp-expositor-products-list">';
         foreach ( $products as $product ) {
             $delivered = eventosapp_expositor_count_deliveries( $event_id, $expositor_id, $product['id'] );
-            $inventory = $product['inventory'] === '' ? 'Sin límite' : ( $delivered . ' / ' . absint( $product['inventory'] ) );
-            $limit     = absint( $product['limit_per_attendee'] ) === 0 ? 'Sin límite' : absint( $product['limit_per_attendee'] );
-            echo '<tr>';
-            echo '<td><strong>' . esc_html( $product['name'] ) . '</strong><br><code>' . esc_html( $product['id'] ) . '</code></td>';
-            echo '<td>' . esc_html( $inventory ) . '</td>';
-            echo '<td>' . esc_html( $limit ) . '</td>';
-            echo '<td><strong>' . esc_html( $delivered ) . '</strong></td>';
-            echo '<td><span class="evapp-expositor-badge">' . ( $product['active'] === '1' ? 'Activo' : 'Inactivo' ) . '</span></td>';
-            echo '</tr>';
+            $inventory_value = $product['inventory'] === '' ? '' : absint( $product['inventory'] );
+            $inventory_label = $product['inventory'] === '' ? 'Sin límite' : ( $delivered . ' / ' . $inventory_value );
+            $min_limit       = isset( $product['min_per_attendee'] ) ? absint( $product['min_per_attendee'] ) : 1;
+            $max_limit       = absint( $product['limit_per_attendee'] ) === 0 ? 'Sin límite' : absint( $product['limit_per_attendee'] );
+            $active_label    = $product['active'] === '1' ? 'Activo' : 'Inactivo';
+            $badge_class     = $product['active'] === '1' ? 'is-active' : 'is-inactive';
+
+            echo '<div class="evapp-expositor-product-card" data-product-card="' . esc_attr( $product['id'] ) . '" data-product-name="' . esc_attr( $product['name'] ) . '" data-product-inventory="' . esc_attr( $inventory_value ) . '" data-product-min="' . esc_attr( $min_limit ) . '" data-product-limit="' . esc_attr( absint( $product['limit_per_attendee'] ) ) . '" data-product-active="' . esc_attr( $product['active'] ) . '">';
+            echo '<div class="evapp-expositor-product-main">';
+            echo '<div><div class="evapp-expositor-product-title">' . esc_html( $product['name'] ) . '</div><code class="evapp-expositor-product-code">' . esc_html( $product['id'] ) . '</code></div>';
+            echo '<span class="evapp-expositor-badge ' . esc_attr( $badge_class ) . '">' . esc_html( $active_label ) . '</span>';
+            echo '</div>';
+            echo '<div class="evapp-expositor-product-meta">';
+            echo '<div class="evapp-expositor-chip"><span>Inventario</span><strong>' . esc_html( $inventory_label ) . '</strong></div>';
+            echo '<div class="evapp-expositor-chip"><span>Mín.</span><strong>' . esc_html( $min_limit ) . '</strong></div>';
+            echo '<div class="evapp-expositor-chip"><span>Máx.</span><strong>' . esc_html( $max_limit ) . '</strong></div>';
+            echo '<div class="evapp-expositor-chip"><span>Entregados</span><strong>' . esc_html( $delivered ) . '</strong></div>';
+            echo '</div>';
+            echo '<div class="evapp-expositor-product-actions">';
+            echo '<button type="button" class="evapp-expositor-btn secondary evapp-product-edit" data-product-id="' . esc_attr( $product['id'] ) . '">Editar</button>';
+            echo '<button type="button" class="evapp-expositor-btn danger evapp-product-delete" data-product-id="' . esc_attr( $product['id'] ) . '">Eliminar</button>';
+            echo '</div>';
+            echo '</div>';
         }
-        echo '</tbody></table>';
+        echo '</div>';
     }
 
     $html = ob_get_clean();
@@ -1526,12 +1657,19 @@ function eventosapp_expositor_render_products_table( $event_id, $expositor_id, $
     return $html;
 }
 
-function eventosapp_expositor_products_select_options( $event_id, $expositor_id ) {
+function eventosapp_expositor_get_products_select_options_html( $event_id, $expositor_id ) {
     $products = eventosapp_expositor_get_products( $event_id, $expositor_id );
+    ob_start();
+    echo '<option value="">— Selecciona un producto —</option>';
     foreach ( $products as $product ) {
         if ( $product['active'] !== '1' ) continue;
         echo '<option value="' . esc_attr( $product['id'] ) . '">' . esc_html( $product['name'] ) . '</option>';
     }
+    return ob_get_clean();
+}
+
+function eventosapp_expositor_products_select_options( $event_id, $expositor_id ) {
+    echo eventosapp_expositor_get_products_select_options_html( $event_id, $expositor_id );
 }
 
 add_shortcode( 'eventosapp_expositor', function () {
@@ -1583,8 +1721,12 @@ add_shortcode( 'eventosapp_expositor', function () {
                 <div class="evapp-expositor-muted"><strong><?php echo esc_html( $expositor_name ); ?></strong> · <?php echo esc_html( $event_title ); ?></div>
             </div>
             <?php if ( count( $expositor_ids ) > 1 ) : ?>
-                <form method="get">
-                    <label class="evapp-expositor-muted" for="evapp_expositor_switch">Cambiar expositor</label>
+                <form method="get" class="evapp-expositor-switch">
+                    <?php foreach ( $_GET as $key => $value ) : ?>
+                        <?php if ( $key === 'expositor_id' || is_array( $value ) ) continue; ?>
+                        <input type="hidden" name="<?php echo esc_attr( sanitize_key( $key ) ); ?>" value="<?php echo esc_attr( sanitize_text_field( wp_unslash( $value ) ) ); ?>">
+                    <?php endforeach; ?>
+                    <label for="evapp_expositor_switch">Cambiar expositor</label>
                     <select id="evapp_expositor_switch" name="expositor_id" class="evapp-expositor-select" onchange="this.form.submit()">
                         <?php foreach ( $expositor_ids as $eid ) :
                             $name = get_post_meta( $eid, '_expositor_nombre_empresa', true ) ?: get_the_title( $eid );
@@ -1596,58 +1738,124 @@ add_shortcode( 'eventosapp_expositor', function () {
             <?php endif; ?>
         </div>
 
-        <div class="evapp-expositor-grid">
-            <div class="evapp-expositor-card"><h3>Personas entregadas</h3><div class="evapp-expositor-stat" id="evapp-expo-total-deliveries"><?php echo esc_html( $total_deliveries ); ?></div></div>
-            <div class="evapp-expositor-card"><h3>Productos creados</h3><div class="evapp-expositor-stat"><?php echo esc_html( $total_products ); ?></div></div>
-            <div class="evapp-expositor-card"><h3>Base de datos</h3><?php if ( $download_allowed ) : ?><a class="evapp-expositor-btn" href="<?php echo esc_url( $download_url ); ?>">Descargar CSV</a><?php else : ?><p class="evapp-expositor-muted">Descarga pendiente de autorización por el organizador.</p><?php endif; ?></div>
+        <div class="evapp-expositor-stats" aria-label="Métricas del expositor">
+            <div class="evapp-expositor-stat-card">
+                <h3>Entregas</h3>
+                <div class="evapp-expositor-stat" id="evapp-expo-total-deliveries"><?php echo esc_html( $total_deliveries ); ?></div>
+            </div>
+            <div class="evapp-expositor-stat-card">
+                <h3>Productos</h3>
+                <div class="evapp-expositor-stat" id="evapp-expo-total-products"><?php echo esc_html( $total_products ); ?></div>
+            </div>
+            <div class="evapp-expositor-stat-card">
+                <h3>Base datos</h3>
+                <?php if ( $download_allowed ) : ?>
+                    <a class="evapp-expositor-btn" href="<?php echo esc_url( $download_url ); ?>">CSV</a>
+                <?php else : ?>
+                    <div class="evapp-expositor-muted" style="font-size:12px;line-height:1.2;">Pendiente</div>
+                <?php endif; ?>
+            </div>
         </div>
 
-        <div class="evapp-expositor-card">
-            <h3>Crear producto o consumible</h3>
-            <div class="evapp-expositor-form-grid">
-                <div class="evapp-expositor-field"><label>Producto</label><input type="text" id="evapp_product_name" class="evapp-expositor-input" placeholder="Ej. Muestra gratis, bebida, cupón"></div>
-                <div class="evapp-expositor-field"><label>Inventario</label><input type="number" id="evapp_product_inventory" class="evapp-expositor-input" min="0" placeholder="Vacío = sin límite"></div>
-                <div class="evapp-expositor-field"><label>Límite por asistente</label><input type="number" id="evapp_product_limit" class="evapp-expositor-input" min="0" value="1" placeholder="0 = sin límite"></div>
-                <button class="evapp-expositor-btn" id="evapp_save_product" type="button">Guardar</button>
-            </div>
-            <div id="evapp-products-table" style="margin-top:14px;">
-                <?php eventosapp_expositor_render_products_table( $event_id, $current_expositor ); ?>
-            </div>
-        </div>
-
-        <div class="evapp-expositor-card" style="margin-top:14px;">
-            <h3>Control de entrega por QR</h3>
-            <div class="evapp-expositor-form-grid" style="grid-template-columns:2fr auto auto;">
-                <div class="evapp-expositor-field">
-                    <label>Producto a entregar</label>
-                    <select id="evapp_delivery_product" class="evapp-expositor-select">
-                        <option value="">— Selecciona un producto —</option>
-                        <?php eventosapp_expositor_products_select_options( $event_id, $current_expositor ); ?>
-                    </select>
-                </div>
-                <button class="evapp-expositor-btn" id="evapp_open_camera" type="button">Abrir cámara</button>
-                <button class="evapp-expositor-btn secondary" id="evapp_stop_camera" type="button" style="display:none;">Cerrar cámara</button>
+        <div class="evapp-expositor-app">
+            <div class="evapp-expositor-tabs" role="tablist" aria-label="Opciones del expositor">
+                <button type="button" class="evapp-expositor-tab is-active" id="evapp-tab-btn-qr" data-evapp-tab="qr" role="tab" aria-selected="true" aria-controls="evapp-panel-qr">Leer QR</button>
+                <button type="button" class="evapp-expositor-tab" id="evapp-tab-btn-inventory" data-evapp-tab="inventory" role="tab" aria-selected="false" aria-controls="evapp-panel-inventory">Gestionar inventario</button>
             </div>
 
-            <div class="evapp-expositor-actions">
-                <input type="text" id="evapp_manual_qr" class="evapp-expositor-input" style="max-width:520px;" placeholder="También puedes pegar o escribir el contenido del QR">
-                <button class="evapp-expositor-btn secondary" id="evapp_validate_manual" type="button">Validar QR</button>
-            </div>
+            <div class="evapp-expositor-panels">
+                <section class="evapp-expositor-panel is-active" id="evapp-panel-qr" data-evapp-panel="qr" role="tabpanel" aria-labelledby="evapp-tab-btn-qr">
+                    <div class="evapp-expositor-panel-head">
+                        <div>
+                            <h3>Control de entrega por QR</h3>
+                            <div class="evapp-expositor-muted">Selecciona un producto, lee el QR del asistente y confirma la transacción.</div>
+                        </div>
+                    </div>
 
-            <div id="evapp-scanner" class="evapp-expositor-scanner">
-                <video id="evapp-scanner-video" playsinline muted></video>
-                <div class="evapp-expositor-muted" id="evapp-scanner-status" style="color:#dbeafe;margin-top:8px;">Apunta la cámara al QR del asistente.</div>
-            </div>
+                    <div class="evapp-expositor-card">
+                        <div class="evapp-expositor-qr-grid">
+                            <div class="evapp-expositor-field">
+                                <label for="evapp_delivery_product">Producto a entregar</label>
+                                <select id="evapp_delivery_product" class="evapp-expositor-select">
+                                    <?php eventosapp_expositor_products_select_options( $event_id, $current_expositor ); ?>
+                                </select>
+                            </div>
+                            <button class="evapp-expositor-btn" id="evapp_open_camera" type="button">Abrir cámara</button>
+                            <button class="evapp-expositor-btn secondary" id="evapp_stop_camera" type="button" style="display:none;">Cerrar cámara</button>
+                        </div>
 
-            <div id="evapp-expo-message"></div>
-            <div class="evapp-expositor-attendee" id="evapp-attendee-card">
-                <h3 id="evapp-attendee-name"></h3>
-                <div id="evapp-attendee-data" class="evapp-expositor-muted"></div>
-                <div id="evapp-attendee-warning"></div>
-                <div class="evapp-expositor-actions">
-                    <button class="evapp-expositor-btn" id="evapp_confirm_delivery" type="button">Confirmar entrega</button>
-                    <button class="evapp-expositor-btn secondary" id="evapp_cancel_delivery" type="button">Cancelar</button>
-                </div>
+                        <div class="evapp-expositor-actions">
+                            <input type="text" id="evapp_manual_qr" class="evapp-expositor-input" style="max-width:520px;" placeholder="También puedes pegar o escribir el contenido del QR">
+                            <button class="evapp-expositor-btn secondary" id="evapp_validate_manual" type="button">Validar QR</button>
+                        </div>
+
+                        <div id="evapp-scanner" class="evapp-expositor-scanner">
+                            <video id="evapp-scanner-video" playsinline muted></video>
+                            <div class="evapp-expositor-muted" id="evapp-scanner-status" style="color:#dbeafe;margin-top:8px;">Apunta la cámara al QR del asistente.</div>
+                        </div>
+
+                        <div id="evapp-expo-message"></div>
+                        <div class="evapp-expositor-attendee" id="evapp-attendee-card">
+                            <h3 id="evapp-attendee-name"></h3>
+                            <div id="evapp-attendee-data" class="evapp-expositor-muted"></div>
+                            <div id="evapp-attendee-warning"></div>
+                            <div class="evapp-expositor-actions">
+                                <button class="evapp-expositor-btn" id="evapp_confirm_delivery" type="button">Confirmar entrega</button>
+                                <button class="evapp-expositor-btn secondary" id="evapp_cancel_delivery" type="button">Cancelar</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="evapp-expositor-panel" id="evapp-panel-inventory" data-evapp-panel="inventory" role="tabpanel" aria-labelledby="evapp-tab-btn-inventory">
+                    <div class="evapp-expositor-panel-head">
+                        <div>
+                            <h3>Gestionar inventario</h3>
+                            <div class="evapp-expositor-muted">Crea, edita, elimina productos y define inventario, entregas mínimas y máximas por asistente.</div>
+                        </div>
+                    </div>
+
+                    <div class="evapp-expositor-card">
+                        <input type="hidden" id="evapp_product_id" value="">
+                        <div class="evapp-expositor-form-grid">
+                            <div class="evapp-expositor-field">
+                                <label for="evapp_product_name">Producto</label>
+                                <input type="text" id="evapp_product_name" class="evapp-expositor-input" placeholder="Ej. Muestra gratis, bebida, cupón">
+                            </div>
+                            <div class="evapp-expositor-field">
+                                <label for="evapp_product_inventory">Inventario</label>
+                                <input type="number" id="evapp_product_inventory" class="evapp-expositor-input" min="0" placeholder="Vacío = sin límite">
+                            </div>
+                            <div class="evapp-expositor-field">
+                                <label for="evapp_product_min">Entrega mínima</label>
+                                <input type="number" id="evapp_product_min" class="evapp-expositor-input" min="0" value="1" placeholder="1">
+                            </div>
+                            <div class="evapp-expositor-field">
+                                <label for="evapp_product_limit">Entrega máxima</label>
+                                <input type="number" id="evapp_product_limit" class="evapp-expositor-input" min="0" value="1" placeholder="0 = sin límite">
+                            </div>
+                            <div class="evapp-expositor-field">
+                                <label for="evapp_product_active">Estado</label>
+                                <select id="evapp_product_active" class="evapp-expositor-select">
+                                    <option value="1">Activo</option>
+                                    <option value="0">Inactivo</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="evapp-expositor-actions">
+                            <button class="evapp-expositor-btn" id="evapp_save_product" type="button">Guardar producto</button>
+                            <button class="evapp-expositor-btn secondary" id="evapp_reset_product" type="button">Nuevo producto</button>
+                        </div>
+                        <div id="evapp-inventory-message"></div>
+                    </div>
+
+                    <div class="evapp-expositor-card">
+                        <h3>Productos y consumibles</h3>
+                        <div id="evapp-products-table">
+                            <?php eventosapp_expositor_render_products_table( $event_id, $current_expositor ); ?>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
     </div>
@@ -1655,39 +1863,168 @@ add_shortcode( 'eventosapp_expositor', function () {
     (function(){
         var root = document.getElementById('evapp-expositor-module');
         if(!root) return;
+
         var ajaxUrl = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
         var state = {stream:null, detector:null, scanning:false, ticketId:0, force:false};
+
         function qs(id){ return document.getElementById(id); }
-        function message(text, type){
-            var el = qs('evapp-expo-message');
-            el.innerHTML = text ? '<div class="evapp-expositor-notice '+(type||'')+'">'+text+'</div>' : '';
+        function qsa(selector, context){ return Array.prototype.slice.call((context || document).querySelectorAll(selector)); }
+        function getEl(id){ return qs(id); }
+        function escapeHtml(value){
+            return String(value || '').replace(/[&<>"']/g, function(match){
+                return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[match];
+            });
         }
+        function writeMessage(id, text, type){
+            var el = getEl(id);
+            if(!el) return;
+            el.innerHTML = text ? '<div class="evapp-expositor-notice '+(type||'')+'">'+escapeHtml(text)+'</div>' : '';
+            if(text){ el.scrollIntoView({behavior:'smooth', block:'nearest'}); }
+        }
+        function message(text, type){ writeMessage('evapp-expo-message', text, type); }
+        function inventoryMessage(text, type){ writeMessage('evapp-inventory-message', text, type); }
         function form(params){
             var fd = new FormData();
             Object.keys(params).forEach(function(k){ fd.append(k, params[k]); });
-            return fetch(ajaxUrl, {method:'POST', credentials:'same-origin', body:fd}).then(function(r){ return r.json().then(function(j){ j.httpStatus = r.status; return j; }); });
+            return fetch(ajaxUrl, {method:'POST', credentials:'same-origin', body:fd}).then(function(r){
+                return r.json().then(function(j){ j.httpStatus = r.status; return j; });
+            });
         }
-        function refreshProductSelect(){
-            var tmp = document.createElement('div');
-            tmp.innerHTML = qs('evapp-products-table').innerHTML;
+        function activePanel(){ return root.querySelector('.evapp-expositor-panel.is-active'); }
+        function scrollActivePanelTop(){
+            var panel = activePanel();
+            if(panel){ panel.scrollTo({top:0, behavior:'smooth'}); }
         }
-        qs('evapp_save_product').addEventListener('click', function(){
-            var name = qs('evapp_product_name').value.trim();
-            if(!name){ message('El nombre del producto es obligatorio.', 'error'); return; }
-            this.disabled = true;
-            form({action:'eventosapp_expositor_save_product', nonce:root.dataset.nonce, event_id:root.dataset.eventId, expositor_id:root.dataset.expositorId, name:name, inventory:qs('evapp_product_inventory').value, limit_per_attendee:qs('evapp_product_limit').value, active:'1'}).then(function(resp){
-                if(resp.success){
-                    message(resp.data.message, 'success');
-                    qs('evapp-products-table').innerHTML = resp.data.products_html;
-                    window.location.reload();
-                }else{
-                    message(resp.data && resp.data.message ? resp.data.message : 'No se pudo guardar el producto.', 'error');
-                }
-            }).catch(function(){ message('Error de conexión.', 'error'); }).finally(function(){ qs('evapp_save_product').disabled = false; });
+        function switchTab(tab){
+            qsa('.evapp-expositor-tab', root).forEach(function(btn){
+                var isActive = btn.getAttribute('data-evapp-tab') === tab;
+                btn.classList.toggle('is-active', isActive);
+                btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            });
+            qsa('.evapp-expositor-panel', root).forEach(function(panel){
+                panel.classList.toggle('is-active', panel.getAttribute('data-evapp-panel') === tab);
+            });
+            scrollActivePanelTop();
+        }
+        qsa('.evapp-expositor-tab', root).forEach(function(btn){
+            btn.addEventListener('click', function(){ switchTab(btn.getAttribute('data-evapp-tab')); });
         });
+        function updateProductUi(resp, selectedProduct){
+            if(resp && resp.data){
+                if(typeof resp.data.products_html !== 'undefined' && getEl('evapp-products-table')){
+                    getEl('evapp-products-table').innerHTML = resp.data.products_html;
+                }
+                if(typeof resp.data.products_options !== 'undefined' && getEl('evapp_delivery_product')){
+                    getEl('evapp_delivery_product').innerHTML = resp.data.products_options;
+                    if(selectedProduct){
+                        var canSelectProduct = false;
+                        qsa('option', getEl('evapp_delivery_product')).forEach(function(option){
+                            if(option.value === selectedProduct){ canSelectProduct = true; }
+                        });
+                        if(canSelectProduct){ getEl('evapp_delivery_product').value = selectedProduct; }
+                    }
+                }
+                if(typeof resp.data.total_products !== 'undefined' && getEl('evapp-expo-total-products')){
+                    getEl('evapp-expo-total-products').textContent = resp.data.total_products;
+                }
+            }
+        }
+        function resetProductForm(){
+            if(getEl('evapp_product_id')) getEl('evapp_product_id').value = '';
+            if(getEl('evapp_product_name')) getEl('evapp_product_name').value = '';
+            if(getEl('evapp_product_inventory')) getEl('evapp_product_inventory').value = '';
+            if(getEl('evapp_product_min')) getEl('evapp_product_min').value = '1';
+            if(getEl('evapp_product_limit')) getEl('evapp_product_limit').value = '1';
+            if(getEl('evapp_product_active')) getEl('evapp_product_active').value = '1';
+            if(getEl('evapp_save_product')) getEl('evapp_save_product').textContent = 'Guardar producto';
+        }
+        if(getEl('evapp_reset_product')){
+            getEl('evapp_reset_product').addEventListener('click', function(){
+                resetProductForm();
+                inventoryMessage('', '');
+                if(getEl('evapp_product_name')) getEl('evapp_product_name').focus();
+            });
+        }
+        if(getEl('evapp_save_product')){
+            getEl('evapp_save_product').addEventListener('click', function(){
+                var name = (getEl('evapp_product_name').value || '').trim();
+                var minVal = getEl('evapp_product_min').value === '' ? 1 : parseInt(getEl('evapp_product_min').value, 10);
+                var maxVal = getEl('evapp_product_limit').value === '' ? 1 : parseInt(getEl('evapp_product_limit').value, 10);
+                if(!name){ inventoryMessage('El nombre del producto es obligatorio.', 'error'); return; }
+                if(maxVal > 0 && minVal > maxVal){ inventoryMessage('La entrega mínima no puede ser mayor que la entrega máxima por asistente.', 'error'); return; }
+
+                this.disabled = true;
+                form({
+                    action:'eventosapp_expositor_save_product',
+                    nonce:root.dataset.nonce,
+                    event_id:root.dataset.eventId,
+                    expositor_id:root.dataset.expositorId,
+                    product_id:getEl('evapp_product_id').value,
+                    name:name,
+                    inventory:getEl('evapp_product_inventory').value,
+                    min_per_attendee:getEl('evapp_product_min').value,
+                    limit_per_attendee:getEl('evapp_product_limit').value,
+                    active:getEl('evapp_product_active').value
+                }).then(function(resp){
+                    if(resp.success){
+                        updateProductUi(resp, resp.data.product_id);
+                        resetProductForm();
+                        inventoryMessage(resp.data.message, 'success');
+                    }else{
+                        inventoryMessage(resp.data && resp.data.message ? resp.data.message : 'No se pudo guardar el producto.', 'error');
+                    }
+                }).catch(function(){ inventoryMessage('Error de conexión.', 'error'); }).finally(function(){
+                    if(getEl('evapp_save_product')) getEl('evapp_save_product').disabled = false;
+                });
+            });
+        }
+        if(getEl('evapp-products-table')){
+            getEl('evapp-products-table').addEventListener('click', function(e){
+                var editBtn = e.target.closest('.evapp-product-edit');
+                var deleteBtn = e.target.closest('.evapp-product-delete');
+                if(editBtn){
+                    var card = editBtn.closest('[data-product-card]');
+                    if(!card) return;
+                    switchTab('inventory');
+                    getEl('evapp_product_id').value = card.dataset.productCard || '';
+                    getEl('evapp_product_name').value = card.dataset.productName || '';
+                    getEl('evapp_product_inventory').value = card.dataset.productInventory || '';
+                    getEl('evapp_product_min').value = card.dataset.productMin || '1';
+                    getEl('evapp_product_limit').value = card.dataset.productLimit || '1';
+                    getEl('evapp_product_active').value = card.dataset.productActive || '1';
+                    getEl('evapp_save_product').textContent = 'Actualizar producto';
+                    inventoryMessage('Editando producto: ' + (card.dataset.productName || ''), '');
+                    getEl('evapp_product_name').focus();
+                    return;
+                }
+                if(deleteBtn){
+                    var productId = deleteBtn.getAttribute('data-product-id');
+                    var cardDelete = deleteBtn.closest('[data-product-card]');
+                    var productName = cardDelete ? (cardDelete.dataset.productName || 'este producto') : 'este producto';
+                    if(!productId) return;
+                    if(!window.confirm('¿Eliminar ' + productName + '? Las entregas históricas se conservarán en la base de datos.')) return;
+                    deleteBtn.disabled = true;
+                    form({
+                        action:'eventosapp_expositor_delete_product',
+                        nonce:root.dataset.nonce,
+                        event_id:root.dataset.eventId,
+                        expositor_id:root.dataset.expositorId,
+                        product_id:productId
+                    }).then(function(resp){
+                        if(resp.success){
+                            updateProductUi(resp, '');
+                            if(getEl('evapp_product_id').value === productId){ resetProductForm(); }
+                            inventoryMessage(resp.data.message, 'success');
+                        }else{
+                            inventoryMessage(resp.data && resp.data.message ? resp.data.message : 'No se pudo eliminar el producto.', 'error');
+                        }
+                    }).catch(function(){ inventoryMessage('Error de conexión.', 'error'); }).finally(function(){ deleteBtn.disabled = false; });
+                }
+            });
+        }
         function validateQr(content){
-            var product = qs('evapp_delivery_product').value;
-            if(!product){ message('Selecciona primero el producto que quieres entregar.', 'error'); return; }
+            var product = getEl('evapp_delivery_product') ? getEl('evapp_delivery_product').value : '';
+            if(!product){ message('Selecciona primero el producto que quieres entregar. Si no hay productos, entra en Gestionar inventario y crea uno.', 'error'); return; }
             if(!content){ message('No se detectó contenido de QR.', 'error'); return; }
             message('Validando QR...', '');
             form({action:'eventosapp_expositor_validate_qr', nonce:root.dataset.nonce, event_id:root.dataset.eventId, expositor_id:root.dataset.expositorId, product_id:product, qr_content:content}).then(function(resp){
@@ -1695,47 +2032,54 @@ add_shortcode( 'eventosapp_expositor', function () {
                 var a = resp.data.attendee;
                 state.ticketId = a.ticket_id;
                 state.force = false;
-                qs('evapp-attendee-name').textContent = a.full_name || 'Asistente sin nombre';
-                qs('evapp-attendee-data').innerHTML = '<strong>Ticket:</strong> '+(a.public_ticket_id || a.ticket_id)+'<br><strong>Email:</strong> '+(a.email || '—')+'<br><strong>Empresa:</strong> '+(a.company || '—')+'<br><strong>Documento:</strong> '+(a.document || '—');
-                qs('evapp-attendee-warning').innerHTML = resp.data.duplicate ? '<div class="evapp-expositor-notice error">'+resp.data.duplicate_label+'</div>' : '';
-                qs('evapp-attendee-card').style.display = 'block';
+                getEl('evapp-attendee-name').textContent = a.full_name || 'Asistente sin nombre';
+                getEl('evapp-attendee-data').innerHTML = '<strong>Ticket:</strong> '+escapeHtml(a.public_ticket_id || a.ticket_id)+'<br><strong>Email:</strong> '+escapeHtml(a.email || '—')+'<br><strong>Empresa:</strong> '+escapeHtml(a.company || '—')+'<br><strong>Documento:</strong> '+escapeHtml(a.document || '—');
+                getEl('evapp-attendee-warning').innerHTML = resp.data.duplicate ? '<div class="evapp-expositor-notice error">'+escapeHtml(resp.data.duplicate_label)+'</div>' : '';
+                getEl('evapp-attendee-card').style.display = 'block';
+                if(getEl('evapp_confirm_delivery')) getEl('evapp_confirm_delivery').textContent = 'Confirmar entrega';
                 message('QR válido. Confirma la entrega para registrar el beneficio.', 'success');
                 stopCamera();
+                getEl('evapp-attendee-card').scrollIntoView({behavior:'smooth', block:'nearest'});
             }).catch(function(){ message('Error de conexión al validar.', 'error'); });
         }
         function registerDelivery(force){
-            var product = qs('evapp_delivery_product').value;
+            var product = getEl('evapp_delivery_product') ? getEl('evapp_delivery_product').value : '';
             if(!state.ticketId || !product){ message('Primero valida un QR y selecciona un producto.', 'error'); return; }
-            qs('evapp_confirm_delivery').disabled = true;
+            getEl('evapp_confirm_delivery').disabled = true;
             form({action:'eventosapp_expositor_register_delivery', nonce:root.dataset.nonce, event_id:root.dataset.eventId, expositor_id:root.dataset.expositorId, product_id:product, ticket_id:state.ticketId, force:force ? '1' : '0'}).then(function(resp){
                 if(resp.success){
                     message(resp.data.message, 'success');
-                    qs('evapp-expo-total-deliveries').textContent = resp.data.total;
-                    qs('evapp-products-table').innerHTML = resp.data.products_html;
-                    qs('evapp-attendee-card').style.display = 'none';
+                    getEl('evapp-expo-total-deliveries').textContent = resp.data.total;
+                    if(resp.data.products_html && getEl('evapp-products-table')) getEl('evapp-products-table').innerHTML = resp.data.products_html;
+                    getEl('evapp-attendee-card').style.display = 'none';
+                    if(getEl('evapp_manual_qr')) getEl('evapp_manual_qr').value = '';
                     state.ticketId = 0;
                     state.force = false;
+                    getEl('evapp_confirm_delivery').textContent = 'Confirmar entrega';
                     return;
                 }
                 if(resp.data && resp.data.code === 'duplicate' && resp.data.can_force){
                     message(resp.data.message, 'error');
                     state.force = true;
-                    qs('evapp_confirm_delivery').textContent = 'Confirmar de todas formas';
+                    getEl('evapp_confirm_delivery').textContent = 'Confirmar de todas formas';
                     return;
                 }
                 message(resp.data && resp.data.message ? resp.data.message : 'No se pudo registrar la entrega.', 'error');
-            }).catch(function(){ message('Error de conexión al registrar.', 'error'); }).finally(function(){ qs('evapp_confirm_delivery').disabled = false; });
+            }).catch(function(){ message('Error de conexión al registrar.', 'error'); }).finally(function(){
+                if(getEl('evapp_confirm_delivery')) getEl('evapp_confirm_delivery').disabled = false;
+            });
         }
-        qs('evapp_validate_manual').addEventListener('click', function(){ validateQr(qs('evapp_manual_qr').value.trim()); });
-        qs('evapp_confirm_delivery').addEventListener('click', function(){ registerDelivery(state.force); });
-        qs('evapp_cancel_delivery').addEventListener('click', function(){ qs('evapp-attendee-card').style.display = 'none'; state.ticketId = 0; state.force = false; qs('evapp_confirm_delivery').textContent = 'Confirmar entrega'; });
+        if(getEl('evapp_validate_manual')) getEl('evapp_validate_manual').addEventListener('click', function(){ validateQr((getEl('evapp_manual_qr').value || '').trim()); });
+        if(getEl('evapp_manual_qr')) getEl('evapp_manual_qr').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); validateQr((getEl('evapp_manual_qr').value || '').trim()); } });
+        if(getEl('evapp_confirm_delivery')) getEl('evapp_confirm_delivery').addEventListener('click', function(){ registerDelivery(state.force); });
+        if(getEl('evapp_cancel_delivery')) getEl('evapp_cancel_delivery').addEventListener('click', function(){ getEl('evapp-attendee-card').style.display = 'none'; state.ticketId = 0; state.force = false; getEl('evapp_confirm_delivery').textContent = 'Confirmar entrega'; });
         function stopCamera(){
             state.scanning = false;
             if(state.stream){ state.stream.getTracks().forEach(function(t){ t.stop(); }); state.stream = null; }
-            qs('evapp-scanner').style.display = 'none';
-            qs('evapp_stop_camera').style.display = 'none';
+            if(getEl('evapp-scanner')) getEl('evapp-scanner').style.display = 'none';
+            if(getEl('evapp_stop_camera')) getEl('evapp_stop_camera').style.display = 'none';
         }
-        qs('evapp_stop_camera').addEventListener('click', stopCamera);
+        if(getEl('evapp_stop_camera')) getEl('evapp_stop_camera').addEventListener('click', stopCamera);
         function loadJsQr(){
             return new Promise(function(resolve, reject){
                 if(window.jsQR){ resolve(); return; }
@@ -1787,19 +2131,23 @@ add_shortcode( 'eventosapp_expositor', function () {
                 message('No se pudo cargar el lector QR alternativo. Usa el campo manual o revisa la conexión del navegador.', 'error');
             });
         }
-        qs('evapp_open_camera').addEventListener('click', function(){
-            if(!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia){ message('Este navegador no permite abrir la cámara. Usa el campo manual.', 'error'); return; }
-            navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}}).then(function(stream){
-                state.stream = stream;
-                state.scanning = true;
-                qs('evapp-scanner').style.display = 'block';
-                qs('evapp_stop_camera').style.display = 'inline-flex';
-                var video = qs('evapp-scanner-video');
-                video.srcObject = stream;
-                video.play();
-                startQrLoop(video);
-            }).catch(function(){ message('No se pudo abrir la cámara. Revisa permisos del navegador.', 'error'); });
-        });
+        if(getEl('evapp_open_camera')){
+            getEl('evapp_open_camera').addEventListener('click', function(){
+                switchTab('qr');
+                if(!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia){ message('Este navegador no permite abrir la cámara. Usa el campo manual.', 'error'); return; }
+                navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}}).then(function(stream){
+                    state.stream = stream;
+                    state.scanning = true;
+                    getEl('evapp-scanner').style.display = 'block';
+                    getEl('evapp_stop_camera').style.display = 'inline-flex';
+                    var video = getEl('evapp-scanner-video');
+                    video.srcObject = stream;
+                    video.play();
+                    getEl('evapp-scanner').scrollIntoView({behavior:'smooth', block:'nearest'});
+                    startQrLoop(video);
+                }).catch(function(){ message('No se pudo abrir la cámara. Revisa permisos del navegador.', 'error'); });
+            });
+        }
     })();
     </script>
     <?php
