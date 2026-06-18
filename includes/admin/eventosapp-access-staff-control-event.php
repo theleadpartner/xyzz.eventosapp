@@ -259,6 +259,7 @@ if (!function_exists('eventosapp_staff_access_user_has_any_dashboard_event')) {
         ]);
 
         if (!$event_ids) {
+            $cache[$user_id] = false;
             return false;
         }
 
@@ -273,6 +274,320 @@ if (!function_exists('eventosapp_staff_access_user_has_any_dashboard_event')) {
         return false;
     }
 }
+
+if (!function_exists('eventosapp_dashboard_user_has_staff_custom_scope_in_event')) {
+    /**
+     * Verifica si el usuario tiene una fila personalizada en el metabox
+     * Control de Acceso Dashboard Staff para un evento concreto, aunque Ver Dashboard
+     * esté apagado. Esto permite respetar una negación explícita por usuario.
+     *
+     * @param int $event_id
+     * @param int|null $user_id
+     * @return bool
+     */
+    function eventosapp_dashboard_user_has_staff_custom_scope_in_event($event_id, $user_id = null) {
+        $event_id = absint($event_id);
+        if ($user_id === null) {
+            $user_id = get_current_user_id();
+        }
+        $user_id = absint($user_id);
+
+        if (!$event_id || !$user_id) {
+            return false;
+        }
+
+        return function_exists('eventosapp_staff_access_user_has_custom_access')
+            && eventosapp_staff_access_user_has_custom_access($event_id, $user_id);
+    }
+}
+
+if (!function_exists('eventosapp_dashboard_user_has_any_staff_custom_scope')) {
+    /**
+     * Detecta si el usuario aparece en alguna configuración personalizada del metabox
+     * Control de Acceso Dashboard Staff.
+     *
+     * @param int|null $user_id
+     * @return bool
+     */
+    function eventosapp_dashboard_user_has_any_staff_custom_scope($user_id = null) {
+        if ($user_id === null) {
+            $user_id = get_current_user_id();
+        }
+        $user_id = absint($user_id);
+        if (!$user_id) {
+            return false;
+        }
+
+        static $cache = [];
+        if (array_key_exists($user_id, $cache)) {
+            return (bool) $cache[$user_id];
+        }
+
+        $event_ids = get_posts([
+            'post_type'      => 'eventosapp_event',
+            'post_status'    => ['publish', 'draft', 'pending', 'private'],
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'meta_key'       => '_eventosapp_staff_user_event_access',
+            'no_found_rows'  => true,
+        ]);
+
+        foreach ((array) $event_ids as $event_id) {
+            if (eventosapp_dashboard_user_has_staff_custom_scope_in_event((int) $event_id, $user_id)) {
+                $cache[$user_id] = true;
+                return true;
+            }
+        }
+
+        $cache[$user_id] = false;
+        return false;
+    }
+}
+
+if (!function_exists('eventosapp_dashboard_user_has_cogestion_assignment_in_event')) {
+    /**
+     * Verifica asignaciones por Co-gestión temporal y Staff operativo para un evento.
+     * Se mantiene separado de eventosapp_user_can_manage_event para que ningún permiso global
+     * por rol pueda convertir esta revisión en acceso a todos los eventos.
+     *
+     * @param int $event_id
+     * @param int|null $user_id
+     * @return bool
+     */
+    function eventosapp_dashboard_user_has_cogestion_assignment_in_event($event_id, $user_id = null) {
+        $event_id = absint($event_id);
+        if ($user_id === null) {
+            $user_id = get_current_user_id();
+        }
+        $user_id = absint($user_id);
+
+        if (!$event_id || !$user_id) {
+            return false;
+        }
+
+        $now = time();
+
+        $temp_authors = get_post_meta($event_id, '_evapp_temp_authors', true);
+        if (is_array($temp_authors)) {
+            foreach ($temp_authors as $row) {
+                if (!is_array($row) || empty($row['user_id'])) {
+                    continue;
+                }
+                if (absint($row['user_id']) !== $user_id) {
+                    continue;
+                }
+                $until = isset($row['until']) ? absint($row['until']) : 0;
+                if (!$until || $until >= $now) {
+                    return true;
+                }
+            }
+        }
+
+        $staff_assigned = get_post_meta($event_id, '_evapp_event_staff_assigned', true);
+        if (is_array($staff_assigned)) {
+            foreach ($staff_assigned as $key => $row) {
+                $row_user_id = absint($key);
+                if (is_array($row) && !empty($row['user_id'])) {
+                    $row_user_id = absint($row['user_id']);
+                }
+                if ($row_user_id !== $user_id) {
+                    continue;
+                }
+
+                $until = is_array($row) && isset($row['until']) ? absint($row['until']) : 0;
+                if (!$until || $until >= $now) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('eventosapp_dashboard_user_has_any_cogestion_assignment')) {
+    /**
+     * Verifica si el usuario tiene al menos una asignación vigente de Co-gestión/Staff operativo.
+     *
+     * @param int|null $user_id
+     * @return bool
+     */
+    function eventosapp_dashboard_user_has_any_cogestion_assignment($user_id = null) {
+        if ($user_id === null) {
+            $user_id = get_current_user_id();
+        }
+        $user_id = absint($user_id);
+        if (!$user_id) {
+            return false;
+        }
+
+        static $cache = [];
+        if (array_key_exists($user_id, $cache)) {
+            return (bool) $cache[$user_id];
+        }
+
+        $event_ids = get_posts([
+            'post_type'      => 'eventosapp_event',
+            'post_status'    => ['publish', 'draft', 'pending', 'private'],
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                'relation' => 'OR',
+                [
+                    'key'     => '_evapp_temp_authors',
+                    'compare' => 'EXISTS',
+                ],
+                [
+                    'key'     => '_evapp_event_staff_assigned',
+                    'compare' => 'EXISTS',
+                ],
+            ],
+        ]);
+
+        foreach ((array) $event_ids as $event_id) {
+            if (eventosapp_dashboard_user_has_cogestion_assignment_in_event((int) $event_id, $user_id)) {
+                $cache[$user_id] = true;
+                return true;
+            }
+        }
+
+        $cache[$user_id] = false;
+        return false;
+    }
+}
+
+if (!function_exists('eventosapp_dashboard_user_has_any_event_scope')) {
+    /**
+     * Indica si el usuario está limitado por asignaciones explícitas de alguno de los metaboxes
+     * que otorgan acceso frontend por evento. Esta función no concede permisos por sí misma;
+     * solo ayuda a activar el candado por evento cuando corresponde.
+     *
+     * @param int|null $user_id
+     * @return bool
+     */
+    function eventosapp_dashboard_user_has_any_event_scope($user_id = null) {
+        if ($user_id === null) {
+            $user_id = get_current_user_id();
+        }
+        $user_id = absint($user_id);
+        if (!$user_id) {
+            return false;
+        }
+
+        if (eventosapp_dashboard_user_has_any_staff_custom_scope($user_id)) {
+            return true;
+        }
+
+        if (eventosapp_dashboard_user_has_any_cogestion_assignment($user_id)) {
+            return true;
+        }
+
+        if (function_exists('eventosapp_support_user_has_any_event') && eventosapp_support_user_has_any_event($user_id)) {
+            return true;
+        }
+
+        if (function_exists('eventosapp_expositor_user_has_any_event') && eventosapp_expositor_user_has_any_event($user_id)) {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('eventosapp_dashboard_user_can_access_event_scope')) {
+    /**
+     * Valida el acceso real de un usuario a un evento del dashboard frontend.
+     *
+     * Reglas aplicadas:
+     * - El administrador conserva acceso total.
+     * - El autor del evento conserva acceso a su propio evento.
+     * - La fila personalizada del metabox Control de Acceso Dashboard Staff manda sobre
+     *   otras asignaciones para ese evento: Ver Dashboard apagado bloquea el evento.
+     * - Co-gestión, Equipo de apoyo y Expositores suman eventos permitidos, pero no abren
+     *   eventos donde el usuario no esté asignado.
+     *
+     * @param int $event_id
+     * @param int|null $user_id
+     * @return bool
+     */
+    function eventosapp_dashboard_user_can_access_event_scope($event_id, $user_id = null) {
+        $event_id = absint($event_id);
+        if ($user_id === null) {
+            $user_id = get_current_user_id();
+        }
+        $user_id = absint($user_id);
+
+        if (!$event_id || !$user_id || get_post_type($event_id) !== 'eventosapp_event') {
+            return false;
+        }
+
+        if (user_can($user_id, 'manage_options')) {
+            return true;
+        }
+
+        $event = get_post($event_id);
+        if ($event && absint($event->post_author) === $user_id) {
+            return true;
+        }
+
+        if (eventosapp_dashboard_user_has_staff_custom_scope_in_event($event_id, $user_id)) {
+            return eventosapp_staff_access_user_can_select_event_in_dashboard($event_id, $user_id);
+        }
+
+        if (eventosapp_dashboard_user_has_cogestion_assignment_in_event($event_id, $user_id)) {
+            return true;
+        }
+
+        if (function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event($event_id, $user_id)) {
+            return true;
+        }
+
+        if (function_exists('eventosapp_expositor_user_has_assignment_in_event') && eventosapp_expositor_user_has_assignment_in_event($event_id, $user_id)) {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('eventosapp_dashboard_enforce_event_scope_on_role_can')) {
+    /**
+     * Candado final de seguridad para evitar que permisos globales por rol reabran
+     * módulos en un evento activo que el usuario no tiene asignado.
+     *
+     * @param bool $has_permission
+     * @param string $feature
+     * @param WP_User $user
+     * @return bool
+     */
+    function eventosapp_dashboard_enforce_event_scope_on_role_can($has_permission, $feature, $user) {
+        if (!$user || empty($user->ID)) {
+            return $has_permission;
+        }
+
+        $user_id = absint($user->ID);
+        if (!$user_id || user_can($user_id, 'manage_options')) {
+            return $has_permission;
+        }
+
+        $active_event = function_exists('eventosapp_get_active_event') ? absint(eventosapp_get_active_event()) : 0;
+
+        if (!$active_event) {
+            if ($feature === 'dashboard' && eventosapp_dashboard_user_has_any_event_scope($user_id)) {
+                return true;
+            }
+            return $has_permission;
+        }
+
+        if (!eventosapp_dashboard_user_can_access_event_scope($active_event, $user_id)) {
+            return false;
+        }
+
+        return $has_permission;
+    }
+}
+add_filter('eventosapp_role_can', 'eventosapp_dashboard_enforce_event_scope_on_role_can', 20000, 3);
 
 // ========================================
 // METABOX: Control de Acceso por Evento
@@ -978,6 +1293,10 @@ if (!function_exists('eventosapp_user_can_access_dashboard_feature_in_event')) {
         $feature = sanitize_key($feature);
 
         if (!$user_id || !$event_id || $feature === '') {
+            return false;
+        }
+
+        if (function_exists('eventosapp_dashboard_user_can_access_event_scope') && !eventosapp_dashboard_user_can_access_event_scope($event_id, $user_id)) {
             return false;
         }
 
