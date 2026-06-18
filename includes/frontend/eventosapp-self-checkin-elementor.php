@@ -1885,6 +1885,14 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'default'      => 'yes',
                     ]);
 
+                    $this->add_control('hide_target_class', [
+                        'label'       => 'Clase para ocultar otros elementos',
+                        'type'        => \Elementor\Controls_Manager::TEXT,
+                        'default'     => 'evsc-hide-on-fullscreen',
+                        'label_block' => true,
+                        'description' => 'Agrega esta clase, sin punto inicial, en cualquier elemento de Elementor que deba desaparecer cuando se active la pantalla completa.',
+                    ]);
+
                     $this->end_controls_section();
 
                     $this->start_controls_section('section_style_button', [
@@ -1968,6 +1976,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'label'              => $settings['label'] ?? 'Activar pantalla completa',
                         'align'              => $settings['align'] ?? 'center',
                         'hide_on_fullscreen' => ( $settings['hide_on_fullscreen'] ?? 'yes' ) === 'yes',
+                        'hide_target_class'  => $settings['hide_target_class'] ?? 'evsc-hide-on-fullscreen',
                     ]);
                 }
             }
