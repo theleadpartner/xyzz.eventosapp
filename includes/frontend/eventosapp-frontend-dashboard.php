@@ -238,15 +238,15 @@ if ( ! function_exists('eventosapp_dashboard_user_can_select_event') ) {
 			return false;
 		}
 
-		if ( current_user_can('manage_options') ) {
+		if ( function_exists('eventosapp_dashboard_user_can_access_event_scope') ) {
+			return eventosapp_dashboard_user_can_access_event_scope( $event_id, $user_id );
+		}
+
+		if ( user_can( $user_id, 'manage_options' ) ) {
 			return true;
 		}
 
 		if ( function_exists('eventosapp_staff_access_user_can_select_event_in_dashboard') && eventosapp_staff_access_user_can_select_event_in_dashboard($event_id, $user_id) ) {
-			return true;
-		}
-
-		if ( function_exists('eventosapp_support_user_can_select_event_in_dashboard') && eventosapp_support_user_can_select_event_in_dashboard($event_id, $user_id) ) {
 			return true;
 		}
 
