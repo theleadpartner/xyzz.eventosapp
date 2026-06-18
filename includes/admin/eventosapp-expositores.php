@@ -562,18 +562,36 @@ if ( ! function_exists( 'eventosapp_expositor_apply_dashboard_isolation' ) ) {
 
         if ( $active_event ) {
             if ( eventosapp_expositor_user_has_assignment_in_event( $active_event, $user_id ) ) {
-                return in_array( $feature, $allowed_features, true );
-            }
+                if ( in_array( $feature, $allowed_features, true ) ) {
+                    return true;
+                }
 
-            if ( eventosapp_expositor_user_has_any_event( $user_id ) ) {
-                return $feature === 'dashboard';
+                $has_other_event_scope = false;
+                $event = get_post( $active_event );
+                if ( $event && absint( $event->post_author ) === $user_id ) {
+                    $has_other_event_scope = true;
+                }
+                if ( ! $has_other_event_scope && function_exists( 'eventosapp_dashboard_user_has_staff_custom_scope_in_event' ) ) {
+                    $has_other_event_scope = eventosapp_dashboard_user_has_staff_custom_scope_in_event( $active_event, $user_id );
+                }
+                if ( ! $has_other_event_scope && function_exists( 'eventosapp_dashboard_user_has_cogestion_assignment_in_event' ) ) {
+                    $has_other_event_scope = eventosapp_dashboard_user_has_cogestion_assignment_in_event( $active_event, $user_id );
+                }
+                if ( ! $has_other_event_scope && function_exists( 'eventosapp_support_user_has_assignment_in_event' ) ) {
+                    $has_other_event_scope = eventosapp_support_user_has_assignment_in_event( $active_event, $user_id );
+                }
+
+                return $has_other_event_scope ? $has_permission : false;
             }
 
             return $has_permission;
         }
 
         if ( eventosapp_expositor_user_has_any_event( $user_id ) ) {
-            return in_array( $feature, $allowed_features, true );
+            if ( in_array( $feature, $allowed_features, true ) ) {
+                return true;
+            }
+            return $has_permission;
         }
 
         return $has_permission;
@@ -587,8 +605,9 @@ if ( ! function_exists( 'eventosapp_expositor_manager_can_access_event' ) ) {
         $user_id  = $user_id ? absint( $user_id ) : get_current_user_id();
         if ( ! $event_id || ! $user_id ) return false;
         if ( user_can( $user_id, 'manage_options' ) ) return true;
+        if ( function_exists( 'eventosapp_dashboard_user_can_access_event_scope' ) && ! eventosapp_dashboard_user_can_access_event_scope( $event_id, $user_id ) ) return false;
         if ( function_exists( 'eventosapp_user_can_manage_event' ) && eventosapp_user_can_manage_event( $event_id, $user_id ) ) return true;
-        if ( function_exists( 'eventosapp_role_can' ) && eventosapp_role_can( 'expositor_gestion', $user_id ) ) return true;
+        if ( function_exists( 'eventosapp_staff_access_get_user_feature_value' ) && (int) eventosapp_staff_access_get_user_feature_value( $event_id, $user_id, 'expositor_gestion', 0 ) === 1 ) return true;
         return false;
     }
 }
