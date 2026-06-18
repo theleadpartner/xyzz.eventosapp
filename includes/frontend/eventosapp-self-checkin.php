@@ -1027,6 +1027,20 @@ if ( ! function_exists('eventosapp_self_checkin_clean_background_class') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_self_checkin_clean_fullscreen_hide_class') ) {
+    /**
+     * Normaliza la clase que se usará para ocultar elementos externos cuando el kiosko
+     * entra en pantalla completa. Solo se acepta una clase CSS, sin punto inicial.
+     */
+    function eventosapp_self_checkin_clean_fullscreen_hide_class( $class ) {
+        $class = trim( (string) $class );
+        $class = ltrim( $class, '.' );
+        $parts = preg_split('/\s+/', $class);
+        $class = ! empty( $parts[0] ) ? sanitize_html_class( $parts[0] ) : '';
+        return $class ?: 'evsc-hide-on-fullscreen';
+    }
+}
+
 if ( ! function_exists('eventosapp_self_checkin_get_design_config') ) {
     function eventosapp_self_checkin_get_design_config( $event_id ) {
         $event_id = absint( $event_id );
@@ -1299,6 +1313,7 @@ if ( ! function_exists('eventosapp_self_checkin_default_css') ) {
     function eventosapp_self_checkin_default_css() {
         return <<<'CSS'
 .evsc-wrap{box-sizing:border-box;width:100%;max-width:760px;margin:0 auto;padding:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:28px;box-shadow:0 12px 34px rgba(15,23,42,.08);font-family:Arial,Helvetica,sans-serif;color:#0f172a;text-align:center}
+body.evsc-modal-open{overflow:hidden!important;touch-action:none}
 .evsc-wrap *,.evsc-wrap *::before,.evsc-wrap *::after,.evsc-admin-note *,.evsc-admin-note *::before,.evsc-admin-note *::after{box-sizing:border-box}
 .evsc-logo-wrap{display:flex;justify-content:center;align-items:center;margin:0 0 18px;text-align:center}
 .evsc-logo{display:block;width:auto;height:auto;max-width:220px;max-height:120px;object-fit:contain}
@@ -1328,6 +1343,7 @@ if ( ! function_exists('eventosapp_self_checkin_default_css') ) {
 .evsc-status.err{background:#fee2e2;color:#991b1b}
 .evsc-status.loading{background:#dbeafe;color:#1e40af}
 .evsc-results{margin-top:18px;display:grid;gap:12px;width:100%}
+.evsc-results.evsc-results-hidden{display:none!important}
 .evsc-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;background:#fff;border:2px solid #e2e8f0;border-radius:20px;padding:18px;box-shadow:0 8px 20px rgba(15,23,42,.05);cursor:pointer;text-align:left;width:100%;color:inherit;font-family:inherit}
 .evsc-result:hover{border-color:#93c5fd}
 .evsc-result.is-selected{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
@@ -1350,6 +1366,18 @@ if ( ! function_exists('eventosapp_self_checkin_default_css') ) {
 .evsc-alert{max-width:900px;margin:16px auto;padding:14px 16px;border-radius:14px;font-size:17px;font-weight:700;font-family:Arial,Helvetica,sans-serif}
 .evsc-alert-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
 .evsc-alert-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.evsc-modal{position:fixed;inset:0;z-index:999999;display:none;align-items:center;justify-content:center;padding:clamp(18px,4vh,56px) 18px;font-family:Arial,Helvetica,sans-serif}
+.evsc-modal.is-visible{display:flex}
+.evsc-modal-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.64);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
+.evsc-modal-card{position:relative;z-index:1;width:min(92vw,820px);max-height:calc(100vh - 72px);overflow:auto;border-radius:28px;background:var(--evsc-wrap-bg,#f8fafc);border:1px solid var(--evsc-wrap-border,#e2e8f0);box-shadow:0 28px 76px rgba(2,6,23,.42);padding:24px;color:var(--evsc-text,#0f172a);text-align:center;-webkit-overflow-scrolling:touch}
+.evsc-modal-body{width:100%;padding:4px 0 0}
+.evsc-modal-close{position:sticky;top:0;float:right;z-index:3;display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;margin:-10px -8px 8px 12px;border:0;border-radius:999px;background:var(--evsc-light-btn-bg,#e2e8f0);color:var(--evsc-light-btn-text,#0f172a);font-size:30px;font-weight:900;line-height:1;cursor:pointer;touch-action:manipulation;box-shadow:0 8px 20px rgba(15,23,42,.14)}
+.evsc-modal-close:hover{background:var(--evsc-light-btn-hover,#cbd5e1)}
+.evsc-modal .evsc-status{margin-top:6px}
+.evsc-modal .evsc-actions{margin-top:18px}
+.evsc-modal .evsc-confirm{margin:18px 0 0;max-width:none}
+.evsc-modal .evsc-confirm-grid{text-align:left}
+.evsc-modal .evsc-result{background:var(--evsc-panel-bg,#fff)!important}
 .evsc-admin-note{position:relative;max-width:760px;margin:16px auto 18px;padding:16px 52px 16px 16px;border-radius:16px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.45;font-weight:700}
 .evsc-admin-note strong{color:#7c2d12}
 .evsc-launcher-close{position:absolute;top:10px;right:10px;width:32px;height:32px;border:0;border-radius:999px;background:rgba(124,45,18,.12);color:#7c2d12;font-size:20px;line-height:1;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;touch-action:manipulation}
@@ -1368,13 +1396,13 @@ body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
 .evsc-fullscreen-trigger-wrap{display:flex;width:100%;max-width:760px;margin:0 auto 16px;align-items:center;justify-content:center;font-family:Arial,Helvetica,sans-serif}
 .evsc-fullscreen-trigger-wrap.align-left{justify-content:flex-start}.evsc-fullscreen-trigger-wrap.align-right{justify-content:flex-end}.evsc-fullscreen-trigger-wrap.align-stretch .evsc-fullscreen-trigger{width:100%}
 .evsc-fullscreen-trigger{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:0;border-radius:999px;background:#047857;color:#fff!important;text-decoration:none!important;padding:16px 24px;min-height:58px;font-size:18px;font-weight:900;line-height:1;cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none;box-shadow:0 10px 24px rgba(4,120,87,.2);transition:transform .12s ease,filter .15s ease,background-color .15s ease,color .15s ease,opacity .15s ease}
-.evsc-fullscreen-trigger:hover{filter:brightness(.96);transform:translateY(-1px)}.evsc-fullscreen-trigger:active{transform:translateY(0)}.evsc-fullscreen-trigger.evsc-is-hidden,body.evsc-is-fullscreen .evsc-fullscreen-trigger-wrap[data-hide-on-fullscreen="1"]{display:none!important}body.evsc-is-fullscreen .evsc-launcher-module{display:none!important}
+.evsc-fullscreen-trigger:hover{filter:brightness(.96);transform:translateY(-1px)}.evsc-fullscreen-trigger:active{transform:translateY(0)}.evsc-fullscreen-trigger.evsc-is-hidden,body.evsc-is-fullscreen .evsc-fullscreen-trigger-wrap[data-hide-on-fullscreen="1"],body.evsc-is-fullscreen .evsc-hide-on-fullscreen{display:none!important}body.evsc-is-fullscreen .evsc-launcher-module{display:none!important}
 .evsc-keyboard{width:100%;margin:18px 0 4px;padding:14px;border-radius:22px;background:#f1f5f9;border:1px solid #dbe4ee;box-shadow:inset 0 1px 0 rgba(255,255,255,.72)}
 .evsc-keyboard-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;flex-wrap:wrap}.evsc-keyboard-title{display:block;color:#334155;font-size:15px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.evsc-keyboard-toggle{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .evsc-keyboard-mode{border:0;border-radius:999px;background:#e2e8f0;color:#0f172a;padding:9px 14px;font-size:14px;font-weight:900;cursor:pointer;touch-action:manipulation}.evsc-keyboard-mode.is-active{background:#2563eb;color:#fff}
 .evsc-keyboard-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(7,minmax(0,1fr));display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-numbers{display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-letters{display:grid}
 .evsc-key{display:inline-flex;align-items:center;justify-content:center;min-height:58px;border:0;border-radius:16px;background:#fff;color:#0f172a;font-size:22px;font-weight:900;line-height:1;box-shadow:0 3px 10px rgba(15,23,42,.08);cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none}.evsc-key:hover{filter:brightness(.97)}.evsc-key:active{transform:translateY(1px)}.evsc-key-action{background:#dbeafe;color:#1d4ed8;font-size:16px}.evsc-key-wide{grid-column:span 2}
-@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}.evsc-fullscreen-trigger-wrap{max-width:100%;align-items:stretch}.evsc-fullscreen-trigger{width:100%;min-height:64px}.evsc-keyboard{padding:12px;border-radius:18px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(5,minmax(0,1fr))}.evsc-key{min-height:54px;font-size:20px}.evsc-key-action{font-size:15px}}
+@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}.evsc-fullscreen-trigger-wrap{max-width:100%;align-items:stretch}.evsc-fullscreen-trigger{width:100%;min-height:64px}.evsc-keyboard{padding:12px;border-radius:18px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(5,minmax(0,1fr))}.evsc-key{min-height:54px;font-size:20px}.evsc-key-action{font-size:15px}.evsc-modal{padding:14px}.evsc-modal-card{width:100%;max-height:calc(100vh - 28px);border-radius:22px;padding:18px}.evsc-modal-close{width:46px;height:46px;font-size:28px}}
 .evsc-wrap{background:var(--evsc-wrap-bg,#f8fafc)!important;border-color:var(--evsc-wrap-border,#e2e8f0)!important;color:var(--evsc-text,#0f172a)!important}
 .evsc-logo{max-width:var(--evsc-main-logo-width,220px)!important;max-height:var(--evsc-main-logo-max-height,120px)!important;width:auto!important;height:auto!important;object-fit:contain!important}
 .evsc-kicker{color:var(--evsc-kicker,#2563eb)!important}.evsc-title{color:var(--evsc-text,#0f172a)!important}.evsc-subtitle{color:var(--evsc-muted,#475569)!important}
@@ -1442,11 +1470,36 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
     return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || null;
   }
 
+  function evscGetFullscreenHideSelectors(){
+    var selectors = ['.evsc-hide-on-fullscreen'];
+    $('.evsc-fullscreen-trigger-wrap[data-fullscreen-hide-class]').each(function(){
+      var className = String($(this).attr('data-fullscreen-hide-class') || '').replace(/^\./, '').split(/\s+/)[0];
+      if(className && /^[A-Za-z0-9_-]+$/.test(className)){
+        selectors.push('.' + className);
+      }
+    });
+
+    var unique = [];
+    $.each(selectors, function(i, selector){
+      if(selector && $.inArray(selector, unique) === -1){
+        unique.push(selector);
+      }
+    });
+    return unique;
+  }
+
   function evscUpdateFullscreenState(){
     var isFullscreen = !!evscFullscreenElement();
     $('body').toggleClass('evsc-is-fullscreen', isFullscreen);
     $('.evsc-js-fullscreen').toggleClass('evsc-is-hidden', isFullscreen).attr('aria-hidden', isFullscreen ? 'true' : 'false');
     $('.evsc-launcher-module').attr('aria-hidden', isFullscreen ? 'true' : 'false');
+
+    var hideSelectors = evscGetFullscreenHideSelectors();
+    if(hideSelectors.length){
+      try {
+        $(hideSelectors.join(',')).not('.evsc-fullscreen-trigger-wrap').not('.evsc-fullscreen-trigger').attr('aria-hidden', isFullscreen ? 'true' : 'false');
+      } catch(e) {}
+    }
   }
 
   function evscTryFullscreen(){
@@ -1721,6 +1774,8 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
     var $searchBtn = $root.find('.evsc-js-search').first();
     var $confirmBtn = $root.find('.evsc-js-confirm').first();
     var $clearBtn = $root.find('.evsc-js-clear').first();
+    var $modal = $root.find('.evsc-js-modal').first();
+    var $modalClose = $root.find('.evsc-js-modal-close').first();
     var $results = $root.find('.evsc-js-results').first();
     var $status = $root.find('.evsc-js-status').first();
     var $confirm = $root.find('.evsc-js-confirm-box').first();
@@ -1731,6 +1786,25 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
     var selectedTicket = null;
     var confirmedTicket = null;
     var currentRows = [];
+
+    function openModal(){
+      if(!$modal.length){
+        return;
+      }
+      $modal.addClass('is-visible').attr('aria-hidden', 'false');
+      $('body').addClass('evsc-modal-open');
+      setTimeout(function(){
+        try { $modal.find('.evsc-modal-card').first().scrollTop(0); } catch(e) {}
+      }, 20);
+    }
+
+    function closeModal(){
+      if(!$modal.length){
+        return;
+      }
+      $modal.removeClass('is-visible').attr('aria-hidden', 'true');
+      $('body').removeClass('evsc-modal-open');
+    }
 
     function showStatus(message, type){
       $status.removeClass('ok err loading is-visible');
@@ -1920,16 +1994,20 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       });
     }
 
-    function resetSelection(keepResults){
+    function resetSelection(keepResults, keepModal){
       selectedTicket = null;
       confirmedTicket = null;
-      $confirmBtn.prop('disabled', true);
+      $confirmBtn.prop('disabled', true).show();
       $printBtn.prop('disabled', true);
       $confirm.removeClass('is-visible');
       $confirmData.empty();
+      $results.removeClass('evsc-results-hidden').attr('aria-hidden', 'false');
       if(!keepResults){
         currentRows = [];
         $results.empty();
+      }
+      if(!keepModal){
+        closeModal();
       }
     }
 
@@ -1938,10 +2016,14 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
     }
 
     function renderResults(rows){
-      resetSelection(true);
+      resetSelection(true, true);
+      openModal();
       currentRows = $.isArray(rows) ? rows : [];
+      $results.removeClass('evsc-results-hidden').attr('aria-hidden', 'false');
+      $confirmBtn.prop('disabled', true).show();
 
       if(!currentRows.length){
+        $confirmBtn.prop('disabled', true).hide();
         $results.html('<div class="evsc-status is-visible err">'+escHtml(messages.no_results || 'No se encontraron resultados.')+'</div>');
         return;
       }
@@ -1978,6 +2060,9 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
 
     function renderConfirm(it){
       confirmedTicket = it;
+      openModal();
+      $results.addClass('evsc-results-hidden').attr('aria-hidden', 'true');
+      $confirmBtn.prop('disabled', true).hide();
       $confirmData.html(
         '<div class="evsc-data"><span class="evsc-data-label">Nombre</span><span class="evsc-data-value">'+escHtml(it.full_name || '—')+'</span></div>'+
         '<div class="evsc-data"><span class="evsc-data-label">Cédula</span><span class="evsc-data-value">'+escHtml(it.cc || '—')+'</span></div>'+
@@ -1990,7 +2075,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       );
       $confirm.addClass('is-visible');
       $printBtn.prop('disabled', false);
-      $('html, body').animate({scrollTop: $confirm.offset().top - 20}, 220);
+      try { $modal.find('.evsc-modal-card').first().scrollTop(0); } catch(e) {}
     }
 
     initTouchKeyboard();
@@ -2035,25 +2120,30 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
         evscExitFullscreen();
         $input.val('');
         resetSelection(false);
+        openModal();
         showStatus('Modo pantalla completa cerrado.', 'ok');
         setTimeout(function(){ focusInput(); }, 160);
         return;
       }
 
       if(!validIdentifier()){
+        resetSelection(false, true);
+        openModal();
         showStatus(messages.cc_required || 'Ingresa un dato válido para buscar.', 'err');
-        resetSelection(false);
         return;
       }
 
       if(!ajaxUrl || !searchNonce){
+        resetSelection(false, true);
+        openModal();
         showStatus('No fue posible iniciar la búsqueda. Recarga la página e intenta nuevamente.', 'err');
         return;
       }
 
       $searchBtn.prop('disabled', true).text('Buscando…');
+      resetSelection(false, true);
+      openModal();
       showStatus(messages.searching || 'Buscando asistente…', 'loading');
-      resetSelection(false);
 
       $.post(ajaxUrl, {
         action: 'eventosapp_self_checkin_search',
@@ -2066,9 +2156,11 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
           renderResults(resp.data && resp.data.results ? resp.data.results : []);
         } else {
           var msg = resp && resp.data && resp.data.message ? resp.data.message : (messages.no_results || 'No se encontraron resultados.');
+          openModal();
           showStatus(msg, 'err');
         }
       }, 'json').fail(function(){
+        openModal();
         showStatus(messages.net_error || 'Error de conexión. Intenta nuevamente.', 'err');
       }).always(function(){
         $searchBtn.prop('disabled', false).text($searchBtn.data('label') || 'Buscar');
@@ -2161,9 +2253,15 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
     });
 
     evscBindPress($clearBtn, null, function(){
-      $input.val('').focus();
+      $input.val('');
       resetSelection(false);
       showStatus('', '');
+      focusInput();
+    });
+
+    evscBindPress($modalClose, null, function(){
+      closeModal();
+      focusInput();
     });
   }
 
@@ -2282,6 +2380,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_fullscreen_button') ) {
             'label'              => 'Activar pantalla completa',
             'align'              => 'center',
             'hide_on_fullscreen' => true,
+            'hide_target_class'  => 'evsc-hide-on-fullscreen',
             'extra_class'        => '',
         ];
         $args = wp_parse_args( (array) $args, $defaults );
@@ -2293,12 +2392,16 @@ if ( ! function_exists('eventosapp_self_checkin_render_fullscreen_button') ) {
             $align = 'center';
         }
 
+        $hide_target_class = function_exists('eventosapp_self_checkin_clean_fullscreen_hide_class') ? eventosapp_self_checkin_clean_fullscreen_hide_class( $args['hide_target_class'] ) : 'evsc-hide-on-fullscreen';
         $classes = trim( 'evsc-fullscreen-trigger-wrap align-' . $align . ' ' . sanitize_html_class( $args['extra_class'] ) );
 
         ob_start();
         echo eventosapp_self_checkin_inline_style_fallback();
+        if ( $hide_target_class && $hide_target_class !== 'evsc-hide-on-fullscreen' ) {
+            echo '<style id="eventosapp-self-checkin-fullscreen-hide-' . esc_attr( md5( $hide_target_class ) ) . '">body.evsc-is-fullscreen .' . esc_html( $hide_target_class ) . '{display:none!important;}</style>';
+        }
         ?>
-        <div class="<?php echo esc_attr( $classes ); ?>" data-hide-on-fullscreen="<?php echo ! empty( $args['hide_on_fullscreen'] ) ? '1' : '0'; ?>">
+        <div class="<?php echo esc_attr( $classes ); ?>" data-hide-on-fullscreen="<?php echo ! empty( $args['hide_on_fullscreen'] ) ? '1' : '0'; ?>" data-fullscreen-hide-class="<?php echo esc_attr( $hide_target_class ); ?>">
             <button type="button" class="evsc-fullscreen-trigger evsc-js-fullscreen" data-label="<?php echo esc_attr( $args['label'] ); ?>">
                 <?php echo esc_html( $args['label'] ); ?>
             </button>
@@ -2481,20 +2584,29 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
                     </div>
                 <?php endif; ?>
 
-                <div class="evsc-status evsc-js-status" role="status" aria-live="polite"></div>
-                <div class="evsc-results evsc-js-results" aria-live="polite"></div>
-
-                <div class="evsc-actions">
-                    <button type="button" class="evsc-btn evsc-btn-light evsc-js-clear"><?php echo esc_html( $args['clear_label'] ); ?></button>
-                    <button type="button" class="evsc-btn evsc-btn-success evsc-js-confirm" data-label="<?php echo esc_attr( $args['confirm_label'] ); ?>" disabled><?php echo esc_html( $args['confirm_label'] ); ?></button>
-                </div>
             </div>
 
-            <div class="evsc-confirm evsc-js-confirm-box" aria-live="polite">
-                <h3><?php echo esc_html( $args['confirm_heading'] ); ?></h3>
-                <div class="evsc-confirm-grid evsc-js-confirm-data"></div>
-                <div class="evsc-actions">
-                    <button type="button" class="evsc-btn evsc-btn-success evsc-js-print" data-label="<?php echo esc_attr( $args['print_label'] ); ?>" disabled><?php echo esc_html( $args['print_label'] ); ?></button>
+            <div class="evsc-modal evsc-js-modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="<?php echo esc_attr( $uid ); ?>-modal-title">
+                <div class="evsc-modal-backdrop" aria-hidden="true"></div>
+                <div class="evsc-modal-card">
+                    <button type="button" class="evsc-modal-close evsc-js-modal-close" aria-label="Cerrar ventana de resultados">×</button>
+                    <div class="evsc-modal-body">
+                        <div id="<?php echo esc_attr( $uid ); ?>-modal-title" class="evsc-status evsc-js-status" role="status" aria-live="polite"></div>
+                        <div class="evsc-results evsc-js-results" aria-live="polite"></div>
+
+                        <div class="evsc-actions evsc-modal-actions">
+                            <button type="button" class="evsc-btn evsc-btn-light evsc-js-clear"><?php echo esc_html( $args['clear_label'] ); ?></button>
+                            <button type="button" class="evsc-btn evsc-btn-success evsc-js-confirm" data-label="<?php echo esc_attr( $args['confirm_label'] ); ?>" disabled><?php echo esc_html( $args['confirm_label'] ); ?></button>
+                        </div>
+
+                        <div class="evsc-confirm evsc-js-confirm-box" aria-live="polite">
+                            <h3><?php echo esc_html( $args['confirm_heading'] ); ?></h3>
+                            <div class="evsc-confirm-grid evsc-js-confirm-data"></div>
+                            <div class="evsc-actions">
+                                <button type="button" class="evsc-btn evsc-btn-success evsc-js-print" data-label="<?php echo esc_attr( $args['print_label'] ); ?>" disabled><?php echo esc_html( $args['print_label'] ); ?></button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2540,12 +2652,14 @@ add_shortcode('eventosapp_self_checkin_fullscreen_button', function( $atts ) {
         'label'              => 'Activar pantalla completa',
         'align'              => 'center',
         'hide_on_fullscreen' => '1',
+        'hide_target_class'  => 'evsc-hide-on-fullscreen',
     ], $atts, 'eventosapp_self_checkin_fullscreen_button');
 
     return eventosapp_self_checkin_render_fullscreen_button([
         'label'              => $atts['label'],
         'align'              => $atts['align'],
         'hide_on_fullscreen' => $atts['hide_on_fullscreen'] !== '0',
+        'hide_target_class'  => $atts['hide_target_class'],
     ]);
 });
 
