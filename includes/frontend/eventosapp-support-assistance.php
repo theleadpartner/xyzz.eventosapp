@@ -353,7 +353,7 @@ if ( ! function_exists('eventosapp_support_user_can_admin_event_without_support'
         $user_id  = $user_id === null ? get_current_user_id() : absint($user_id);
         if ( ! $event_id || ! $user_id ) return false;
 
-        if ( user_can($user_id, 'manage_options') || user_can($user_id, 'edit_others_posts') ) {
+        if ( user_can($user_id, 'manage_options') ) {
             return true;
         }
 
@@ -428,19 +428,17 @@ if ( ! function_exists('eventosapp_support_user_can_select_event_in_dashboard') 
             return true;
         }
 
+        if ( function_exists('eventosapp_dashboard_user_can_access_event_scope') ) {
+            return eventosapp_dashboard_user_can_access_event_scope($event_id, $user_id);
+        }
+
         // Respeta primero los accesos personalizados del metabox Control de Acceso Dashboard Staff.
         // Esto evita que el flujo de selección de evento quede limitado solo al permiso de gestión del evento.
         if ( function_exists('eventosapp_staff_access_user_can_select_event_in_dashboard') && eventosapp_staff_access_user_can_select_event_in_dashboard($event_id, $user_id) ) {
             return true;
         }
 
-        // Compatibilidad con la matriz por rol del Control de Acceso Dashboard Staff.
-        // Esta ruta no depende del evento activo y por eso es segura durante la selección inicial.
-        if ( function_exists('eventosapp_user_can_access_dashboard_feature_in_event') && eventosapp_user_can_access_dashboard_feature_in_event($user_id, 'dashboard', $event_id) ) {
-            return true;
-        }
-
-        // Permite seleccionar el evento a usuarios asignados al módulo Expositor o a gestores de expositores.
+        // Permite seleccionar el evento a usuarios asignados al módulo Expositor.
         // Esta validación no concede permisos de Asistencia; solo habilita el cambio de evento activo.
         if ( function_exists('eventosapp_expositor_user_can_select_event_in_dashboard') && eventosapp_expositor_user_can_select_event_in_dashboard($event_id, $user_id) ) {
             return true;
