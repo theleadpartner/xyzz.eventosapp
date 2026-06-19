@@ -1543,6 +1543,15 @@ add_action('add_meta_boxes', function() {
     );
 
     add_meta_box(
+        'eventosapp_self_checkin_auth_evento',
+        'Autogestión Kiosko - Autenticación',
+        'eventosapp_render_metabox_self_checkin_auth',
+        'eventosapp_event',
+        'normal',
+        'default'
+    );
+
+    add_meta_box(
         'eventosapp_self_checkin_design_evento',
         'Autogestión Kiosko - Personalización',
         'eventosapp_render_metabox_self_checkin_design',
@@ -2070,6 +2079,102 @@ function eventosapp_render_metabox_networking_global_auth($post) {
 }
 
 /**
+ * Metabox: Autenticación del módulo de Autogestión Kiosko.
+ * Permite escoger qué datos puede escribir el asistente para encontrarse en el kiosko.
+ */
+function eventosapp_render_metabox_self_checkin_auth($post) {
+    $options = function_exists('eventosapp_self_checkin_auth_field_options')
+        ? eventosapp_self_checkin_auth_field_options()
+        : [
+            'identification' => [
+                'label'       => 'Identificación',
+                'help'        => 'Busca por cédula, pasaporte u otra identificación registrada.',
+                'keyboard'    => 'numbers',
+                'placeholder' => 'Ej: 1234567890 o PA123456',
+            ],
+            'full_name' => [
+                'label'       => 'Nombres + apellidos',
+                'help'        => 'Busca por nombre completo o una parte.',
+                'keyboard'    => 'letters',
+                'placeholder' => 'Ej: María Pérez',
+            ],
+            'last_name' => [
+                'label'       => 'Apellidos',
+                'help'        => 'Busca por apellido completo o parcial.',
+                'keyboard'    => 'letters',
+                'placeholder' => 'Ej: García',
+            ],
+            'phone' => [
+                'label'       => 'Celular',
+                'help'        => 'Busca por celular completo o parcial.',
+                'keyboard'    => 'numbers',
+                'placeholder' => 'Ej: 3001234567',
+            ],
+        ];
+
+    $selected = function_exists('eventosapp_self_checkin_get_event_auth_fields')
+        ? eventosapp_self_checkin_get_event_auth_fields($post->ID)
+        : (array) get_post_meta($post->ID, '_eventosapp_self_checkin_auth_fields', true);
+
+    if (empty($selected)) {
+        $selected = ['identification'];
+    }
+
+    $keyboard_mode = function_exists('eventosapp_self_checkin_auth_keyboard_mode')
+        ? eventosapp_self_checkin_auth_keyboard_mode($selected)
+        : (in_array('full_name', $selected, true) || in_array('last_name', $selected, true) ? 'letters' : 'numbers');
+
+    wp_nonce_field('eventosapp_self_checkin_auth_guardar', 'eventosapp_self_checkin_auth_nonce');
+    ?>
+    <style>
+        .evapp-kiosk-auth-box{border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;padding:14px;margin:10px 0;color:#111827}
+        .evapp-kiosk-auth-title{margin:0 0 8px;font-weight:800;color:#1e3a8a;font-size:14px;text-transform:uppercase;letter-spacing:.03em}
+        .evapp-kiosk-auth-help{margin:0 0 12px;color:#1f4f82;font-size:12px;line-height:1.45}
+        .evapp-kiosk-auth-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:10px}
+        .evapp-kiosk-auth-option{display:block;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px;min-height:120px}
+        .evapp-kiosk-auth-option strong{display:flex;align-items:center;gap:8px;font-size:14px;color:#111827;margin-bottom:6px}
+        .evapp-kiosk-auth-option small{display:block;color:#6b7280;line-height:1.35;margin-top:5px}
+        .evapp-kiosk-auth-pill{display:inline-flex;align-items:center;border-radius:999px;background:#e0f2fe;color:#075985;font-size:11px;font-weight:800;padding:3px 8px;margin-top:8px}
+        .evapp-kiosk-auth-preview{margin-top:12px;padding:12px;border-radius:10px;background:#fff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:13px;line-height:1.45}
+        .evapp-kiosk-auth-preview strong{color:#111827}
+    </style>
+    <div class="evapp-kiosk-auth-box">
+        <p class="evapp-kiosk-auth-title">Datos permitidos para buscar asistentes en el kiosko</p>
+        <p class="evapp-kiosk-auth-help">Esta configuración aplica solo para este evento. Puedes activar uno o varios datos. Si activas nombres o apellidos como único criterio, el teclado táctil abrirá primero en letras; si activas identificación o celular, abrirá primero en números. El asistente siempre podrá cambiar entre letras y números desde el panel.</p>
+        <div class="evapp-kiosk-auth-grid">
+            <?php foreach ($options as $key => $field): ?>
+                <?php
+                $key = sanitize_key($key);
+                $label = $field['label'] ?? $key;
+                $help = $field['help'] ?? '';
+                $placeholder = $field['placeholder'] ?? '';
+                $keyboard = ($field['keyboard'] ?? 'numbers') === 'letters' ? 'Letras' : 'Números';
+                ?>
+                <label class="evapp-kiosk-auth-option">
+                    <strong>
+                        <input type="checkbox" name="eventosapp_self_checkin_auth_fields[]" value="<?php echo esc_attr($key); ?>" <?php checked(in_array($key, $selected, true)); ?>>
+                        <?php echo esc_html($label); ?>
+                    </strong>
+                    <?php if ($help): ?>
+                        <small><?php echo esc_html($help); ?></small>
+                    <?php endif; ?>
+                    <?php if ($placeholder): ?>
+                        <small><strong>Ejemplo:</strong> <?php echo esc_html($placeholder); ?></small>
+                    <?php endif; ?>
+                    <span class="evapp-kiosk-auth-pill">Teclado sugerido: <?php echo esc_html($keyboard); ?></span>
+                </label>
+            <?php endforeach; ?>
+        </div>
+        <div class="evapp-kiosk-auth-preview">
+            <strong>Comportamiento actual:</strong>
+            el kiosko buscará por <?php echo esc_html(function_exists('eventosapp_self_checkin_auth_label') ? eventosapp_self_checkin_auth_label($selected) : implode(', ', $selected)); ?>.
+            Teclado inicial: <strong><?php echo $keyboard_mode === 'letters' ? 'Letras' : 'Números'; ?></strong>.
+        </div>
+    </div>
+    <?php
+}
+
+/**
  * Metabox: Personalización del módulo de Autogestión Kiosko.
  * Permite definir tema, fondo, logo principal y logos adicionales por evento.
  */
@@ -2555,6 +2660,36 @@ function eventosapp_save_networking_global_auth_metabox($post_id) {
     }
 
     update_post_meta($post_id, '_eventosapp_networking_global_auth_fields', $fields);
+}
+
+/**
+ * Guardar configuración de autenticación del módulo de Autogestión Kiosko por evento.
+ */
+add_action('save_post_eventosapp_event', 'eventosapp_save_self_checkin_auth_metabox', 28);
+function eventosapp_save_self_checkin_auth_metabox($post_id) {
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    if (!current_user_can('edit_post', $post_id)) return;
+
+    if (!isset($_POST['eventosapp_self_checkin_auth_nonce']) || !wp_verify_nonce($_POST['eventosapp_self_checkin_auth_nonce'], 'eventosapp_self_checkin_auth_guardar')) {
+        return;
+    }
+
+    $fields = [];
+    if (!empty($_POST['eventosapp_self_checkin_auth_fields']) && is_array($_POST['eventosapp_self_checkin_auth_fields'])) {
+        foreach ($_POST['eventosapp_self_checkin_auth_fields'] as $field) {
+            $fields[] = sanitize_key(wp_unslash($field));
+        }
+    }
+
+    $fields = function_exists('eventosapp_self_checkin_normalize_auth_fields')
+        ? eventosapp_self_checkin_normalize_auth_fields($fields)
+        : array_values(array_unique(array_filter($fields)));
+
+    if (empty($fields)) {
+        $fields = ['identification'];
+    }
+
+    update_post_meta($post_id, '_eventosapp_self_checkin_auth_fields', $fields);
 }
 
 /**
