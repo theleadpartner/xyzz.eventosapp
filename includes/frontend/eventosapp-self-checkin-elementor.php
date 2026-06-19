@@ -292,7 +292,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->add_control('subtitle', [
                         'label'       => 'Subtítulo',
                         'type'        => \Elementor\Controls_Manager::TEXTAREA,
-                        'default'     => 'Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.',
+                        'default'     => 'Ingresa el dato solicitado, selecciona el resultado correcto, confirma la información e imprime la escarapela.',
                         'label_block' => true,
                     ]);
 
@@ -415,7 +415,14 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                     $this->add_control('touch_keyboard_backspace_label', [
                         'label'     => 'Etiqueta borrar',
                         'type'      => \Elementor\Controls_Manager::TEXT,
-                        'default'   => 'Borrar',
+                        'default'   => 'Borrar atrás',
+                        'condition' => [ 'show_touch_keyboard' => 'yes' ],
+                    ]);
+
+                    $this->add_control('touch_keyboard_space_label', [
+                        'label'     => 'Etiqueta espacio',
+                        'type'      => \Elementor\Controls_Manager::TEXT,
+                        'default'   => 'Espacio',
                         'condition' => [ 'show_touch_keyboard' => 'yes' ],
                     ]);
 
@@ -736,7 +743,7 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
 
                 private function register_input_style_controls() {
                     $this->start_controls_section('section_style_input', [
-                        'label' => 'Campo de cédula',
+                        'label' => 'Campo de búsqueda',
                         'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
                     ]);
 
@@ -1791,7 +1798,8 @@ if ( ! function_exists('eventosapp_self_checkin_register_elementor_widgets') ) {
                         'touch_keyboard_title' => $settings['touch_keyboard_title'] ?? 'Teclado táctil',
                         'touch_keyboard_numbers_label' => $settings['touch_keyboard_numbers_label'] ?? 'Números',
                         'touch_keyboard_letters_label' => $settings['touch_keyboard_letters_label'] ?? 'Letras',
-                        'touch_keyboard_backspace_label' => $settings['touch_keyboard_backspace_label'] ?? 'Borrar',
+                        'touch_keyboard_backspace_label' => $settings['touch_keyboard_backspace_label'] ?? 'Borrar atrás',
+                        'touch_keyboard_space_label' => $settings['touch_keyboard_space_label'] ?? 'Espacio',
                         'touch_keyboard_clear_label' => $settings['touch_keyboard_clear_label'] ?? 'Limpiar',
                         'kicker'            => $settings['kicker'] ?? 'Autogestión',
                         'title'             => $settings['title'] ?? 'Identificación del asistente',
