@@ -549,29 +549,50 @@ add_action('save_post_eventosapp_event', function($post_id){
  * Helper público para jalar la configuración desde cualquier parte.
  */
 function eventosapp_get_badge_settings($evento_id) {
-    $get = function($k,$def=null) use ($evento_id){
+    $evento_id = absint($evento_id);
+
+    $get = function($k, $def = null) use ($evento_id) {
+        if (!$evento_id) {
+            return $def;
+        }
+
         $v = get_post_meta($evento_id, $k, true);
         return ($v === '' || $v === null) ? $def : $v;
     };
-    $order = [];
-    for($i=1;$i<=5;$i++){
-        $order[$i] = $get("eventosapp_field_order_{$i}", 'none');
+
+    $allowed_designs = ['manillas', 'escarapelas', 'escarapelas_split', 'escarapelas_split_4'];
+    $design = sanitize_key($get('eventosapp_badge_design', 'manillas'));
+    if (!in_array($design, $allowed_designs, true)) {
+        $design = 'manillas';
     }
+
+    $order = [];
+    for ($i = 1; $i <= 5; $i++) {
+        $field = sanitize_key($get("eventosapp_field_order_{$i}", 'none'));
+        $order[$i] = $field !== '' ? $field : 'none';
+    }
+
+    /*
+     * Estos defaults deben coincidir con los valores que se muestran en el metabox.
+     * El kiosko usa este helper para imprimir; si aquí se usan otros tamaños, la
+     * autogestión termina jalando una escarapela distinta a la configurada/esperada
+     * para el evento cuando todavía no se ha guardado algún campo opcional.
+     */
     return [
-        'design'         => $get('eventosapp_badge_design', 'manillas'),
+        'design'         => $design,
         'order'          => $order,
-        'width'          => (int) $get('eventosapp_badge_width', 200),
-        'height'         => (int) $get('eventosapp_badge_height', 100),
-        'size_large'     => (int) $get('eventosapp_badge_size_large', 24),
-        'size_medium'    => (int) $get('eventosapp_badge_size_medium', 18),
-        'size_small'     => (int) $get('eventosapp_badge_size_small', 14),
-        'weight_large'   => (int) $get('eventosapp_badge_weight_large', 600),
-        'weight_medium'  => (int) $get('eventosapp_badge_weight_medium', 500),
-        'weight_small'   => (int) $get('eventosapp_badge_weight_small', 400),
-        'sep_vertical'   => (int) $get('eventosapp_badge_sep_vertical', 4),
-        'sep_horizontal' => (int) $get('eventosapp_badge_sep_horizontal', 4),
-        'qr_size'        => (int) $get('eventosapp_badge_qr_size', 72),
-        'border_width'   => (int) $get('eventosapp_badge_border_width', 1),
+        'width'          => max(1, (int) $get('eventosapp_badge_width', 374)),
+        'height'         => max(1, (int) $get('eventosapp_badge_height', 208)),
+        'size_large'     => max(1, (int) $get('eventosapp_badge_size_large', 24)),
+        'size_medium'    => max(1, (int) $get('eventosapp_badge_size_medium', 18)),
+        'size_small'     => max(1, (int) $get('eventosapp_badge_size_small', 14)),
+        'weight_large'   => max(100, (int) $get('eventosapp_badge_weight_large', 600)),
+        'weight_medium'  => max(100, (int) $get('eventosapp_badge_weight_medium', 500)),
+        'weight_small'   => max(100, (int) $get('eventosapp_badge_weight_small', 400)),
+        'sep_vertical'   => max(0, (int) $get('eventosapp_badge_sep_vertical', 4)),
+        'sep_horizontal' => max(0, (int) $get('eventosapp_badge_sep_horizontal', 4)),
+        'qr_size'        => max(1, (int) $get('eventosapp_badge_qr_size', 72)),
+        'border_width'   => max(0, (int) $get('eventosapp_badge_border_width', 0)),
     ];
 }
 
@@ -595,20 +616,31 @@ function eventosapp_badge_print_url($evento_id, $ticket = '') {
 /**
  * Imprime el HTML final de la escarapela usando la configuración guardada.
  */
-function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = true) {
-    $evento_id = absint($evento_id);
-    $ticket_id = absint($ticket_id);
+function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_print = true) {
+    $evento_id  = absint($evento_id);
+    $ticket_id  = absint($ticket_id);
+    $auto_print = (bool) $auto_print;
 
-    if (!$evento_id) {
-        wp_die('Evento inválido', '', 400);
+    if (!$evento_id || get_post_type($evento_id) !== 'eventosapp_event') {
+        return '';
     }
 
-    $cfg    = eventosapp_get_badge_settings($evento_id);
-    $labels = eventosapp_badge_build_labels($evento_id, $ticket_id);
+    if ($ticket_id && get_post_type($ticket_id) !== 'eventosapp_ticket') {
+        $ticket_id = 0;
+    }
 
+    if ($ticket_id) {
+        $ticket_event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if ($ticket_event_id && $ticket_event_id !== $evento_id) {
+            $evento_id = $ticket_event_id;
+        }
+    }
+
+    $cfg      = eventosapp_get_badge_settings($evento_id);
+    $labels   = eventosapp_badge_build_labels($evento_id, $ticket_id);
     $flex_dir = ($cfg['design'] === 'escarapelas') ? 'column' : 'row';
 
-    header('Content-Type: text/html; charset=UTF-8');
+    ob_start();
     ?>
 <!doctype html>
 <html>
@@ -619,10 +651,10 @@ function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = 
   html,body{margin:0;padding:0;height:100%}
   body{display:flex;align-items:center;justify-content:center;font-family:Arial,Helvetica,sans-serif}
   .badge{
-    <?php echo ($cfg['border_width']>0 ? "border:" . (int) $cfg['border_width'] . "px solid #000;" : "border:none;"); ?>
+    <?php echo ($cfg['border_width'] > 0 ? "border:" . (int) $cfg['border_width'] . "px solid #000;" : "border:none;"); ?>
     display:flex; flex-direction:<?php echo esc_attr($flex_dir); ?>;
     align-items:stretch; justify-content:center;
-    width:<?php echo (int)$cfg['width']; ?>px; height:<?php echo (int)$cfg['height']; ?>px;
+    width:<?php echo (int) $cfg['width']; ?>px; height:<?php echo (int) $cfg['height']; ?>px;
     padding:4px; box-sizing:border-box;
   }
   .left,.right{display:flex; flex-direction:column; justify-content:center; height:100%;}
@@ -636,12 +668,14 @@ function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = 
 </style>
 </head>
 <body>
-<div class="badge">
+<div class="badge" data-event-id="<?php echo esc_attr($evento_id); ?>" data-ticket-id="<?php echo esc_attr($ticket_id); ?>">
 <?php
     $active = [];
-    for ($i=1;$i<=5;$i++){
+    for ($i = 1; $i <= 5; $i++) {
         $f = $cfg['order'][$i] ?? 'none';
-        if ($f !== 'none') $active[] = $f;
+        if ($f !== 'none') {
+            $active[] = $f;
+        }
     }
 
     if ($cfg['design'] === 'escarapelas_split') {
@@ -650,9 +684,9 @@ function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = 
         $right = $active[3] ?? null;
 
         echo "<div class='left'>";
-        foreach ($left as $idx=>$field) {
-            $fs = ($idx===0) ? $cfg['size_large'] : (($idx===1) ? $cfg['size_medium'] : $cfg['size_small']);
-            $fw = ($idx===0) ? $cfg['weight_large'] : (($idx===1) ? $cfg['weight_medium'] : $cfg['weight_small']);
+        foreach ($left as $idx => $field) {
+            $fs = ($idx === 0) ? $cfg['size_large'] : (($idx === 1) ? $cfg['size_medium'] : $cfg['size_small']);
+            $fw = ($idx === 0) ? $cfg['weight_large'] : (($idx === 1) ? $cfg['weight_medium'] : $cfg['weight_small']);
             eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $cfg['sep_vertical'], $cfg['qr_size']);
         }
         echo "</div>";
@@ -670,7 +704,7 @@ function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = 
         $right = $active[4] ?? null;
 
         echo "<div class='left'>";
-        foreach ($left as $idx=>$field) {
+        foreach ($left as $idx => $field) {
             if ($idx === 0) {
                 $fs = $cfg['size_large'];
                 $fw = $cfg['weight_large'];
@@ -694,11 +728,11 @@ function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = 
 
     } else {
         // Diseños normales (manillas o escarapelas vertical).
-        foreach (array_values($active) as $idx=>$field) {
-            $margin = ($cfg['design']==='escarapelas') ? $cfg['sep_vertical'] : $cfg['sep_horizontal'];
-            if ($cfg['design']==='escarapelas') {
-                $fs = ($idx===0) ? $cfg['size_large'] : (($idx<=2) ? $cfg['size_medium'] : $cfg['size_small']);
-                $fw = ($idx===0) ? $cfg['weight_large'] : (($idx<=2) ? $cfg['weight_medium'] : $cfg['weight_small']);
+        foreach (array_values($active) as $idx => $field) {
+            $margin = ($cfg['design'] === 'escarapelas') ? $cfg['sep_vertical'] : $cfg['sep_horizontal'];
+            if ($cfg['design'] === 'escarapelas') {
+                $fs = ($idx === 0) ? $cfg['size_large'] : (($idx <= 2) ? $cfg['size_medium'] : $cfg['size_small']);
+                $fw = ($idx === 0) ? $cfg['weight_large'] : (($idx <= 2) ? $cfg['weight_medium'] : $cfg['weight_small']);
             } else {
                 $fs = $cfg['size_medium'];
                 $fw = $cfg['weight_medium'];
@@ -714,6 +748,30 @@ function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = 
 </body>
 </html>
 <?php
+    return ob_get_clean();
+}
+
+/**
+ * Imprime el HTML final de la escarapela usando la configuración guardada.
+ */
+function eventosapp_badge_output_html($evento_id, $ticket_id = 0, $auto_print = true) {
+    $evento_id = absint($evento_id);
+    $ticket_id = absint($ticket_id);
+
+    if (!$evento_id) {
+        wp_die('Evento inválido', '', 400);
+    }
+
+    $html = eventosapp_get_badge_html_from_event($evento_id, $ticket_id, $auto_print);
+    if ($html === '') {
+        wp_die('No fue posible generar la escarapela para este evento.', '', 500);
+    }
+
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=UTF-8');
+    }
+
+    echo $html;
     exit;
 }
 
