@@ -4,7 +4,7 @@
  *
  * Shortcode: [eventosapp_self_checkin]
  *
- * Módulo táctil para que el asistente se identifique por cédula, confirme sus datos
+ * Módulo táctil para que el asistente se identifique por el dato configurado, confirme sus datos
  * y dispare la impresión de la escarapela. Al imprimir, el ticket queda marcado como
  * check-in presencial del día del evento sin revertir estados existentes.
  */
@@ -329,6 +329,7 @@ if ( ! function_exists('eventosapp_self_checkin_find_tickets_by_text') ) {
             '_eventosapp_asistente_nombre',
             '_eventosapp_asistente_apellido',
             '_eventosapp_asistente_email',
+            '_eventosapp_asistente_tel',
             '_eventosapp_asistente_telefono',
             '_eventosapp_asistente_empresa',
             '_eventosapp_asistente_cargo',
@@ -675,6 +676,7 @@ if ( ! function_exists('eventosapp_self_checkin_ticket_payload') ) {
             'company'         => $company,
             'designation'     => $role,
             'cc'              => $cc,
+            'identification'  => $cc,
             'email'           => $email,
             'phone'           => $phone,
             'localidad'       => $localidad,
@@ -886,7 +888,7 @@ if ( ! function_exists('eventosapp_self_checkin_windows_launcher_content') ) {
 if ( ! function_exists('eventosapp_self_checkin_messages') ) {
     function eventosapp_self_checkin_messages() {
         return [
-            'cc_required' => 'Ingresa una cédula de 5 a 30 números o mínimo 2 letras para buscar.',
+            'cc_required' => 'Ingresa un dato válido según la autenticación configurada para este kiosko.',
             'searching'   => 'Buscando asistente…',
             'no_results'  => 'No se encontró ningún asistente con ese dato en este evento.',
             'select_one'  => 'Selecciona un resultado para continuar.',
@@ -894,6 +896,537 @@ if ( ! function_exists('eventosapp_self_checkin_messages') ) {
             'printing'    => 'Marcando check-in e imprimiendo escarapela…',
             'net_error'   => 'Error de conexión. Intenta nuevamente.',
         ];
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_auth_field_options') ) {
+    /**
+     * Campos permitidos para autenticar/buscar asistentes desde el kiosko.
+     * Se separan de la autenticación de Networking para que cada módulo conserve
+     * su propia configuración por evento y no se afecten flujos existentes.
+     */
+    function eventosapp_self_checkin_auth_field_options() {
+        return [
+            'identification' => [
+                'label'       => 'Identificación',
+                'short_label' => 'Identificación',
+                'placeholder' => 'Ej: 1234567890 o PA123456',
+                'help'        => 'Busca por cédula, pasaporte u otra identificación alfanumérica registrada en el ticket.',
+                'keyboard'    => 'numbers',
+                'meta_keys'   => [ '_eventosapp_asistente_cc', '_evapp_search_cc', '_evapp_search_identification' ],
+            ],
+            'full_name' => [
+                'label'       => 'Nombres + apellidos',
+                'short_label' => 'Nombre completo',
+                'placeholder' => 'Ej: María Pérez o Pérez María',
+                'help'        => 'Busca por nombre, apellido o una parte de ambos. No distingue tildes, mayúsculas ni minúsculas.',
+                'keyboard'    => 'letters',
+                'meta_keys'   => [ '_eventosapp_asistente_nombre', '_eventosapp_asistente_apellido' ],
+            ],
+            'last_name' => [
+                'label'       => 'Apellidos',
+                'short_label' => 'Apellidos',
+                'placeholder' => 'Ej: García o De la Hoz',
+                'help'        => 'Busca por apellido completo o por una parte del apellido. No distingue tildes, mayúsculas ni minúsculas.',
+                'keyboard'    => 'letters',
+                'meta_keys'   => [ '_eventosapp_asistente_apellido' ],
+            ],
+            'phone' => [
+                'label'       => 'Celular',
+                'short_label' => 'Celular',
+                'placeholder' => 'Ej: 3001234567',
+                'help'        => 'Busca por celular completo o por una parte del número registrado.',
+                'keyboard'    => 'numbers',
+                'meta_keys'   => [ '_eventosapp_asistente_tel', '_eventosapp_asistente_telefono', '_evapp_search_phone' ],
+            ],
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_default_auth_fields') ) {
+    function eventosapp_self_checkin_default_auth_fields() {
+        return [ 'identification' ];
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_normalize_auth_fields') ) {
+    function eventosapp_self_checkin_normalize_auth_fields( $fields ) {
+        $options = eventosapp_self_checkin_auth_field_options();
+
+        if ( is_string( $fields ) ) {
+            $decoded = json_decode( $fields, true );
+            if ( is_array( $decoded ) ) {
+                $fields = $decoded;
+            } else {
+                $fields = array_map( 'trim', explode( ',', $fields ) );
+            }
+        }
+
+        if ( ! is_array( $fields ) ) {
+            $fields = [];
+        }
+
+        $clean = [];
+        foreach ( $fields as $field ) {
+            $field = sanitize_key( (string) $field );
+            if ( isset( $options[ $field ] ) && ! in_array( $field, $clean, true ) ) {
+                $clean[] = $field;
+            }
+        }
+
+        if ( empty( $clean ) ) {
+            $clean = eventosapp_self_checkin_default_auth_fields();
+        }
+
+        return $clean;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_get_event_auth_fields') ) {
+    function eventosapp_self_checkin_get_event_auth_fields( $event_id ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return eventosapp_self_checkin_default_auth_fields();
+        }
+
+        $stored = get_post_meta( $event_id, '_eventosapp_self_checkin_auth_fields', true );
+        if ( empty( $stored ) ) {
+            return eventosapp_self_checkin_default_auth_fields();
+        }
+
+        return eventosapp_self_checkin_normalize_auth_fields( $stored );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_auth_label') ) {
+    function eventosapp_self_checkin_auth_label( $fields ) {
+        $options = eventosapp_self_checkin_auth_field_options();
+        $labels  = [];
+
+        foreach ( eventosapp_self_checkin_normalize_auth_fields( $fields ) as $field ) {
+            if ( isset( $options[ $field ]['short_label'] ) ) {
+                $labels[] = $options[ $field ]['short_label'];
+            }
+        }
+
+        if ( empty( $labels ) ) {
+            return 'Identificación';
+        }
+
+        if ( count( $labels ) === 1 ) {
+            return $labels[0];
+        }
+
+        return implode( ', ', $labels );
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_auth_placeholder') ) {
+    function eventosapp_self_checkin_auth_placeholder( $fields ) {
+        $fields  = eventosapp_self_checkin_normalize_auth_fields( $fields );
+        $options = eventosapp_self_checkin_auth_field_options();
+
+        if ( count( $fields ) === 1 && ! empty( $options[ $fields[0] ]['placeholder'] ) ) {
+            return $options[ $fields[0] ]['placeholder'];
+        }
+
+        return 'Escribe identificación, nombre, apellido o celular';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_auth_help_text') ) {
+    function eventosapp_self_checkin_auth_help_text( $fields ) {
+        $fields = eventosapp_self_checkin_normalize_auth_fields( $fields );
+        if ( in_array( 'full_name', $fields, true ) || in_array( 'last_name', $fields, true ) ) {
+            return 'Escribe el dato configurado para este evento. La búsqueda por nombres o apellidos acepta coincidencias parciales y no distingue tildes ni mayúsculas.';
+        }
+
+        if ( in_array( 'phone', $fields, true ) ) {
+            return 'Escribe el celular o una parte del número registrado para buscar el asistente.';
+        }
+
+        return 'Escribe la identificación del asistente. También se aceptan pasaportes o documentos con letras y números.';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_auth_keyboard_mode') ) {
+    function eventosapp_self_checkin_auth_keyboard_mode( $fields ) {
+        $fields  = eventosapp_self_checkin_normalize_auth_fields( $fields );
+        $options = eventosapp_self_checkin_auth_field_options();
+
+        if ( empty( $fields ) ) {
+            return 'numbers';
+        }
+
+        foreach ( $fields as $field ) {
+            if ( ( $options[ $field ]['keyboard'] ?? 'numbers' ) !== 'letters' ) {
+                return 'numbers';
+            }
+        }
+
+        return 'letters';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_search_normalize_text') ) {
+    function eventosapp_self_checkin_search_normalize_text( $value ) {
+        if ( is_array( $value ) || is_object( $value ) ) {
+            return '';
+        }
+
+        $value = wp_strip_all_tags( (string) $value );
+        $value = remove_accents( $value );
+        $value = strtolower( $value );
+        $value = preg_replace('/[^a-z0-9\s]+/u', ' ', $value);
+        if ( ! is_string( $value ) ) {
+            return '';
+        }
+        $value = preg_replace('/\s+/u', ' ', trim( $value ));
+        return is_string( $value ) ? $value : '';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_search_compact') ) {
+    function eventosapp_self_checkin_search_compact( $value ) {
+        $value = eventosapp_self_checkin_search_normalize_text( $value );
+        $value = preg_replace('/[^a-z0-9]+/', '', $value);
+        return is_string( $value ) ? $value : '';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_search_digits') ) {
+    function eventosapp_self_checkin_search_digits( $value ) {
+        return preg_replace('/\D+/', '', (string) $value);
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_validate_auth_search') ) {
+    function eventosapp_self_checkin_validate_auth_search( $value, $fields = [] ) {
+        $fields = eventosapp_self_checkin_normalize_auth_fields( $fields );
+        $value  = eventosapp_self_checkin_sanitize_search_value( $value );
+
+        if ( $value === '' ) {
+            return new WP_Error('empty_auth_search', 'Ingresa un dato para buscar.');
+        }
+
+        $normalized = eventosapp_self_checkin_search_normalize_text( $value );
+        $compact    = eventosapp_self_checkin_search_compact( $value );
+        $digits     = eventosapp_self_checkin_search_digits( $value );
+        $has_text   = in_array( 'full_name', $fields, true ) || in_array( 'last_name', $fields, true );
+        $has_phone  = in_array( 'phone', $fields, true );
+        $has_id     = in_array( 'identification', $fields, true );
+
+        if ( $normalized === '' || $compact === '' ) {
+            return new WP_Error('invalid_auth_search', 'Ingresa letras o números válidos para buscar.');
+        }
+
+        if ( $has_text ) {
+            $len = function_exists('mb_strlen') ? mb_strlen( $compact, 'UTF-8' ) : strlen( $compact );
+            if ( $len < 2 ) {
+                return new WP_Error('short_auth_search', 'Ingresa mínimo 2 letras o números para buscar.');
+            }
+            return $value;
+        }
+
+        if ( $has_phone ) {
+            if ( strlen( $digits ) < 3 ) {
+                return new WP_Error('short_phone_search', 'Ingresa mínimo 3 números del celular para buscar.');
+            }
+            return $value;
+        }
+
+        if ( $has_id ) {
+            if ( preg_match('/^[0-9]+$/', $compact) && strlen( $compact ) < 5 ) {
+                return new WP_Error('short_id_search', 'Ingresa mínimo 5 números de la identificación para buscar.');
+            }
+            if ( strlen( $compact ) < 2 ) {
+                return new WP_Error('short_id_search', 'Ingresa mínimo 2 caracteres de la identificación para buscar.');
+            }
+            return $value;
+        }
+
+        return $value;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_text_contains_all_terms') ) {
+    function eventosapp_self_checkin_text_contains_all_terms( $haystack, $needle ) {
+        $haystack = eventosapp_self_checkin_search_normalize_text( $haystack );
+        $needle   = eventosapp_self_checkin_search_normalize_text( $needle );
+
+        if ( $haystack === '' || $needle === '' ) {
+            return false;
+        }
+
+        $terms = preg_split('/\s+/', $needle, -1, PREG_SPLIT_NO_EMPTY);
+        if ( empty( $terms ) ) {
+            return false;
+        }
+
+        foreach ( $terms as $term ) {
+            if ( $term === '' ) {
+                continue;
+            }
+            if ( strpos( $haystack, $term ) === false ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_ticket_matches_auth_search') ) {
+    function eventosapp_self_checkin_ticket_matches_auth_search( $ticket_id, $search_value, $fields = [] ) {
+        $ticket_id = absint( $ticket_id );
+        if ( ! $ticket_id ) {
+            return false;
+        }
+
+        $fields  = eventosapp_self_checkin_normalize_auth_fields( $fields );
+        $compact = eventosapp_self_checkin_search_compact( $search_value );
+        $digits  = eventosapp_self_checkin_search_digits( $search_value );
+
+        foreach ( $fields as $field ) {
+            if ( $field === 'full_name' ) {
+                $first_name = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
+                $last_name  = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
+                $full_name  = trim( $first_name . ' ' . $last_name );
+                $title      = get_the_title( $ticket_id );
+
+                if ( eventosapp_self_checkin_text_contains_all_terms( $full_name, $search_value ) || eventosapp_self_checkin_text_contains_all_terms( $title, $search_value ) ) {
+                    return true;
+                }
+            }
+
+            if ( $field === 'last_name' ) {
+                $last_name = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
+                if ( eventosapp_self_checkin_text_contains_all_terms( $last_name, $search_value ) ) {
+                    return true;
+                }
+            }
+
+            if ( $field === 'identification' ) {
+                $stored_raw     = get_post_meta( $ticket_id, '_eventosapp_asistente_cc', true );
+                $stored_compact = eventosapp_self_checkin_search_compact( $stored_raw );
+                $stored_index   = eventosapp_self_checkin_search_compact( get_post_meta( $ticket_id, '_evapp_search_identification', true ) );
+                $stored_digits  = eventosapp_self_checkin_search_digits( $stored_raw );
+
+                $haystacks = array_values( array_unique( array_filter( [ $stored_compact, $stored_index ] ) ) );
+                foreach ( $haystacks as $haystack ) {
+                    if ( $haystack === $compact || ( strlen( $compact ) >= 2 && strpos( $haystack, $compact ) !== false ) ) {
+                        return true;
+                    }
+                }
+
+                if ( $digits !== '' && $stored_digits !== '' ) {
+                    $safe_partial = strlen( $digits ) >= 5 && strpos( $stored_digits, $digits ) !== false;
+                    if ( $stored_digits === $digits || $safe_partial ) {
+                        return true;
+                    }
+                }
+            }
+
+            if ( $field === 'phone' ) {
+                $stored_phone = get_post_meta( $ticket_id, '_eventosapp_asistente_tel', true );
+                if ( $stored_phone === '' ) {
+                    $stored_phone = get_post_meta( $ticket_id, '_eventosapp_asistente_telefono', true );
+                }
+                if ( $stored_phone === '' ) {
+                    $stored_phone = get_post_meta( $ticket_id, '_evapp_search_phone', true );
+                }
+                $stored_digits = eventosapp_self_checkin_search_digits( $stored_phone );
+                if ( $digits !== '' && $stored_digits !== '' && ( $stored_digits === $digits || ( strlen( $digits ) >= 3 && strpos( $stored_digits, $digits ) !== false ) ) ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_find_tickets_by_auth_fields') ) {
+    function eventosapp_self_checkin_find_tickets_by_auth_fields( $search_value, $event_id, $fields = [], $limit = 20 ) {
+        global $wpdb;
+
+        $event_id     = absint( $event_id );
+        $fields       = eventosapp_self_checkin_normalize_auth_fields( $fields );
+        $search_value = eventosapp_self_checkin_sanitize_search_value( $search_value );
+        $limit        = max( 1, min( 30, absint( $limit ) ) );
+
+        if ( ! $event_id || $search_value === '' ) {
+            return [];
+        }
+
+        $cache_key = 'evapp_self_auth_v1_' . md5( $event_id . '|' . implode( ',', $fields ) . '|' . $search_value . '|' . $limit );
+        $cached = wp_cache_get( $cache_key, 'eventosapp_self_checkin' );
+        if ( is_array( $cached ) ) {
+            return array_map( 'intval', $cached );
+        }
+
+        $ids = [];
+        $push_ids = function( $new_ids ) use ( &$ids, $limit ) {
+            foreach ( (array) $new_ids as $new_id ) {
+                $new_id = absint( $new_id );
+                if ( $new_id && ! in_array( $new_id, $ids, true ) ) {
+                    $ids[] = $new_id;
+                }
+                if ( count( $ids ) >= $limit ) {
+                    break;
+                }
+            }
+        };
+
+        $compact = eventosapp_self_checkin_search_compact( $search_value );
+        $digits  = eventosapp_self_checkin_search_digits( $search_value );
+        $like_raw = '%' . $wpdb->esc_like( $search_value ) . '%';
+        $like_compact = '%' . $wpdb->esc_like( $compact ) . '%';
+
+        if ( in_array( 'identification', $fields, true ) ) {
+            if ( $digits !== '' && preg_match('/^[0-9]+$/', $compact) ) {
+                $push_ids( eventosapp_self_checkin_find_tickets_by_cc( $digits, $event_id, $limit ) );
+            }
+
+            if ( count( $ids ) < $limit && $compact !== '' ) {
+                $sql = "
+                    SELECT DISTINCT p.ID
+                      FROM {$wpdb->posts} p
+                      INNER JOIN {$wpdb->postmeta} event_pm
+                              ON event_pm.post_id = p.ID
+                             AND event_pm.meta_key = %s
+                             AND event_pm.meta_value = %s
+                      INNER JOIN {$wpdb->postmeta} id_pm
+                              ON id_pm.post_id = p.ID
+                             AND id_pm.meta_key IN (%s,%s,%s)
+                     WHERE p.post_type = %s
+                       AND p.post_status NOT IN ('trash','auto-draft','inherit')
+                       AND (id_pm.meta_value LIKE %s OR LOWER(id_pm.meta_value) LIKE %s)
+                     ORDER BY p.ID DESC
+                     LIMIT %d
+                ";
+                $push_ids( $wpdb->get_col( eventosapp_self_checkin_prepare( $sql, [
+                    '_eventosapp_ticket_evento_id',
+                    (string) $event_id,
+                    '_eventosapp_asistente_cc',
+                    '_evapp_search_cc',
+                    '_evapp_search_identification',
+                    'eventosapp_ticket',
+                    $like_raw,
+                    $like_compact,
+                    min( 80, max( 30, $limit * 4 ) ),
+                ] ) ) );
+            }
+        }
+
+        if ( count( $ids ) < $limit && in_array( 'phone', $fields, true ) && $digits !== '' ) {
+            $phone_like = '%' . $wpdb->esc_like( $digits ) . '%';
+            $sql = "
+                SELECT DISTINCT p.ID
+                  FROM {$wpdb->posts} p
+                  INNER JOIN {$wpdb->postmeta} event_pm
+                          ON event_pm.post_id = p.ID
+                         AND event_pm.meta_key = %s
+                         AND event_pm.meta_value = %s
+                  INNER JOIN {$wpdb->postmeta} phone_pm
+                          ON phone_pm.post_id = p.ID
+                         AND phone_pm.meta_key IN (%s,%s,%s)
+                 WHERE p.post_type = %s
+                   AND p.post_status NOT IN ('trash','auto-draft','inherit')
+                   AND phone_pm.meta_value LIKE %s
+                 ORDER BY p.ID DESC
+                 LIMIT %d
+            ";
+            $push_ids( $wpdb->get_col( eventosapp_self_checkin_prepare( $sql, [
+                '_eventosapp_ticket_evento_id',
+                (string) $event_id,
+                '_eventosapp_asistente_tel',
+                '_eventosapp_asistente_telefono',
+                '_evapp_search_phone',
+                'eventosapp_ticket',
+                $phone_like,
+                min( 80, max( 30, $limit * 4 ) ),
+            ] ) ) );
+        }
+
+        if ( count( $ids ) < $limit && ( in_array( 'full_name', $fields, true ) || in_array( 'last_name', $fields, true ) ) ) {
+            $name_meta_keys = in_array( 'last_name', $fields, true ) && ! in_array( 'full_name', $fields, true )
+                ? [ '_eventosapp_asistente_apellido' ]
+                : [ '_eventosapp_asistente_nombre', '_eventosapp_asistente_apellido' ];
+            $name_placeholders = implode( ',', array_fill( 0, count( $name_meta_keys ), '%s' ) );
+            $first_term = eventosapp_self_checkin_search_normalize_text( $search_value );
+            $first_term = preg_split('/\s+/', $first_term, -1, PREG_SPLIT_NO_EMPTY);
+            $first_term = ! empty( $first_term[0] ) ? $first_term[0] : $search_value;
+            $name_like = '%' . $wpdb->esc_like( $first_term ) . '%';
+
+            $sql = "
+                SELECT DISTINCT p.ID
+                  FROM {$wpdb->posts} p
+                  INNER JOIN {$wpdb->postmeta} event_pm
+                          ON event_pm.post_id = p.ID
+                         AND event_pm.meta_key = %s
+                         AND event_pm.meta_value = %s
+                  LEFT JOIN {$wpdb->postmeta} name_pm
+                         ON name_pm.post_id = p.ID
+                        AND name_pm.meta_key IN ({$name_placeholders})
+                 WHERE p.post_type = %s
+                   AND p.post_status NOT IN ('trash','auto-draft','inherit')
+                   AND (p.post_title LIKE %s OR name_pm.meta_value LIKE %s)
+                 ORDER BY p.ID DESC
+                 LIMIT %d
+            ";
+            $params = array_merge(
+                [ '_eventosapp_ticket_evento_id', (string) $event_id ],
+                $name_meta_keys,
+                [ 'eventosapp_ticket', $name_like, $name_like, min( 120, max( 40, $limit * 5 ) ) ]
+            );
+            $push_ids( $wpdb->get_col( eventosapp_self_checkin_prepare( $sql, $params ) ) );
+        }
+
+        /*
+         * Validación final en PHP para garantizar búsqueda abierta y tolerante:
+         * - no sensible a tildes;
+         * - no sensible a mayúsculas/minúsculas;
+         * - nombres y apellidos por términos parciales;
+         * - identificaciones alfanuméricas como pasaportes.
+         */
+        $candidate_ids = get_posts([
+            'post_type'              => 'eventosapp_ticket',
+            'post_status'            => [ 'publish', 'private', 'draft', 'pending', 'future' ],
+            'fields'                 => 'ids',
+            'posts_per_page'         => 10000,
+            'no_found_rows'          => true,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
+            'meta_query'             => [
+                [
+                    'key'     => '_eventosapp_ticket_evento_id',
+                    'value'   => (string) $event_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $ordered_candidates = array_values( array_unique( array_merge( $ids, array_map( 'intval', (array) $candidate_ids ) ) ) );
+        if ( ! empty( $ordered_candidates ) ) {
+            update_meta_cache( 'post', $ordered_candidates );
+        }
+
+        $matched = [];
+        foreach ( $ordered_candidates as $candidate_id ) {
+            if ( eventosapp_self_checkin_ticket_matches_auth_search( $candidate_id, $search_value, $fields ) ) {
+                $matched[] = absint( $candidate_id );
+            }
+
+            if ( count( $matched ) >= $limit ) {
+                break;
+            }
+        }
+
+        $matched = array_slice( array_values( array_unique( array_filter( array_map( 'intval', $matched ) ) ) ), 0, $limit );
+        wp_cache_set( $cache_key, $matched, 'eventosapp_self_checkin', 30 );
+
+        return $matched;
     }
 }
 
@@ -1342,9 +1875,10 @@ body.evsc-modal-open{overflow:hidden!important;touch-action:none}
 .evsc-status.ok{background:#dcfce7;color:#166534}
 .evsc-status.err{background:#fee2e2;color:#991b1b}
 .evsc-status.loading{background:#dbeafe;color:#1e40af}
-.evsc-results{margin-top:18px;display:grid;gap:12px;width:100%}
+.evsc-results{margin-top:18px;display:grid;gap:12px;width:100%;max-height:min(54vh,560px);overflow:auto;padding:2px 4px 8px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .evsc-results.evsc-results-hidden{display:none!important}
-.evsc-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;background:#fff;border:2px solid #e2e8f0;border-radius:20px;padding:18px;box-shadow:0 8px 20px rgba(15,23,42,.05);cursor:pointer;text-align:left;width:100%;color:inherit;font-family:inherit}
+.evsc-results-summary{position:sticky;top:0;z-index:2;margin:0 0 2px;padding:12px 14px;border-radius:14px;background:var(--evsc-status-bg,#f1f5f9);color:var(--evsc-status-text,#334155);font-size:16px;font-weight:900;text-align:center;border:1px solid var(--evsc-panel-border,#e2e8f0)}
+.evsc-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;background:#fff;border:2px solid #e2e8f0;border-radius:20px;padding:18px;box-shadow:0 8px 20px rgba(15,23,42,.05);cursor:pointer;text-align:left;width:100%;color:inherit;font-family:inherit;min-width:0}
 .evsc-result:hover{border-color:#93c5fd}
 .evsc-result.is-selected{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
 .evsc-result.is-selected .evsc-select-label{background:#2563eb;color:#fff!important}
@@ -1374,7 +1908,7 @@ body.evsc-modal-open{overflow:hidden!important;touch-action:none}
 .evsc-modal-close{position:sticky;top:0;float:right;z-index:3;display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;margin:-10px -8px 8px 12px;border:0;border-radius:999px;background:var(--evsc-light-btn-bg,#e2e8f0);color:var(--evsc-light-btn-text,#0f172a);font-size:30px;font-weight:900;line-height:1;cursor:pointer;touch-action:manipulation;box-shadow:0 8px 20px rgba(15,23,42,.14)}
 .evsc-modal-close:hover{background:var(--evsc-light-btn-hover,#cbd5e1)}
 .evsc-modal .evsc-status{margin-top:6px}
-.evsc-modal .evsc-actions{margin-top:18px}
+.evsc-modal .evsc-actions{margin-top:18px}.evsc-modal-actions{position:sticky;bottom:-4px;z-index:4;padding-top:12px;background:linear-gradient(to bottom,transparent,var(--evsc-wrap-bg,#f8fafc) 24%)}
 .evsc-modal .evsc-confirm{margin:18px 0 0;max-width:none}
 .evsc-modal .evsc-confirm-grid{text-align:left}
 .evsc-modal .evsc-result{background:var(--evsc-panel-bg,#fff)!important}
@@ -1401,8 +1935,8 @@ body.evsc-kiosk-lock a,body.evsc-kiosk-lock button{touch-action:manipulation}
 .evsc-keyboard-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;flex-wrap:wrap}.evsc-keyboard-title{display:block;color:#334155;font-size:15px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.evsc-keyboard-toggle{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .evsc-keyboard-mode{border:0;border-radius:999px;background:#e2e8f0;color:#0f172a;padding:9px 14px;font-size:14px;font-weight:900;cursor:pointer;touch-action:manipulation}.evsc-keyboard-mode.is-active{background:#2563eb;color:#fff}
 .evsc-keyboard-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(7,minmax(0,1fr));display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-numbers{display:none}.evsc-keyboard[data-mode="letters"] .evsc-keyboard-letters{display:grid}
-.evsc-key{display:inline-flex;align-items:center;justify-content:center;min-height:58px;border:0;border-radius:16px;background:#fff;color:#0f172a;font-size:22px;font-weight:900;line-height:1;box-shadow:0 3px 10px rgba(15,23,42,.08);cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none}.evsc-key:hover{filter:brightness(.97)}.evsc-key:active{transform:translateY(1px)}.evsc-key-action{background:#dbeafe;color:#1d4ed8;font-size:16px}.evsc-key-wide{grid-column:span 2}
-@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}.evsc-fullscreen-trigger-wrap{max-width:100%;align-items:stretch}.evsc-fullscreen-trigger{width:100%;min-height:64px}.evsc-keyboard{padding:12px;border-radius:18px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(5,minmax(0,1fr))}.evsc-key{min-height:54px;font-size:20px}.evsc-key-action{font-size:15px}.evsc-modal{padding:14px}.evsc-modal-card{width:100%;max-height:calc(100vh - 28px);border-radius:22px;padding:18px}.evsc-modal-close{width:46px;height:46px;font-size:28px}}
+.evsc-key{display:inline-flex;align-items:center;justify-content:center;min-height:58px;border:0;border-radius:16px;background:#fff;color:#0f172a;font-size:22px;font-weight:900;line-height:1;box-shadow:0 3px 10px rgba(15,23,42,.08);cursor:pointer;touch-action:manipulation;appearance:none;-webkit-appearance:none}.evsc-key:hover{filter:brightness(.97)}.evsc-key:active{transform:translateY(1px)}.evsc-key-action{background:#dbeafe;color:#1d4ed8;font-size:16px}.evsc-key-wide{grid-column:span 2}.evsc-key-space{grid-column:span 3}
+@media(max-width:800px){.evsc-wrap{max-width:100%;padding:16px;border-radius:20px}.evsc-title{font-size:30px}.evsc-panel{padding:16px}.evsc-input{font-size:27px;min-height:76px}.evsc-results{max-height:min(58vh,620px)}.evsc-result{grid-template-columns:1fr}.evsc-result-name{font-size:23px}.evsc-confirm-grid{grid-template-columns:1fr}.evsc-launcher-actions{align-items:stretch}.evsc-launcher-btn{width:100%}.evsc-admin-note{padding-right:48px}.evsc-fullscreen-trigger-wrap{max-width:100%;align-items:stretch}.evsc-fullscreen-trigger{width:100%;min-height:64px}.evsc-keyboard{padding:12px;border-radius:18px}.evsc-keyboard-grid.evsc-keyboard-letters{grid-template-columns:repeat(5,minmax(0,1fr))}.evsc-key{min-height:54px;font-size:20px}.evsc-key-action{font-size:15px}.evsc-key-space{grid-column:span 5}.evsc-modal{padding:14px}.evsc-modal-card{width:100%;max-height:calc(100vh - 28px);border-radius:22px;padding:18px}.evsc-modal-close{width:46px;height:46px;font-size:28px}}
 .evsc-wrap{background:var(--evsc-wrap-bg,#f8fafc)!important;border-color:var(--evsc-wrap-border,#e2e8f0)!important;color:var(--evsc-text,#0f172a)!important}
 .evsc-logo{max-width:var(--evsc-main-logo-width,220px)!important;max-height:var(--evsc-main-logo-max-height,120px)!important;width:auto!important;height:auto!important;object-fit:contain!important}
 .evsc-kicker{color:var(--evsc-kicker,#2563eb)!important}.evsc-title{color:var(--evsc-text,#0f172a)!important}.evsc-subtitle{color:var(--evsc-muted,#475569)!important}
@@ -1783,6 +2317,10 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
     var $printBtn = $root.find('.evsc-js-print').first();
     var $keyboard = $root.find('.evsc-js-keyboard').first();
     var touchKeyboardEnabled = $keyboard.length > 0;
+    var defaultKeyboardMode = String($root.attr('data-keyboard-default') || $root.data('keyboard-default') || ($keyboard.length ? $keyboard.attr('data-mode') : 'numbers') || 'numbers');
+    if(defaultKeyboardMode !== 'letters'){
+      defaultKeyboardMode = 'numbers';
+    }
     var selectedTicket = null;
     var confirmedTicket = null;
     var currentRows = [];
@@ -1868,7 +2406,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
 
     function keyboardInsert(value){
       value = (value === null || typeof value === 'undefined') ? '' : String(value);
-      value = value.toUpperCase().replace(/[^0-9A-ZÁÉÍÓÚÜÑ]/g, '');
+      value = value.toUpperCase().replace(/[^0-9A-ZÁÉÍÓÚÜÑ\s]/g, '');
       if(!value){
         return;
       }
@@ -1942,12 +2480,26 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       focusInput();
     }
 
+    function setKeyboardMode(mode){
+      if(!touchKeyboardEnabled){
+        return;
+      }
+      mode = String(mode || 'numbers');
+      if(mode !== 'letters'){
+        mode = 'numbers';
+      }
+      $keyboard.attr('data-mode', mode);
+      $keyboard.find('.evsc-js-keyboard-mode').removeClass('is-active').attr('aria-pressed', 'false');
+      $keyboard.find('.evsc-js-keyboard-mode[data-mode="'+mode+'"]').addClass('is-active').attr('aria-pressed', 'true');
+    }
+
     function initTouchKeyboard(){
       if(!touchKeyboardEnabled){
         return;
       }
 
       $input.attr('inputmode', 'none').attr('virtualkeyboardpolicy', 'manual').attr('data-evsc-touch-keyboard', '1');
+      setKeyboardMode(defaultKeyboardMode);
 
       $input.on('pointerdown touchstart', function(evt){
         try {
@@ -1970,12 +2522,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
 
       evscBindPress($keyboard, '.evsc-js-keyboard-mode', function(){
         var mode = String($(this).attr('data-mode') || 'numbers');
-        if(mode !== 'letters'){
-          mode = 'numbers';
-        }
-        $keyboard.attr('data-mode', mode);
-        $keyboard.find('.evsc-js-keyboard-mode').removeClass('is-active').attr('aria-pressed', 'false');
-        $(this).addClass('is-active').attr('aria-pressed', 'true');
+        setKeyboardMode(mode);
         focusInput();
       });
 
@@ -2028,14 +2575,15 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
         return;
       }
 
-      var html = '';
+      var html = '<div class="evsc-results-summary">' + escHtml(currentRows.length === 1 ? 'Se encontró 1 resultado. Selecciona el asistente para continuar.' : 'Se encontraron ' + currentRows.length + ' resultados. Selecciona el asistente correcto para continuar.') + '</div>';
       $.each(currentRows, function(i, it){
         var checked = it.already_checked === true || it.today_status === 'checked_in';
         html += '<button type="button" class="evsc-result evsc-js-result" data-ticket-id="'+escHtml(it.ticket_id)+'">'
-             +    '<span>'
+             +    '<span class="evsc-result-main">'
              +      '<span class="evsc-result-name">'+escHtml(it.full_name || 'Asistente sin nombre')+'</span>'
              +      '<span class="evsc-result-meta">'
-             +        'Cédula: <strong>'+escHtml(it.cc || '—')+'</strong><br>'
+             +        'Identificación: <strong>'+escHtml(it.identification || it.cc || '—')+'</strong><br>'
+             +        'Celular: <strong>'+escHtml(it.phone || '—')+'</strong><br>'
              +        'Localidad: <strong>'+escHtml(it.localidad || '—')+'</strong> · Ticket: <strong>'+escHtml(it.ticket_pub || '—')+'</strong><br>'
              +        'Empresa: <strong>'+escHtml(it.company || '—')+'</strong>'
              +      '</span>'
@@ -2065,7 +2613,8 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       $confirmBtn.prop('disabled', true).hide();
       $confirmData.html(
         '<div class="evsc-data"><span class="evsc-data-label">Nombre</span><span class="evsc-data-value">'+escHtml(it.full_name || '—')+'</span></div>'+
-        '<div class="evsc-data"><span class="evsc-data-label">Cédula</span><span class="evsc-data-value">'+escHtml(it.cc || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Identificación</span><span class="evsc-data-value">'+escHtml(it.identification || it.cc || '—')+'</span></div>'+
+        '<div class="evsc-data"><span class="evsc-data-label">Celular</span><span class="evsc-data-value">'+escHtml(it.phone || '—')+'</span></div>'+ 
         '<div class="evsc-data"><span class="evsc-data-label">Localidad</span><span class="evsc-data-value">'+escHtml(it.localidad || '—')+'</span></div>'+
         '<div class="evsc-data"><span class="evsc-data-label">Empresa</span><span class="evsc-data-value">'+escHtml(it.company || '—')+'</span></div>'+
         '<div class="evsc-data"><span class="evsc-data-label">Cargo</span><span class="evsc-data-value">'+escHtml(it.designation || '—')+'</span></div>'+
@@ -2106,7 +2655,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
           keyboardClear();
           return;
         }
-        if(/^[0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]$/.test(key)){
+        if(/^[0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s]$/.test(key)){
           e.preventDefault();
           keyboardInsert(key);
         }
@@ -2149,6 +2698,7 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
         action: 'eventosapp_self_checkin_search',
         security: searchNonce,
         event_id: eventId,
+        identifier: searchValue,
         cedula: searchValue
       }, function(resp){
         if(resp && resp.success){
@@ -2491,11 +3041,12 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
             'touch_keyboard_title'   => 'Teclado táctil',
             'touch_keyboard_numbers_label' => 'Números',
             'touch_keyboard_letters_label' => 'Letras',
-            'touch_keyboard_backspace_label' => 'Borrar',
+            'touch_keyboard_backspace_label' => 'Borrar atrás',
+            'touch_keyboard_space_label' => 'Espacio',
             'touch_keyboard_clear_label' => 'Limpiar',
             'kicker'                 => 'Autogestión',
             'title'                  => 'Identificación del asistente',
-            'subtitle'               => 'Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.',
+            'subtitle'               => 'Ingresa el dato solicitado, selecciona el resultado correcto, confirma la información e imprime la escarapela.',
             'field_label'            => 'Cédula de ciudadanía',
             'placeholder'            => 'Ej: 1234567890',
             'search_label'           => 'Buscar',
@@ -2507,6 +3058,22 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
             'fullscreen_label'       => 'Activar pantalla completa',
         ];
         $args = wp_parse_args( (array) $args, $defaults );
+
+        $auth_fields        = function_exists('eventosapp_self_checkin_get_event_auth_fields') ? eventosapp_self_checkin_get_event_auth_fields( $event_id ) : [ 'identification' ];
+        $auth_field_label   = function_exists('eventosapp_self_checkin_auth_label') ? eventosapp_self_checkin_auth_label( $auth_fields ) : 'Identificación';
+        $auth_placeholder   = function_exists('eventosapp_self_checkin_auth_placeholder') ? eventosapp_self_checkin_auth_placeholder( $auth_fields ) : 'Ej: 1234567890 o PA123456';
+        $auth_help_text     = function_exists('eventosapp_self_checkin_auth_help_text') ? eventosapp_self_checkin_auth_help_text( $auth_fields ) : 'Escribe el dato configurado para este evento.';
+        $keyboard_mode      = function_exists('eventosapp_self_checkin_auth_keyboard_mode') ? eventosapp_self_checkin_auth_keyboard_mode( $auth_fields ) : 'numbers';
+
+        if ( empty( $args['field_label'] ) || $args['field_label'] === $defaults['field_label'] ) {
+            $args['field_label'] = $auth_field_label;
+        }
+        if ( empty( $args['placeholder'] ) || $args['placeholder'] === $defaults['placeholder'] ) {
+            $args['placeholder'] = $auth_placeholder;
+        }
+        if ( empty( $args['subtitle'] ) || $args['subtitle'] === $defaults['subtitle'] || $args['subtitle'] === 'Ingresa la cédula, selecciona el resultado correcto, confirma la información e imprime la escarapela.' ) {
+            $args['subtitle'] = $auth_help_text . ' Luego selecciona el resultado correcto, confirma la información e imprime la escarapela.';
+        }
 
         $design_config = eventosapp_self_checkin_get_design_config( $event_id );
         if ( empty( $args['logo_url'] ) && ! empty( $design_config['main_logo_url'] ) ) {
@@ -2523,7 +3090,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
         echo eventosapp_self_checkin_inline_style_fallback();
         echo eventosapp_self_checkin_background_style_fallback( $event_id );
         ?>
-        <div id="<?php echo esc_attr( $uid ); ?>" class="evsc-wrap <?php echo esc_attr( $theme_class ); ?>" style="<?php echo esc_attr( $design_style ); ?>" data-theme="<?php echo esc_attr( $design_config['theme'] ?? 'light' ); ?>" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-event-name="<?php echo esc_attr( get_the_title( $event_id ) ); ?>" data-kiosk-lock="<?php echo ! empty( $args['enable_kiosk_lock'] ) ? '1' : '0'; ?>" data-ajax-url="<?php echo esc_url( admin_url('admin-ajax.php') ); ?>" data-search-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_search') ); ?>" data-confirm-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_confirm') ); ?>" data-print-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_print') ); ?>">
+        <div id="<?php echo esc_attr( $uid ); ?>" class="evsc-wrap <?php echo esc_attr( $theme_class ); ?>" style="<?php echo esc_attr( $design_style ); ?>" data-theme="<?php echo esc_attr( $design_config['theme'] ?? 'light' ); ?>" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-event-name="<?php echo esc_attr( get_the_title( $event_id ) ); ?>" data-kiosk-lock="<?php echo ! empty( $args['enable_kiosk_lock'] ) ? '1' : '0'; ?>" data-ajax-url="<?php echo esc_url( admin_url('admin-ajax.php') ); ?>" data-search-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_search') ); ?>" data-confirm-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_confirm') ); ?>" data-print-nonce="<?php echo esc_attr( wp_create_nonce('eventosapp_self_checkin_print') ); ?>" data-auth-fields="<?php echo esc_attr( wp_json_encode( $auth_fields ) ); ?>" data-keyboard-default="<?php echo esc_attr( $keyboard_mode ); ?>">
             <?php if ( ! empty( $args['logo_url'] ) ) : ?>
                 <div class="evsc-logo-wrap">
                     <img class="evsc-logo" src="<?php echo esc_url( $args['logo_url'] ); ?>" alt="<?php echo esc_attr( $args['logo_alt'] ?: get_the_title( $event_id ) ); ?>">
@@ -2558,12 +3125,12 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
                 </div>
 
                 <?php if ( ! empty( $args['show_touch_keyboard'] ) ) : ?>
-                    <div class="evsc-keyboard evsc-js-keyboard" data-mode="numbers" aria-label="<?php echo esc_attr( $args['touch_keyboard_title'] ); ?>">
+                    <div class="evsc-keyboard evsc-js-keyboard" data-mode="<?php echo esc_attr( $keyboard_mode ); ?>" aria-label="<?php echo esc_attr( $args['touch_keyboard_title'] ); ?>">
                         <div class="evsc-keyboard-head">
                             <span class="evsc-keyboard-title"><?php echo esc_html( $args['touch_keyboard_title'] ); ?></span>
                             <div class="evsc-keyboard-toggle" role="group" aria-label="Modo de teclado">
-                                <button type="button" class="evsc-keyboard-mode evsc-js-keyboard-mode is-active" data-mode="numbers" aria-pressed="true"><?php echo esc_html( $args['touch_keyboard_numbers_label'] ); ?></button>
-                                <button type="button" class="evsc-keyboard-mode evsc-js-keyboard-mode" data-mode="letters" aria-pressed="false"><?php echo esc_html( $args['touch_keyboard_letters_label'] ); ?></button>
+                                <button type="button" class="evsc-keyboard-mode evsc-js-keyboard-mode <?php echo $keyboard_mode === 'numbers' ? 'is-active' : ''; ?>" data-mode="numbers" aria-pressed="<?php echo $keyboard_mode === 'numbers' ? 'true' : 'false'; ?>"><?php echo esc_html( $args['touch_keyboard_numbers_label'] ); ?></button>
+                                <button type="button" class="evsc-keyboard-mode evsc-js-keyboard-mode <?php echo $keyboard_mode === 'letters' ? 'is-active' : ''; ?>" data-mode="letters" aria-pressed="<?php echo $keyboard_mode === 'letters' ? 'true' : 'false'; ?>"><?php echo esc_html( $args['touch_keyboard_letters_label'] ); ?></button>
                             </div>
                         </div>
                         <div class="evsc-keyboard-grid evsc-keyboard-numbers">
@@ -2578,6 +3145,7 @@ if ( ! function_exists('eventosapp_self_checkin_render_main_ui') ) {
                             <?php foreach ( [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'Ñ', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z' ] as $key ) : ?>
                                 <button type="button" class="evsc-key" data-key="<?php echo esc_attr( $key ); ?>"><?php echo esc_html( $key ); ?></button>
                             <?php endforeach; ?>
+                            <button type="button" class="evsc-key evsc-key-action evsc-key-space" data-key=" "><?php echo esc_html( $args['touch_keyboard_space_label'] ); ?></button>
                             <button type="button" class="evsc-key evsc-key-action evsc-key-wide" data-action="backspace"><?php echo esc_html( $args['touch_keyboard_backspace_label'] ); ?></button>
                             <button type="button" class="evsc-key evsc-key-action evsc-key-wide" data-action="clear"><?php echo esc_html( $args['touch_keyboard_clear_label'] ); ?></button>
                         </div>
@@ -2675,12 +3243,19 @@ add_action('wp_ajax_eventosapp_self_checkin_search', function() {
         wp_send_json_error(['message' => 'No tienes permisos para este evento.'], 403);
     }
 
-    $identifier = eventosapp_self_checkin_validate_identifier( $_POST['cedula'] ?? '' );
+    $auth_fields = function_exists('eventosapp_self_checkin_get_event_auth_fields') ? eventosapp_self_checkin_get_event_auth_fields( $event_id ) : [ 'identification' ];
+    $raw_search  = $_POST['identifier'] ?? ( $_POST['cedula'] ?? '' );
+    $identifier  = function_exists('eventosapp_self_checkin_validate_auth_search')
+        ? eventosapp_self_checkin_validate_auth_search( $raw_search, $auth_fields )
+        : eventosapp_self_checkin_validate_identifier( $raw_search );
+
     if ( is_wp_error( $identifier ) ) {
         wp_send_json_error(['message' => $identifier->get_error_message()], 400);
     }
 
-    $ticket_ids = eventosapp_self_checkin_find_tickets_by_identifier( $identifier, $event_id, 10 );
+    $ticket_ids = function_exists('eventosapp_self_checkin_find_tickets_by_auth_fields')
+        ? eventosapp_self_checkin_find_tickets_by_auth_fields( $identifier, $event_id, $auth_fields, 20 )
+        : eventosapp_self_checkin_find_tickets_by_identifier( $identifier, $event_id, 10 );
     if ( ! empty( $ticket_ids ) ) {
         update_meta_cache('post', $ticket_ids);
     }
@@ -2695,7 +3270,8 @@ add_action('wp_ajax_eventosapp_self_checkin_search', function() {
     }
 
     wp_send_json_success([
-        'results' => $results,
+        'results'     => $results,
+        'auth_fields' => $auth_fields,
     ]);
 });
 
