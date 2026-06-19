@@ -799,20 +799,25 @@ function eventosapp_ajax_render_badge() {
 
 
 /**
- * Construcción de la escarapela tomando metas del EVENTO
- * ACTUALIZADA: Incluye todos los campos nuevos y soporte para escarapelas_split_4
+ * Construcción de la escarapela tomando metas del EVENTO.
+ *
+ * Fallback heredado: la versión central preferida vive en eventosapp-badges.php.
+ * Esta declaración queda protegida para no generar fatal si el helper central
+ * ya fue cargado, manteniendo compatibilidad con instalaciones donde el archivo
+ * de escarapelas no esté disponible por alguna razón.
  */
-function eventosapp_get_badge_html_from_event( $event_id, $ticket_id ) {
+if ( ! function_exists('eventosapp_get_badge_html_from_event') ) {
+function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_print = true ) {
     // 1) Cargar la config del evento desde el helper del admin
     if ( ! function_exists('eventosapp_get_badge_settings') ) {
         $cfg = [
             'design' => 'manillas',
             'order'  => [1=>'full_name',2=>'company',3=>'qr',4=>'none',5=>'none'],
-            'width'  => 200, 'height'=>100,
+            'width'  => 374, 'height'=>208,
             'size_large'=>24, 'size_medium'=>18, 'size_small'=>14,
             'weight_large'=>600,'weight_medium'=>500,'weight_small'=>400,
             'sep_vertical'=>4, 'sep_horizontal'=>4,
-            'qr_size'=>72, 'border_width'=>1,
+            'qr_size'=>72, 'border_width'=>0,
         ];
     } else {
         $cfg = eventosapp_get_badge_settings( $event_id );
@@ -1024,8 +1029,11 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id ) {
     }
 ?>
 </div>
+<?php if ( ! empty( $auto_print ) ) : ?>
 <script>window.print();</script>
+<?php endif; ?>
 </body></html>
 <?php
     return ob_get_clean();
+}
 }
