@@ -1198,11 +1198,96 @@ if ( ! function_exists( 'eventosapp_expositor_get_download_permissions' ) ) {
     }
 }
 
-if ( ! function_exists( 'eventosapp_expositor_download_is_allowed' ) ) {
-    function eventosapp_expositor_download_is_allowed( $event_id, $expositor_id, $user_id = 0 ) {
-        if ( eventosapp_expositor_manager_can_access_event( $event_id, $user_id ) ) return true;
+if ( ! function_exists( 'eventosapp_expositor_download_permission_is_enabled' ) ) {
+    /**
+     * Revisa únicamente si el organizador/gestor autorizó la descarga CSV
+     * para un expositor dentro de un evento.
+     *
+     * No valida al usuario actual; esa validación se hace en
+     * eventosapp_expositor_download_is_allowed().
+     *
+     * @param int $event_id
+     * @param int $expositor_id
+     * @return bool
+     */
+    function eventosapp_expositor_download_permission_is_enabled( $event_id, $expositor_id ) {
+        $expositor_id = absint( $expositor_id );
+        if ( ! $event_id || ! $expositor_id ) return false;
+
         $permissions = eventosapp_expositor_get_download_permissions( $event_id );
-        return ! empty( $permissions[ absint( $expositor_id ) ] );
+        if ( empty( $permissions ) || ! is_array( $permissions ) ) return false;
+
+        foreach ( $permissions as $permission_expositor_id => $enabled ) {
+            if ( absint( $permission_expositor_id ) === $expositor_id && ! empty( $enabled ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_download_is_allowed' ) ) {
+    /**
+     * Valida si un usuario puede descargar el CSV de entregas de un expositor.
+     *
+     * Reglas:
+     * - Administrador, organizador del evento o usuario con permiso de Gestión de Expositores
+     *   puede descargar el CSV como CSV organizador.
+     * - Usuario asignado al expositor sólo puede descargar cuando el organizador/gestor
+     *   activó la autorización de descarga para ese expositor.
+     * - Un usuario no asignado al expositor no puede descargar aunque conozca el enlace.
+     *
+     * @param int $event_id
+     * @param int $expositor_id
+     * @param int $user_id
+     * @return bool
+     */
+    function eventosapp_expositor_download_is_allowed( $event_id, $expositor_id, $user_id = 0 ) {
+        $event_id     = absint( $event_id );
+        $expositor_id = absint( $expositor_id );
+        $user_id      = $user_id ? absint( $user_id ) : get_current_user_id();
+
+        if ( ! $event_id || ! $expositor_id || ! $user_id ) return false;
+
+        if ( eventosapp_expositor_manager_can_access_event( $event_id, $user_id ) ) {
+            return true;
+        }
+
+        if ( ! eventosapp_expositor_download_permission_is_enabled( $event_id, $expositor_id ) ) {
+            return false;
+        }
+
+        return in_array( $expositor_id, eventosapp_expositor_user_get_expositor_ids_for_event( $event_id, $user_id ), true );
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_get_download_csv_url' ) ) {
+    /**
+     * Construye una URL frontend para descargar el CSV.
+     *
+     * Se evita depender de wp-admin/admin-post.php porque algunos usuarios frontend
+     * tipo expositor/staff pueden ser redireccionados fuera del área admin antes de
+     * que WordPress ejecute la acción de descarga.
+     *
+     * @param int $event_id
+     * @param int $expositor_id
+     * @return string
+     */
+    function eventosapp_expositor_get_download_csv_url( $event_id, $expositor_id ) {
+        $event_id     = absint( $event_id );
+        $expositor_id = absint( $expositor_id );
+
+        $url = add_query_arg(
+            [
+                'eventosapp_expositor_download_csv' => '1',
+                'event_id'                         => $event_id,
+                'expositor_id'                     => $expositor_id,
+            ],
+            home_url( '/' )
+        );
+
+        return wp_nonce_url( $url, 'eventosapp_expositor_download_' . $event_id . '_' . $expositor_id );
     }
 }
 
@@ -1728,7 +1813,7 @@ add_shortcode( 'eventosapp_expositor', function () {
     $total_products    = count( eventosapp_expositor_get_products( $event_id, $current_expositor ) );
     $download_allowed  = eventosapp_expositor_download_is_allowed( $event_id, $current_expositor, $user_id );
     $nonce             = wp_create_nonce( 'eventosapp_expositor_front_' . $event_id );
-    $download_url      = wp_nonce_url( admin_url( 'admin-post.php?action=eventosapp_expositor_download_csv&event_id=' . $event_id . '&expositor_id=' . $current_expositor ), 'eventosapp_expositor_download_' . $event_id . '_' . $current_expositor );
+    $download_url      = eventosapp_expositor_get_download_csv_url( $event_id, $current_expositor );
 
     ob_start();
     eventosapp_expositor_front_css();
@@ -2214,7 +2299,7 @@ add_shortcode( 'eventosapp_expositor_gestion', function () {
                         $name = get_post_meta( $expositor_id, '_expositor_nombre_empresa', true ) ?: get_the_title( $expositor_id );
                         $products = eventosapp_expositor_get_products( $event_id, $expositor_id );
                         $total = eventosapp_expositor_count_deliveries( $event_id, $expositor_id );
-                        $url = wp_nonce_url( admin_url( 'admin-post.php?action=eventosapp_expositor_download_csv&event_id=' . $event_id . '&expositor_id=' . $expositor_id ), 'eventosapp_expositor_download_' . $event_id . '_' . $expositor_id );
+                        $url = eventosapp_expositor_get_download_csv_url( $event_id, $expositor_id );
                         ?>
                         <tr>
                             <td><strong><?php echo esc_html( $name ); ?></strong></td>
@@ -2264,81 +2349,127 @@ add_shortcode( 'eventosapp_expositor_gestion', function () {
 // 6. CSV
 // ============================================================
 
-add_action( 'admin_post_eventosapp_expositor_download_csv', function () {
-    global $wpdb;
+if ( ! function_exists( 'eventosapp_expositor_download_csv_send' ) ) {
+    /**
+     * Genera y envía el CSV de entregas del expositor validando usuario, evento,
+     * expositor, nonce y autorización configurada por el organizador/gestor.
+     *
+     * Esta función se reutiliza desde la ruta frontend nueva y desde la ruta
+     * admin-post anterior para conservar compatibilidad con enlaces ya emitidos.
+     *
+     * @return void
+     */
+    function eventosapp_expositor_download_csv_send() {
+        global $wpdb;
 
-    $event_id     = absint( $_GET['event_id'] ?? 0 );
-    $expositor_id = absint( $_GET['expositor_id'] ?? 0 );
+        if ( ! is_user_logged_in() ) {
+            wp_die( 'Debes iniciar sesión para descargar esta base de datos.' );
+        }
 
-    if ( ! $event_id || ! $expositor_id ) {
-        wp_die( 'Parámetros inválidos.' );
-    }
+        $event_id     = absint( $_GET['event_id'] ?? 0 );
+        $expositor_id = absint( $_GET['expositor_id'] ?? 0 );
+        $user_id      = get_current_user_id();
 
-    check_admin_referer( 'eventosapp_expositor_download_' . $event_id . '_' . $expositor_id );
+        if ( ! $event_id || ! $expositor_id || get_post_type( $event_id ) !== 'eventosapp_event' || get_post_type( $expositor_id ) !== 'eventosapp_expositor' ) {
+            wp_die( 'Parámetros inválidos.' );
+        }
 
-    if ( ! eventosapp_expositor_user_can_manage_expositor( $event_id, $expositor_id ) && ! eventosapp_expositor_download_is_allowed( $event_id, $expositor_id ) ) {
-        wp_die( 'No tienes autorización para descargar esta base de datos.' );
-    }
+        $nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
+        if ( ! wp_verify_nonce( $nonce, 'eventosapp_expositor_download_' . $event_id . '_' . $expositor_id ) ) {
+            wp_die( 'El enlace de descarga no es válido o expiró. Vuelve al módulo y genera nuevamente la descarga.' );
+        }
 
-    if ( ! eventosapp_expositor_download_is_allowed( $event_id, $expositor_id ) ) {
-        wp_die( 'La descarga todavía no fue autorizada por el organizador.' );
-    }
+        $is_manager      = eventosapp_expositor_manager_can_access_event( $event_id, $user_id );
+        $is_assigned     = in_array( $expositor_id, eventosapp_expositor_user_get_expositor_ids_for_event( $event_id, $user_id ), true );
+        $is_authorized   = eventosapp_expositor_download_permission_is_enabled( $event_id, $expositor_id );
+        $can_download    = eventosapp_expositor_download_is_allowed( $event_id, $expositor_id, $user_id );
 
-    $rows = $wpdb->get_results( $wpdb->prepare(
-        'SELECT * FROM ' . eventosapp_expositores_table_name() . ' WHERE event_id = %d AND expositor_id = %d ORDER BY created_at_gmt DESC',
-        $event_id,
-        $expositor_id
-    ), ARRAY_A );
+        if ( ! $can_download ) {
+            if ( $is_assigned && ! $is_manager && ! $is_authorized ) {
+                wp_die( 'La descarga todavía no fue autorizada por el organizador.' );
+            }
 
-    $event_slug     = sanitize_title( get_the_title( $event_id ) ?: 'evento' );
-    $expositor_slug = sanitize_title( get_the_title( $expositor_id ) ?: 'expositor' );
-    $filename       = 'entregas-' . $event_slug . '-' . $expositor_slug . '-' . date_i18n( 'Ymd-His' ) . '.csv';
+            wp_die( 'No tienes autorización para descargar esta base de datos.' );
+        }
 
-    nocache_headers();
-    header( 'Content-Type: text/csv; charset=utf-8' );
-    header( 'Content-Disposition: attachment; filename=' . $filename );
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            'SELECT * FROM ' . eventosapp_expositores_table_name() . ' WHERE event_id = %d AND expositor_id = %d ORDER BY created_at_gmt DESC',
+            $event_id,
+            $expositor_id
+        ), ARRAY_A );
 
-    $out = fopen( 'php://output', 'w' );
-    fprintf( $out, chr(0xEF) . chr(0xBB) . chr(0xBF) );
-    fputcsv( $out, [
-        'Fecha',
-        'Evento',
-        'Expositor',
-        'Producto',
-        'Ticket público',
-        'Post ID ticket',
-        'Nombre',
-        'Apellido',
-        'Email',
-        'Teléfono',
-        'Empresa',
-        'Documento',
-        'Localidad',
-        'Entregado por',
-    ] );
+        $event_slug     = sanitize_title( get_the_title( $event_id ) ?: 'evento' );
+        $expositor_slug = sanitize_title( get_the_title( $expositor_id ) ?: 'expositor' );
+        $filename       = sanitize_file_name( 'entregas-' . $event_slug . '-' . $expositor_slug . '-' . date_i18n( 'Ymd-His' ) . '.csv' );
 
-    foreach ( $rows as $row ) {
+        while ( ob_get_level() ) {
+            ob_end_clean();
+        }
+
+        nocache_headers();
+        header( 'Content-Type: text/csv; charset=utf-8' );
+        header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+
+        $out = fopen( 'php://output', 'w' );
+        fprintf( $out, chr(0xEF) . chr(0xBB) . chr(0xBF) );
         fputcsv( $out, [
-            $row['created_at'],
-            get_the_title( $event_id ),
-            get_the_title( $expositor_id ),
-            $row['product_name'],
-            $row['public_ticket_id'],
-            $row['ticket_id'],
-            $row['attendee_name'],
-            $row['attendee_lastname'],
-            $row['attendee_email'],
-            $row['attendee_phone'],
-            $row['attendee_company'],
-            $row['attendee_document'],
-            $row['attendee_location'],
-            $row['delivered_by_name'],
+            'Fecha',
+            'Evento',
+            'Expositor',
+            'Producto',
+            'Ticket público',
+            'Post ID ticket',
+            'Nombre',
+            'Apellido',
+            'Email',
+            'Teléfono',
+            'Empresa',
+            'Documento',
+            'Localidad',
+            'Entregado por',
         ] );
-    }
 
-    fclose( $out );
-    exit;
-} );
+        foreach ( $rows as $row ) {
+            fputcsv( $out, [
+                $row['created_at'],
+                get_the_title( $event_id ),
+                get_the_title( $expositor_id ),
+                $row['product_name'],
+                $row['public_ticket_id'],
+                $row['ticket_id'],
+                $row['attendee_name'],
+                $row['attendee_lastname'],
+                $row['attendee_email'],
+                $row['attendee_phone'],
+                $row['attendee_company'],
+                $row['attendee_document'],
+                $row['attendee_location'],
+                $row['delivered_by_name'],
+            ] );
+        }
+
+        fclose( $out );
+        exit;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_maybe_download_csv_from_frontend' ) ) {
+    /**
+     * Atiende la descarga desde una URL frontend para evitar redirecciones al home
+     * provocadas por restricciones de acceso a wp-admin en usuarios tipo expositor.
+     *
+     * @return void
+     */
+    function eventosapp_expositor_maybe_download_csv_from_frontend() {
+        if ( empty( $_GET['eventosapp_expositor_download_csv'] ) ) {
+            return;
+        }
+
+        eventosapp_expositor_download_csv_send();
+    }
+}
+add_action( 'init', 'eventosapp_expositor_maybe_download_csv_from_frontend', 1 );
+add_action( 'admin_post_eventosapp_expositor_download_csv', 'eventosapp_expositor_download_csv_send' );
 
 // ============================================================
 // 7. COLUMNAS ADMIN
