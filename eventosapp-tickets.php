@@ -1240,8 +1240,8 @@ function eventosapp_ticket_metabox_render($post) {
                 <input type="text" class="eventosapp-input-wide" name="eventosapp_asistente_nombre" value="<?php echo esc_attr($asistente_nombre); ?>" required>
                 <label>Apellido:</label>
                 <input type="text" class="eventosapp-input-wide" name="eventosapp_asistente_apellido" value="<?php echo esc_attr($asistente_apellido); ?>" required>
-                <label>Cédula de Ciudadanía:</label>
-                <input type="text" class="eventosapp-input-wide" name="eventosapp_asistente_cc" value="<?php echo esc_attr($asistente_cc); ?>">
+                <label>Identificación / Pasaporte:</label>
+                <input type="text" class="eventosapp-input-wide" name="eventosapp_asistente_cc" value="<?php echo esc_attr($asistente_cc); ?>" placeholder="Cédula, pasaporte o documento alfanumérico">
                 <label>Email:</label>
                 <input type="email" class="eventosapp-input-wide" name="eventosapp_asistente_email" value="<?php echo esc_attr($asistente_email); ?>" required>
                 <label>Número de Contacto:</label>
@@ -1655,6 +1655,19 @@ function eventosapp_ticket_generar_pdf($ticket_id) {
 // Reemplaza el hook actual por este:
 add_action('save_post_eventosapp_ticket', 'eventosapp_save_ticket', 20, 3);
 
+if ( ! function_exists('eventosapp_ticket_compact_search_value') ) {
+    function eventosapp_ticket_compact_search_value($value) {
+        if (is_array($value) || is_object($value)) {
+            return '';
+        }
+        $value = wp_strip_all_tags((string) $value);
+        $value = remove_accents($value);
+        $value = strtolower($value);
+        $value = preg_replace('/[^a-z0-9]+/', '', $value);
+        return is_string($value) ? $value : '';
+    }
+}
+
 function eventosapp_save_ticket($post_id, $post, $update) {
     // 1) Protecciones básicas
     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
@@ -1683,17 +1696,35 @@ function eventosapp_save_ticket($post_id, $post, $update) {
     update_post_meta($post_id, '_eventosapp_ticket_user_id', $user_id);
 
     // 4) Datos asistente
-    update_post_meta($post_id, '_eventosapp_asistente_nombre',   sanitize_text_field($_POST['eventosapp_asistente_nombre']   ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_apellido', sanitize_text_field($_POST['eventosapp_asistente_apellido'] ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_cc',       sanitize_text_field($_POST['eventosapp_asistente_cc']       ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_email',    sanitize_email($_POST['eventosapp_asistente_email']         ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_tel',      sanitize_text_field($_POST['eventosapp_asistente_tel']      ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_empresa',  sanitize_text_field($_POST['eventosapp_asistente_empresa']  ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_nit',      sanitize_text_field($_POST['eventosapp_asistente_nit']      ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_cargo',    sanitize_text_field($_POST['eventosapp_asistente_cargo']    ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_ciudad',   sanitize_text_field($_POST['eventosapp_asistente_ciudad']   ?? ''));
-    update_post_meta($post_id, '_eventosapp_asistente_pais',     sanitize_text_field($_POST['eventosapp_asistente_pais']     ?? 'Colombia'));
-    update_post_meta($post_id, '_eventosapp_asistente_localidad',sanitize_text_field($_POST['eventosapp_asistente_localidad'] ?? ''));
+    $asistente_nombre   = sanitize_text_field($_POST['eventosapp_asistente_nombre']   ?? '');
+    $asistente_apellido = sanitize_text_field($_POST['eventosapp_asistente_apellido'] ?? '');
+    $asistente_cc       = sanitize_text_field($_POST['eventosapp_asistente_cc']       ?? '');
+    $asistente_email    = sanitize_email($_POST['eventosapp_asistente_email']         ?? '');
+    $asistente_tel      = sanitize_text_field($_POST['eventosapp_asistente_tel']      ?? '');
+    $asistente_empresa  = sanitize_text_field($_POST['eventosapp_asistente_empresa']  ?? '');
+    $asistente_nit      = sanitize_text_field($_POST['eventosapp_asistente_nit']      ?? '');
+    $asistente_cargo    = sanitize_text_field($_POST['eventosapp_asistente_cargo']    ?? '');
+    $asistente_ciudad   = sanitize_text_field($_POST['eventosapp_asistente_ciudad']   ?? '');
+    $asistente_pais     = sanitize_text_field($_POST['eventosapp_asistente_pais']     ?? 'Colombia');
+    $asistente_localidad= sanitize_text_field($_POST['eventosapp_asistente_localidad'] ?? '');
+
+    update_post_meta($post_id, '_eventosapp_asistente_nombre',   $asistente_nombre);
+    update_post_meta($post_id, '_eventosapp_asistente_apellido', $asistente_apellido);
+    update_post_meta($post_id, '_eventosapp_asistente_cc',       $asistente_cc);
+    update_post_meta($post_id, '_eventosapp_asistente_email',    $asistente_email);
+    update_post_meta($post_id, '_eventosapp_asistente_tel',      $asistente_tel);
+    update_post_meta($post_id, '_eventosapp_asistente_empresa',  $asistente_empresa);
+    update_post_meta($post_id, '_eventosapp_asistente_nit',      $asistente_nit);
+    update_post_meta($post_id, '_eventosapp_asistente_cargo',    $asistente_cargo);
+    update_post_meta($post_id, '_eventosapp_asistente_ciudad',   $asistente_ciudad);
+    update_post_meta($post_id, '_eventosapp_asistente_pais',     $asistente_pais);
+    update_post_meta($post_id, '_eventosapp_asistente_localidad',$asistente_localidad);
+
+    // Índices auxiliares para búsquedas rápidas desde kiosko: conserva el índice numérico existente
+    // y agrega uno alfanumérico para cédulas con letras, pasaportes e identificaciones mixtas.
+    update_post_meta($post_id, '_evapp_search_cc', preg_replace('/\D+/', '', (string) $asistente_cc));
+    update_post_meta($post_id, '_evapp_search_identification', eventosapp_ticket_compact_search_value($asistente_cc));
+    update_post_meta($post_id, '_evapp_search_phone', preg_replace('/\D+/', '', (string) $asistente_tel));
 
 	// NUEVO: Estado de Pago
     $estado_pago = isset($_POST['eventosapp_estado_pago']) ? sanitize_text_field($_POST['eventosapp_estado_pago']) : 'no_pagado';
