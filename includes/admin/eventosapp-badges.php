@@ -615,7 +615,13 @@ function eventosapp_badge_print_url($evento_id, $ticket = '') {
 
 /**
  * Imprime el HTML final de la escarapela usando la configuración guardada.
+ *
+ * Se protege con function_exists porque versiones anteriores del módulo de
+ * búsqueda/frontend también declaraban esta función. La fuente preferida es
+ * este helper central de escarapelas, pero esta protección evita fatales si
+ * otro archivo heredado ya fue cargado por el sitio.
  */
+if ( ! function_exists('eventosapp_get_badge_html_from_event') ) {
 function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_print = true) {
     $evento_id  = absint($evento_id);
     $ticket_id  = absint($ticket_id);
@@ -750,6 +756,7 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
 <?php
     return ob_get_clean();
 }
+}
 
 /**
  * Imprime el HTML final de la escarapela usando la configuración guardada.
@@ -793,55 +800,6 @@ function eventosapp_download_badge_handler() {
 
     // El botón del metabox es administrativo y mantiene validación por capacidad.
     if (!current_user_can('edit_post', $evento_id)) wp_die('Sin permisos.', '', 403);
-
-    eventosapp_badge_output_html($evento_id, $ticket_id, true);
-}
-
-/**
- * AJAX compatible con el render usado por búsqueda/impresión y kiosko.
- *
- * Se registra con prioridad 1 para que este render centralizado use la misma
- * configuración del metabox y también soporte QR Networking.
- */
-add_action('wp_ajax_eventosapp_render_badge', 'eventosapp_render_badge_handler', 1);
-add_action('wp_ajax_nopriv_eventosapp_render_badge', 'eventosapp_render_badge_handler', 1);
-
-function eventosapp_render_badge_handler() {
-    $ticket_id = eventosapp_badge_resolve_ticket_id();
-    $evento_id = eventosapp_badge_resolve_event_id($ticket_id);
-
-    if (!$evento_id) wp_die('Evento inválido', '', 400);
-
-    $nonce = '';
-    if (isset($_GET['nonce'])) {
-        $nonce = sanitize_text_field(wp_unslash($_GET['nonce']));
-    } elseif (isset($_GET['_wpnonce'])) {
-        $nonce = sanitize_text_field(wp_unslash($_GET['_wpnonce']));
-    }
-
-    $nonce_ok = false;
-    if ($nonce !== '') {
-        $nonce_actions = [
-            'eventosapp_render_badge',
-            'eventosapp_download_badge',
-            'eventosapp_self_checkin',
-            'eventosapp_self_checkin_nonce',
-            'eventosapp_badge',
-        ];
-        foreach ($nonce_actions as $action) {
-            if (wp_verify_nonce($nonce, $action)) {
-                $nonce_ok = true;
-                break;
-            }
-        }
-    }
-
-    $can_edit_event  = current_user_can('edit_post', $evento_id);
-    $can_edit_ticket = ($ticket_id && current_user_can('edit_post', $ticket_id));
-
-    if (!$nonce_ok && !$can_edit_event && !$can_edit_ticket) {
-        wp_die('Nonce inválido', '', 403);
-    }
 
     eventosapp_badge_output_html($evento_id, $ticket_id, true);
 }
