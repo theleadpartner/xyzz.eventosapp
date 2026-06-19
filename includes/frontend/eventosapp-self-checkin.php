@@ -16,7 +16,8 @@ if ( ! function_exists('eventosapp_self_checkin_prepare_badge_print_html') ) {
     /**
      * Ajusta el HTML de la escarapela para el módulo de autogestión.
      *
-     * La función original eventosapp_get_badge_html_from_event() ya trae window.print().
+     * La función central eventosapp_get_badge_html_from_event() trae el HTML de
+     * escarapela desde el metabox del evento dueño del ticket y ya incluye window.print().
      * Aquí no cambiamos el diseño ni la configuración de escarapela: solo reemplazamos
      * el disparador de impresión por uno más estable para kioskos, esperando DOM,
      * fuentes e imágenes/QR antes de enviar la orden al navegador.
@@ -3370,11 +3371,25 @@ add_action('wp_ajax_eventosapp_self_checkin_badge', function() {
         wp_die('Sin permisos.', '', 403);
     }
 
+    /*
+     * La impresión del kiosko debe usar SIEMPRE la configuración de escarapela
+     * del evento al que pertenece el ticket, aunque el request llegue con otro
+     * event_id por URL, caché del navegador, widget fijo o estado del dashboard.
+     */
+    $event_id = $ticket_event_id;
+
     if ( ! function_exists('eventosapp_get_badge_html_from_event') ) {
+        if ( function_exists('eventosapp_badge_output_html') ) {
+            eventosapp_badge_output_html( $event_id, $ticket_id, true );
+        }
         wp_die('La función de escarapela no está disponible.', '', 500);
     }
 
-    $badge_html = eventosapp_get_badge_html_from_event( $event_id, $ticket_id );
+    $badge_html = eventosapp_get_badge_html_from_event( $event_id, $ticket_id, true );
+    if ( ! is_string( $badge_html ) || $badge_html === '' ) {
+        wp_die('No fue posible generar la escarapela para este evento.', '', 500);
+    }
+
     echo eventosapp_self_checkin_prepare_badge_print_html( $badge_html );
     exit;
 });
