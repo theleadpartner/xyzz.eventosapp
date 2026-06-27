@@ -88,14 +88,14 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
    * @return bool
    */
   function eventosapp_user_can_manage_event($event_id, $user_id = null){
-    $event_id = (int)$event_id;
+    $event_id = absint($event_id);
     if (!$event_id) return false;
 
     // Determinar usuario
     if ($user_id === null) {
       $user_id = get_current_user_id();
     }
-    $user_id = (int)$user_id;
+    $user_id = absint($user_id);
     if (!$user_id) return false;
 
     // 1. Administradores siempre pueden
@@ -105,7 +105,11 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
 
     // 2. Autor del evento puede
     $event = get_post($event_id);
-    if ($event && (int)$event->post_author === $user_id) {
+    if (!$event || $event->post_type !== 'eventosapp_event') {
+      return false;
+    }
+
+    if (absint($event->post_author) === $user_id) {
       return true;
     }
 
@@ -121,29 +125,65 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
 
     $now = time();
 
-    // 4. Co-gestores temporales (no expirados)
+    // 4. Co-gestores temporales (no expirados).
+    // Compatibilidad: soporta filas nuevas ['user_id'=>ID,'until'=>TS], filas indexadas
+    // por ID de usuario y valores escalares heredados que pudieran existir en instalaciones previas.
     $temp_authors = get_post_meta($event_id, '_evapp_temp_authors', true);
     if (is_array($temp_authors)) {
-      foreach ($temp_authors as $row) {
-        if (!is_array($row)) continue;
-        if (empty($row['user_id'])) continue;
-        if ((int)$row['user_id'] !== $user_id) continue;
+      foreach ($temp_authors as $key => $row) {
+        $row_user_id = 0;
+        $until = 0;
 
-        // Verificar expiración
-        $until = isset($row['until']) ? (int)$row['until'] : 0;
-        if ($until === 0 || $until >= $now) {
+        if (is_array($row)) {
+          $row_user_id = !empty($row['user_id']) ? absint($row['user_id']) : absint($key);
+          $until = isset($row['until']) ? absint($row['until']) : 0;
+        } else {
+          $row_user_id = absint($row);
+        }
+
+        if ($row_user_id !== $user_id) continue;
+
+        if (!$until || $until >= $now) {
           return true; // Co-gestor válido (sin expiración o no ha expirado)
         }
       }
     }
 
-    // 5. Staff asignado (no expirado)
+    // 5. Staff operativo asignado (no expirado).
+    // El post meta es la fuente principal y se recorre completo para aceptar estructuras
+    // uid => datos y también listas numéricas con ['user_id'=>ID].
     $staff_assigned = get_post_meta($event_id, '_evapp_event_staff_assigned', true);
-    if (is_array($staff_assigned) && isset($staff_assigned[$user_id])) {
-      $staff_data = $staff_assigned[$user_id];
-      $until = isset($staff_data['until']) ? (int)$staff_data['until'] : 0;
-      if ($until === 0 || $until >= $now) {
-        return true; // Staff válido (sin expiración o no ha expirado)
+    if (is_array($staff_assigned)) {
+      foreach ($staff_assigned as $key => $row) {
+        $row_user_id = absint($key);
+        $until = 0;
+
+        if (is_array($row)) {
+          $row_user_id = !empty($row['user_id']) ? absint($row['user_id']) : $row_user_id;
+          $until = isset($row['until']) ? absint($row['until']) : 0;
+        }
+
+        if ($row_user_id !== $user_id) continue;
+
+        if (!$until || $until >= $now) {
+          return true; // Staff válido (sin expiración o no ha expirado)
+        }
+      }
+    }
+
+    // 5B. Compatibilidad con usermeta _evapp_event_assignment multi-evento.
+    $user_assignments = get_user_meta($user_id, '_evapp_event_assignment', true);
+    if (is_array($user_assignments)) {
+      if (isset($user_assignments[$event_id]) && is_array($user_assignments[$event_id])) {
+        $until = isset($user_assignments[$event_id]['until']) ? absint($user_assignments[$event_id]['until']) : 0;
+        if (!$until || $until >= $now) {
+          return true;
+        }
+      } elseif (isset($user_assignments['event_id']) && absint($user_assignments['event_id']) === $event_id) {
+        $until = isset($user_assignments['until']) ? absint($user_assignments['until']) : 0;
+        if (!$until || $until >= $now) {
+          return true;
+        }
       }
     }
 
