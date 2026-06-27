@@ -268,6 +268,58 @@ if ( ! function_exists('eventosapp_dashboard_user_can_select_event') ) {
 }
 
 /**
+ * Determina si el usuario tiene por lo menos un evento al que pueda entrar desde el dashboard.
+ *
+ * Esta validación no reemplaza los permisos por módulo. Solo evita que el dashboard quede
+ * bloqueado cuando el usuario tiene acceso por Co-gestión, Staff operativo, Acceso
+ * personalizado, Asistencia o Expositor, pero todavía no tiene un evento activo válido.
+ */
+if ( ! function_exists('eventosapp_dashboard_user_has_any_selectable_event') ) {
+	function eventosapp_dashboard_user_has_any_selectable_event( $user_id = 0 ) {
+		$user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+		if ( ! $user_id ) {
+			return false;
+		}
+
+		if ( user_can( $user_id, 'manage_options' ) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_staff_access_user_has_any_dashboard_event') && eventosapp_staff_access_user_has_any_dashboard_event( $user_id ) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_dashboard_user_has_any_cogestion_assignment') && eventosapp_dashboard_user_has_any_cogestion_assignment( $user_id ) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_support_user_has_any_event') && eventosapp_support_user_has_any_event( $user_id ) ) {
+			return true;
+		}
+
+		if ( function_exists('eventosapp_expositor_user_has_any_event') && eventosapp_expositor_user_has_any_event( $user_id ) ) {
+			return true;
+		}
+
+		$event_ids = get_posts([
+			'post_type'      => 'eventosapp_event',
+			'post_status'    => ['publish', 'private', 'future', 'draft', 'pending'],
+			'posts_per_page' => 300,
+			'fields'         => 'ids',
+			'no_found_rows'  => true,
+		]);
+
+		foreach ( (array) $event_ids as $event_id ) {
+			if ( function_exists('eventosapp_dashboard_user_can_select_event') && eventosapp_dashboard_user_can_select_event( $event_id, $user_id ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+}
+
+/**
  * Shortcode principal del dashboard.
  * Uso: [eventosapp_dashboard]
  */
@@ -277,27 +329,8 @@ add_shortcode('eventosapp_dashboard', function(){
 		return '<p>Debes iniciar sesión. <a href="'.esc_url($login).'">Iniciar sesión</a></p>';
 	}
 
-	$evapp_can_view_dashboard = function_exists('eventosapp_role_can') && eventosapp_role_can('dashboard');
-	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_staff_access_user_has_any_dashboard_event') ) {
-		$evapp_can_view_dashboard = eventosapp_staff_access_user_has_any_dashboard_event( get_current_user_id() );
-	}
-	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_support_user_has_any_event') ) {
-		$evapp_can_view_dashboard = eventosapp_support_user_has_any_event( get_current_user_id() );
-	}
-	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_expositor_user_has_any_event') ) {
-		$evapp_can_view_dashboard = eventosapp_expositor_user_has_any_event( get_current_user_id() );
-	}
-
-	if ( ! $evapp_can_view_dashboard ) {
-		return '<p>No tienes permisos para ver este panel.</p>';
-	}
-
-	// Cambio de evento por GET
-	if ( isset($_GET['evapp']) && $_GET['evapp'] === 'change_event' ) {
-		if (function_exists('eventosapp_clear_active_event')) {
-			eventosapp_clear_active_event();
-		}
-	}
+	$current_user_id = get_current_user_id();
+	$active_event    = function_exists('eventosapp_get_active_event') ? absint( eventosapp_get_active_event( $current_user_id ) ) : 0;
 
 	// Mensajes
 	$msg = '';
@@ -308,21 +341,51 @@ add_shortcode('eventosapp_dashboard', function(){
 		$msg = '<div class="notice notice-success" style="padding:8px;margin:10px 0;">Evento activado.</div>';
 	}
 
-	ob_start();
-	echo '<div class="evapp-dashboard">';
+	// Cambio de evento por GET. Debe ejecutarse antes de validar permisos para evitar
+	// que un evento activo anterior deje bloqueado el acceso al selector del dashboard.
+	if ( isset($_GET['evapp']) && $_GET['evapp'] === 'change_event' ) {
+		if ( function_exists('eventosapp_clear_active_event') ) {
+			eventosapp_clear_active_event( $current_user_id );
+		}
+		$active_event = 0;
+	}
 
-	$current_user_id = get_current_user_id();
-	$active_event    = function_exists('eventosapp_get_active_event') ? absint( eventosapp_get_active_event() ) : 0;
-
+	// Si el usuario conserva en usermeta un evento activo viejo o no permitido, se limpia
+	// antes de consultar eventosapp_role_can('dashboard'). De lo contrario el candado por
+	// evento puede negar el dashboard completo y no deja llegar al selector.
 	if ( $active_event && function_exists('eventosapp_dashboard_user_can_select_event') && ! eventosapp_dashboard_user_can_select_event( $active_event, $current_user_id ) ) {
 		if ( function_exists('eventosapp_clear_active_event') ) {
-			eventosapp_clear_active_event();
+			eventosapp_clear_active_event( $current_user_id );
 		}
 		$active_event = 0;
 		if ( $msg === '' ) {
-			$msg = '<div class="notice notice-error" style="padding:8px;margin:10px 0;"><strong>Error:</strong> No puedes gestionar este evento.</div>';
+			$msg = '<div class="notice notice-error" style="padding:8px;margin:10px 0;"><strong>Error:</strong> El evento activo anterior ya no está disponible para tu usuario. Selecciona un evento permitido.</div>';
 		}
 	}
+
+	$evapp_can_view_dashboard = function_exists('eventosapp_role_can') && eventosapp_role_can('dashboard');
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_dashboard_user_has_any_selectable_event') ) {
+		$evapp_can_view_dashboard = eventosapp_dashboard_user_has_any_selectable_event( $current_user_id );
+	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_staff_access_user_has_any_dashboard_event') ) {
+		$evapp_can_view_dashboard = eventosapp_staff_access_user_has_any_dashboard_event( $current_user_id );
+	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_dashboard_user_has_any_cogestion_assignment') ) {
+		$evapp_can_view_dashboard = eventosapp_dashboard_user_has_any_cogestion_assignment( $current_user_id );
+	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_support_user_has_any_event') ) {
+		$evapp_can_view_dashboard = eventosapp_support_user_has_any_event( $current_user_id );
+	}
+	if ( ! $evapp_can_view_dashboard && function_exists('eventosapp_expositor_user_has_any_event') ) {
+		$evapp_can_view_dashboard = eventosapp_expositor_user_has_any_event( $current_user_id );
+	}
+
+	if ( ! $evapp_can_view_dashboard ) {
+		return '<p>No tienes permisos para ver este panel.</p>';
+	}
+
+	ob_start();
+	echo '<div class="evapp-dashboard">';
 
 	if ( $active_event ) {
 		// Estilos una sola vez
@@ -484,7 +547,7 @@ add_shortcode('eventosapp_dashboard', function(){
 		$query_args = [
 			'post_type'      => 'eventosapp_event',
 			'posts_per_page' => 300,
-			'post_status'    => ['publish'],
+			'post_status'    => ['publish', 'private', 'future', 'draft', 'pending'],
 			'orderby'        => 'title',
 			'order'          => 'ASC',
 		];
