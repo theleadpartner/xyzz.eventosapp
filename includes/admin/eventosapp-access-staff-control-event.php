@@ -251,7 +251,7 @@ if (!function_exists('eventosapp_staff_access_user_has_any_dashboard_event')) {
 
         $event_ids = get_posts([
             'post_type'      => 'eventosapp_event',
-            'post_status'    => ['publish', 'draft', 'pending', 'private'],
+            'post_status'    => ['publish', 'private', 'future', 'draft', 'pending'],
             'posts_per_page' => -1,
             'fields'         => 'ids',
             'meta_key'       => '_eventosapp_staff_user_event_access',
@@ -325,7 +325,7 @@ if (!function_exists('eventosapp_dashboard_user_has_any_staff_custom_scope')) {
 
         $event_ids = get_posts([
             'post_type'      => 'eventosapp_event',
-            'post_status'    => ['publish', 'draft', 'pending', 'private'],
+            'post_status'    => ['publish', 'private', 'future', 'draft', 'pending'],
             'posts_per_page' => -1,
             'fields'         => 'ids',
             'meta_key'       => '_eventosapp_staff_user_event_access',
@@ -369,14 +369,21 @@ if (!function_exists('eventosapp_dashboard_user_has_cogestion_assignment_in_even
 
         $temp_authors = get_post_meta($event_id, '_evapp_temp_authors', true);
         if (is_array($temp_authors)) {
-            foreach ($temp_authors as $row) {
-                if (!is_array($row) || empty($row['user_id'])) {
+            foreach ($temp_authors as $key => $row) {
+                $row_user_id = 0;
+                $until = 0;
+
+                if (is_array($row)) {
+                    $row_user_id = !empty($row['user_id']) ? absint($row['user_id']) : absint($key);
+                    $until = isset($row['until']) ? absint($row['until']) : 0;
+                } else {
+                    $row_user_id = absint($row);
+                }
+
+                if ($row_user_id !== $user_id) {
                     continue;
                 }
-                if (absint($row['user_id']) !== $user_id) {
-                    continue;
-                }
-                $until = isset($row['until']) ? absint($row['until']) : 0;
+
                 if (!$until || $until >= $now) {
                     return true;
                 }
@@ -428,7 +435,7 @@ if (!function_exists('eventosapp_dashboard_user_has_any_cogestion_assignment')) 
 
         $event_ids = get_posts([
             'post_type'      => 'eventosapp_event',
-            'post_status'    => ['publish', 'draft', 'pending', 'private'],
+            'post_status'    => ['publish', 'private', 'future', 'draft', 'pending'],
             'posts_per_page' => -1,
             'fields'         => 'ids',
             'no_found_rows'  => true,
@@ -581,6 +588,13 @@ if (!function_exists('eventosapp_dashboard_enforce_event_scope_on_role_can')) {
         }
 
         if (!eventosapp_dashboard_user_can_access_event_scope($active_event, $user_id)) {
+            // Si el evento activo guardado en usermeta ya no pertenece al usuario,
+            // no se debe bloquear la entrada general al dashboard. Permitimos solo
+            // el acceso al panel cuando el usuario tiene algún otro alcance válido
+            // para que el shortcode pueda limpiar el evento activo y mostrar el selector.
+            if ($feature === 'dashboard' && eventosapp_dashboard_user_has_any_event_scope($user_id)) {
+                return true;
+            }
             return false;
         }
 
