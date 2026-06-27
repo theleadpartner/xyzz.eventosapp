@@ -624,6 +624,7 @@ add_filter('eventosapp_role_can', function($has_permission, $feature, $user){
         return $has_permission;
     }
 
+    $user_id          = absint($user->ID);
     $support_features = ['support_assistance', 'support_team_metrics'];
 
     $active_event = 0;
@@ -632,12 +633,18 @@ add_filter('eventosapp_role_can', function($has_permission, $feature, $user){
     }
 
     if ( ! $active_event ) {
-        $has_support_event = eventosapp_support_user_has_any_event($user->ID);
+        $has_support_event = eventosapp_support_user_has_any_event($user_id);
         $has_expositor_event = function_exists('eventosapp_expositor_user_has_any_event')
-            ? eventosapp_expositor_user_has_any_event($user->ID)
+            ? eventosapp_expositor_user_has_any_event($user_id)
+            : false;
+        $has_cogestion_event = function_exists('eventosapp_dashboard_user_has_any_cogestion_assignment')
+            ? eventosapp_dashboard_user_has_any_cogestion_assignment($user_id)
+            : false;
+        $has_custom_dashboard_event = function_exists('eventosapp_staff_access_user_has_any_dashboard_event')
+            ? eventosapp_staff_access_user_has_any_dashboard_event($user_id)
             : false;
 
-        if ( $feature === 'dashboard' && ( $has_support_event || $has_expositor_event ) ) {
+        if ( $feature === 'dashboard' && ( $has_support_event || $has_expositor_event || $has_cogestion_event || $has_custom_dashboard_event ) ) {
             return true;
         }
 
@@ -648,18 +655,20 @@ add_filter('eventosapp_role_can', function($has_permission, $feature, $user){
         return $has_permission;
     }
 
-    if ( eventosapp_support_user_is_super_admin($user->ID) ) {
+    if ( eventosapp_support_user_is_super_admin($user_id) ) {
         if ( in_array($feature, $support_features, true) ) {
             return true;
         }
         return $has_permission;
     }
 
-    $has_support_assignment = eventosapp_support_user_has_assignment_in_event($active_event, $user->ID);
+    $has_support_assignment = eventosapp_support_user_has_assignment_in_event($active_event, $user_id);
 
     // Asistencia y métricas quedan gobernadas exclusivamente por el metabox de apoyo.
+    // La sección personalizada por usuario del Control de Acceso Dashboard Staff se
+    // reaplica después con prioridad alta, por lo que puede conceder o bloquear estos módulos.
     if ( in_array($feature, $support_features, true) ) {
-        return eventosapp_support_user_can_feature_for_event($active_event, $feature, $user->ID);
+        return eventosapp_support_user_can_feature_for_event($active_event, $feature, $user_id);
     }
 
     if ( ! $has_support_assignment ) {
@@ -668,6 +677,30 @@ add_filter('eventosapp_role_can', function($has_permission, $feature, $user){
 
     if ( $feature === 'dashboard' ) {
         return true;
+    }
+
+    // Si el mismo usuario también es autor, co-gestor temporal, staff operativo
+    // o tiene una configuración personalizada de dashboard para este evento,
+    // el metabox de Asistencia no debe aislarlo ni apagar sus permisos de gestión.
+    // En ese caso se conserva el permiso ya resuelto por la matriz global/por rol
+    // o por la capa personalizada que se reaplica más adelante.
+    $has_management_scope = false;
+
+    $event = get_post($active_event);
+    if ( $event && absint($event->post_author) === $user_id ) {
+        $has_management_scope = true;
+    }
+
+    if ( ! $has_management_scope && function_exists('eventosapp_dashboard_user_has_cogestion_assignment_in_event') ) {
+        $has_management_scope = eventosapp_dashboard_user_has_cogestion_assignment_in_event($active_event, $user_id);
+    }
+
+    if ( ! $has_management_scope && function_exists('eventosapp_dashboard_user_has_staff_custom_scope_in_event') ) {
+        $has_management_scope = eventosapp_dashboard_user_has_staff_custom_scope_in_event($active_event, $user_id);
+    }
+
+    if ( $has_management_scope ) {
+        return $has_permission;
     }
 
     // La asignación en Equipo de apoyo / Asistencia no debe apagar módulos externos que
@@ -679,7 +712,7 @@ add_filter('eventosapp_role_can', function($has_permission, $feature, $user){
         return $has_permission;
     }
 
-    // Para los demás botones operativos se mantiene el aislamiento original del equipo de apoyo.
+    // Para los demás botones operativos se mantiene el aislamiento del equipo de apoyo.
     return false;
 }, 20, 3);
 
