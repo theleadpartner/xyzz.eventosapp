@@ -263,18 +263,42 @@ function eventosapp_badge_get_selected_paper_template($evento_id) {
 }
 
 /**
- * Guarda la biblioteca de plantillas desde el metabox del evento.
+ * Renderiza una vista previa visual del papel y su área útil.
  */
-function eventosapp_badge_save_paper_templates_from_post() {
+function eventosapp_badge_render_paper_preview_box($template, $label = '', $class = '') {
+    $template = eventosapp_badge_normalize_paper_template($template, $template['key'] ?? 'preview');
+    $ratio    = max(0.1, (float) $template['width_mm'] / max(1, (float) $template['height_mm']));
+    $left_pct = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $template['width_mm'])) * 100));
+    $top_pct  = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $template['height_mm'])) * 100));
+    $label    = $label !== '' ? $label : __('Área útil', 'eventosapp');
+
+    ?>
+    <div class="evapp-paper-preview <?php echo esc_attr($class); ?>" style="--paper-ratio:<?php echo esc_attr($ratio); ?>;">
+      <div class="evapp-paper-safe" style="left:<?php echo esc_attr($left_pct); ?>%;right:<?php echo esc_attr($left_pct); ?>%;top:<?php echo esc_attr($top_pct); ?>%;bottom:<?php echo esc_attr($top_pct); ?>%;">
+        <?php echo esc_html($label); ?>
+      </div>
+    </div>
+    <?php
+}
+
+/**
+ * Guarda la biblioteca centralizada de plantillas de papel.
+ */
+function eventosapp_badge_save_paper_templates_from_request($request) {
+    if (!is_array($request)) {
+        return false;
+    }
+
     $existing_templates = eventosapp_badge_get_paper_templates();
-    $submitted          = isset($_POST['eventosapp_badge_paper_templates']) && is_array($_POST['eventosapp_badge_paper_templates'])
-        ? wp_unslash($_POST['eventosapp_badge_paper_templates'])
+    $submitted          = isset($request['eventosapp_badge_paper_templates']) && is_array($request['eventosapp_badge_paper_templates'])
+        ? wp_unslash($request['eventosapp_badge_paper_templates'])
         : [];
-    $delete             = isset($_POST['eventosapp_badge_delete_template']) && is_array($_POST['eventosapp_badge_delete_template'])
-        ? array_map('sanitize_key', array_keys(wp_unslash($_POST['eventosapp_badge_delete_template'])))
+    $delete             = isset($request['eventosapp_badge_delete_template']) && is_array($request['eventosapp_badge_delete_template'])
+        ? array_map('sanitize_key', array_keys(wp_unslash($request['eventosapp_badge_delete_template'])))
         : [];
 
     $templates_to_save = [];
+
     foreach ($submitted as $key => $template) {
         $key = sanitize_key($key);
         if ($key === '' || $key === 'legacy_event') {
@@ -282,8 +306,9 @@ function eventosapp_badge_save_paper_templates_from_post() {
         }
 
         $was_locked = !empty($existing_templates[$key]['locked']);
+
         if ($was_locked && in_array($key, $delete, true)) {
-            // Las plantillas base no se eliminan para evitar que eventos existentes queden sin formato.
+            // Las plantillas base se pueden editar, pero no eliminar.
             $delete = array_diff($delete, [$key]);
         }
 
@@ -296,15 +321,15 @@ function eventosapp_badge_save_paper_templates_from_post() {
         $templates_to_save[$normalized['key']] = $normalized;
     }
 
-    if (!empty($_POST['eventosapp_badge_new_template_name'])) {
-        $new_name = sanitize_text_field(wp_unslash($_POST['eventosapp_badge_new_template_name']));
+    if (!empty($request['eventosapp_badge_new_template_name'])) {
+        $new_name = sanitize_text_field(wp_unslash($request['eventosapp_badge_new_template_name']));
         $base_key = sanitize_key(sanitize_title($new_name));
         if ($base_key === '') {
             $base_key = 'plantilla';
         }
 
         $new_key = $base_key;
-        $suffix = 2;
+        $suffix  = 2;
         while (isset($templates_to_save[$new_key]) || isset($existing_templates[$new_key])) {
             $new_key = $base_key . '_' . $suffix;
             $suffix++;
@@ -313,21 +338,184 @@ function eventosapp_badge_save_paper_templates_from_post() {
         $new_template = eventosapp_badge_normalize_paper_template([
             'key'         => $new_key,
             'name'        => $new_name,
-            'width_mm'    => $_POST['eventosapp_badge_new_template_width_mm'] ?? 99,
-            'height_mm'   => $_POST['eventosapp_badge_new_template_height_mm'] ?? 55,
-            'margin_mm'   => $_POST['eventosapp_badge_new_template_margin_mm'] ?? 2,
-            'orientation' => $_POST['eventosapp_badge_new_template_orientation'] ?? 'landscape',
+            'width_mm'    => $request['eventosapp_badge_new_template_width_mm'] ?? 99,
+            'height_mm'   => $request['eventosapp_badge_new_template_height_mm'] ?? 55,
+            'margin_mm'   => $request['eventosapp_badge_new_template_margin_mm'] ?? 2,
+            'orientation' => $request['eventosapp_badge_new_template_orientation'] ?? 'landscape',
             'locked'      => false,
         ], $new_key);
         $new_template['locked'] = false;
         $templates_to_save[$new_template['key']] = $new_template;
     }
 
-    /*
-     * Guardamos incluso las plantillas base editadas para permitir ajustar márgenes
-     * y medidas desde la biblioteca sin tocar los campos del evento.
-     */
     update_option('eventosapp_badge_paper_templates', $templates_to_save, false);
+    return true;
+}
+
+/**
+ * Wrapper heredado por compatibilidad con instalaciones que llamen esta función.
+ */
+function eventosapp_badge_save_paper_templates_from_post() {
+    return eventosapp_badge_save_paper_templates_from_request($_POST);
+}
+
+/**
+ * Página centralizada: Biblioteca de Escarapelas.
+ */
+add_action('admin_menu', function () {
+    add_submenu_page(
+        'eventosapp_dashboard',
+        __('Biblioteca de Escarapelas', 'eventosapp'),
+        __('Biblioteca de Escarapelas', 'eventosapp'),
+        'manage_options',
+        'eventosapp_badge_library',
+        'eventosapp_render_badge_library_page'
+    );
+}, 12);
+
+/**
+ * Renderiza la página administrativa de plantillas reutilizables.
+ */
+function eventosapp_render_badge_library_page() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('No tienes permisos suficientes para acceder a esta página.', 'eventosapp'));
+    }
+
+    $saved = false;
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['eventosapp_badge_library_action'])) {
+        check_admin_referer('eventosapp_save_badge_library', 'eventosapp_badge_library_nonce');
+        $saved = eventosapp_badge_save_paper_templates_from_request($_POST);
+    }
+
+    $templates = eventosapp_badge_get_paper_templates();
+    ?>
+    <div class="wrap evapp-badge-library-wrap">
+      <h1><?php _e('Biblioteca de Escarapelas', 'eventosapp'); ?></h1>
+      <p class="description">
+        <?php _e('Crea y edita formatos de papel reutilizables para todos los eventos. La plantilla seleccionada en cada evento se usa en @page, en el contenedor HTML y en la vista previa para que la impresión salga con la misma medida esperada.', 'eventosapp'); ?>
+      </p>
+
+      <?php if ($saved): ?>
+        <div class="notice notice-success is-dismissible"><p><?php _e('Biblioteca de escarapelas guardada correctamente.', 'eventosapp'); ?></p></div>
+      <?php endif; ?>
+
+      <style>
+        .evapp-badge-library-wrap{max-width:1280px}
+        .evapp-library-panel{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:18px;margin-top:18px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+        .evapp-library-toolbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}
+        .evapp-library-toolbar p{margin:4px 0;color:#50575e}
+        .evapp-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px}
+        .evapp-template-card{border:1px solid #dcdcde;border-radius:12px;background:#fbfbfc;padding:14px;display:flex;gap:14px;align-items:flex-start;min-height:175px}
+        .evapp-template-card.is-base{background:#f8fafc}
+        .evapp-template-card-main{flex:1;min-width:0}
+        .evapp-template-card h2{font-size:14px;margin:0 0 10px;line-height:1.3}
+        .evapp-template-card label{font-weight:600;font-size:12px;display:block;margin:0 0 8px}
+        .evapp-template-card input,.evapp-template-card select{width:100%;margin-top:4px}
+        .evapp-template-fields{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+        .evapp-template-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;color:#646970;font-size:12px}
+        .evapp-template-delete{color:#b32d2e;margin-top:10px!important}
+        .evapp-paper-preview{width:120px;flex:0 0 120px;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden}
+        .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
+        .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.07);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box}
+        .evapp-new-template{display:grid;grid-template-columns:2fr repeat(4,1fr);gap:10px;align-items:end;padding:14px;border:1px dashed #8c8f94;border-radius:12px;background:#f6f7f7;margin-top:20px}
+        .evapp-new-template label{font-size:12px;font-weight:600;display:block}
+        .evapp-new-template input,.evapp-new-template select{width:100%;margin-top:4px}
+        .evapp-library-submit{margin-top:18px;display:flex;gap:10px;align-items:center}
+        @media (max-width:960px){.evapp-template-card{display:block}.evapp-paper-preview{margin-bottom:12px}.evapp-new-template{grid-template-columns:1fr 1fr}}
+        @media (max-width:640px){.evapp-template-fields,.evapp-new-template{grid-template-columns:1fr}}
+      </style>
+
+      <form method="post">
+        <?php wp_nonce_field('eventosapp_save_badge_library', 'eventosapp_badge_library_nonce'); ?>
+        <input type="hidden" name="eventosapp_badge_library_action" value="save">
+
+        <div class="evapp-library-panel">
+          <div class="evapp-library-toolbar">
+            <div>
+              <h2 style="margin-top:0"><?php _e('Formatos disponibles', 'eventosapp'); ?></h2>
+              <p><?php _e('El ancho, alto y margen se guardan en milímetros. El margen representa el área interna útil que también se respeta en el HTML de impresión.', 'eventosapp'); ?></p>
+            </div>
+            <a class="button" href="<?php echo esc_url(admin_url('edit.php?post_type=eventosapp_event')); ?>"><?php _e('Ir a eventos', 'eventosapp'); ?></a>
+          </div>
+
+          <div class="evapp-template-grid">
+            <?php foreach ($templates as $key => $template): ?>
+              <div class="evapp-template-card <?php echo !empty($template['locked']) ? 'is-base' : ''; ?>">
+                <?php eventosapp_badge_render_paper_preview_box($template, __('Área útil', 'eventosapp')); ?>
+                <div class="evapp-template-card-main">
+                  <h2><?php echo esc_html($template['name']); ?></h2>
+                  <input type="hidden" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][key]" value="<?php echo esc_attr($key); ?>">
+
+                  <label><?php _e('Nombre de la plantilla', 'eventosapp'); ?>
+                    <input type="text" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][name]" value="<?php echo esc_attr($template['name']); ?>" required>
+                  </label>
+
+                  <div class="evapp-template-fields">
+                    <label><?php _e('Ancho mm', 'eventosapp'); ?>
+                      <input type="number" step="0.1" min="10" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][width_mm]" value="<?php echo esc_attr(eventosapp_badge_format_mm($template['width_mm'])); ?>" required>
+                    </label>
+                    <label><?php _e('Alto mm', 'eventosapp'); ?>
+                      <input type="number" step="0.1" min="10" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][height_mm]" value="<?php echo esc_attr(eventosapp_badge_format_mm($template['height_mm'])); ?>" required>
+                    </label>
+                    <label><?php _e('Margen mm', 'eventosapp'); ?>
+                      <input type="number" step="0.1" min="0" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][margin_mm]" value="<?php echo esc_attr(eventosapp_badge_format_mm($template['margin_mm'])); ?>" required>
+                    </label>
+                  </div>
+
+                  <label><?php _e('Orientación base', 'eventosapp'); ?>
+                    <select name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][orientation]">
+                      <option value="landscape" <?php selected($template['orientation'], 'landscape'); ?>><?php _e('Horizontal', 'eventosapp'); ?></option>
+                      <option value="portrait" <?php selected($template['orientation'], 'portrait'); ?>><?php _e('Vertical', 'eventosapp'); ?></option>
+                    </select>
+                  </label>
+
+                  <div class="evapp-template-meta">
+                    <span><?php printf(esc_html__('%s × %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($template['width_mm'])), esc_html(eventosapp_badge_format_mm($template['height_mm']))); ?></span>
+                    <?php if (!empty($template['locked'])): ?>
+                      <span>· <?php _e('Plantilla base', 'eventosapp'); ?></span>
+                    <?php endif; ?>
+                  </div>
+
+                  <?php if (empty($template['locked'])): ?>
+                    <label class="evapp-template-delete">
+                      <input type="checkbox" name="eventosapp_badge_delete_template[<?php echo esc_attr($key); ?>]" value="1">
+                      <?php _e('Eliminar esta plantilla', 'eventosapp'); ?>
+                    </label>
+                  <?php endif; ?>
+                </div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+
+          <div class="evapp-new-template">
+            <label><?php _e('Nueva plantilla', 'eventosapp'); ?>
+              <input type="text" name="eventosapp_badge_new_template_name" placeholder="<?php esc_attr_e('Ej. Escarapela sponsor', 'eventosapp'); ?>">
+            </label>
+            <label><?php _e('Ancho mm', 'eventosapp'); ?>
+              <input type="number" step="0.1" min="10" name="eventosapp_badge_new_template_width_mm" value="100">
+            </label>
+            <label><?php _e('Alto mm', 'eventosapp'); ?>
+              <input type="number" step="0.1" min="10" name="eventosapp_badge_new_template_height_mm" value="140">
+            </label>
+            <label><?php _e('Margen mm', 'eventosapp'); ?>
+              <input type="number" step="0.1" min="0" name="eventosapp_badge_new_template_margin_mm" value="3">
+            </label>
+            <label><?php _e('Orientación', 'eventosapp'); ?>
+              <select name="eventosapp_badge_new_template_orientation">
+                <option value="portrait"><?php _e('Vertical', 'eventosapp'); ?></option>
+                <option value="landscape"><?php _e('Horizontal', 'eventosapp'); ?></option>
+              </select>
+            </label>
+          </div>
+
+          <div class="evapp-library-submit">
+            <button type="submit" class="button button-primary button-large"><?php _e('Guardar biblioteca', 'eventosapp'); ?></button>
+            <span class="description"><?php _e('Después de guardar, estas plantillas aparecerán en el metabox Configuración de Escarapela de cada evento.', 'eventosapp'); ?></span>
+          </div>
+        </div>
+      </form>
+    </div>
+    <?php
 }
 
 /**
@@ -611,17 +799,16 @@ function eventosapp_badge_render_field_slot($field, $labels, $font_size, $font_w
 function eventosapp_render_badge_metabox($post) {
     wp_nonce_field('eventosapp_save_badge_settings', 'eventosapp_badge_nonce');
 
-    // Valores guardados (con defaults).
-    $design   = get_post_meta($post->ID, 'eventosapp_badge_design', true) ?: 'manillas';
+    $design = get_post_meta($post->ID, 'eventosapp_badge_design', true) ?: 'manillas';
 
     $order_fields = [];
-    for ($i=1; $i<=5; $i++){
+    for ($i = 1; $i <= 5; $i++) {
         $order_fields[$i] = get_post_meta($post->ID, "eventosapp_field_order_{$i}", true) ?: 'none';
     }
 
-    $paper_templates  = eventosapp_badge_get_paper_templates();
-    $legacy_template  = eventosapp_badge_get_legacy_event_template($post->ID);
-    $selected_key     = sanitize_key(get_post_meta($post->ID, 'eventosapp_badge_paper_template', true));
+    $paper_templates   = eventosapp_badge_get_paper_templates();
+    $legacy_template   = eventosapp_badge_get_legacy_event_template($post->ID);
+    $selected_key      = sanitize_key(get_post_meta($post->ID, 'eventosapp_badge_paper_template', true));
     $selected_template = eventosapp_badge_get_selected_paper_template($post->ID);
 
     if ($selected_key === '' && $selected_template['key'] === 'legacy_event') {
@@ -644,16 +831,16 @@ function eventosapp_render_badge_metabox($post) {
     $sep_horizontal = (int) (get_post_meta($post->ID, 'eventosapp_badge_sep_horizontal', true) ?: 4);
     $qr_size        = (int) (get_post_meta($post->ID, 'eventosapp_badge_qr_size', true) ?: 72);
     $border_width   = get_post_meta($post->ID, 'eventosapp_badge_border_width', true);
-    if ($border_width === '' || $border_width === null) $border_width = 0;
-    $border_width   = (int) $border_width;
+    if ($border_width === '' || $border_width === null) {
+        $border_width = 0;
+    }
+    $border_width = (int) $border_width;
 
-    // Campo para vista previa con el ID público del ticket (tk...).
     $preview_ticket_key = get_post_meta($post->ID, 'eventosapp_badge_ticket_key', true) ?: '';
+    $options            = eventosapp_get_all_available_fields($post->ID);
+    $weights            = [100, 200, 300, 400, 500, 600, 700, 800];
+    $library_url        = admin_url('admin.php?page=eventosapp_badge_library');
 
-    // Obtener todos los campos disponibles (básicos + extras del evento).
-    $options = eventosapp_get_all_available_fields($post->ID);
-
-    $weights = [100,200,300,400,500,600,700,800];
     $design_labels = [
         'manillas' => [
             'title' => __('Manillas / Horizontal', 'eventosapp'),
@@ -674,263 +861,303 @@ function eventosapp_render_badge_metabox($post) {
     ];
     ?>
     <style>
-      .evapp-badge-metabox{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d2327}
-      .evapp-badge-intro{background:#f0f6fc;border:1px solid #c5d9ed;border-left:4px solid #2271b1;border-radius:8px;padding:12px 14px;margin:12px 0 16px}
-      .evapp-badge-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:0 0 16px}
-      .evapp-badge-section{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
-      .evapp-badge-section h3{margin:0 0 10px;font-size:15px;line-height:1.3}
-      .evapp-badge-section p{margin:6px 0;color:#50575e}
-      .evapp-badge-field{margin:12px 0}
-      .evapp-badge-field label{font-weight:600;display:block;margin-bottom:5px}
-      .evapp-badge-field input[type=text],.evapp-badge-field input[type=number],.evapp-badge-field select{width:100%;max-width:360px}
-      .evapp-badge-help{display:block;margin-top:5px;color:#646970;font-size:12px}
-      .evapp-design-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-      .evapp-design-card{border:1px solid #dcdcde;border-radius:10px;padding:10px;background:#f6f7f7;cursor:pointer;display:block}
-      .evapp-design-card input{margin-right:7px}
-      .evapp-design-card:has(input:checked){border-color:#2271b1;background:#f0f6fc;box-shadow:0 0 0 1px #2271b1 inset}
-      .evapp-field-map{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px}
-      .evapp-field-map label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}
-      .evapp-paper-selected{display:grid;grid-template-columns:160px 1fr;gap:14px;align-items:center;margin-top:10px}
-      .evapp-paper-preview{width:140px;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:6px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden}
+      .evapp-badge-metabox{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d2327;max-width:1180px}
+      .evapp-badge-intro{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:#f0f6fc;border:1px solid #c5d9ed;border-left:4px solid #2271b1;border-radius:10px;padding:13px 15px;margin:12px 0 16px}
+      .evapp-badge-intro strong{display:block;margin-bottom:4px}.evapp-badge-intro p{margin:0;color:#50575e}.evapp-badge-intro .button{white-space:nowrap}
+      .evapp-badge-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(340px,.9fr);gap:16px;margin:0 0 16px;align-items:start}
+      .evapp-badge-section{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);margin-bottom:16px}
+      .evapp-badge-section h3{margin:0 0 12px;font-size:15px;line-height:1.3}.evapp-badge-section p{margin:6px 0;color:#50575e}
+      .evapp-badge-field{margin:12px 0}.evapp-badge-field label{font-weight:600;display:block;margin-bottom:5px}
+      .evapp-badge-field input[type=text],.evapp-badge-field input[type=number],.evapp-badge-field select{width:100%;max-width:420px}.evapp-badge-help{display:block;margin-top:5px;color:#646970;font-size:12px}
+      .evapp-paper-row{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center;margin-top:10px}
+      .evapp-paper-preview{width:140px;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden}
       .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
-      .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.06);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box}
-      .evapp-paper-meta strong{display:block;font-size:14px;margin-bottom:4px}
-      .evapp-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:12px}
-      .evapp-template-card{border:1px solid #dcdcde;border-radius:10px;padding:10px;background:#fbfbfc}
-      .evapp-template-card .evapp-paper-preview{width:100px;margin-bottom:8px}
-      .evapp-template-card input[type=text]{width:100%}
-      .evapp-template-card .evapp-template-mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
-      .evapp-template-card .evapp-template-mini-grid input{width:100%}
-      .evapp-template-card small{display:block;color:#646970;margin-top:6px}
-      .evapp-new-template{display:grid;grid-template-columns:2fr repeat(4,1fr);gap:8px;align-items:end;margin-top:12px;padding:12px;border:1px dashed #8c8f94;border-radius:10px;background:#f6f7f7}
-      .evapp-new-template label{font-size:12px;font-weight:600;display:block;margin-bottom:4px}
-      .evapp-new-template input,.evapp-new-template select{width:100%}
-      .evapp-badge-actions{display:flex;gap:10px;align-items:center;margin-top:14px}
-      @media (max-width:1100px){.evapp-badge-grid{grid-template-columns:1fr}.evapp-field-map{grid-template-columns:repeat(2,minmax(140px,1fr))}.evapp-new-template{grid-template-columns:1fr 1fr}.evapp-paper-selected{grid-template-columns:1fr}}
-      @media (max-width:782px){.evapp-design-options,.evapp-field-map,.evapp-new-template{grid-template-columns:1fr}.evapp-badge-section{padding:12px}}
+      .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.06);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box}
+      .evapp-paper-meta strong{display:block;font-size:14px;margin-bottom:4px}.evapp-paper-meta span{color:#50575e}
+      .evapp-design-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.evapp-design-card{border:1px solid #dcdcde;border-radius:10px;padding:10px;background:#f6f7f7;cursor:pointer;display:block}.evapp-design-card input{margin-right:7px}.evapp-design-card:has(input:checked){border-color:#2271b1;background:#f0f6fc;box-shadow:0 0 0 1px #2271b1 inset}
+      .evapp-field-map{display:grid;grid-template-columns:repeat(5,minmax(145px,1fr));gap:10px}.evapp-field-map label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-field-map select{width:100%}
+      .evapp-style-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px}.evapp-style-grid label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-style-grid input,.evapp-style-grid select{max-width:100%;width:auto}.evapp-style-grid .evapp-style-combo input{width:78px}.evapp-style-grid .evapp-style-combo select{width:72px}
+      .evapp-print-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.evapp-print-actions .button-primary{min-height:36px}
+      .evapp-live-paper{width:100%;max-width:430px;margin:0 auto;background:#fff;border:2px solid #1d2327;border-radius:9px;position:relative;box-shadow:0 14px 30px rgba(0,0,0,.13);overflow:hidden}.evapp-live-paper::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
+      .evapp-live-safe{position:absolute;border:1px dashed #2271b1;background:#fff;display:flex;align-items:stretch;justify-content:center;overflow:hidden;box-sizing:border-box}.evapp-live-badge{width:100%;height:100%;display:flex;align-items:stretch;justify-content:center;background:#fff;overflow:hidden}.evapp-live-badge.design-escarapelas{flex-direction:column}.evapp-live-badge.design-manillas{flex-direction:row}.evapp-live-left,.evapp-live-right{display:flex;flex-direction:column;justify-content:center;min-width:0;height:100%}.evapp-live-left{flex:1 1 auto}.evapp-live-right{align-items:center;flex:0 0 auto}.evapp-live-slot{text-align:center;line-height:1.12;word-break:break-word;overflow-wrap:anywhere;max-width:100%;padding:1px 2px}.evapp-live-slot.is-qr{display:flex;align-items:center;justify-content:center}.evapp-live-slot.is-qr span{display:flex;align-items:center;justify-content:center;border:2px solid #1d2327;background:repeating-linear-gradient(45deg,#fff,#fff 3px,#e5e7eb 3px,#e5e7eb 6px);font-size:10px;font-weight:700;color:#1d2327}
+      .evapp-live-caption{margin-top:12px;text-align:center;color:#50575e;font-size:12px}.evapp-live-caption strong{display:block;color:#1d2327;font-size:13px;margin-bottom:2px}
+      @media (max-width:1180px){.evapp-badge-grid{grid-template-columns:1fr}.evapp-field-map{grid-template-columns:repeat(2,minmax(145px,1fr))}.evapp-style-grid{grid-template-columns:repeat(2,minmax(120px,1fr))}}
+      @media (max-width:782px){.evapp-badge-intro{display:block}.evapp-badge-intro .button{margin-top:10px}.evapp-design-options,.evapp-field-map,.evapp-style-grid{grid-template-columns:1fr}.evapp-paper-row{grid-template-columns:1fr}.evapp-badge-section{padding:12px}}
     </style>
 
-    <div class="evapp-badge-metabox" data-selected-template="<?php echo esc_attr($selected_key); ?>">
+    <div class="evapp-badge-metabox">
       <div class="evapp-badge-intro">
-        <strong><?php _e('Formato de papel centralizado por plantillas.', 'eventosapp'); ?></strong>
-        <p><?php _e('Los campos directos de ancho y alto ya no se editan por evento. Ahora el tamaño físico de impresión sale del formato de papel seleccionado para evitar diferencias entre el HTML y la impresora.', 'eventosapp'); ?></p>
+        <div>
+          <strong><?php _e('Configuración por evento usando plantillas centralizadas.', 'eventosapp'); ?></strong>
+          <p><?php _e('El evento solo escoge la plantilla, define orientación, mapea campos y ajusta estilos. Las medidas físicas se administran desde Biblioteca de Escarapelas.', 'eventosapp'); ?></p>
+        </div>
+        <a class="button" href="<?php echo esc_url($library_url); ?>"><?php _e('Abrir Biblioteca de Escarapelas', 'eventosapp'); ?></a>
       </div>
 
       <div class="evapp-badge-grid">
-        <section class="evapp-badge-section">
-          <h3><?php _e('1. Formato de papel para impresión', 'eventosapp'); ?></h3>
-          <div class="evapp-badge-field">
-            <label for="eventosapp_badge_paper_template"><?php _e('Plantilla activa', 'eventosapp'); ?></label>
-            <select name="eventosapp_badge_paper_template" id="eventosapp_badge_paper_template">
-              <?php foreach ($paper_templates as $key => $template): ?>
-                <option value="<?php echo esc_attr($key); ?>" <?php selected($selected_key, $key); ?>
-                        data-name="<?php echo esc_attr($template['name']); ?>"
-                        data-width="<?php echo esc_attr(eventosapp_badge_format_mm($template['width_mm'])); ?>"
-                        data-height="<?php echo esc_attr(eventosapp_badge_format_mm($template['height_mm'])); ?>"
-                        data-margin="<?php echo esc_attr(eventosapp_badge_format_mm($template['margin_mm'])); ?>"
-                        data-orientation="<?php echo esc_attr($template['orientation']); ?>">
-                  <?php echo esc_html($template['name']); ?> — <?php echo esc_html(eventosapp_badge_format_mm($template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($template['height_mm'])); ?> mm
-                </option>
-              <?php endforeach; ?>
-            </select>
-            <span class="evapp-badge-help"><?php _e('La plantilla define ancho, alto y margen de impresión. La orientación de los elementos se mantiene en “Tipo de diseño”.', 'eventosapp'); ?></span>
-          </div>
+        <div>
+          <section class="evapp-badge-section">
+            <h3><?php _e('1. Plantilla de impresión', 'eventosapp'); ?></h3>
+            <div class="evapp-badge-field">
+              <label for="eventosapp_badge_paper_template"><?php _e('Plantilla activa', 'eventosapp'); ?></label>
+              <select name="eventosapp_badge_paper_template" id="eventosapp_badge_paper_template">
+                <?php foreach ($paper_templates as $key => $template): ?>
+                  <option value="<?php echo esc_attr($key); ?>" <?php selected($selected_key, $key); ?>
+                          data-name="<?php echo esc_attr($template['name']); ?>"
+                          data-width="<?php echo esc_attr(eventosapp_badge_format_mm($template['width_mm'])); ?>"
+                          data-height="<?php echo esc_attr(eventosapp_badge_format_mm($template['height_mm'])); ?>"
+                          data-margin="<?php echo esc_attr(eventosapp_badge_format_mm($template['margin_mm'])); ?>"
+                          data-orientation="<?php echo esc_attr($template['orientation']); ?>">
+                    <?php echo esc_html($template['name']); ?> — <?php echo esc_html(eventosapp_badge_format_mm($template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($template['height_mm'])); ?> mm
+                  </option>
+                <?php endforeach; ?>
+              </select>
+              <span class="evapp-badge-help"><?php _e('Las medidas y márgenes se crean o editan en la nueva página Biblioteca de Escarapelas.', 'eventosapp'); ?></span>
+            </div>
 
-          <?php
-          $ratio = max(0.1, (float) $selected_template['width_mm'] / max(1, (float) $selected_template['height_mm']));
-          $left_pct = min(45, max(0, ((float) $selected_template['margin_mm'] / max(1, (float) $selected_template['width_mm'])) * 100));
-          $top_pct  = min(45, max(0, ((float) $selected_template['margin_mm'] / max(1, (float) $selected_template['height_mm'])) * 100));
-          ?>
-          <div class="evapp-paper-selected">
-            <div class="evapp-paper-preview" id="evapp_selected_paper_preview" style="--paper-ratio:<?php echo esc_attr($ratio); ?>;">
-              <div class="evapp-paper-safe" id="evapp_selected_paper_safe" style="left:<?php echo esc_attr($left_pct); ?>%;right:<?php echo esc_attr($left_pct); ?>%;top:<?php echo esc_attr($top_pct); ?>%;bottom:<?php echo esc_attr($top_pct); ?>%;">
-                <?php _e('Área útil', 'eventosapp'); ?>
+            <div class="evapp-paper-row">
+              <div class="evapp-paper-preview" id="evapp_selected_paper_preview">
+                <div class="evapp-paper-safe" id="evapp_selected_paper_safe"><?php _e('Área útil', 'eventosapp'); ?></div>
+              </div>
+              <div class="evapp-paper-meta">
+                <strong id="evapp_selected_paper_name"><?php echo esc_html($selected_template['name']); ?></strong>
+                <span id="evapp_selected_paper_size"><?php echo esc_html(eventosapp_badge_format_mm($selected_template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($selected_template['height_mm'])); ?> mm</span><br>
+                <span id="evapp_selected_paper_margin"><?php printf(esc_html__('Margen: %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($selected_template['margin_mm']))); ?></span><br>
+                <span id="evapp_selected_paper_orientation"><?php echo esc_html($selected_template['orientation'] === 'portrait' ? __('Vertical', 'eventosapp') : __('Horizontal', 'eventosapp')); ?></span>
               </div>
             </div>
-            <div class="evapp-paper-meta">
-              <strong id="evapp_selected_paper_name"><?php echo esc_html($selected_template['name']); ?></strong>
-              <span id="evapp_selected_paper_size"><?php echo esc_html(eventosapp_badge_format_mm($selected_template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($selected_template['height_mm'])); ?> mm</span><br>
-              <span id="evapp_selected_paper_margin"><?php printf(esc_html__('Margen: %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($selected_template['margin_mm']))); ?></span><br>
-              <span id="evapp_selected_paper_orientation"><?php echo esc_html($selected_template['orientation'] === 'portrait' ? __('Vertical', 'eventosapp') : __('Horizontal', 'eventosapp')); ?></span>
+          </section>
+
+          <section class="evapp-badge-section">
+            <h3><?php _e('2. Orientación de elementos', 'eventosapp'); ?></h3>
+            <div class="evapp-design-options">
+              <?php foreach ($design_labels as $key => $data): ?>
+                <label class="evapp-design-card">
+                  <input type="radio" name="eventosapp_badge_design" value="<?php echo esc_attr($key); ?>" <?php checked($design, $key); ?>>
+                  <strong><?php echo esc_html($data['title']); ?></strong>
+                  <span class="evapp-badge-help"><?php echo esc_html($data['desc']); ?></span>
+                </label>
+              <?php endforeach; ?>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section class="evapp-badge-section">
-          <h3><?php _e('2. Vista previa de impresión', 'eventosapp'); ?></h3>
-          <div class="evapp-badge-field">
-            <label for="eventosapp_badge_ticket_key"><?php _e('Número de ticket (ID público)', 'eventosapp'); ?></label>
-            <input type="text"
-                   id="eventosapp_badge_ticket_key"
-                   name="eventosapp_badge_ticket_key"
-                   value="<?php echo esc_attr($preview_ticket_key); ?>"
-                   placeholder="p. ej. tkcdG7ejZvDjWAD"
-                   pattern="^[A-Za-z0-9_-]{6,}$"
-                   title="<?php esc_attr_e('Pegue aquí el ID público del ticket (tk...)', 'eventosapp'); ?>">
-            <span class="evapp-badge-help"><?php _e('Opcional. Si lo dejas vacío se abre una vista con textos de muestra.', 'eventosapp'); ?></span>
-          </div>
-          <div class="evapp-badge-actions">
-            <button type="button" class="button button-primary" id="eventosapp_download_badge"><?php _e('Vista previa / Imprimir escarapela', 'eventosapp'); ?></button>
-          </div>
-          <p><?php _e('Para impresión precisa, usa escala 100% y desactiva “ajustar a página” en el cuadro de impresión cuando el navegador lo muestre.', 'eventosapp'); ?></p>
-        </section>
-      </div>
+          <section class="evapp-badge-section">
+            <h3><?php _e('3. Mapeo de contenido', 'eventosapp'); ?></h3>
+            <div class="evapp-field-map">
+              <?php for ($i = 1; $i <= 5; $i++): ?>
+                <div>
+                  <label for="eventosapp_field_order_<?php echo (int) $i; ?>"><?php printf(esc_html__('Campo %d', 'eventosapp'), (int) $i); ?></label>
+                  <select name="eventosapp_field_order_<?php echo (int) $i; ?>" id="eventosapp_field_order_<?php echo (int) $i; ?>" class="evapp-field-order">
+                    <?php foreach ($options as $val => $lab): ?>
+                      <option value="<?php echo esc_attr($val); ?>" <?php selected($order_fields[$i], $val); ?>><?php echo esc_html($lab); ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                </div>
+              <?php endfor; ?>
+            </div>
+          </section>
 
-      <div class="evapp-badge-grid">
-        <section class="evapp-badge-section">
-          <h3><?php _e('3. Orientación de elementos', 'eventosapp'); ?></h3>
-          <div class="evapp-design-options">
-            <?php foreach ($design_labels as $design_key => $design_info): ?>
-              <label class="evapp-design-card">
-                <input type="radio" name="eventosapp_badge_design" value="<?php echo esc_attr($design_key); ?>" <?php checked($design, $design_key); ?>>
-                <strong><?php echo esc_html($design_info['title']); ?></strong>
-                <small class="evapp-badge-help"><?php echo esc_html($design_info['desc']); ?></small>
-              </label>
-            <?php endforeach; ?>
-          </div>
-        </section>
-
-        <section class="evapp-badge-section">
-          <h3><?php _e('4. Mapeo de contenido', 'eventosapp'); ?></h3>
-          <div class="evapp-field-map">
-            <?php for ($i=1; $i<=5; $i++): ?>
-              <div>
-                <label for="eventosapp_field_order_<?php echo $i; ?>"><?php printf(__('Campo %d', 'eventosapp'), $i); ?></label>
-                <select name="eventosapp_field_order_<?php echo $i; ?>" id="eventosapp_field_order_<?php echo $i; ?>">
-                  <?php foreach($options as $val=>$lab): ?>
-                    <option value="<?php echo esc_attr($val); ?>" <?php selected($order_fields[$i], $val); ?>><?php echo esc_html($lab); ?></option>
-                  <?php endforeach; ?>
+          <section class="evapp-badge-section">
+            <h3><?php _e('4. Estilo de textos, QR y borde', 'eventosapp'); ?></h3>
+            <div class="evapp-style-grid">
+              <div class="evapp-style-combo">
+                <label><?php _e('Texto grande', 'eventosapp'); ?></label>
+                <input type="number" name="eventosapp_badge_size_large" id="eventosapp_badge_size_large" value="<?php echo esc_attr($size_large); ?>" min="1"> px
+                <select name="eventosapp_badge_weight_large" id="eventosapp_badge_weight_large">
+                  <?php foreach ($weights as $w) echo '<option value="'.$w.'"'.selected($weight_large, $w, false).'>'.$w.'</option>'; ?>
                 </select>
               </div>
-            <?php endfor; ?>
-          </div>
-        </section>
-      </div>
-
-      <section class="evapp-badge-section">
-        <h3><?php _e('5. Estilo de elementos internos', 'eventosapp'); ?></h3>
-        <div class="evapp-field-map">
-          <div>
-            <label><?php _e('Tamaño grande', 'eventosapp'); ?></label>
-            <input type="number" name="eventosapp_badge_size_large" value="<?php echo esc_attr($size_large); ?>" min="1"> px
-            <select name="eventosapp_badge_weight_large">
-              <?php foreach($weights as $w) echo '<option value="'.$w.'"'.selected($weight_large,$w,false).'>'.$w.'</option>'; ?>
-            </select>
-          </div>
-          <div>
-            <label><?php _e('Tamaño mediano', 'eventosapp'); ?></label>
-            <input type="number" name="eventosapp_badge_size_medium" value="<?php echo esc_attr($size_medium); ?>" min="1"> px
-            <select name="eventosapp_badge_weight_medium">
-              <?php foreach($weights as $w) echo '<option value="'.$w.'"'.selected($weight_medium,$w,false).'>'.$w.'</option>'; ?>
-            </select>
-          </div>
-          <div>
-            <label><?php _e('Tamaño pequeño', 'eventosapp'); ?></label>
-            <input type="number" name="eventosapp_badge_size_small" value="<?php echo esc_attr($size_small); ?>" min="1"> px
-            <select name="eventosapp_badge_weight_small">
-              <?php foreach($weights as $w) echo '<option value="'.$w.'"'.selected($weight_small,$w,false).'>'.$w.'</option>'; ?>
-            </select>
-          </div>
-          <div>
-            <label><?php _e('Separación vertical', 'eventosapp'); ?></label>
-            <input type="number" name="eventosapp_badge_sep_vertical" value="<?php echo esc_attr($sep_vertical); ?>" min="0"> px
-          </div>
-          <div>
-            <label><?php _e('Separación horizontal', 'eventosapp'); ?></label>
-            <input type="number" name="eventosapp_badge_sep_horizontal" value="<?php echo esc_attr($sep_horizontal); ?>" min="0"> px
-          </div>
-          <div>
-            <label><?php _e('Tamaño del QR', 'eventosapp'); ?></label>
-            <input type="number" name="eventosapp_badge_qr_size" value="<?php echo esc_attr($qr_size); ?>" min="1"> px
-          </div>
-          <div>
-            <label><?php _e('Grosor del borde', 'eventosapp'); ?></label>
-            <input type="number" name="eventosapp_badge_border_width" value="<?php echo esc_attr($border_width); ?>" min="0"> px
-          </div>
-        </div>
-      </section>
-
-      <section class="evapp-badge-section" style="margin-top:16px;">
-        <h3><?php _e('6. Biblioteca de plantillas de papel', 'eventosapp'); ?></h3>
-        <p><?php _e('Crea formatos reutilizables para otros eventos. Estas medidas se usan en @page y en el contenedor HTML para que la vista previa coincida mejor con la impresión física.', 'eventosapp'); ?></p>
-
-        <div class="evapp-template-grid">
-          <?php foreach ($paper_templates as $key => $template):
-              if ($key === 'legacy_event') {
-                  continue;
-              }
-              $ratio = max(0.1, (float) $template['width_mm'] / max(1, (float) $template['height_mm']));
-              $left_pct = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $template['width_mm'])) * 100));
-              $top_pct  = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $template['height_mm'])) * 100));
-          ?>
-            <div class="evapp-template-card">
-              <div class="evapp-paper-preview" style="--paper-ratio:<?php echo esc_attr($ratio); ?>;">
-                <div class="evapp-paper-safe" style="left:<?php echo esc_attr($left_pct); ?>%;right:<?php echo esc_attr($left_pct); ?>%;top:<?php echo esc_attr($top_pct); ?>%;bottom:<?php echo esc_attr($top_pct); ?>%;">mm</div>
+              <div class="evapp-style-combo">
+                <label><?php _e('Texto mediano', 'eventosapp'); ?></label>
+                <input type="number" name="eventosapp_badge_size_medium" id="eventosapp_badge_size_medium" value="<?php echo esc_attr($size_medium); ?>" min="1"> px
+                <select name="eventosapp_badge_weight_medium" id="eventosapp_badge_weight_medium">
+                  <?php foreach ($weights as $w) echo '<option value="'.$w.'"'.selected($weight_medium, $w, false).'>'.$w.'</option>'; ?>
+                </select>
               </div>
-              <input type="hidden" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][key]" value="<?php echo esc_attr($key); ?>">
-              <label>
-                <span class="screen-reader-text"><?php _e('Nombre de plantilla', 'eventosapp'); ?></span>
-                <input type="text" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][name]" value="<?php echo esc_attr($template['name']); ?>">
-              </label>
-              <div class="evapp-template-mini-grid">
-                <label><?php _e('Ancho', 'eventosapp'); ?><input type="number" step="0.1" min="10" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][width_mm]" value="<?php echo esc_attr(eventosapp_badge_format_mm($template['width_mm'])); ?>"></label>
-                <label><?php _e('Alto', 'eventosapp'); ?><input type="number" step="0.1" min="10" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][height_mm]" value="<?php echo esc_attr(eventosapp_badge_format_mm($template['height_mm'])); ?>"></label>
-                <label><?php _e('Margen', 'eventosapp'); ?><input type="number" step="0.1" min="0" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][margin_mm]" value="<?php echo esc_attr(eventosapp_badge_format_mm($template['margin_mm'])); ?>"></label>
+              <div class="evapp-style-combo">
+                <label><?php _e('Texto pequeño', 'eventosapp'); ?></label>
+                <input type="number" name="eventosapp_badge_size_small" id="eventosapp_badge_size_small" value="<?php echo esc_attr($size_small); ?>" min="1"> px
+                <select name="eventosapp_badge_weight_small" id="eventosapp_badge_weight_small">
+                  <?php foreach ($weights as $w) echo '<option value="'.$w.'"'.selected($weight_small, $w, false).'>'.$w.'</option>'; ?>
+                </select>
               </div>
-              <input type="hidden" name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][orientation]" value="<?php echo esc_attr($template['orientation']); ?>">
-              <small><?php echo esc_html($template['orientation'] === 'portrait' ? __('Vertical', 'eventosapp') : __('Horizontal', 'eventosapp')); ?><?php echo !empty($template['locked']) ? ' · ' . esc_html__('base', 'eventosapp') : ''; ?></small>
-              <?php if (empty($template['locked'])): ?>
-                <label style="margin-top:8px;display:block;color:#b32d2e;"><input type="checkbox" name="eventosapp_badge_delete_template[<?php echo esc_attr($key); ?>]" value="1"> <?php _e('Eliminar plantilla', 'eventosapp'); ?></label>
-              <?php endif; ?>
+              <div>
+                <label><?php _e('Separación vertical', 'eventosapp'); ?></label>
+                <input type="number" name="eventosapp_badge_sep_vertical" id="eventosapp_badge_sep_vertical" value="<?php echo esc_attr($sep_vertical); ?>" min="0"> px
+              </div>
+              <div>
+                <label><?php _e('Separación horizontal', 'eventosapp'); ?></label>
+                <input type="number" name="eventosapp_badge_sep_horizontal" id="eventosapp_badge_sep_horizontal" value="<?php echo esc_attr($sep_horizontal); ?>" min="0"> px
+              </div>
+              <div>
+                <label><?php _e('Tamaño del QR', 'eventosapp'); ?></label>
+                <input type="number" name="eventosapp_badge_qr_size" id="eventosapp_badge_qr_size" value="<?php echo esc_attr($qr_size); ?>" min="1"> px
+              </div>
+              <div>
+                <label><?php _e('Grosor del borde', 'eventosapp'); ?></label>
+                <input type="number" name="eventosapp_badge_border_width" id="eventosapp_badge_border_width" value="<?php echo esc_attr($border_width); ?>" min="0"> px
+              </div>
             </div>
-          <?php endforeach; ?>
+          </section>
         </div>
 
-        <div class="evapp-new-template">
-          <label><?php _e('Nueva plantilla', 'eventosapp'); ?><input type="text" name="eventosapp_badge_new_template_name" placeholder="<?php esc_attr_e('Ej. Escarapela sponsor', 'eventosapp'); ?>"></label>
-          <label><?php _e('Ancho mm', 'eventosapp'); ?><input type="number" step="0.1" min="10" name="eventosapp_badge_new_template_width_mm" value="100"></label>
-          <label><?php _e('Alto mm', 'eventosapp'); ?><input type="number" step="0.1" min="10" name="eventosapp_badge_new_template_height_mm" value="140"></label>
-          <label><?php _e('Margen mm', 'eventosapp'); ?><input type="number" step="0.1" min="0" name="eventosapp_badge_new_template_margin_mm" value="3"></label>
-          <label><?php _e('Orientación', 'eventosapp'); ?>
-            <select name="eventosapp_badge_new_template_orientation">
-              <option value="portrait"><?php _e('Vertical', 'eventosapp'); ?></option>
-              <option value="landscape"><?php _e('Horizontal', 'eventosapp'); ?></option>
-            </select>
-          </label>
-        </div>
-      </section>
+        <aside>
+          <section class="evapp-badge-section">
+            <h3><?php _e('Vista previa del formato', 'eventosapp'); ?></h3>
+            <div class="evapp-live-paper" id="evapp_live_paper">
+              <div class="evapp-live-safe" id="evapp_live_safe">
+                <div class="evapp-live-badge" id="evapp_live_badge"></div>
+              </div>
+            </div>
+            <div class="evapp-live-caption">
+              <strong id="evapp_live_template_name"><?php echo esc_html($selected_template['name']); ?></strong>
+              <span id="evapp_live_template_detail"><?php echo esc_html(eventosapp_badge_format_mm($selected_template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($selected_template['height_mm'])); ?> mm</span>
+            </div>
+          </section>
+
+          <section class="evapp-badge-section">
+            <h3><?php _e('Vista previa / prueba de impresión', 'eventosapp'); ?></h3>
+            <div class="evapp-badge-field">
+              <label for="eventosapp_badge_ticket_key"><?php _e('Número de ticket (ID público)', 'eventosapp'); ?></label>
+              <input type="text" name="eventosapp_badge_ticket_key" id="eventosapp_badge_ticket_key" value="<?php echo esc_attr($preview_ticket_key); ?>" placeholder="p. ej. tkcdG7ejZvDjWAD">
+              <span class="evapp-badge-help"><?php _e('Opcional. Si lo dejas vacío se abre una vista con textos de muestra.', 'eventosapp'); ?></span>
+            </div>
+            <div class="evapp-print-actions">
+              <button type="button" class="button button-primary" id="eventosapp_download_badge"><?php _e('Vista previa / Imprimir escarapela', 'eventosapp'); ?></button>
+            </div>
+            <p class="evapp-badge-help"><?php _e('Para impresión precisa, usa escala 100% y desactiva “ajustar a página” en el cuadro de impresión cuando el navegador lo muestre.', 'eventosapp'); ?></p>
+          </section>
+        </aside>
+      </div>
     </div>
 
     <script>
     jQuery(function($){
-      function evappUpdatePaperPreview(){
-        var $selected = $('#eventosapp_badge_paper_template option:selected');
-        var name = $selected.data('name') || $selected.text();
-        var width = parseFloat($selected.data('width')) || 99;
-        var height = parseFloat($selected.data('height')) || 55;
-        var margin = parseFloat($selected.data('margin')) || 0;
-        var orientation = ($selected.data('orientation') || '').toString();
-        var ratio = width / Math.max(height, 1);
-        var leftPct = Math.min(45, Math.max(0, (margin / Math.max(width, 1)) * 100));
-        var topPct = Math.min(45, Math.max(0, (margin / Math.max(height, 1)) * 100));
-
-        $('#evapp_selected_paper_preview').css('--paper-ratio', ratio);
-        $('#evapp_selected_paper_safe').css({left:leftPct+'%', right:leftPct+'%', top:topPct+'%', bottom:topPct+'%'});
-        $('#evapp_selected_paper_name').text(name);
-        $('#evapp_selected_paper_size').text(width + ' × ' + height + ' mm');
-        $('#evapp_selected_paper_margin').text('<?php echo esc_js(__('Margen:', 'eventosapp')); ?> ' + margin + ' mm');
-        $('#evapp_selected_paper_orientation').text(orientation === 'portrait' ? '<?php echo esc_js(__('Vertical', 'eventosapp')); ?>' : '<?php echo esc_js(__('Horizontal', 'eventosapp')); ?>');
+      function evappEscapeHtml(value){
+        return $('<div/>').text(value || '').html();
       }
 
-      $('#eventosapp_badge_paper_template').on('change', evappUpdatePaperPreview);
-      evappUpdatePaperPreview();
+      function evappNumber(selector, fallback){
+        var value = parseFloat($(selector).val());
+        return isNaN(value) ? fallback : value;
+      }
+
+      function evappSelectedPaper(){
+        var $selected = $('#eventosapp_badge_paper_template option:selected');
+        return {
+          name: ($selected.data('name') || $selected.text() || '').toString(),
+          width: parseFloat($selected.data('width')) || 99,
+          height: parseFloat($selected.data('height')) || 55,
+          margin: parseFloat($selected.data('margin')) || 0,
+          orientation: ($selected.data('orientation') || '').toString()
+        };
+      }
+
+      function evappApplyPaperPreview(){
+        var paper = evappSelectedPaper();
+        var ratio = paper.width / Math.max(paper.height, 1);
+        var leftPct = Math.min(45, Math.max(0, (paper.margin / Math.max(paper.width, 1)) * 100));
+        var topPct = Math.min(45, Math.max(0, (paper.margin / Math.max(paper.height, 1)) * 100));
+        var orientationText = paper.orientation === 'portrait' ? '<?php echo esc_js(__('Vertical', 'eventosapp')); ?>' : '<?php echo esc_js(__('Horizontal', 'eventosapp')); ?>';
+
+        $('#evapp_selected_paper_preview, #evapp_live_paper').css('--paper-ratio', ratio);
+        $('#evapp_selected_paper_safe, #evapp_live_safe').css({left:leftPct+'%', right:leftPct+'%', top:topPct+'%', bottom:topPct+'%'});
+        $('#evapp_selected_paper_name, #evapp_live_template_name').text(paper.name);
+        $('#evapp_selected_paper_size').text(paper.width + ' × ' + paper.height + ' mm');
+        $('#evapp_selected_paper_margin').text('<?php echo esc_js(__('Margen:', 'eventosapp')); ?> ' + paper.margin + ' mm');
+        $('#evapp_selected_paper_orientation').text(orientationText);
+        $('#evapp_live_template_detail').text(paper.width + ' × ' + paper.height + ' mm · ' + '<?php echo esc_js(__('Margen', 'eventosapp')); ?> ' + paper.margin + ' mm');
+      }
+
+      function evappSlotHtml(field, label, level){
+        var isQr = field === 'qr' || field === 'qr_networking';
+        var margin = Math.max(1, Math.round((level === 'horizontal' ? evappNumber('#eventosapp_badge_sep_horizontal', 4) : evappNumber('#eventosapp_badge_sep_vertical', 4)) * 0.35));
+        if(isQr){
+          var qr = Math.max(24, Math.min(82, Math.round(evappNumber('#eventosapp_badge_qr_size', 72) * 0.52)));
+          return '<div class="evapp-live-slot is-qr" style="margin:'+margin+'px"><span style="width:'+qr+'px;height:'+qr+'px">QR</span></div>';
+        }
+
+        var size = evappNumber('#eventosapp_badge_size_medium', 18);
+        var weight = evappNumber('#eventosapp_badge_weight_medium', 500);
+        if(level === 'large'){
+          size = evappNumber('#eventosapp_badge_size_large', 24);
+          weight = evappNumber('#eventosapp_badge_weight_large', 600);
+        } else if(level === 'small'){
+          size = evappNumber('#eventosapp_badge_size_small', 14);
+          weight = evappNumber('#eventosapp_badge_weight_small', 400);
+        }
+
+        var previewSize = Math.max(8, Math.min(24, Math.round(size * 0.52)));
+        return '<div class="evapp-live-slot" style="margin:'+margin+'px;font-size:'+previewSize+'px;font-weight:'+weight+'">'+evappEscapeHtml(label)+'</div>';
+      }
+
+      function evappBuildLivePreview(){
+        evappApplyPaperPreview();
+
+        var active = [];
+        $('.evapp-field-order').each(function(){
+          var field = $(this).val();
+          if(field && field !== 'none'){
+            active.push({field: field, label: $(this).find('option:selected').text()});
+          }
+        });
+        if(!active.length){
+          active = [
+            {field:'full_name', label:'Nombres + Apellidos'},
+            {field:'company', label:'Nombre de la Empresa'},
+            {field:'qr', label:'QR'}
+          ];
+        }
+
+        var design = $('input[name="eventosapp_badge_design"]:checked').val() || 'manillas';
+        var border = Math.max(0, Math.round(evappNumber('#eventosapp_badge_border_width', 0)));
+        var html = '';
+        var cls = 'design-' + design;
+
+        if(design === 'escarapelas_split'){
+          var left3 = active.slice(0, 3);
+          html += '<div class="evapp-live-left">';
+          $.each(left3, function(index, item){
+            html += evappSlotHtml(item.field, item.label, index === 0 ? 'large' : (index === 1 ? 'medium' : 'small'));
+          });
+          html += '</div><div class="evapp-live-right" style="margin-left:'+Math.max(1, Math.round(evappNumber('#eventosapp_badge_sep_horizontal', 4) * 0.45))+'px">';
+          if(active[3]) html += evappSlotHtml(active[3].field, active[3].label, 'medium');
+          html += '</div>';
+        } else if(design === 'escarapelas_split_4'){
+          var left4 = active.slice(0, 4);
+          html += '<div class="evapp-live-left">';
+          $.each(left4, function(index, item){
+            html += evappSlotHtml(item.field, item.label, index === 0 ? 'large' : (index <= 2 ? 'medium' : 'small'));
+          });
+          html += '</div><div class="evapp-live-right" style="margin-left:'+Math.max(1, Math.round(evappNumber('#eventosapp_badge_sep_horizontal', 4) * 0.45))+'px">';
+          if(active[4]) html += evappSlotHtml(active[4].field, active[4].label, 'medium');
+          html += '</div>';
+        } else {
+          $.each(active, function(index, item){
+            var level = 'horizontal';
+            if(design === 'escarapelas'){
+              level = index === 0 ? 'large' : (index <= 2 ? 'medium' : 'small');
+            }
+            html += evappSlotHtml(item.field, item.label, level);
+          });
+        }
+
+        $('#evapp_live_badge')
+          .removeClass('design-manillas design-escarapelas design-escarapelas_split design-escarapelas_split_4')
+          .addClass(cls)
+          .css('border', border > 0 ? border + 'px solid #000' : 'none')
+          .html(html);
+      }
+
+      $('#eventosapp_badge_paper_template, .evapp-field-order, input[name="eventosapp_badge_design"], #eventosapp_badge_size_large, #eventosapp_badge_size_medium, #eventosapp_badge_size_small, #eventosapp_badge_weight_large, #eventosapp_badge_weight_medium, #eventosapp_badge_weight_small, #eventosapp_badge_sep_vertical, #eventosapp_badge_sep_horizontal, #eventosapp_badge_qr_size, #eventosapp_badge_border_width').on('change keyup input', evappBuildLivePreview);
+      evappBuildLivePreview();
 
       $('#eventosapp_download_badge').on('click', function(e){
         e.preventDefault();
         var ticketKey = $('input[name="eventosapp_badge_ticket_key"]').val() || '';
         var url = '<?php echo admin_url('admin-ajax.php'); ?>' +
                   '?action=eventosapp_download_badge' +
-                  '&post_id=<?php echo (int)$post->ID; ?>' +
+                  '&post_id=<?php echo (int) $post->ID; ?>' +
                   '&ticket_key=' + encodeURIComponent(ticketKey) +
                   '&_wpnonce=<?php echo wp_create_nonce('eventosapp_download_badge'); ?>';
         window.open(url, '_blank');
@@ -952,8 +1179,6 @@ add_action('save_post_eventosapp_event', function($post_id){
     }
     if (!current_user_can('edit_post', $post_id)) return;
 
-    eventosapp_badge_save_paper_templates_from_post();
-
     $templates = eventosapp_badge_get_paper_templates();
     $paper_template = isset($_POST['eventosapp_badge_paper_template']) ? sanitize_key($_POST['eventosapp_badge_paper_template']) : '';
     if ($paper_template === 'legacy_event' || isset($templates[$paper_template])) {
@@ -966,7 +1191,8 @@ add_action('save_post_eventosapp_event', function($post_id){
             update_post_meta($post_id, 'eventosapp_badge_design', $d);
         }
     }
-    for ($i=1; $i<=5; $i++){
+
+    for ($i = 1; $i <= 5; $i++) {
         $k = "eventosapp_field_order_{$i}";
         update_post_meta($post_id, $k, sanitize_key($_POST[$k] ?? 'none'));
     }
@@ -975,7 +1201,7 @@ add_action('save_post_eventosapp_event', function($post_id){
      * Ancho/alto directos ya no se guardan desde el metabox. Se conservan metas
      * heredadas existentes únicamente como fallback para eventos antiguos.
      */
-    foreach (['large','medium','small'] as $s){
+    foreach (['large','medium','small'] as $s) {
         if (isset($_POST["eventosapp_badge_size_{$s}"])) {
             update_post_meta($post_id, "eventosapp_badge_size_{$s}", absint($_POST["eventosapp_badge_size_{$s}"]));
         }
@@ -983,11 +1209,13 @@ add_action('save_post_eventosapp_event', function($post_id){
             update_post_meta($post_id, "eventosapp_badge_weight_{$s}", absint($_POST["eventosapp_badge_weight_{$s}"]));
         }
     }
-    foreach (['vertical','horizontal'] as $dir){
+
+    foreach (['vertical','horizontal'] as $dir) {
         if (isset($_POST["eventosapp_badge_sep_{$dir}"])) {
             update_post_meta($post_id, "eventosapp_badge_sep_{$dir}", absint($_POST["eventosapp_badge_sep_{$dir}"]));
         }
     }
+
     if (isset($_POST['eventosapp_badge_qr_size'])) {
         update_post_meta($post_id, 'eventosapp_badge_qr_size', absint($_POST['eventosapp_badge_qr_size']));
     }
