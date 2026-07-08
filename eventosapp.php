@@ -1481,8 +1481,72 @@ add_filter('parent_file', function($parent_file) {
 });
 
 /**
- * Reorganiza el submenú de EventosApp por grupos funcionales sin cambiar los slugs existentes.
- * Esto evita romper enlaces directos, callbacks o permisos definidos en otros módulos.
+ * Definición única de grupos visuales del menú de EventosApp.
+ *
+ * Importante: estos grupos NO crean páginas falsas ni slugs ficticios.
+ * Solo se usan para ordenar enlaces reales ya registrados por WordPress y por los módulos del plugin.
+ */
+if ( ! function_exists('eventosapp_get_admin_menu_groups') ) {
+    function eventosapp_get_admin_menu_groups() {
+        return [
+            'Gestión del evento' => [
+                ['slug' => 'edit.php?post_type=eventosapp_event'],
+                ['slug' => 'edit.php?post_type=eventosapp_ticket'],
+                ['slug' => 'edit.php?post_type=eventosapp_cliente'],
+                ['slug' => 'edit.php?post_type=eventosapp_expositor'],
+                ['slug' => 'edit.php?post_type=eventosapp_asistente'],
+                ['slug' => 'edit.php?post_type=eventosapp_galeria'],
+            ],
+            'Escarapelas e impresión' => [
+                ['slug' => 'eventosapp_badge_library'],
+                ['label' => 'Generación Masiva de QR'],
+                ['label' => 'Actualización por Lote'],
+            ],
+            'Configuración y herramientas' => [
+                ['label' => 'Configuración'],
+                ['label' => 'Integraciones'],
+                ['label' => 'Config API'],
+                ['label' => 'Herramientas'],
+                ['label' => 'Edición Masiva'],
+                ['label' => 'Salud y Rendimiento'],
+            ],
+            'Email' => [
+                ['label' => 'Email Ticket Masivo'],
+            ],
+            'WhatsApp Tickets' => [
+                ['label' => 'WhatsApp Tickets'],
+                ['label' => 'Log de WhatsApp'],
+                ['label' => 'Plantillas WhatsApp'],
+                ['label' => 'WhatsApp Ticket Masivo'],
+                ['label' => 'Inbox WhatsApp'],
+            ],
+            'WhatsApp Flows' => [
+                ['label' => 'WhatsApp Flows'],
+                ['label' => 'Gestionar Flows'],
+                ['label' => 'Envío Masivo de Flows'],
+                ['label' => 'Plantillas Flow WhatsApp'],
+            ],
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_normalize_admin_menu_label') ) {
+    function eventosapp_normalize_admin_menu_label($label) {
+        $label = wp_strip_all_tags((string) $label);
+        $label = html_entity_decode($label, ENT_QUOTES, get_bloginfo('charset'));
+        $label = trim(preg_replace('/\s+/u', ' ', $label));
+        $label = trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', $label));
+        return $label;
+    }
+}
+
+/**
+ * Reorganiza el submenú de EventosApp usando únicamente entradas reales.
+ *
+ * La versión anterior insertaba elementos con slugs como eventosapp_menu_section_*,
+ * y WordPress los convertía en URLs tipo /wp-admin/eventosapp_menu_section_..., lo que causaba
+ * la salida al frontend. Aquí se eliminan esos slugs ficticios y la separación visual se agrega
+ * después con JavaScript como elementos <li> sin enlace.
  */
 add_action('admin_menu', 'eventosapp_reorganize_admin_submenu', 999);
 function eventosapp_reorganize_admin_submenu() {
@@ -1498,12 +1562,13 @@ function eventosapp_reorganize_admin_submenu() {
 
     foreach ($submenu['eventosapp_dashboard'] as $item) {
         $slug = isset($item[2]) ? (string) $item[2] : '';
-        if ($slug === '' || $slug === 'eventosapp_dashboard') {
+
+        // Quitar duplicado del menú raíz y cualquier separador ficticio dejado por versiones anteriores.
+        if ($slug === '' || $slug === 'eventosapp_dashboard' || strpos($slug, 'eventosapp_menu_section_') === 0) {
             continue;
         }
 
-        $clean_label = isset($item[0]) ? wp_strip_all_tags((string) $item[0]) : '';
-        $clean_label = trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', $clean_label));
+        $clean_label = isset($item[0]) ? eventosapp_normalize_admin_menu_label($item[0]) : '';
 
         $items_by_slug[$slug] = $item;
         if ($clean_label !== '') {
@@ -1512,58 +1577,22 @@ function eventosapp_reorganize_admin_submenu() {
         $remaining[$slug] = $item;
     }
 
-    $groups = [
-        'Gestión del evento' => [
-            'edit.php?post_type=eventosapp_event',
-            'edit.php?post_type=eventosapp_ticket',
-            'edit.php?post_type=eventosapp_cliente',
-            'edit.php?post_type=eventosapp_expositor',
-            'edit.php?post_type=eventosapp_asistente',
-            'edit.php?post_type=eventosapp_galeria',
-        ],
-        'Escarapelas e impresión' => [
-            'eventosapp_badge_library',
-            'Generación Masiva de QR',
-            'Actualización por Lote',
-        ],
-        'Configuración y herramientas' => [
-            'Configuración',
-            'Integraciones',
-            'Config API',
-            'Herramientas',
-            'Edición Masiva',
-            'Salud y Rendimiento',
-        ],
-        'Email' => [
-            'Email Ticket Masivo',
-        ],
-        'WhatsApp Tickets' => [
-            'WhatsApp Tickets',
-            'Log de WhatsApp',
-            'Plantillas WhatsApp',
-            'WhatsApp Ticket Masivo',
-            'Inbox WhatsApp',
-        ],
-        'WhatsApp Flows' => [
-            'WhatsApp Flows',
-            'Gestionar Flows',
-            'Envío Masivo de Flows',
-            'Plantillas Flow WhatsApp',
-        ],
-    ];
+    $ordered      = [];
+    $group_starts = [];
+    $groups       = eventosapp_get_admin_menu_groups();
 
-    $ordered = [];
     foreach ($groups as $group_label => $wanted_items) {
         $group = [];
+
         foreach ($wanted_items as $wanted) {
             $item = null;
             $slug = '';
 
-            if (isset($items_by_slug[$wanted])) {
-                $item = $items_by_slug[$wanted];
+            if (isset($wanted['slug']) && isset($items_by_slug[$wanted['slug']])) {
+                $item = $items_by_slug[$wanted['slug']];
                 $slug = (string) $item[2];
-            } elseif (isset($items_by_label[$wanted])) {
-                $item = $items_by_label[$wanted];
+            } elseif (isset($wanted['label']) && isset($items_by_label[$wanted['label']])) {
+                $item = $items_by_label[$wanted['label']];
                 $slug = (string) $item[2];
             }
 
@@ -1574,12 +1603,11 @@ function eventosapp_reorganize_admin_submenu() {
         }
 
         if (!empty($group)) {
-            $section_slug = 'eventosapp_menu_section_' . sanitize_key(remove_accents($group_label));
-            $ordered[] = [
-                '<span class="evapp-admin-menu-section">' . esc_html($group_label) . '</span>',
-                'manage_options',
-                $section_slug,
-            ];
+            $first_slug = isset($group[0][2]) ? (string) $group[0][2] : '';
+            if ($first_slug !== '') {
+                $group_starts[$first_slug] = (string) $group_label;
+            }
+
             foreach ($group as $item) {
                 $ordered[] = $item;
             }
@@ -1591,33 +1619,106 @@ function eventosapp_reorganize_admin_submenu() {
     }
 
     $submenu['eventosapp_dashboard'] = $ordered;
+    $GLOBALS['eventosapp_admin_menu_group_starts'] = $group_starts;
 }
 
 /**
- * Estilos para que los encabezados de grupo del submenú funcionen como separadores visuales.
+ * Separadores visuales seguros para el menú de EventosApp.
+ *
+ * Se inyectan como <li> sin <a>, por lo tanto no generan URLs falsas ni son clicables.
  */
 add_action('admin_head', function () {
     ?>
     <style>
-      #adminmenu .wp-submenu a[href*="page=eventosapp_menu_section_"]{
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-item{
         pointer-events:none;
         cursor:default;
+        margin:8px 0 2px;
+        padding:9px 12px 4px;
+        border-top:1px solid rgba(240,246,252,.16);
         color:#72aee6!important;
-        opacity:.92;
         font-size:11px;
         font-weight:700;
+        line-height:1.25;
         text-transform:uppercase;
-        letter-spacing:.04em;
-        margin-top:7px;
-        padding-top:9px;
-        border-top:1px solid rgba(240,246,252,.14);
+        letter-spacing:.045em;
+        white-space:normal;
       }
-      #adminmenu .wp-submenu a[href*="page=eventosapp_menu_section_"]:hover,
-      #adminmenu .wp-submenu a[href*="page=eventosapp_menu_section_"].current{
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-item:first-child{
+        margin-top:3px;
+        border-top:0;
+      }
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-label{
+        display:block;
         color:#72aee6!important;
-        background:transparent!important;
       }
     </style>
+    <?php
+});
+
+add_action('admin_footer', function () {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    $group_starts = isset($GLOBALS['eventosapp_admin_menu_group_starts']) && is_array($GLOBALS['eventosapp_admin_menu_group_starts'])
+        ? $GLOBALS['eventosapp_admin_menu_group_starts']
+        : [];
+
+    if (empty($group_starts)) {
+        return;
+    }
+    ?>
+    <script>
+    (function(){
+      var groupStarts = <?php echo wp_json_encode($group_starts); ?>;
+      var submenu = document.querySelector('#adminmenu li.toplevel_page_eventosapp_dashboard ul.wp-submenu');
+      if (!submenu || !groupStarts) { return; }
+
+      function decodeHtml(value) {
+        var textarea = document.createElement('textarea');
+        textarea.innerHTML = value || '';
+        return textarea.value;
+      }
+
+      function hrefMatchesSlug(href, slug) {
+        href = href || '';
+        slug = slug || '';
+        if (!slug) { return false; }
+
+        if (slug.indexOf('.php') !== -1 || slug.indexOf('?') !== -1) {
+          return href.indexOf(slug) !== -1;
+        }
+
+        return href.indexOf('page=' + encodeURIComponent(slug)) !== -1 || href.indexOf('page=' + slug) !== -1;
+      }
+
+      Object.keys(groupStarts).forEach(function(slug){
+        if (submenu.querySelector('.evapp-admin-menu-section-item[data-evapp-group-for="' + slug.replace(/"/g, '\\"') + '"]')) {
+          return;
+        }
+
+        var targetLink = null;
+        var links = submenu.querySelectorAll('li > a');
+        links.forEach(function(link){
+          if (!targetLink && hrefMatchesSlug(link.getAttribute('href'), slug)) {
+            targetLink = link;
+          }
+        });
+
+        if (!targetLink) { return; }
+        var targetItem = targetLink.closest('li');
+        if (!targetItem || !targetItem.parentNode) { return; }
+
+        var separator = document.createElement('li');
+        separator.className = 'evapp-admin-menu-section-item';
+        separator.setAttribute('data-evapp-group-for', slug);
+        separator.setAttribute('aria-hidden', 'true');
+        separator.innerHTML = '<span class="evapp-admin-menu-section-label">' + decodeHtml(groupStarts[slug]) + '</span>';
+        targetItem.parentNode.insertBefore(separator, targetItem);
+      });
+    })();
+    </script>
     <?php
 });
 
