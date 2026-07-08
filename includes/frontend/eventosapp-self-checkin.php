@@ -101,6 +101,11 @@ if ( ! function_exists('eventosapp_self_checkin_prepare_badge_print_html') ) {
 </script>
 HTML;
 
+        $replaced = preg_replace("#<script\b[^>]*id=[\"']eventosapp-badge-autoprint[\"'][^>]*>.*?</script>#is", $script, $html, 1, $count);
+        if ( $count > 0 && is_string( $replaced ) ) {
+            return $replaced;
+        }
+
         $replaced = preg_replace('/<script>\s*window\.print\(\);\s*<\/script>/i', $script, $html, 1, $count);
         if ( $count > 0 && is_string( $replaced ) ) {
             return $replaced;
