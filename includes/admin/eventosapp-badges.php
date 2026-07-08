@@ -195,16 +195,32 @@ function eventosapp_badge_normalize_paper_template($template, $fallback_key = ''
  */
 function eventosapp_badge_get_paper_templates() {
     $templates = [];
+    $deleted_defaults = get_option('eventosapp_badge_deleted_default_templates', []);
+    if (!is_array($deleted_defaults)) {
+        $deleted_defaults = [];
+    }
+    $deleted_defaults = array_map('sanitize_key', $deleted_defaults);
 
     foreach (eventosapp_badge_default_paper_templates() as $key => $template) {
+        $key = sanitize_key($key);
+        if (in_array($key, $deleted_defaults, true)) {
+            continue;
+        }
+
         $templates[$key] = eventosapp_badge_normalize_paper_template($template, $key);
-        $templates[$key]['locked'] = true;
+        $templates[$key]['locked'] = false;
+        $templates[$key]['is_default'] = true;
     }
 
     $saved = get_option('eventosapp_badge_paper_templates', []);
     if (is_array($saved)) {
         foreach ($saved as $key => $template) {
             $normalized = eventosapp_badge_normalize_paper_template($template, $key);
+            if (in_array($normalized['key'], $deleted_defaults, true)) {
+                continue;
+            }
+            $normalized['locked'] = false;
+            $normalized['is_default'] = isset(eventosapp_badge_default_paper_templates()[$normalized['key']]);
             $templates[$normalized['key']] = $normalized;
         }
     }
@@ -259,7 +275,11 @@ function eventosapp_badge_get_selected_paper_template($evento_id) {
         return eventosapp_badge_get_legacy_event_template($evento_id);
     }
 
-    return $templates['legacy_standard'];
+    if (!empty($templates)) {
+        return reset($templates);
+    }
+
+    return eventosapp_badge_runtime_fallback_template();
 }
 
 /**
@@ -290,6 +310,7 @@ function eventosapp_badge_save_paper_templates_from_request($request) {
     }
 
     $existing_templates = eventosapp_badge_get_paper_templates();
+    $default_templates  = eventosapp_badge_default_paper_templates();
     $submitted          = isset($request['eventosapp_badge_paper_templates']) && is_array($request['eventosapp_badge_paper_templates'])
         ? wp_unslash($request['eventosapp_badge_paper_templates'])
         : [];
@@ -298,6 +319,11 @@ function eventosapp_badge_save_paper_templates_from_request($request) {
         : [];
 
     $templates_to_save = [];
+    $deleted_defaults  = get_option('eventosapp_badge_deleted_default_templates', []);
+    if (!is_array($deleted_defaults)) {
+        $deleted_defaults = [];
+    }
+    $deleted_defaults = array_values(array_unique(array_map('sanitize_key', $deleted_defaults)));
 
     foreach ($submitted as $key => $template) {
         $key = sanitize_key($key);
@@ -305,20 +331,21 @@ function eventosapp_badge_save_paper_templates_from_request($request) {
             continue;
         }
 
-        $was_locked = !empty($existing_templates[$key]['locked']);
-
-        if ($was_locked && in_array($key, $delete, true)) {
-            // Las plantillas base se pueden editar, pero no eliminar.
-            $delete = array_diff($delete, [$key]);
-        }
-
-        if (!$was_locked && in_array($key, $delete, true)) {
+        if (in_array($key, $delete, true)) {
+            if (isset($default_templates[$key])) {
+                $deleted_defaults[] = $key;
+            }
             continue;
         }
 
         $normalized = eventosapp_badge_normalize_paper_template($template, $key);
-        $normalized['locked'] = $was_locked;
+        $normalized['locked'] = false;
+        $normalized['is_default'] = isset($default_templates[$key]);
         $templates_to_save[$normalized['key']] = $normalized;
+
+        if (isset($default_templates[$normalized['key']])) {
+            $deleted_defaults = array_diff($deleted_defaults, [$normalized['key']]);
+        }
     }
 
     if (!empty($request['eventosapp_badge_new_template_name'])) {
@@ -330,7 +357,7 @@ function eventosapp_badge_save_paper_templates_from_request($request) {
 
         $new_key = $base_key;
         $suffix  = 2;
-        while (isset($templates_to_save[$new_key]) || isset($existing_templates[$new_key])) {
+        while (isset($templates_to_save[$new_key]) || isset($existing_templates[$new_key]) || isset($default_templates[$new_key])) {
             $new_key = $base_key . '_' . $suffix;
             $suffix++;
         }
@@ -345,9 +372,12 @@ function eventosapp_badge_save_paper_templates_from_request($request) {
             'locked'      => false,
         ], $new_key);
         $new_template['locked'] = false;
+        $new_template['is_default'] = false;
         $templates_to_save[$new_template['key']] = $new_template;
     }
 
+    $deleted_defaults = array_values(array_unique(array_filter($deleted_defaults)));
+    update_option('eventosapp_badge_deleted_default_templates', $deleted_defaults, false);
     update_option('eventosapp_badge_paper_templates', $templates_to_save, false);
     return true;
 }
@@ -357,6 +387,264 @@ function eventosapp_badge_save_paper_templates_from_request($request) {
  */
 function eventosapp_badge_save_paper_templates_from_post() {
     return eventosapp_badge_save_paper_templates_from_request($_POST);
+}
+
+
+/**
+ * Devuelve una plantilla temporal segura cuando el administrador elimina todas las plantillas.
+ * No se muestra en la biblioteca: solo evita errores en eventos que aún no tengan un formato activo.
+ */
+function eventosapp_badge_runtime_fallback_template() {
+    return eventosapp_badge_normalize_paper_template([
+        'key'         => 'runtime_fallback',
+        'name'        => __('Formato temporal 99 × 55 mm', 'eventosapp'),
+        'width_mm'    => 99,
+        'height_mm'   => 55,
+        'margin_mm'   => 2,
+        'orientation' => 'landscape',
+        'locked'      => false,
+    ], 'runtime_fallback');
+}
+
+/**
+ * Permite subir archivos ZIP desde la Biblioteca de Escarapelas.
+ */
+function eventosapp_badge_allow_zip_upload_mimes($mimes) {
+    $mimes['zip'] = 'application/zip';
+    return $mimes;
+}
+
+/**
+ * Normaliza los recursos descargables de soporte de impresión.
+ */
+function eventosapp_badge_get_support_files() {
+    $files = get_option('eventosapp_badge_support_files', []);
+    if (!is_array($files)) {
+        return [];
+    }
+
+    $clean = [];
+    foreach ($files as $key => $file) {
+        if (!is_array($file)) {
+            continue;
+        }
+        $key = sanitize_key($key);
+        $attachment_id = absint($file['attachment_id'] ?? 0);
+        $url = $attachment_id ? wp_get_attachment_url($attachment_id) : '';
+        if (!$attachment_id || !$url) {
+            continue;
+        }
+        $name = sanitize_text_field($file['name'] ?? '');
+        if ($name === '') {
+            $name = basename((string) get_attached_file($attachment_id));
+        }
+        $clean[$key ?: ('file_' . $attachment_id)] = [
+            'key'           => $key ?: ('file_' . $attachment_id),
+            'name'          => $name,
+            'attachment_id' => $attachment_id,
+            'url'           => esc_url_raw($url),
+            'filename'      => sanitize_file_name($file['filename'] ?? basename((string) get_attached_file($attachment_id))),
+            'uploaded_at'   => sanitize_text_field($file['uploaded_at'] ?? ''),
+        ];
+    }
+
+    return $clean;
+}
+
+/**
+ * Guarda nombres, elimina recursos viejos y sube nuevos ZIP de soporte de impresión.
+ */
+function eventosapp_badge_save_support_files_from_request($request, $files) {
+    if (!is_array($request)) {
+        return false;
+    }
+
+    $support_files = eventosapp_badge_get_support_files();
+
+    if (!empty($request['eventosapp_badge_support_existing']) && is_array($request['eventosapp_badge_support_existing'])) {
+        $submitted = wp_unslash($request['eventosapp_badge_support_existing']);
+        foreach ($submitted as $key => $data) {
+            $key = sanitize_key($key);
+            if (!isset($support_files[$key]) || !is_array($data)) {
+                continue;
+            }
+            if (!empty($data['name'])) {
+                $support_files[$key]['name'] = sanitize_text_field($data['name']);
+            }
+        }
+    }
+
+    if (!empty($request['eventosapp_badge_delete_support_file']) && is_array($request['eventosapp_badge_delete_support_file'])) {
+        $delete_keys = array_map('sanitize_key', array_keys(wp_unslash($request['eventosapp_badge_delete_support_file'])));
+        foreach ($delete_keys as $key) {
+            if (!isset($support_files[$key])) {
+                continue;
+            }
+            $attachment_id = absint($support_files[$key]['attachment_id']);
+            if ($attachment_id) {
+                wp_delete_attachment($attachment_id, true);
+            }
+            unset($support_files[$key]);
+        }
+    }
+
+    if (is_array($files)) {
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+
+        for ($i = 1; $i <= 2; $i++) {
+            $input_name = 'eventosapp_badge_support_file_' . $i;
+            if (empty($files[$input_name]) || !is_array($files[$input_name]) || empty($files[$input_name]['name'])) {
+                continue;
+            }
+            if (!empty($files[$input_name]['error']) && (int) $files[$input_name]['error'] !== UPLOAD_ERR_OK) {
+                continue;
+            }
+
+            $extension = strtolower(pathinfo((string) $files[$input_name]['name'], PATHINFO_EXTENSION));
+            if ($extension !== 'zip') {
+                continue;
+            }
+
+            add_filter('upload_mimes', 'eventosapp_badge_allow_zip_upload_mimes');
+            $attachment_id = media_handle_upload($input_name, 0);
+            remove_filter('upload_mimes', 'eventosapp_badge_allow_zip_upload_mimes');
+
+            if (is_wp_error($attachment_id)) {
+                continue;
+            }
+
+            $name = '';
+            $name_key = 'eventosapp_badge_support_name_' . $i;
+            if (!empty($request[$name_key])) {
+                $name = sanitize_text_field(wp_unslash($request[$name_key]));
+            }
+            if ($name === '') {
+                $name = sanitize_file_name($files[$input_name]['name']);
+            }
+
+            $file_key = 'support_' . $attachment_id;
+            $support_files[$file_key] = [
+                'key'           => $file_key,
+                'name'          => $name,
+                'attachment_id' => absint($attachment_id),
+                'url'           => esc_url_raw(wp_get_attachment_url($attachment_id)),
+                'filename'      => sanitize_file_name($files[$input_name]['name']),
+                'uploaded_at'   => current_time('mysql'),
+            ];
+        }
+    }
+
+    update_option('eventosapp_badge_support_files', $support_files, false);
+    return true;
+}
+
+/**
+ * Exporta las plantillas actuales en JSON.
+ */
+function eventosapp_badge_export_templates_json() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('No tienes permisos suficientes para exportar estas plantillas.', 'eventosapp'), '', 403);
+    }
+
+    check_admin_referer('eventosapp_export_badge_templates');
+
+    $templates = array_values(eventosapp_badge_get_paper_templates());
+    foreach ($templates as &$template) {
+        unset($template['locked']);
+    }
+
+    $payload = [
+        'type'        => 'eventosapp_badge_templates',
+        'version'     => 1,
+        'exported_at' => current_time('mysql'),
+        'site'        => home_url('/'),
+        'templates'   => $templates,
+    ];
+
+    nocache_headers();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename=eventosapp-biblioteca-escarapelas-' . gmdate('Ymd-His') . '.json');
+    echo wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+/**
+ * Importa plantillas desde un JSON exportado por EventosApp.
+ */
+function eventosapp_badge_import_templates_from_upload($files) {
+    if (empty($files['eventosapp_badge_templates_import']) || !is_array($files['eventosapp_badge_templates_import']) || empty($files['eventosapp_badge_templates_import']['tmp_name'])) {
+        return false;
+    }
+
+    $file = $files['eventosapp_badge_templates_import'];
+    if (!empty($file['error']) && (int) $file['error'] !== UPLOAD_ERR_OK) {
+        return false;
+    }
+
+    $contents = file_get_contents($file['tmp_name']);
+    if (!$contents) {
+        return false;
+    }
+
+    $payload = json_decode($contents, true);
+    if (!is_array($payload)) {
+        return false;
+    }
+
+    $incoming = [];
+    if (!empty($payload['templates']) && is_array($payload['templates'])) {
+        $incoming = $payload['templates'];
+    } elseif (array_keys($payload) !== range(0, count($payload) - 1)) {
+        $incoming = array_values($payload);
+    } else {
+        $incoming = $payload;
+    }
+
+    if (empty($incoming)) {
+        return false;
+    }
+
+    $templates = eventosapp_badge_get_paper_templates();
+    $default_templates = eventosapp_badge_default_paper_templates();
+    $deleted_defaults = get_option('eventosapp_badge_deleted_default_templates', []);
+    if (!is_array($deleted_defaults)) {
+        $deleted_defaults = [];
+    }
+
+    foreach ($incoming as $template) {
+        if (!is_array($template)) {
+            continue;
+        }
+
+        $normalized = eventosapp_badge_normalize_paper_template($template, $template['key'] ?? '');
+        $base_key = sanitize_key($normalized['key']);
+        if ($base_key === '' || $base_key === 'legacy_event' || $base_key === 'runtime_fallback') {
+            $base_key = sanitize_key(sanitize_title($normalized['name']));
+            if ($base_key === '') {
+                $base_key = 'plantilla_importada';
+            }
+        }
+
+        $new_key = $base_key;
+        $suffix = 2;
+        while (isset($templates[$new_key]) || isset($default_templates[$new_key])) {
+            $new_key = $base_key . '_' . $suffix;
+            $suffix++;
+        }
+
+        $normalized['key'] = $new_key;
+        $normalized['locked'] = false;
+        $normalized['is_default'] = false;
+        $templates[$new_key] = $normalized;
+    }
+
+    $deleted_defaults = array_values(array_unique(array_map('sanitize_key', $deleted_defaults)));
+    update_option('eventosapp_badge_deleted_default_templates', $deleted_defaults, false);
+    update_option('eventosapp_badge_paper_templates', $templates, false);
+
+    return true;
 }
 
 /**
@@ -381,50 +669,63 @@ function eventosapp_render_badge_library_page() {
         wp_die(__('No tienes permisos suficientes para acceder a esta página.', 'eventosapp'));
     }
 
-    $saved = false;
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['eventosapp_badge_library_action'])) {
-        check_admin_referer('eventosapp_save_badge_library', 'eventosapp_badge_library_nonce');
-        $saved = eventosapp_badge_save_paper_templates_from_request($_POST);
+    if (!empty($_GET['eventosapp_badge_export'])) {
+        eventosapp_badge_export_templates_json();
     }
 
-    $templates = eventosapp_badge_get_paper_templates();
+    $saved         = false;
+    $imported      = false;
+    $support_saved = false;
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['eventosapp_badge_library_action'])) {
+        check_admin_referer('eventosapp_save_badge_library', 'eventosapp_badge_library_nonce');
+        $saved         = eventosapp_badge_save_paper_templates_from_request($_POST);
+        $imported      = eventosapp_badge_import_templates_from_upload($_FILES);
+        $support_saved = eventosapp_badge_save_support_files_from_request($_POST, $_FILES);
+    }
+
+    $templates     = eventosapp_badge_get_paper_templates();
+    $support_files = eventosapp_badge_get_support_files();
+    $export_url    = wp_nonce_url(admin_url('admin.php?page=eventosapp_badge_library&eventosapp_badge_export=1'), 'eventosapp_export_badge_templates');
     ?>
     <div class="wrap evapp-badge-library-wrap">
       <h1><?php _e('Biblioteca de Escarapelas', 'eventosapp'); ?></h1>
       <p class="description">
-        <?php _e('Crea y edita formatos de papel reutilizables para todos los eventos. La plantilla seleccionada en cada evento se usa en @page, en el contenedor HTML y en la vista previa para que la impresión salga con la misma medida esperada.', 'eventosapp'); ?>
+        <?php _e('Crea, edita, elimina, exporta e importa formatos de papel reutilizables para todos los eventos. La plantilla seleccionada se usa en @page, en el contenedor HTML y en la vista previa.', 'eventosapp'); ?>
       </p>
 
       <?php if ($saved): ?>
         <div class="notice notice-success is-dismissible"><p><?php _e('Biblioteca de escarapelas guardada correctamente.', 'eventosapp'); ?></p></div>
       <?php endif; ?>
+      <?php if ($imported): ?>
+        <div class="notice notice-success is-dismissible"><p><?php _e('Plantillas importadas correctamente.', 'eventosapp'); ?></p></div>
+      <?php endif; ?>
+      <?php if ($support_saved): ?>
+        <div class="notice notice-success is-dismissible"><p><?php _e('Archivos de soporte de impresión actualizados correctamente.', 'eventosapp'); ?></p></div>
+      <?php endif; ?>
 
       <style>
-        .evapp-badge-library-wrap{max-width:1320px}
-        .evapp-library-panel{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:18px;margin-top:18px;box-shadow:0 1px 2px rgba(0,0,0,.04);box-sizing:border-box;overflow:hidden}
+        .evapp-badge-library-wrap{max-width:1380px}
+        .evapp-badge-library-wrap *{box-sizing:border-box}
+        .evapp-library-panel{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:18px;margin-top:18px;box-shadow:0 1px 2px rgba(0,0,0,.04);overflow:hidden}
         .evapp-library-toolbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}
-        .evapp-library-toolbar p{margin:4px 0;color:#50575e;max-width:860px}
-        .evapp-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:16px;align-items:stretch}
-        .evapp-template-card{border:1px solid #dcdcde;border-radius:12px;background:#fbfbfc;padding:14px;display:flex;flex-direction:column;gap:12px;align-items:stretch;min-width:0;box-sizing:border-box;overflow:hidden}
-        .evapp-template-card.is-base{background:#f8fafc}
-        .evapp-template-card-main{width:100%;min-width:0;box-sizing:border-box}
-        .evapp-template-card h2{font-size:14px;margin:0 0 10px;line-height:1.3;word-break:break-word}
-        .evapp-template-card label{font-weight:600;font-size:12px;display:block;margin:0 0 10px;min-width:0;box-sizing:border-box}
-        .evapp-template-card input,.evapp-template-card select{width:100%;max-width:100%;margin-top:4px;box-sizing:border-box;min-height:34px}
-        .evapp-template-fields{display:grid;grid-template-columns:1fr;gap:8px;margin:2px 0 4px}
-        .evapp-template-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;color:#646970;font-size:12px}
-        .evapp-template-delete{color:#b32d2e;margin-top:10px!important}
-        .evapp-paper-preview{width:min(100%,170px);flex:0 0 auto;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden;margin:0 auto 2px;box-sizing:border-box}
-        .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
-        .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.07);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box;min-width:0;overflow:hidden}
-        .evapp-new-template{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end;padding:14px;border:1px dashed #8c8f94;border-radius:12px;background:#f6f7f7;margin-top:20px;box-sizing:border-box}
-        .evapp-new-template label{font-size:12px;font-weight:600;display:block;min-width:0}
-        .evapp-new-template input,.evapp-new-template select{width:100%;max-width:100%;margin-top:4px;box-sizing:border-box;min-height:34px}
-        .evapp-library-submit{margin-top:18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-        @media (max-width:782px){.evapp-badge-library-wrap{margin-right:10px}.evapp-library-toolbar{display:block}.evapp-library-toolbar .button{margin-top:12px}.evapp-library-panel{padding:14px}.evapp-template-grid{grid-template-columns:1fr}.evapp-new-template{grid-template-columns:1fr}}
+        .evapp-library-toolbar p{margin:4px 0;color:#50575e;max-width:920px}.evapp-library-toolbar-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+        .evapp-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:16px;margin-top:16px;align-items:stretch}
+        .evapp-template-card{border:1px solid #dcdcde;border-radius:12px;background:#fbfbfc;padding:14px;display:flex;flex-direction:column;gap:12px;align-items:stretch;min-width:0;overflow:hidden}
+        .evapp-template-card.is-base{background:#f8fafc}.evapp-template-card-main{width:100%;min-width:0}.evapp-template-card h2{font-size:14px;margin:0 0 10px;line-height:1.3;word-break:break-word}
+        .evapp-template-card label,.evapp-library-form-row label{font-weight:600;font-size:12px;display:block;margin:0 0 10px;min-width:0}
+        .evapp-template-card input,.evapp-template-card select,.evapp-library-form-row input,.evapp-library-form-row select{width:100%;max-width:100%;margin-top:4px;min-height:34px}
+        .evapp-template-fields{display:grid;grid-template-columns:1fr;gap:8px;margin:2px 0 4px}.evapp-template-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;color:#646970;font-size:12px}
+        .evapp-template-delete{color:#b32d2e;margin-top:10px!important;padding-top:8px;border-top:1px solid #dcdcde}
+        .evapp-paper-preview{width:min(100%,185px);flex:0 0 auto;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden;margin:0 auto 2px}
+        .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}.evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.07);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;min-width:0;overflow:hidden}
+        .evapp-new-template{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end;padding:14px;border:1px dashed #8c8f94;border-radius:12px;background:#f6f7f7;margin-top:20px}
+        .evapp-library-submit{margin-top:18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.evapp-library-two-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px;align-items:start}.evapp-library-box{border:1px solid #dcdcde;border-radius:12px;background:#fff;padding:16px;min-width:0}.evapp-library-box h2{margin-top:0}.evapp-library-form-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end}.evapp-support-list{display:grid;grid-template-columns:1fr;gap:12px;margin:12px 0}.evapp-support-item{border:1px solid #dcdcde;border-radius:10px;background:#f6f7f7;padding:12px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}.evapp-support-item .button{white-space:nowrap}.evapp-support-delete{color:#b32d2e}.evapp-library-muted{color:#646970;font-size:12px;margin-top:5px;display:block}
+        @media (max-width:1100px){.evapp-library-two-cols{grid-template-columns:1fr}.evapp-library-toolbar{display:block}.evapp-library-toolbar-actions{justify-content:flex-start;margin-top:12px}}
+        @media (max-width:782px){.evapp-badge-library-wrap{margin-right:10px}.evapp-library-panel,.evapp-library-box{padding:14px}.evapp-template-grid{grid-template-columns:1fr}.evapp-new-template,.evapp-library-form-row,.evapp-support-item{grid-template-columns:1fr}.evapp-library-toolbar-actions .button{width:100%;text-align:center}}
       </style>
 
-      <form method="post">
+      <form method="post" enctype="multipart/form-data">
         <?php wp_nonce_field('eventosapp_save_badge_library', 'eventosapp_badge_library_nonce'); ?>
         <input type="hidden" name="eventosapp_badge_library_action" value="save">
 
@@ -432,14 +733,21 @@ function eventosapp_render_badge_library_page() {
           <div class="evapp-library-toolbar">
             <div>
               <h2 style="margin-top:0"><?php _e('Formatos disponibles', 'eventosapp'); ?></h2>
-              <p><?php _e('El ancho, alto y margen se guardan en milímetros. El margen representa el área interna útil que también se respeta en el HTML de impresión.', 'eventosapp'); ?></p>
+              <p><?php _e('El ancho, alto y margen se guardan en milímetros. Todas las plantillas se pueden editar o eliminar, incluidas las plantillas base.', 'eventosapp'); ?></p>
             </div>
-            <a class="button" href="<?php echo esc_url(admin_url('edit.php?post_type=eventosapp_event')); ?>"><?php _e('Ir a eventos', 'eventosapp'); ?></a>
+            <div class="evapp-library-toolbar-actions">
+              <a class="button" href="<?php echo esc_url($export_url); ?>"><?php _e('Descargar plantillas', 'eventosapp'); ?></a>
+              <a class="button" href="<?php echo esc_url(admin_url('edit.php?post_type=eventosapp_event')); ?>"><?php _e('Ir a eventos', 'eventosapp'); ?></a>
+            </div>
           </div>
+
+          <?php if (empty($templates)): ?>
+            <div class="notice notice-warning inline"><p><?php _e('No hay plantillas guardadas. Crea una nueva plantilla o importa una biblioteca para poder seleccionarla en los eventos.', 'eventosapp'); ?></p></div>
+          <?php endif; ?>
 
           <div class="evapp-template-grid">
             <?php foreach ($templates as $key => $template): ?>
-              <div class="evapp-template-card <?php echo !empty($template['locked']) ? 'is-base' : ''; ?>">
+              <div class="evapp-template-card <?php echo !empty($template['is_default']) ? 'is-base' : ''; ?>">
                 <?php eventosapp_badge_render_paper_preview_box($template, __('Área útil', 'eventosapp')); ?>
                 <div class="evapp-template-card-main">
                   <h2><?php echo esc_html($template['name']); ?></h2>
@@ -470,17 +778,13 @@ function eventosapp_render_badge_library_page() {
 
                   <div class="evapp-template-meta">
                     <span><?php printf(esc_html__('%s × %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($template['width_mm'])), esc_html(eventosapp_badge_format_mm($template['height_mm']))); ?></span>
-                    <?php if (!empty($template['locked'])): ?>
-                      <span>· <?php _e('Plantilla base', 'eventosapp'); ?></span>
-                    <?php endif; ?>
+                    <?php if (!empty($template['is_default'])): ?><span>· <?php _e('Plantilla base editable', 'eventosapp'); ?></span><?php endif; ?>
                   </div>
 
-                  <?php if (empty($template['locked'])): ?>
-                    <label class="evapp-template-delete">
-                      <input type="checkbox" name="eventosapp_badge_delete_template[<?php echo esc_attr($key); ?>]" value="1">
-                      <?php _e('Eliminar esta plantilla', 'eventosapp'); ?>
-                    </label>
-                  <?php endif; ?>
+                  <label class="evapp-template-delete">
+                    <input type="checkbox" name="eventosapp_badge_delete_template[<?php echo esc_attr($key); ?>]" value="1">
+                    <?php _e('Eliminar esta plantilla', 'eventosapp'); ?>
+                  </label>
                 </div>
               </div>
             <?php endforeach; ?>
@@ -506,11 +810,60 @@ function eventosapp_render_badge_library_page() {
               </select>
             </label>
           </div>
+        </div>
 
-          <div class="evapp-library-submit">
-            <button type="submit" class="button button-primary button-large"><?php _e('Guardar biblioteca', 'eventosapp'); ?></button>
-            <span class="description"><?php _e('Después de guardar, estas plantillas aparecerán en el metabox Configuración de Escarapela de cada evento.', 'eventosapp'); ?></span>
-          </div>
+        <div class="evapp-library-two-cols">
+          <section class="evapp-library-box">
+            <h2><?php _e('Importar biblioteca', 'eventosapp'); ?></h2>
+            <p><?php _e('Sube un archivo JSON exportado desde esta misma sección. Las plantillas importadas se agregan sin borrar las existentes.', 'eventosapp'); ?></p>
+            <label><?php _e('Archivo JSON de plantillas', 'eventosapp'); ?>
+              <input type="file" name="eventosapp_badge_templates_import" accept="application/json,.json">
+            </label>
+          </section>
+
+          <section class="evapp-library-box">
+            <h2><?php _e('Archivos de soporte para impresión', 'eventosapp'); ?></h2>
+            <p><?php _e('Sube ZIP con el driver, instalador o herramienta recomendada. Cada archivo puede tener un nombre visible, botón de descarga y opción de eliminación.', 'eventosapp'); ?></p>
+
+            <?php if (!empty($support_files)): ?>
+              <div class="evapp-support-list">
+                <?php foreach ($support_files as $file_key => $file): ?>
+                  <div class="evapp-support-item">
+                    <div>
+                      <label><?php _e('Nombre visible', 'eventosapp'); ?>
+                        <input type="text" name="eventosapp_badge_support_existing[<?php echo esc_attr($file_key); ?>][name]" value="<?php echo esc_attr($file['name']); ?>">
+                      </label>
+                      <span class="evapp-library-muted"><?php echo esc_html($file['filename']); ?><?php echo !empty($file['uploaded_at']) ? ' · ' . esc_html($file['uploaded_at']) : ''; ?></span>
+                      <label class="evapp-support-delete"><input type="checkbox" name="eventosapp_badge_delete_support_file[<?php echo esc_attr($file_key); ?>]" value="1"> <?php _e('Eliminar este ZIP', 'eventosapp'); ?></label>
+                    </div>
+                    <a class="button" href="<?php echo esc_url($file['url']); ?>" target="_blank" rel="noopener"><?php _e('Descargar', 'eventosapp'); ?></a>
+                  </div>
+                <?php endforeach; ?>
+              </div>
+            <?php else: ?>
+              <p class="description"><?php _e('Todavía no hay archivos de soporte cargados.', 'eventosapp'); ?></p>
+            <?php endif; ?>
+
+            <div class="evapp-library-form-row">
+              <label><?php _e('Nombre archivo 1', 'eventosapp'); ?>
+                <input type="text" name="eventosapp_badge_support_name_1" placeholder="<?php esc_attr_e('Ej. Driver impresora recomendada', 'eventosapp'); ?>">
+              </label>
+              <label><?php _e('ZIP archivo 1', 'eventosapp'); ?>
+                <input type="file" name="eventosapp_badge_support_file_1" accept=".zip,application/zip">
+              </label>
+              <label><?php _e('Nombre archivo 2', 'eventosapp'); ?>
+                <input type="text" name="eventosapp_badge_support_name_2" placeholder="<?php esc_attr_e('Ej. Instalador formatos de papel', 'eventosapp'); ?>">
+              </label>
+              <label><?php _e('ZIP archivo 2', 'eventosapp'); ?>
+                <input type="file" name="eventosapp_badge_support_file_2" accept=".zip,application/zip">
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <div class="evapp-library-submit">
+          <button type="submit" class="button button-primary button-large"><?php _e('Guardar biblioteca', 'eventosapp'); ?></button>
+          <span class="description"><?php _e('Después de guardar, estas plantillas aparecerán en el metabox Configuración de Escarapela de cada evento.', 'eventosapp'); ?></span>
         </div>
       </form>
     </div>
@@ -769,12 +1122,16 @@ function eventosapp_badge_build_labels($evento_id, $ticket_id = 0) {
 /**
  * Renderiza un campo de la escarapela como texto o como imagen QR según corresponda.
  */
-function eventosapp_badge_render_field_slot($field, $labels, $font_size, $font_weight, $margin, $qr_size) {
+function eventosapp_badge_render_field_slot($field, $labels, $font_size, $font_weight, $margin, $qr_size, $text_align = 'center') {
     $field       = (string) $field;
     $font_size   = absint($font_size);
     $font_weight = absint($font_weight);
     $margin      = absint($margin);
     $qr_size     = absint($qr_size);
+    $text_align  = sanitize_key($text_align);
+    if (!in_array($text_align, ['left', 'center', 'right'], true)) {
+        $text_align = 'center';
+    }
 
     if (eventosapp_badge_is_qr_field($field)) {
         $qr_src = isset($labels[$field]) ? (string) $labels[$field] : '';
@@ -789,7 +1146,7 @@ function eventosapp_badge_render_field_slot($field, $labels, $font_size, $font_w
     }
 
     $label_text = isset($labels[$field]) ? $labels[$field] : '';
-    echo "<div class='slot' style='margin:" . $margin . "px; font-size:" . $font_size . "px; font-weight:" . $font_weight . ";'>" . esc_html($label_text) . "</div>";
+    echo "<div class='slot' style='margin:" . $margin . "px; font-size:" . $font_size . "px; font-weight:" . $font_weight . "; text-align:" . esc_attr($text_align) . ";'>" . esc_html($label_text) . "</div>";
 }
 
 /**
@@ -818,6 +1175,14 @@ function eventosapp_render_badge_metabox($post) {
 
     if ($selected_template['key'] === 'legacy_event') {
         $paper_templates = array_merge(['legacy_event' => $legacy_template], $paper_templates);
+    } elseif (empty($paper_templates)) {
+        $paper_templates = [$selected_template['key'] => $selected_template];
+    }
+
+    $allowed_text_align = ['left', 'center', 'right'];
+    $text_align = sanitize_key(get_post_meta($post->ID, 'eventosapp_badge_text_align', true) ?: 'center');
+    if (!in_array($text_align, $allowed_text_align, true)) {
+        $text_align = 'center';
     }
 
     $size_large     = (int) (get_post_meta($post->ID, 'eventosapp_badge_size_large', true) ?: 24);
@@ -879,7 +1244,7 @@ function eventosapp_render_badge_metabox($post) {
       .evapp-style-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.evapp-style-grid label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-style-grid input,.evapp-style-grid select{max-width:100%;min-height:34px}.evapp-style-grid input[type=number]{width:96px}.evapp-style-grid .evapp-style-combo{display:grid;grid-template-columns:minmax(0,96px) minmax(0,82px);gap:6px;align-items:center}.evapp-style-grid .evapp-style-combo label{grid-column:1/-1}.evapp-style-grid .evapp-style-combo input{width:96px}.evapp-style-grid .evapp-style-combo select{width:82px}
       .evapp-print-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.evapp-print-actions .button-primary{min-height:36px;white-space:normal}
       .evapp-live-paper{width:100%;max-width:560px;margin:0 auto;background:#fff;border:2px solid #1d2327;border-radius:9px;position:relative;box-shadow:0 14px 30px rgba(0,0,0,.13);overflow:hidden}.evapp-live-paper::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
-      .evapp-live-safe{position:absolute;border:1px dashed #2271b1;background:#fff;display:flex;align-items:stretch;justify-content:center;overflow:hidden;box-sizing:border-box}.evapp-live-badge{width:100%;height:100%;display:flex;align-items:stretch;justify-content:center;background:#fff;overflow:hidden}.evapp-live-badge.design-escarapelas{flex-direction:column}.evapp-live-badge.design-manillas{flex-direction:row}.evapp-live-left,.evapp-live-right{display:flex;flex-direction:column;justify-content:center;min-width:0;height:100%}.evapp-live-left{flex:1 1 auto}.evapp-live-right{align-items:center;flex:0 0 auto}.evapp-live-slot{text-align:center;line-height:1.12;word-break:break-word;overflow-wrap:anywhere;max-width:100%;padding:1px 2px}.evapp-live-slot.is-qr{display:flex;align-items:center;justify-content:center}.evapp-live-slot.is-qr span{display:flex;align-items:center;justify-content:center;border:2px solid #1d2327;background:repeating-linear-gradient(45deg,#fff,#fff 3px,#e5e7eb 3px,#e5e7eb 6px);font-size:10px;font-weight:700;color:#1d2327}
+      .evapp-live-safe{position:absolute;border:1px dashed #2271b1;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;box-sizing:border-box}.evapp-live-badge{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden;text-align:var(--evapp-badge-text-align,center)}.evapp-live-badge.design-escarapelas{flex-direction:column}.evapp-live-badge.design-manillas{flex-direction:row}.evapp-live-left,.evapp-live-right{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;max-height:100%}.evapp-live-left{flex:0 1 auto}.evapp-live-right{flex:0 0 auto}.evapp-live-slot{text-align:var(--evapp-badge-text-align,center);line-height:1.12;word-break:break-word;overflow-wrap:anywhere;max-width:100%;padding:1px 2px}.evapp-live-slot.is-qr{display:flex;align-items:center;justify-content:center}.evapp-live-slot.is-qr span{display:flex;align-items:center;justify-content:center;border:2px solid #1d2327;background:repeating-linear-gradient(45deg,#fff,#fff 3px,#e5e7eb 3px,#e5e7eb 6px);font-size:10px;font-weight:700;color:#1d2327}
       .evapp-live-caption{margin-top:12px;text-align:center;color:#50575e;font-size:12px}.evapp-live-caption strong{display:block;color:#1d2327;font-size:13px;margin-bottom:2px}
       @media (min-width:1500px){.evapp-badge-grid{grid-template-columns:minmax(0,1.05fr) minmax(420px,.95fr)}}
       @media (max-width:782px){.evapp-badge-intro{display:block}.evapp-badge-intro .button{margin-top:10px;width:100%}.evapp-design-options,.evapp-field-map,.evapp-style-grid{grid-template-columns:1fr}.evapp-paper-row{grid-template-columns:1fr}.evapp-paper-preview{margin:0 auto}.evapp-badge-section{padding:12px}.evapp-style-grid .evapp-style-combo{grid-template-columns:96px 82px}}
@@ -997,6 +1362,14 @@ function eventosapp_render_badge_metabox($post) {
                 <label><?php _e('Grosor del borde', 'eventosapp'); ?></label>
                 <input type="number" name="eventosapp_badge_border_width" id="eventosapp_badge_border_width" value="<?php echo esc_attr($border_width); ?>" min="0"> px
               </div>
+              <div>
+                <label for="eventosapp_badge_text_align"><?php _e('Alineación del texto', 'eventosapp'); ?></label>
+                <select name="eventosapp_badge_text_align" id="eventosapp_badge_text_align">
+                  <option value="left" <?php selected($text_align, 'left'); ?>><?php _e('Izquierda', 'eventosapp'); ?></option>
+                  <option value="center" <?php selected($text_align, 'center'); ?>><?php _e('Centro', 'eventosapp'); ?></option>
+                  <option value="right" <?php selected($text_align, 'right'); ?>><?php _e('Derecha', 'eventosapp'); ?></option>
+                </select>
+              </div>
             </div>
           </section>
         </div>
@@ -1088,7 +1461,8 @@ function eventosapp_render_badge_metabox($post) {
         }
 
         var previewSize = Math.max(8, Math.min(24, Math.round(size * 0.52)));
-        return '<div class="evapp-live-slot" style="margin:'+margin+'px;font-size:'+previewSize+'px;font-weight:'+weight+'">'+evappEscapeHtml(label)+'</div>';
+        var align = ($('#eventosapp_badge_text_align').val() || 'center').toString();
+        return '<div class="evapp-live-slot" style="margin:'+margin+'px;font-size:'+previewSize+'px;font-weight:'+weight+';text-align:'+align+'">'+evappEscapeHtml(label)+'</div>';
       }
 
       function evappBuildLivePreview(){
@@ -1111,6 +1485,7 @@ function eventosapp_render_badge_metabox($post) {
 
         var design = $('input[name="eventosapp_badge_design"]:checked').val() || 'manillas';
         var border = Math.max(0, Math.round(evappNumber('#eventosapp_badge_border_width', 0)));
+        var textAlign = ($('#eventosapp_badge_text_align').val() || 'center').toString();
         var html = '';
         var cls = 'design-' + design;
 
@@ -1145,11 +1520,15 @@ function eventosapp_render_badge_metabox($post) {
         $('#evapp_live_badge')
           .removeClass('design-manillas design-escarapelas design-escarapelas_split design-escarapelas_split_4')
           .addClass(cls)
-          .css('border', border > 0 ? border + 'px solid #000' : 'none')
+          .css({
+            'border': border > 0 ? border + 'px solid #000' : 'none',
+            '--evapp-badge-text-align': textAlign,
+            'text-align': textAlign
+          })
           .html(html);
       }
 
-      $('#eventosapp_badge_paper_template, .evapp-field-order, input[name="eventosapp_badge_design"], #eventosapp_badge_size_large, #eventosapp_badge_size_medium, #eventosapp_badge_size_small, #eventosapp_badge_weight_large, #eventosapp_badge_weight_medium, #eventosapp_badge_weight_small, #eventosapp_badge_sep_vertical, #eventosapp_badge_sep_horizontal, #eventosapp_badge_qr_size, #eventosapp_badge_border_width').on('change keyup input', evappBuildLivePreview);
+      $('#eventosapp_badge_paper_template, .evapp-field-order, input[name="eventosapp_badge_design"], #eventosapp_badge_size_large, #eventosapp_badge_size_medium, #eventosapp_badge_size_small, #eventosapp_badge_weight_large, #eventosapp_badge_weight_medium, #eventosapp_badge_weight_small, #eventosapp_badge_sep_vertical, #eventosapp_badge_sep_horizontal, #eventosapp_badge_qr_size, #eventosapp_badge_border_width, #eventosapp_badge_text_align').on('change keyup input', evappBuildLivePreview);
       evappBuildLivePreview();
 
       $('#eventosapp_download_badge').on('click', function(e){
@@ -1222,6 +1601,12 @@ add_action('save_post_eventosapp_event', function($post_id){
     if (isset($_POST['eventosapp_badge_border_width'])) {
         update_post_meta($post_id, 'eventosapp_badge_border_width', max(0, absint($_POST['eventosapp_badge_border_width'])));
     }
+    if (isset($_POST['eventosapp_badge_text_align'])) {
+        $text_align = sanitize_key($_POST['eventosapp_badge_text_align']);
+        if (in_array($text_align, ['left', 'center', 'right'], true)) {
+            update_post_meta($post_id, 'eventosapp_badge_text_align', $text_align);
+        }
+    }
     if (isset($_POST['eventosapp_badge_ticket_key'])) {
         update_post_meta(
             $post_id,
@@ -1258,6 +1643,11 @@ function eventosapp_get_badge_settings($evento_id) {
         $order[$i] = $field !== '' ? $field : 'none';
     }
 
+    $text_align = sanitize_key($get('eventosapp_badge_text_align', 'center'));
+    if (!in_array($text_align, ['left', 'center', 'right'], true)) {
+        $text_align = 'center';
+    }
+
     $paper_template = eventosapp_badge_get_selected_paper_template($evento_id);
     $paper_width_mm = eventosapp_badge_sanitize_mm($paper_template['width_mm'] ?? 99, 99, 10, 1000);
     $paper_height_mm = eventosapp_badge_sanitize_mm($paper_template['height_mm'] ?? 55, 55, 10, 1000);
@@ -1291,6 +1681,7 @@ function eventosapp_get_badge_settings($evento_id) {
         'sep_horizontal'      => max(0, (int) $get('eventosapp_badge_sep_horizontal', 4)),
         'qr_size'             => max(1, (int) $get('eventosapp_badge_qr_size', 72)),
         'border_width'        => max(0, (int) $get('eventosapp_badge_border_width', 0)),
+        'text_align'          => $text_align,
     ];
 }
 
@@ -1348,6 +1739,10 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
     $paper_height_mm = eventosapp_badge_format_mm($cfg['paper_height_mm']);
     $paper_margin_mm = eventosapp_badge_format_mm($cfg['paper_margin_mm']);
     $border_width    = max(0, (int) $cfg['border_width']);
+    $text_align      = sanitize_key($cfg['text_align'] ?? 'center');
+    if (!in_array($text_align, ['left', 'center', 'right'], true)) {
+        $text_align = 'center';
+    }
 
     ob_start();
     ?>
@@ -1380,7 +1775,7 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
     <?php echo ($border_width > 0 ? "border:" . $border_width . "px solid #000;" : "border:none;"); ?>
     display:flex;
     flex-direction:<?php echo esc_attr($flex_dir); ?>;
-    align-items:stretch;
+    align-items:center;
     justify-content:center;
     width:100%;
     height:100%;
@@ -1388,11 +1783,12 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
     box-sizing:border-box;
     overflow:hidden;
     background:#fff;
+    text-align:<?php echo esc_attr($text_align); ?>;
   }
-  .left,.right{display:flex;flex-direction:column;justify-content:center;min-width:0;height:100%;}
-  .left{flex:1 1 auto;}
-  .right{align-items:center;flex:0 0 auto;}
-  .slot{line-height:1.15;text-align:center;word-break:break-word;overflow-wrap:anywhere;max-width:100%;}
+  .left,.right{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;max-height:100%;}
+  .left{flex:0 1 auto;}
+  .right{flex:0 0 auto;}
+  .slot{line-height:1.15;text-align:<?php echo esc_attr($text_align); ?>;word-break:break-word;overflow-wrap:anywhere;max-width:100%;}
   .slot-qr{display:flex;align-items:center;justify-content:center;}
   .slot-qr img{display:block;max-width:100%;height:auto;}
   @media screen {
@@ -1435,14 +1831,14 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
         foreach ($left as $idx => $field) {
             $fs = ($idx === 0) ? $cfg['size_large'] : (($idx === 1) ? $cfg['size_medium'] : $cfg['size_small']);
             $fw = ($idx === 0) ? $cfg['weight_large'] : (($idx === 1) ? $cfg['weight_medium'] : $cfg['weight_small']);
-            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $cfg['sep_vertical'], $cfg['qr_size']);
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $cfg['sep_vertical'], $cfg['qr_size'], $cfg['text_align']);
         }
         echo "</div>";
 
         $mh = absint($cfg['sep_horizontal']);
         echo "<div class='right' style='margin-left:{$mh}px'>";
         if ($right) {
-            eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size']);
+            eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size'], $cfg['text_align']);
         }
         echo "</div>";
 
@@ -1463,14 +1859,14 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
                 $fs = $cfg['size_small'];
                 $fw = $cfg['weight_small'];
             }
-            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $cfg['sep_vertical'], $cfg['qr_size']);
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $cfg['sep_vertical'], $cfg['qr_size'], $cfg['text_align']);
         }
         echo "</div>";
 
         $mh = absint($cfg['sep_horizontal']);
         echo "<div class='right' style='margin-left:{$mh}px'>";
         if ($right) {
-            eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size']);
+            eventosapp_badge_render_field_slot($right, $labels, $cfg['size_medium'], $cfg['weight_medium'], $cfg['sep_vertical'], $cfg['qr_size'], $cfg['text_align']);
         }
         echo "</div>";
 
@@ -1485,7 +1881,7 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
                 $fs = $cfg['size_medium'];
                 $fw = $cfg['weight_medium'];
             }
-            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $margin, $cfg['qr_size']);
+            eventosapp_badge_render_field_slot($field, $labels, $fs, $fw, $margin, $cfg['qr_size'], $cfg['text_align']);
         }
     }
 ?>
