@@ -1480,6 +1480,147 @@ add_filter('parent_file', function($parent_file) {
     return $parent_file;
 });
 
+/**
+ * Reorganiza el submenú de EventosApp por grupos funcionales sin cambiar los slugs existentes.
+ * Esto evita romper enlaces directos, callbacks o permisos definidos en otros módulos.
+ */
+add_action('admin_menu', 'eventosapp_reorganize_admin_submenu', 999);
+function eventosapp_reorganize_admin_submenu() {
+    global $submenu;
+
+    if (empty($submenu['eventosapp_dashboard']) || !is_array($submenu['eventosapp_dashboard'])) {
+        return;
+    }
+
+    $items_by_slug  = [];
+    $items_by_label = [];
+    $remaining      = [];
+
+    foreach ($submenu['eventosapp_dashboard'] as $item) {
+        $slug = isset($item[2]) ? (string) $item[2] : '';
+        if ($slug === '' || $slug === 'eventosapp_dashboard') {
+            continue;
+        }
+
+        $clean_label = isset($item[0]) ? wp_strip_all_tags((string) $item[0]) : '';
+        $clean_label = trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', $clean_label));
+
+        $items_by_slug[$slug] = $item;
+        if ($clean_label !== '') {
+            $items_by_label[$clean_label] = $item;
+        }
+        $remaining[$slug] = $item;
+    }
+
+    $groups = [
+        'Gestión del evento' => [
+            'edit.php?post_type=eventosapp_event',
+            'edit.php?post_type=eventosapp_ticket',
+            'edit.php?post_type=eventosapp_cliente',
+            'edit.php?post_type=eventosapp_expositor',
+            'edit.php?post_type=eventosapp_asistente',
+            'edit.php?post_type=eventosapp_galeria',
+        ],
+        'Escarapelas e impresión' => [
+            'eventosapp_badge_library',
+            'Generación Masiva de QR',
+            'Actualización por Lote',
+        ],
+        'Configuración y herramientas' => [
+            'Configuración',
+            'Integraciones',
+            'Config API',
+            'Herramientas',
+            'Edición Masiva',
+            'Salud y Rendimiento',
+        ],
+        'Email' => [
+            'Email Ticket Masivo',
+        ],
+        'WhatsApp Tickets' => [
+            'WhatsApp Tickets',
+            'Log de WhatsApp',
+            'Plantillas WhatsApp',
+            'WhatsApp Ticket Masivo',
+            'Inbox WhatsApp',
+        ],
+        'WhatsApp Flows' => [
+            'WhatsApp Flows',
+            'Gestionar Flows',
+            'Envío Masivo de Flows',
+            'Plantillas Flow WhatsApp',
+        ],
+    ];
+
+    $ordered = [];
+    foreach ($groups as $group_label => $wanted_items) {
+        $group = [];
+        foreach ($wanted_items as $wanted) {
+            $item = null;
+            $slug = '';
+
+            if (isset($items_by_slug[$wanted])) {
+                $item = $items_by_slug[$wanted];
+                $slug = (string) $item[2];
+            } elseif (isset($items_by_label[$wanted])) {
+                $item = $items_by_label[$wanted];
+                $slug = (string) $item[2];
+            }
+
+            if ($item && isset($remaining[$slug])) {
+                $group[] = $item;
+                unset($remaining[$slug]);
+            }
+        }
+
+        if (!empty($group)) {
+            $section_slug = 'eventosapp_menu_section_' . sanitize_key(remove_accents($group_label));
+            $ordered[] = [
+                '<span class="evapp-admin-menu-section">' . esc_html($group_label) . '</span>',
+                'manage_options',
+                $section_slug,
+            ];
+            foreach ($group as $item) {
+                $ordered[] = $item;
+            }
+        }
+    }
+
+    foreach ($remaining as $item) {
+        $ordered[] = $item;
+    }
+
+    $submenu['eventosapp_dashboard'] = $ordered;
+}
+
+/**
+ * Estilos para que los encabezados de grupo del submenú funcionen como separadores visuales.
+ */
+add_action('admin_head', function () {
+    ?>
+    <style>
+      #adminmenu .wp-submenu a[href*="page=eventosapp_menu_section_"]{
+        pointer-events:none;
+        cursor:default;
+        color:#72aee6!important;
+        opacity:.92;
+        font-size:11px;
+        font-weight:700;
+        text-transform:uppercase;
+        letter-spacing:.04em;
+        margin-top:7px;
+        padding-top:9px;
+        border-top:1px solid rgba(240,246,252,.14);
+      }
+      #adminmenu .wp-submenu a[href*="page=eventosapp_menu_section_"]:hover,
+      #adminmenu .wp-submenu a[href*="page=eventosapp_menu_section_"].current{
+        color:#72aee6!important;
+        background:transparent!important;
+      }
+    </style>
+    <?php
+});
+
 
 /**
  * 1. Registrar el Custom Post Type "eventosapp_event"
