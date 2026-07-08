@@ -1623,34 +1623,62 @@ function eventosapp_reorganize_admin_submenu() {
 }
 
 /**
- * Separadores visuales seguros para el menú de EventosApp.
+ * Separadores visuales colapsables y seguros para el menú de EventosApp.
  *
- * Se inyectan como <li> sin <a>, por lo tanto no generan URLs falsas ni son clicables.
+ * Se inyectan como <li> con <button>, por lo tanto no generan URLs falsas.
+ * Cada grupo puede abrirse/cerrarse para ahorrar espacio en el menú lateral.
  */
 add_action('admin_head', function () {
     ?>
     <style>
       #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-item{
-        pointer-events:none;
-        cursor:default;
         margin:8px 0 2px;
-        padding:9px 12px 4px;
+        padding:0;
         border-top:1px solid rgba(240,246,252,.16);
-        color:#72aee6!important;
-        font-size:11px;
-        font-weight:700;
-        line-height:1.25;
-        text-transform:uppercase;
-        letter-spacing:.045em;
-        white-space:normal;
+        background:transparent!important;
       }
       #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-item:first-child{
         margin-top:3px;
         border-top:0;
       }
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-toggle{
+        width:100%;
+        border:0;
+        background:transparent;
+        color:#72aee6!important;
+        padding:9px 12px 5px;
+        margin:0;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:8px;
+        cursor:pointer;
+        font-size:11px;
+        font-weight:700;
+        line-height:1.25;
+        text-transform:uppercase;
+        letter-spacing:.045em;
+        text-align:left;
+        white-space:normal;
+      }
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-toggle:hover,
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-toggle:focus{
+        color:#c3dff5!important;
+        outline:0;
+        box-shadow:none;
+      }
       #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-label{
         display:block;
-        color:#72aee6!important;
+        color:inherit!important;
+      }
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu .evapp-admin-menu-section-icon{
+        flex:0 0 auto;
+        color:inherit;
+        font-size:12px;
+        line-height:1;
+      }
+      #adminmenu li.toplevel_page_eventosapp_dashboard .wp-submenu li.evapp-admin-menu-child.is-evapp-collapsed{
+        display:none!important;
       }
     </style>
     <?php
@@ -1673,12 +1701,21 @@ add_action('admin_footer', function () {
     (function(){
       var groupStarts = <?php echo wp_json_encode($group_starts); ?>;
       var submenu = document.querySelector('#adminmenu li.toplevel_page_eventosapp_dashboard ul.wp-submenu');
+      var storageKey = 'eventosapp_admin_menu_collapsed_groups_v2';
       if (!submenu || !groupStarts) { return; }
 
       function decodeHtml(value) {
         var textarea = document.createElement('textarea');
         textarea.innerHTML = value || '';
         return textarea.value;
+      }
+
+      function safeSelectorValue(value) {
+        value = String(value || '');
+        if (window.CSS && typeof window.CSS.escape === 'function') {
+          return window.CSS.escape(value);
+        }
+        return value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
       }
 
       function hrefMatchesSlug(href, slug) {
@@ -1693,8 +1730,26 @@ add_action('admin_footer', function () {
         return href.indexOf('page=' + encodeURIComponent(slug)) !== -1 || href.indexOf('page=' + slug) !== -1;
       }
 
+      function readCollapsedState() {
+        try {
+          var parsed = JSON.parse(window.localStorage.getItem(storageKey) || '{}');
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (e) {
+          return {};
+        }
+      }
+
+      function writeCollapsedState(state) {
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify(state || {}));
+        } catch (e) {}
+      }
+
+      var collapsedState = readCollapsedState();
+      var orderedGroups = [];
+
       Object.keys(groupStarts).forEach(function(slug){
-        if (submenu.querySelector('.evapp-admin-menu-section-item[data-evapp-group-for="' + slug.replace(/"/g, '\\"') + '"]')) {
+        if (submenu.querySelector('.evapp-admin-menu-section-item[data-evapp-group-for="' + safeSelectorValue(slug) + '"]')) {
           return;
         }
 
@@ -1710,12 +1765,76 @@ add_action('admin_footer', function () {
         var targetItem = targetLink.closest('li');
         if (!targetItem || !targetItem.parentNode) { return; }
 
+        var groupLabel = decodeHtml(groupStarts[slug]);
         var separator = document.createElement('li');
         separator.className = 'evapp-admin-menu-section-item';
         separator.setAttribute('data-evapp-group-for', slug);
-        separator.setAttribute('aria-hidden', 'true');
-        separator.innerHTML = '<span class="evapp-admin-menu-section-label">' + decodeHtml(groupStarts[slug]) + '</span>';
+        separator.innerHTML = '<button type="button" class="evapp-admin-menu-section-toggle" aria-expanded="true">'
+          + '<span class="evapp-admin-menu-section-label">' + groupLabel + '</span>'
+          + '<span class="evapp-admin-menu-section-icon" aria-hidden="true">▾</span>'
+          + '</button>';
         targetItem.parentNode.insertBefore(separator, targetItem);
+        orderedGroups.push({ slug: slug, label: groupLabel, separator: separator });
+      });
+
+      if (!orderedGroups.length) { return; }
+
+      var allNodes = Array.prototype.slice.call(submenu.children);
+
+      orderedGroups.forEach(function(group, index){
+        var startIndex = allNodes.indexOf(group.separator);
+        var nextSeparator = orderedGroups[index + 1] ? orderedGroups[index + 1].separator : null;
+        var endIndex = nextSeparator ? allNodes.indexOf(nextSeparator) : allNodes.length;
+        var children = [];
+        var hasCurrent = false;
+
+        for (var i = startIndex + 1; i < endIndex; i++) {
+          var item = allNodes[i];
+          if (!item || item.classList.contains('evapp-admin-menu-section-item')) { continue; }
+          item.classList.add('evapp-admin-menu-child');
+          item.setAttribute('data-evapp-menu-group', group.slug);
+          children.push(item);
+          if (item.classList.contains('current') || item.querySelector('a.current')) {
+            hasCurrent = true;
+          }
+        }
+
+        group.children = children;
+        group.hasCurrent = hasCurrent;
+      });
+
+      function setGroupCollapsed(group, collapsed, persist) {
+        var toggle = group.separator.querySelector('.evapp-admin-menu-section-toggle');
+        var icon = group.separator.querySelector('.evapp-admin-menu-section-icon');
+        group.separator.classList.toggle('is-collapsed', collapsed);
+        if (toggle) {
+          toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+        if (icon) {
+          icon.textContent = collapsed ? '▸' : '▾';
+        }
+        (group.children || []).forEach(function(item){
+          item.classList.toggle('is-evapp-collapsed', collapsed);
+        });
+        if (persist) {
+          collapsedState[group.slug] = collapsed ? 1 : 0;
+          writeCollapsedState(collapsedState);
+        }
+      }
+
+      orderedGroups.forEach(function(group){
+        var hasStoredValue = Object.prototype.hasOwnProperty.call(collapsedState, group.slug);
+        var shouldCollapse = hasStoredValue ? !!collapsedState[group.slug] : !group.hasCurrent;
+        setGroupCollapsed(group, shouldCollapse, false);
+
+        var toggle = group.separator.querySelector('.evapp-admin-menu-section-toggle');
+        if (toggle) {
+          toggle.addEventListener('click', function(event){
+            event.preventDefault();
+            event.stopPropagation();
+            setGroupCollapsed(group, !group.separator.classList.contains('is-collapsed'), true);
+          });
+        }
       });
     })();
     </script>
