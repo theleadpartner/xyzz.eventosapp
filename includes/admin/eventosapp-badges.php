@@ -400,29 +400,28 @@ function eventosapp_render_badge_library_page() {
       <?php endif; ?>
 
       <style>
-        .evapp-badge-library-wrap{max-width:1280px}
-        .evapp-library-panel{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:18px;margin-top:18px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+        .evapp-badge-library-wrap{max-width:1320px}
+        .evapp-library-panel{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:18px;margin-top:18px;box-shadow:0 1px 2px rgba(0,0,0,.04);box-sizing:border-box;overflow:hidden}
         .evapp-library-toolbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}
-        .evapp-library-toolbar p{margin:4px 0;color:#50575e}
-        .evapp-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px}
-        .evapp-template-card{border:1px solid #dcdcde;border-radius:12px;background:#fbfbfc;padding:14px;display:flex;gap:14px;align-items:flex-start;min-height:175px}
+        .evapp-library-toolbar p{margin:4px 0;color:#50575e;max-width:860px}
+        .evapp-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:16px;align-items:stretch}
+        .evapp-template-card{border:1px solid #dcdcde;border-radius:12px;background:#fbfbfc;padding:14px;display:flex;flex-direction:column;gap:12px;align-items:stretch;min-width:0;box-sizing:border-box;overflow:hidden}
         .evapp-template-card.is-base{background:#f8fafc}
-        .evapp-template-card-main{flex:1;min-width:0}
-        .evapp-template-card h2{font-size:14px;margin:0 0 10px;line-height:1.3}
-        .evapp-template-card label{font-weight:600;font-size:12px;display:block;margin:0 0 8px}
-        .evapp-template-card input,.evapp-template-card select{width:100%;margin-top:4px}
-        .evapp-template-fields{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+        .evapp-template-card-main{width:100%;min-width:0;box-sizing:border-box}
+        .evapp-template-card h2{font-size:14px;margin:0 0 10px;line-height:1.3;word-break:break-word}
+        .evapp-template-card label{font-weight:600;font-size:12px;display:block;margin:0 0 10px;min-width:0;box-sizing:border-box}
+        .evapp-template-card input,.evapp-template-card select{width:100%;max-width:100%;margin-top:4px;box-sizing:border-box;min-height:34px}
+        .evapp-template-fields{display:grid;grid-template-columns:1fr;gap:8px;margin:2px 0 4px}
         .evapp-template-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;color:#646970;font-size:12px}
         .evapp-template-delete{color:#b32d2e;margin-top:10px!important}
-        .evapp-paper-preview{width:120px;flex:0 0 120px;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden}
+        .evapp-paper-preview{width:min(100%,170px);flex:0 0 auto;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden;margin:0 auto 2px;box-sizing:border-box}
         .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
-        .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.07);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box}
-        .evapp-new-template{display:grid;grid-template-columns:2fr repeat(4,1fr);gap:10px;align-items:end;padding:14px;border:1px dashed #8c8f94;border-radius:12px;background:#f6f7f7;margin-top:20px}
-        .evapp-new-template label{font-size:12px;font-weight:600;display:block}
-        .evapp-new-template input,.evapp-new-template select{width:100%;margin-top:4px}
-        .evapp-library-submit{margin-top:18px;display:flex;gap:10px;align-items:center}
-        @media (max-width:960px){.evapp-template-card{display:block}.evapp-paper-preview{margin-bottom:12px}.evapp-new-template{grid-template-columns:1fr 1fr}}
-        @media (max-width:640px){.evapp-template-fields,.evapp-new-template{grid-template-columns:1fr}}
+        .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.07);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box;min-width:0;overflow:hidden}
+        .evapp-new-template{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end;padding:14px;border:1px dashed #8c8f94;border-radius:12px;background:#f6f7f7;margin-top:20px;box-sizing:border-box}
+        .evapp-new-template label{font-size:12px;font-weight:600;display:block;min-width:0}
+        .evapp-new-template input,.evapp-new-template select{width:100%;max-width:100%;margin-top:4px;box-sizing:border-box;min-height:34px}
+        .evapp-library-submit{margin-top:18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+        @media (max-width:782px){.evapp-badge-library-wrap{margin-right:10px}.evapp-library-toolbar{display:block}.evapp-library-toolbar .button{margin-top:12px}.evapp-library-panel{padding:14px}.evapp-template-grid{grid-template-columns:1fr}.evapp-new-template{grid-template-columns:1fr}}
       </style>
 
       <form method="post">
@@ -861,28 +860,29 @@ function eventosapp_render_badge_metabox($post) {
     ];
     ?>
     <style>
-      .evapp-badge-metabox{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d2327;max-width:1180px}
+      .evapp-badge-metabox{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d2327;max-width:100%;box-sizing:border-box;overflow:hidden}
+      .evapp-badge-metabox *{box-sizing:border-box}
       .evapp-badge-intro{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:#f0f6fc;border:1px solid #c5d9ed;border-left:4px solid #2271b1;border-radius:10px;padding:13px 15px;margin:12px 0 16px}
-      .evapp-badge-intro strong{display:block;margin-bottom:4px}.evapp-badge-intro p{margin:0;color:#50575e}.evapp-badge-intro .button{white-space:nowrap}
-      .evapp-badge-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(340px,.9fr);gap:16px;margin:0 0 16px;align-items:start}
-      .evapp-badge-section{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);margin-bottom:16px}
+      .evapp-badge-intro strong{display:block;margin-bottom:4px}.evapp-badge-intro p{margin:0;color:#50575e}.evapp-badge-intro .button{white-space:normal;text-align:center;min-height:36px;display:inline-flex;align-items:center;justify-content:center}
+      .evapp-badge-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;margin:0 0 16px;align-items:start}
+      .evapp-badge-section{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);margin-bottom:16px;min-width:0;overflow:hidden}
       .evapp-badge-section h3{margin:0 0 12px;font-size:15px;line-height:1.3}.evapp-badge-section p{margin:6px 0;color:#50575e}
-      .evapp-badge-field{margin:12px 0}.evapp-badge-field label{font-weight:600;display:block;margin-bottom:5px}
-      .evapp-badge-field input[type=text],.evapp-badge-field input[type=number],.evapp-badge-field select{width:100%;max-width:420px}.evapp-badge-help{display:block;margin-top:5px;color:#646970;font-size:12px}
-      .evapp-paper-row{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center;margin-top:10px}
-      .evapp-paper-preview{width:140px;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden}
+      .evapp-badge-field{margin:12px 0;min-width:0}.evapp-badge-field label{font-weight:600;display:block;margin-bottom:5px}
+      .evapp-badge-field input[type=text],.evapp-badge-field input[type=number],.evapp-badge-field select{width:100%;max-width:100%;min-height:34px}.evapp-badge-help{display:block;margin-top:5px;color:#646970;font-size:12px}
+      .evapp-paper-row{display:grid;grid-template-columns:minmax(130px,160px) minmax(0,1fr);gap:14px;align-items:center;margin-top:10px;min-width:0}
+      .evapp-paper-preview{width:150px;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden}
       .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
-      .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.06);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box}
-      .evapp-paper-meta strong{display:block;font-size:14px;margin-bottom:4px}.evapp-paper-meta span{color:#50575e}
-      .evapp-design-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.evapp-design-card{border:1px solid #dcdcde;border-radius:10px;padding:10px;background:#f6f7f7;cursor:pointer;display:block}.evapp-design-card input{margin-right:7px}.evapp-design-card:has(input:checked){border-color:#2271b1;background:#f0f6fc;box-shadow:0 0 0 1px #2271b1 inset}
-      .evapp-field-map{display:grid;grid-template-columns:repeat(5,minmax(145px,1fr));gap:10px}.evapp-field-map label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-field-map select{width:100%}
-      .evapp-style-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px}.evapp-style-grid label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-style-grid input,.evapp-style-grid select{max-width:100%;width:auto}.evapp-style-grid .evapp-style-combo input{width:78px}.evapp-style-grid .evapp-style-combo select{width:72px}
-      .evapp-print-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.evapp-print-actions .button-primary{min-height:36px}
-      .evapp-live-paper{width:100%;max-width:430px;margin:0 auto;background:#fff;border:2px solid #1d2327;border-radius:9px;position:relative;box-shadow:0 14px 30px rgba(0,0,0,.13);overflow:hidden}.evapp-live-paper::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
+      .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.06);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box;overflow:hidden}
+      .evapp-paper-meta{min-width:0}.evapp-paper-meta strong{display:block;font-size:14px;margin-bottom:4px;word-break:break-word}.evapp-paper-meta span{color:#50575e}
+      .evapp-design-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.evapp-design-card{border:1px solid #dcdcde;border-radius:10px;padding:10px;background:#f6f7f7;cursor:pointer;display:block;min-width:0}.evapp-design-card input{margin-right:7px}.evapp-design-card:has(input:checked){border-color:#2271b1;background:#f0f6fc;box-shadow:0 0 0 1px #2271b1 inset}
+      .evapp-field-map{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.evapp-field-map label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-field-map select{width:100%;max-width:100%;min-height:34px}
+      .evapp-style-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.evapp-style-grid label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-style-grid input,.evapp-style-grid select{max-width:100%;min-height:34px}.evapp-style-grid input[type=number]{width:96px}.evapp-style-grid .evapp-style-combo{display:grid;grid-template-columns:minmax(0,96px) minmax(0,82px);gap:6px;align-items:center}.evapp-style-grid .evapp-style-combo label{grid-column:1/-1}.evapp-style-grid .evapp-style-combo input{width:96px}.evapp-style-grid .evapp-style-combo select{width:82px}
+      .evapp-print-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.evapp-print-actions .button-primary{min-height:36px;white-space:normal}
+      .evapp-live-paper{width:100%;max-width:560px;margin:0 auto;background:#fff;border:2px solid #1d2327;border-radius:9px;position:relative;box-shadow:0 14px 30px rgba(0,0,0,.13);overflow:hidden}.evapp-live-paper::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
       .evapp-live-safe{position:absolute;border:1px dashed #2271b1;background:#fff;display:flex;align-items:stretch;justify-content:center;overflow:hidden;box-sizing:border-box}.evapp-live-badge{width:100%;height:100%;display:flex;align-items:stretch;justify-content:center;background:#fff;overflow:hidden}.evapp-live-badge.design-escarapelas{flex-direction:column}.evapp-live-badge.design-manillas{flex-direction:row}.evapp-live-left,.evapp-live-right{display:flex;flex-direction:column;justify-content:center;min-width:0;height:100%}.evapp-live-left{flex:1 1 auto}.evapp-live-right{align-items:center;flex:0 0 auto}.evapp-live-slot{text-align:center;line-height:1.12;word-break:break-word;overflow-wrap:anywhere;max-width:100%;padding:1px 2px}.evapp-live-slot.is-qr{display:flex;align-items:center;justify-content:center}.evapp-live-slot.is-qr span{display:flex;align-items:center;justify-content:center;border:2px solid #1d2327;background:repeating-linear-gradient(45deg,#fff,#fff 3px,#e5e7eb 3px,#e5e7eb 6px);font-size:10px;font-weight:700;color:#1d2327}
       .evapp-live-caption{margin-top:12px;text-align:center;color:#50575e;font-size:12px}.evapp-live-caption strong{display:block;color:#1d2327;font-size:13px;margin-bottom:2px}
-      @media (max-width:1180px){.evapp-badge-grid{grid-template-columns:1fr}.evapp-field-map{grid-template-columns:repeat(2,minmax(145px,1fr))}.evapp-style-grid{grid-template-columns:repeat(2,minmax(120px,1fr))}}
-      @media (max-width:782px){.evapp-badge-intro{display:block}.evapp-badge-intro .button{margin-top:10px}.evapp-design-options,.evapp-field-map,.evapp-style-grid{grid-template-columns:1fr}.evapp-paper-row{grid-template-columns:1fr}.evapp-badge-section{padding:12px}}
+      @media (min-width:1500px){.evapp-badge-grid{grid-template-columns:minmax(0,1.05fr) minmax(420px,.95fr)}}
+      @media (max-width:782px){.evapp-badge-intro{display:block}.evapp-badge-intro .button{margin-top:10px;width:100%}.evapp-design-options,.evapp-field-map,.evapp-style-grid{grid-template-columns:1fr}.evapp-paper-row{grid-template-columns:1fr}.evapp-paper-preview{margin:0 auto}.evapp-badge-section{padding:12px}.evapp-style-grid .evapp-style-combo{grid-template-columns:96px 82px}}
     </style>
 
     <div class="evapp-badge-metabox">
