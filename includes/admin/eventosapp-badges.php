@@ -103,6 +103,131 @@ function eventosapp_badge_format_mm($value) {
     return $formatted === '' ? '0' : $formatted;
 }
 
+
+/**
+ * Opciones de rotación del driver que se exportan para EventosApp Printer Setup.
+ * Auto conserva la orientación normal; las opciones 180 se usan solo si el driver
+ * las expone o si se complementan con un perfil privado del fabricante.
+ */
+function eventosapp_badge_driver_rotation_options() {
+    return [
+        'auto'         => __('Automático según orientación', 'eventosapp'),
+        'portrait'     => __('Portrait', 'eventosapp'),
+        'landscape'    => __('Landscape', 'eventosapp'),
+        'portrait180'  => __('Portrait 180', 'eventosapp'),
+        'landscape180' => __('Landscape 180', 'eventosapp'),
+    ];
+}
+
+/**
+ * Normaliza la rotación del driver sin amarrarla a medidas o nombres específicos.
+ */
+function eventosapp_badge_sanitize_driver_rotation($value) {
+    $value = strtolower(trim((string) $value));
+    $value = str_replace([' ', '_', '-', '°'], '', $value);
+
+    if (in_array($value, ['portrait180', 'reverseportrait', 'portraitreverse', 'vertical180', 'p180'], true)) {
+        return 'portrait180';
+    }
+    if (in_array($value, ['landscape180', 'reverselandscape', 'landscapereverse', 'horizontal180', 'l180'], true)) {
+        return 'landscape180';
+    }
+    if (in_array($value, ['portrait', 'vertical', 'p'], true)) {
+        return 'portrait';
+    }
+    if (in_array($value, ['landscape', 'horizontal', 'l'], true)) {
+        return 'landscape';
+    }
+
+    return 'auto';
+}
+
+/**
+ * Etiqueta legible para mostrar la rotación del driver en la biblioteca.
+ */
+function eventosapp_badge_driver_rotation_label($value) {
+    $value   = eventosapp_badge_sanitize_driver_rotation($value);
+    $options = eventosapp_badge_driver_rotation_options();
+    return $options[$value] ?? $options['auto'];
+}
+
+/**
+ * Calcula el lienzo final y la rotación del contenido que se enviarán al navegador y a la impresora.
+ *
+ * La biblioteca guarda el tamaño base del formato de papel, pero la orientación
+ * de impresión debe convertir ese formato en un lienzo final tipo portrait o
+ * landscape. Cuando el lienzo se intercambia, también se rota el bloque interno
+ * de contenido para que el preview, @page y la impresión usen exactamente la
+ * misma dirección visual.
+ *
+ * Ejemplo: una plantilla base 101 × 59 mm en orientación Vertical envía:
+ * - @page / lienzo: 59 × 101 mm.
+ * - contenido: 101 × 59 mm, rotado -90° dentro del lienzo.
+ */
+function eventosapp_badge_get_oriented_paper_dimensions($width_mm, $height_mm, $orientation = '') {
+    $base_width_mm  = eventosapp_badge_sanitize_mm($width_mm, 99, 10, 1000);
+    $base_height_mm = eventosapp_badge_sanitize_mm($height_mm, 55, 10, 1000);
+    $orientation    = sanitize_key($orientation);
+
+    $base_page_orientation = ($base_height_mm >= $base_width_mm) ? 'portrait' : 'landscape';
+
+    if (!in_array($orientation, ['portrait', 'landscape'], true)) {
+        $orientation = $base_page_orientation;
+    }
+
+    $short_side = min($base_width_mm, $base_height_mm);
+    $long_side  = max($base_width_mm, $base_height_mm);
+
+    if ($orientation === 'portrait') {
+        $width_mm  = $short_side;
+        $height_mm = $long_side;
+    } else {
+        $width_mm  = $long_side;
+        $height_mm = $short_side;
+    }
+
+    $canvas_rotated = (abs($width_mm - $base_width_mm) > 0.01) || (abs($height_mm - $base_height_mm) > 0.01);
+    $content_rotation = 0;
+
+    if ($canvas_rotated) {
+        /*
+         * Si el formato base era horizontal y se pide vertical, el lienzo se vuelve
+         * corto × largo y el contenido debe girar -90° para acompañar ese lienzo.
+         * Si el formato base era vertical y se pide horizontal, el giro opuesto lo
+         * mantiene consistente con el nuevo @page.
+         */
+        $content_rotation = ($orientation === 'portrait') ? -90 : 90;
+    }
+
+    return [
+        'base_width_mm'         => $base_width_mm,
+        'base_height_mm'        => $base_height_mm,
+        'width_mm'              => $width_mm,
+        'height_mm'             => $height_mm,
+        'orientation'           => $orientation,
+        'page_orientation'      => $orientation,
+        'base_page_orientation' => $base_page_orientation,
+        'content_rotation'      => $content_rotation,
+        'rotated'               => $canvas_rotated,
+        'canvas_rotated'        => $canvas_rotated,
+    ];
+}
+
+/**
+ * Versión helper para plantillas completas.
+ */
+function eventosapp_badge_get_oriented_template_dimensions($template) {
+    if (!is_array($template)) {
+        $template = [];
+    }
+
+    return eventosapp_badge_get_oriented_paper_dimensions(
+        $template['width_mm'] ?? 99,
+        $template['height_mm'] ?? 55,
+        $template['orientation'] ?? ''
+    );
+}
+
 /**
  * Plantillas base disponibles aunque aún no existan plantillas guardadas.
  */
@@ -114,8 +239,9 @@ function eventosapp_badge_default_paper_templates() {
             'width_mm'    => 99,
             'height_mm'   => 55,
             'margin_mm'   => 2,
-            'orientation' => 'landscape',
-            'locked'      => true,
+            'orientation'     => 'landscape',
+            'driver_rotation' => 'auto',
+            'locked'          => true,
         ],
         'badge_100x140' => [
             'key'         => 'badge_100x140',
@@ -123,8 +249,9 @@ function eventosapp_badge_default_paper_templates() {
             'width_mm'    => 100,
             'height_mm'   => 140,
             'margin_mm'   => 3,
-            'orientation' => 'portrait',
-            'locked'      => true,
+            'orientation'     => 'portrait',
+            'driver_rotation' => 'auto',
+            'locked'          => true,
         ],
         'badge_90x130' => [
             'key'         => 'badge_90x130',
@@ -132,8 +259,9 @@ function eventosapp_badge_default_paper_templates() {
             'width_mm'    => 90,
             'height_mm'   => 130,
             'margin_mm'   => 3,
-            'orientation' => 'portrait',
-            'locked'      => true,
+            'orientation'     => 'portrait',
+            'driver_rotation' => 'auto',
+            'locked'          => true,
         ],
         'card_86x54' => [
             'key'         => 'card_86x54',
@@ -141,8 +269,9 @@ function eventosapp_badge_default_paper_templates() {
             'width_mm'    => 86,
             'height_mm'   => 54,
             'margin_mm'   => 2,
-            'orientation' => 'landscape',
-            'locked'      => true,
+            'orientation'     => 'landscape',
+            'driver_rotation' => 'auto',
+            'locked'          => true,
         ],
         'wristband_250x25' => [
             'key'         => 'wristband_250x25',
@@ -150,8 +279,9 @@ function eventosapp_badge_default_paper_templates() {
             'width_mm'    => 250,
             'height_mm'   => 25,
             'margin_mm'   => 2,
-            'orientation' => 'landscape',
-            'locked'      => true,
+            'orientation'     => 'landscape',
+            'driver_rotation' => 'auto',
+            'locked'          => true,
         ],
     ];
 }
@@ -179,14 +309,23 @@ function eventosapp_badge_normalize_paper_template($template, $fallback_key = ''
         $orientation = ($height >= $width) ? 'portrait' : 'landscape';
     }
 
+    $driver_rotation = eventosapp_badge_sanitize_driver_rotation(
+        $template['driver_rotation']
+        ?? $template['driverRotation']
+        ?? $template['rotate']
+        ?? $template['rotation']
+        ?? 'auto'
+    );
+
     return [
-        'key'         => $key,
-        'name'        => $name,
-        'width_mm'    => $width,
-        'height_mm'   => $height,
-        'margin_mm'   => $margin,
-        'orientation' => $orientation,
-        'locked'      => !empty($template['locked']),
+        'key'             => $key,
+        'name'            => $name,
+        'width_mm'        => $width,
+        'height_mm'       => $height,
+        'margin_mm'       => $margin,
+        'orientation'     => $orientation,
+        'driver_rotation' => $driver_rotation,
+        'locked'          => !empty($template['locked']),
     ];
 }
 
@@ -283,19 +422,28 @@ function eventosapp_badge_get_selected_paper_template($evento_id) {
 }
 
 /**
- * Renderiza una vista previa visual del papel y su área útil.
+ * Renderiza una vista previa visual del papel físico y su área útil.
+ * La orientación se muestra como orientación del contenido, no como intercambio
+ * del tamaño físico del papel.
  */
 function eventosapp_badge_render_paper_preview_box($template, $label = '', $class = '') {
     $template = eventosapp_badge_normalize_paper_template($template, $template['key'] ?? 'preview');
-    $ratio    = max(0.1, (float) $template['width_mm'] / max(1, (float) $template['height_mm']));
-    $left_pct = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $template['width_mm'])) * 100));
-    $top_pct  = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $template['height_mm'])) * 100));
+    $layout   = eventosapp_badge_get_oriented_template_dimensions($template);
+    $ratio    = max(0.1, (float) $layout['width_mm'] / max(1, (float) $layout['height_mm']));
+    $left_pct = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $layout['width_mm'])) * 100));
+    $top_pct  = min(45, max(0, ((float) $template['margin_mm'] / max(1, (float) $layout['height_mm'])) * 100));
     $label    = $label !== '' ? $label : __('Área útil', 'eventosapp');
+    $canvas_label = !empty($layout['canvas_rotated'])
+        ? sprintf(__('Lienzo %s × %s mm · contenido %s°', 'eventosapp'), eventosapp_badge_format_mm($layout['width_mm']), eventosapp_badge_format_mm($layout['height_mm']), (int) $layout['content_rotation'])
+        : '';
 
     ?>
-    <div class="evapp-paper-preview <?php echo esc_attr($class); ?>" style="--paper-ratio:<?php echo esc_attr($ratio); ?>;">
+    <div class="evapp-paper-preview <?php echo esc_attr($class); ?>" style="--paper-ratio:<?php echo esc_attr($ratio); ?>;" data-effective-width-mm="<?php echo esc_attr(eventosapp_badge_format_mm($layout['width_mm'])); ?>" data-effective-height-mm="<?php echo esc_attr(eventosapp_badge_format_mm($layout['height_mm'])); ?>" data-paper-orientation="<?php echo esc_attr($layout['orientation']); ?>" data-content-rotation="<?php echo esc_attr((int) $layout['content_rotation']); ?>">
       <div class="evapp-paper-safe" style="left:<?php echo esc_attr($left_pct); ?>%;right:<?php echo esc_attr($left_pct); ?>%;top:<?php echo esc_attr($top_pct); ?>%;bottom:<?php echo esc_attr($top_pct); ?>%;">
-        <?php echo esc_html($label); ?>
+        <span class="evapp-paper-safe-label"><?php echo esc_html($label); ?></span>
+        <?php if ($canvas_label !== ''): ?>
+          <span class="evapp-paper-rotation-label"><?php echo esc_html($canvas_label); ?></span>
+        <?php endif; ?>
       </div>
     </div>
     <?php
@@ -367,9 +515,10 @@ function eventosapp_badge_save_paper_templates_from_request($request) {
             'name'        => $new_name,
             'width_mm'    => $request['eventosapp_badge_new_template_width_mm'] ?? 99,
             'height_mm'   => $request['eventosapp_badge_new_template_height_mm'] ?? 55,
-            'margin_mm'   => $request['eventosapp_badge_new_template_margin_mm'] ?? 2,
-            'orientation' => $request['eventosapp_badge_new_template_orientation'] ?? 'landscape',
-            'locked'      => false,
+            'margin_mm'        => $request['eventosapp_badge_new_template_margin_mm'] ?? 2,
+            'orientation'      => $request['eventosapp_badge_new_template_orientation'] ?? 'landscape',
+            'driver_rotation' => $request['eventosapp_badge_new_template_driver_rotation'] ?? 'auto',
+            'locked'           => false,
         ], $new_key);
         $new_template['locked'] = false;
         $new_template['is_default'] = false;
@@ -553,7 +702,10 @@ function eventosapp_badge_export_templates_json() {
     $templates = array_values(eventosapp_badge_get_paper_templates());
     foreach ($templates as &$template) {
         unset($template['locked']);
+        $template['driver_rotation'] = eventosapp_badge_sanitize_driver_rotation($template['driver_rotation'] ?? 'auto');
+        $template['driverRotation']  = $template['driver_rotation'];
     }
+    unset($template);
 
     $payload = [
         'type'        => 'eventosapp_badge_templates',
@@ -718,7 +870,7 @@ function eventosapp_render_badge_library_page() {
         .evapp-template-fields{display:grid;grid-template-columns:1fr;gap:8px;margin:2px 0 4px}.evapp-template-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;color:#646970;font-size:12px}
         .evapp-template-delete{color:#b32d2e;margin-top:10px!important;padding-top:8px;border-top:1px solid #dcdcde}
         .evapp-paper-preview{width:min(100%,185px);flex:0 0 auto;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden;margin:0 auto 2px}
-        .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}.evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.07);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;min-width:0;overflow:hidden}
+        .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}.evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.07);border-radius:5px;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;min-width:0;overflow:hidden}.evapp-paper-safe-label{display:block;line-height:1.1}.evapp-paper-rotation-label{display:block;font-size:9px;line-height:1.05;font-weight:700;color:#135e96}
         .evapp-new-template{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end;padding:14px;border:1px dashed #8c8f94;border-radius:12px;background:#f6f7f7;margin-top:20px}
         .evapp-library-submit{margin-top:18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.evapp-library-two-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px;align-items:start}.evapp-library-box{border:1px solid #dcdcde;border-radius:12px;background:#fff;padding:16px;min-width:0}.evapp-library-box h2{margin-top:0}.evapp-library-form-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end}.evapp-support-list{display:grid;grid-template-columns:1fr;gap:12px;margin:12px 0}.evapp-support-item{border:1px solid #dcdcde;border-radius:10px;background:#f6f7f7;padding:12px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}.evapp-support-item .button{white-space:nowrap}.evapp-support-delete{color:#b32d2e}.evapp-library-muted{color:#646970;font-size:12px;margin-top:5px;display:block}
         @media (max-width:1100px){.evapp-library-two-cols{grid-template-columns:1fr}.evapp-library-toolbar{display:block}.evapp-library-toolbar-actions{justify-content:flex-start;margin-top:12px}}
@@ -769,15 +921,31 @@ function eventosapp_render_badge_library_page() {
                     </label>
                   </div>
 
-                  <label><?php _e('Orientación base', 'eventosapp'); ?>
+                  <label><?php _e('Orientación de impresión', 'eventosapp'); ?>
                     <select name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][orientation]">
                       <option value="landscape" <?php selected($template['orientation'], 'landscape'); ?>><?php _e('Horizontal', 'eventosapp'); ?></option>
                       <option value="portrait" <?php selected($template['orientation'], 'portrait'); ?>><?php _e('Vertical', 'eventosapp'); ?></option>
                     </select>
                   </label>
 
+                  <label><?php _e('Rotación del driver', 'eventosapp'); ?>
+                    <select name="eventosapp_badge_paper_templates[<?php echo esc_attr($key); ?>][driver_rotation]">
+                      <?php foreach (eventosapp_badge_driver_rotation_options() as $rotation_key => $rotation_label): ?>
+                        <option value="<?php echo esc_attr($rotation_key); ?>" <?php selected(eventosapp_badge_sanitize_driver_rotation($template['driver_rotation'] ?? 'auto'), $rotation_key); ?>><?php echo esc_html($rotation_label); ?></option>
+                      <?php endforeach; ?>
+                    </select>
+                    <span class="description"><?php _e('Úsalo solo cuando el driver físico necesite Portrait 180 o Landscape 180. Si no aplica, deja Automático.', 'eventosapp'); ?></span>
+                  </label>
+
+                  <?php
+                    $template_oriented = eventosapp_badge_get_oriented_template_dimensions($template);
+                    $template_orientation_label = $template_oriented['orientation'] === 'portrait' ? __('vertical', 'eventosapp') : __('horizontal', 'eventosapp');
+                  ?>
                   <div class="evapp-template-meta">
-                    <span><?php printf(esc_html__('%s × %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($template['width_mm'])), esc_html(eventosapp_badge_format_mm($template['height_mm']))); ?></span>
+                    <span><?php printf(esc_html__('Tamaño base: %s × %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($template['width_mm'])), esc_html(eventosapp_badge_format_mm($template['height_mm']))); ?></span>
+                    <span>· <?php printf(esc_html__('Lienzo de impresión: %s × %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($template_oriented['width_mm'])), esc_html(eventosapp_badge_format_mm($template_oriented['height_mm']))); ?></span>
+                    <span>· <?php printf(esc_html__('Orientación %s', 'eventosapp'), esc_html($template_orientation_label)); ?></span>
+                    <span>· <?php printf(esc_html__('Rotate driver: %s', 'eventosapp'), esc_html(eventosapp_badge_driver_rotation_label($template['driver_rotation'] ?? 'auto'))); ?></span>
                     <?php if (!empty($template['is_default'])): ?><span>· <?php _e('Plantilla base editable', 'eventosapp'); ?></span><?php endif; ?>
                   </div>
 
@@ -803,10 +971,17 @@ function eventosapp_render_badge_library_page() {
             <label><?php _e('Margen mm', 'eventosapp'); ?>
               <input type="number" step="0.1" min="0" name="eventosapp_badge_new_template_margin_mm" value="3">
             </label>
-            <label><?php _e('Orientación', 'eventosapp'); ?>
+            <label><?php _e('Orientación de impresión', 'eventosapp'); ?>
               <select name="eventosapp_badge_new_template_orientation">
                 <option value="portrait"><?php _e('Vertical', 'eventosapp'); ?></option>
                 <option value="landscape"><?php _e('Horizontal', 'eventosapp'); ?></option>
+              </select>
+            </label>
+            <label><?php _e('Rotación del driver', 'eventosapp'); ?>
+              <select name="eventosapp_badge_new_template_driver_rotation">
+                <?php foreach (eventosapp_badge_driver_rotation_options() as $rotation_key => $rotation_label): ?>
+                  <option value="<?php echo esc_attr($rotation_key); ?>"><?php echo esc_html($rotation_label); ?></option>
+                <?php endforeach; ?>
               </select>
             </label>
           </div>
@@ -866,6 +1041,49 @@ function eventosapp_render_badge_library_page() {
           <span class="description"><?php _e('Después de guardar, estas plantillas aparecerán en el metabox Configuración de Escarapela de cada evento.', 'eventosapp'); ?></span>
         </div>
       </form>
+      <script>
+      jQuery(function($){
+        function evappBadgeLibraryNumber($input, fallback){
+          var value = parseFloat($input.val());
+          return isNaN(value) ? fallback : value;
+        }
+        function evappBadgeLibraryApplyCard($card){
+          var baseWidth = evappBadgeLibraryNumber($card.find('input[name$="[width_mm]"]'), 99);
+          var baseHeight = evappBadgeLibraryNumber($card.find('input[name$="[height_mm]"]'), 55);
+          var margin = evappBadgeLibraryNumber($card.find('input[name$="[margin_mm]"]'), 0);
+          var orientation = ($card.find('select[name$="[orientation]"]').val() || '').toString();
+          if(orientation !== 'portrait' && orientation !== 'landscape'){
+            orientation = baseHeight >= baseWidth ? 'portrait' : 'landscape';
+          }
+          var shortSide = Math.min(baseWidth, baseHeight);
+          var longSide = Math.max(baseWidth, baseHeight);
+          var width = orientation === 'portrait' ? shortSide : longSide;
+          var height = orientation === 'portrait' ? longSide : shortSide;
+          var canvasChanged = Math.abs(width - baseWidth) > 0.01 || Math.abs(height - baseHeight) > 0.01;
+          var contentRotation = canvasChanged ? (orientation === 'portrait' ? -90 : 90) : 0;
+          var ratio = width / Math.max(height, 1);
+          var leftPct = Math.min(45, Math.max(0, (margin / Math.max(width, 1)) * 100));
+          var topPct = Math.min(45, Math.max(0, (margin / Math.max(height, 1)) * 100));
+          var $preview = $card.find('.evapp-paper-preview');
+          var $safe = $card.find('.evapp-paper-safe');
+          $preview.css('--paper-ratio', ratio).attr('data-content-rotation', contentRotation).attr('data-effective-width-mm', width).attr('data-effective-height-mm', height);
+          $safe.css({left:leftPct+'%', right:leftPct+'%', top:topPct+'%', bottom:topPct+'%'});
+          var $rotationLabel = $safe.find('.evapp-paper-rotation-label');
+          if(canvasChanged){
+            if(!$rotationLabel.length){
+              $rotationLabel = $('<span class="evapp-paper-rotation-label"></span>').appendTo($safe);
+            }
+            $rotationLabel.text('Lienzo ' + width + ' × ' + height + ' mm · contenido ' + contentRotation + '°');
+          } else {
+            $rotationLabel.remove();
+          }
+        }
+        $('.evapp-template-card').each(function(){ evappBadgeLibraryApplyCard($(this)); });
+        $('.evapp-template-card').on('input change', 'input, select', function(){
+          evappBadgeLibraryApplyCard($(this).closest('.evapp-template-card'));
+        });
+      });
+      </script>
     </div>
     <?php
 }
@@ -1166,6 +1384,7 @@ function eventosapp_render_badge_metabox($post) {
     $legacy_template   = eventosapp_badge_get_legacy_event_template($post->ID);
     $selected_key      = sanitize_key(get_post_meta($post->ID, 'eventosapp_badge_paper_template', true));
     $selected_template = eventosapp_badge_get_selected_paper_template($post->ID);
+    $selected_oriented = eventosapp_badge_get_oriented_template_dimensions($selected_template);
 
     if ($selected_key === '' && $selected_template['key'] === 'legacy_event') {
         $selected_key = 'legacy_event';
@@ -1237,14 +1456,14 @@ function eventosapp_render_badge_metabox($post) {
       .evapp-paper-row{display:grid;grid-template-columns:minmax(130px,160px) minmax(0,1fr);gap:14px;align-items:center;margin-top:10px;min-width:0}
       .evapp-paper-preview{width:150px;max-width:100%;background:#fff;border:2px solid #1d2327;border-radius:7px;position:relative;box-shadow:0 8px 18px rgba(0,0,0,.08);overflow:hidden}
       .evapp-paper-preview::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
-      .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.06);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box;overflow:hidden}
+      .evapp-paper-safe{position:absolute;border:1px dashed #2271b1;background:rgba(34,113,177,.06);border-radius:5px;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;font-size:10px;color:#2271b1;text-align:center;padding:3px;box-sizing:border-box;overflow:hidden}.evapp-paper-safe-label{display:block;line-height:1.1}.evapp-paper-rotation-label{display:block;font-size:9px;line-height:1.05;font-weight:700;color:#135e96}
       .evapp-paper-meta{min-width:0}.evapp-paper-meta strong{display:block;font-size:14px;margin-bottom:4px;word-break:break-word}.evapp-paper-meta span{color:#50575e}
       .evapp-design-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.evapp-design-card{border:1px solid #dcdcde;border-radius:10px;padding:10px;background:#f6f7f7;cursor:pointer;display:block;min-width:0}.evapp-design-card input{margin-right:7px}.evapp-design-card:has(input:checked){border-color:#2271b1;background:#f0f6fc;box-shadow:0 0 0 1px #2271b1 inset}
       .evapp-field-map{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.evapp-field-map label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-field-map select{width:100%;max-width:100%;min-height:34px}
       .evapp-style-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.evapp-style-grid label{font-weight:600;font-size:12px;display:block;margin-bottom:4px}.evapp-style-grid input,.evapp-style-grid select{max-width:100%;min-height:34px}.evapp-style-grid input[type=number]{width:96px}.evapp-style-grid .evapp-style-combo{display:grid;grid-template-columns:minmax(0,96px) minmax(0,82px);gap:6px;align-items:center}.evapp-style-grid .evapp-style-combo label{grid-column:1/-1}.evapp-style-grid .evapp-style-combo input{width:96px}.evapp-style-grid .evapp-style-combo select{width:82px}
       .evapp-print-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.evapp-print-actions .button-primary{min-height:36px;white-space:normal}
       .evapp-live-paper{width:100%;max-width:560px;margin:0 auto;background:#fff;border:2px solid #1d2327;border-radius:9px;position:relative;box-shadow:0 14px 30px rgba(0,0,0,.13);overflow:hidden}.evapp-live-paper::before{content:"";display:block;aspect-ratio:var(--paper-ratio,1.6)}
-      .evapp-live-safe{position:absolute;border:1px dashed #2271b1;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;box-sizing:border-box}.evapp-live-badge{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden;text-align:var(--evapp-badge-text-align,center)}.evapp-live-badge.design-escarapelas{flex-direction:column}.evapp-live-badge.design-manillas{flex-direction:row}.evapp-live-left,.evapp-live-right{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;max-height:100%}.evapp-live-left{flex:0 1 auto}.evapp-live-right{flex:0 0 auto}.evapp-live-slot{text-align:var(--evapp-badge-text-align,center);line-height:1.12;word-break:break-word;overflow-wrap:anywhere;max-width:100%;padding:1px 2px}.evapp-live-slot.is-qr{display:flex;align-items:center;justify-content:center}.evapp-live-slot.is-qr span{display:flex;align-items:center;justify-content:center;border:2px solid #1d2327;background:repeating-linear-gradient(45deg,#fff,#fff 3px,#e5e7eb 3px,#e5e7eb 6px);font-size:10px;font-weight:700;color:#1d2327}
+      .evapp-live-safe{position:absolute;border:1px dashed #2271b1;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;box-sizing:border-box}.evapp-live-badge{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden;text-align:var(--evapp-badge-text-align,center);flex:0 0 auto;transform-origin:center center;transition:transform .18s ease,width .18s ease,height .18s ease}.evapp-live-badge.design-escarapelas{flex-direction:column}.evapp-live-badge.design-manillas{flex-direction:row}.evapp-live-left,.evapp-live-right{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;max-height:100%}.evapp-live-left{flex:0 1 auto}.evapp-live-right{flex:0 0 auto}.evapp-live-slot{text-align:var(--evapp-badge-text-align,center);line-height:1.12;word-break:break-word;overflow-wrap:anywhere;max-width:100%;padding:1px 2px}.evapp-live-slot.is-qr{display:flex;align-items:center;justify-content:center}.evapp-live-slot.is-qr span{display:flex;align-items:center;justify-content:center;border:2px solid #1d2327;background:repeating-linear-gradient(45deg,#fff,#fff 3px,#e5e7eb 3px,#e5e7eb 6px);font-size:10px;font-weight:700;color:#1d2327}
       .evapp-live-caption{margin-top:12px;text-align:center;color:#50575e;font-size:12px}.evapp-live-caption strong{display:block;color:#1d2327;font-size:13px;margin-bottom:2px}
       @media (min-width:1500px){.evapp-badge-grid{grid-template-columns:minmax(0,1.05fr) minmax(420px,.95fr)}}
       @media (max-width:782px){.evapp-badge-intro{display:block}.evapp-badge-intro .button{margin-top:10px;width:100%}.evapp-design-options,.evapp-field-map,.evapp-style-grid{grid-template-columns:1fr}.evapp-paper-row{grid-template-columns:1fr}.evapp-paper-preview{margin:0 auto}.evapp-badge-section{padding:12px}.evapp-style-grid .evapp-style-combo{grid-template-columns:96px 82px}}
@@ -1267,13 +1486,20 @@ function eventosapp_render_badge_metabox($post) {
               <label for="eventosapp_badge_paper_template"><?php _e('Plantilla activa', 'eventosapp'); ?></label>
               <select name="eventosapp_badge_paper_template" id="eventosapp_badge_paper_template">
                 <?php foreach ($paper_templates as $key => $template): ?>
+                  <?php
+                    $option_layout = eventosapp_badge_get_oriented_template_dimensions($template);
+                    $option_orientation_label = $option_layout['orientation'] === 'portrait' ? __('Vertical', 'eventosapp') : __('Horizontal', 'eventosapp');
+                  ?>
                   <option value="<?php echo esc_attr($key); ?>" <?php selected($selected_key, $key); ?>
                           data-name="<?php echo esc_attr($template['name']); ?>"
-                          data-width="<?php echo esc_attr(eventosapp_badge_format_mm($template['width_mm'])); ?>"
-                          data-height="<?php echo esc_attr(eventosapp_badge_format_mm($template['height_mm'])); ?>"
+                          data-width="<?php echo esc_attr(eventosapp_badge_format_mm($option_layout['width_mm'])); ?>"
+                          data-height="<?php echo esc_attr(eventosapp_badge_format_mm($option_layout['height_mm'])); ?>"
+                          data-base-width="<?php echo esc_attr(eventosapp_badge_format_mm($template['width_mm'])); ?>"
+                          data-base-height="<?php echo esc_attr(eventosapp_badge_format_mm($template['height_mm'])); ?>"
                           data-margin="<?php echo esc_attr(eventosapp_badge_format_mm($template['margin_mm'])); ?>"
-                          data-orientation="<?php echo esc_attr($template['orientation']); ?>">
-                    <?php echo esc_html($template['name']); ?> — <?php echo esc_html(eventosapp_badge_format_mm($template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($template['height_mm'])); ?> mm
+                          data-orientation="<?php echo esc_attr($option_layout['orientation']); ?>"
+                          data-content-rotation="<?php echo esc_attr((int) $option_layout['content_rotation']); ?>">
+                    <?php echo esc_html($template['name']); ?> — <?php echo esc_html(eventosapp_badge_format_mm($option_layout['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($option_layout['height_mm'])); ?> mm · <?php printf(esc_html__('Lienzo %s', 'eventosapp'), esc_html($option_orientation_label)); ?>
                   </option>
                 <?php endforeach; ?>
               </select>
@@ -1286,9 +1512,9 @@ function eventosapp_render_badge_metabox($post) {
               </div>
               <div class="evapp-paper-meta">
                 <strong id="evapp_selected_paper_name"><?php echo esc_html($selected_template['name']); ?></strong>
-                <span id="evapp_selected_paper_size"><?php echo esc_html(eventosapp_badge_format_mm($selected_template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($selected_template['height_mm'])); ?> mm</span><br>
+                <span id="evapp_selected_paper_size"><?php echo esc_html(eventosapp_badge_format_mm($selected_oriented['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($selected_oriented['height_mm'])); ?> mm</span><br>
                 <span id="evapp_selected_paper_margin"><?php printf(esc_html__('Margen: %s mm', 'eventosapp'), esc_html(eventosapp_badge_format_mm($selected_template['margin_mm']))); ?></span><br>
-                <span id="evapp_selected_paper_orientation"><?php echo esc_html($selected_template['orientation'] === 'portrait' ? __('Vertical', 'eventosapp') : __('Horizontal', 'eventosapp')); ?></span>
+                <span id="evapp_selected_paper_orientation"><?php echo esc_html($selected_oriented['orientation'] === 'portrait' ? __('Vertical', 'eventosapp') : __('Horizontal', 'eventosapp')); ?></span>
               </div>
             </div>
           </section>
@@ -1384,7 +1610,7 @@ function eventosapp_render_badge_metabox($post) {
             </div>
             <div class="evapp-live-caption">
               <strong id="evapp_live_template_name"><?php echo esc_html($selected_template['name']); ?></strong>
-              <span id="evapp_live_template_detail"><?php echo esc_html(eventosapp_badge_format_mm($selected_template['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($selected_template['height_mm'])); ?> mm</span>
+              <span id="evapp_live_template_detail"><?php echo esc_html(eventosapp_badge_format_mm($selected_oriented['width_mm'])); ?> × <?php echo esc_html(eventosapp_badge_format_mm($selected_oriented['height_mm'])); ?> mm</span>
             </div>
           </section>
 
@@ -1421,8 +1647,11 @@ function eventosapp_render_badge_metabox($post) {
           name: ($selected.data('name') || $selected.text() || '').toString(),
           width: parseFloat($selected.data('width')) || 99,
           height: parseFloat($selected.data('height')) || 55,
+          baseWidth: parseFloat($selected.data('base-width')) || parseFloat($selected.data('width')) || 99,
+          baseHeight: parseFloat($selected.data('base-height')) || parseFloat($selected.data('height')) || 55,
           margin: parseFloat($selected.data('margin')) || 0,
-          orientation: ($selected.data('orientation') || '').toString()
+          orientation: ($selected.data('orientation') || '').toString(),
+          contentRotation: parseInt($selected.data('content-rotation'), 10) || 0
         };
       }
 
@@ -1431,15 +1660,34 @@ function eventosapp_render_badge_metabox($post) {
         var ratio = paper.width / Math.max(paper.height, 1);
         var leftPct = Math.min(45, Math.max(0, (paper.margin / Math.max(paper.width, 1)) * 100));
         var topPct = Math.min(45, Math.max(0, (paper.margin / Math.max(paper.height, 1)) * 100));
-        var orientationText = paper.orientation === 'portrait' ? '<?php echo esc_js(__('Vertical', 'eventosapp')); ?>' : '<?php echo esc_js(__('Horizontal', 'eventosapp')); ?>';
+        var orientation = (paper.orientation === 'portrait' || paper.orientation === 'landscape')
+          ? paper.orientation
+          : (paper.height >= paper.width ? 'portrait' : 'landscape');
+        var orientationText = orientation === 'portrait' ? '<?php echo esc_js(__('Vertical', 'eventosapp')); ?>' : '<?php echo esc_js(__('Horizontal', 'eventosapp')); ?>';
+        var baseText = paper.baseWidth + ' × ' + paper.baseHeight + ' mm';
+        var canvasText = paper.width + ' × ' + paper.height + ' mm';
+        var safeWidth = Math.max(0.1, paper.width - (paper.margin * 2));
+        var safeHeight = Math.max(0.1, paper.height - (paper.margin * 2));
+        var contentRotation = paper.contentRotation === -90 || paper.contentRotation === 90 ? paper.contentRotation : 0;
+        var contentWidth = contentRotation !== 0 ? safeHeight : safeWidth;
+        var contentHeight = contentRotation !== 0 ? safeWidth : safeHeight;
+        var contentWidthPct = Math.max(1, (contentWidth / Math.max(safeWidth, 0.1)) * 100);
+        var contentHeightPct = Math.max(1, (contentHeight / Math.max(safeHeight, 0.1)) * 100);
 
-        $('#evapp_selected_paper_preview, #evapp_live_paper').css('--paper-ratio', ratio);
+        $('#evapp_selected_paper_preview, #evapp_live_paper').css('--paper-ratio', ratio).attr('data-content-rotation', contentRotation);
         $('#evapp_selected_paper_safe, #evapp_live_safe').css({left:leftPct+'%', right:leftPct+'%', top:topPct+'%', bottom:topPct+'%'});
+        $('#evapp_live_badge').css({
+          transform: contentRotation !== 0 ? 'rotate(' + contentRotation + 'deg)' : 'none',
+          width: contentWidthPct + '%',
+          height: contentHeightPct + '%',
+          'transform-origin':'center center'
+        });
+        $('#evapp_selected_paper_safe').html('<span class="evapp-paper-safe-label"><?php echo esc_js(__('Área útil', 'eventosapp')); ?></span>' + (contentRotation !== 0 ? '<span class="evapp-paper-rotation-label"><?php echo esc_js(__('Contenido', 'eventosapp')); ?> ' + contentRotation + '°</span>' : ''));
         $('#evapp_selected_paper_name, #evapp_live_template_name').text(paper.name);
-        $('#evapp_selected_paper_size').text(paper.width + ' × ' + paper.height + ' mm');
+        $('#evapp_selected_paper_size').text(canvasText);
         $('#evapp_selected_paper_margin').text('<?php echo esc_js(__('Margen:', 'eventosapp')); ?> ' + paper.margin + ' mm');
-        $('#evapp_selected_paper_orientation').text(orientationText);
-        $('#evapp_live_template_detail').text(paper.width + ' × ' + paper.height + ' mm · ' + '<?php echo esc_js(__('Margen', 'eventosapp')); ?> ' + paper.margin + ' mm');
+        $('#evapp_selected_paper_orientation').text(orientationText + ' · <?php echo esc_js(__('lienzo', 'eventosapp')); ?> ' + canvasText + (contentRotation !== 0 ? ' · <?php echo esc_js(__('contenido', 'eventosapp')); ?> ' + contentRotation + '°' : ''));
+        $('#evapp_live_template_detail').text('<?php echo esc_js(__('Lienzo de impresión', 'eventosapp')); ?> ' + canvasText + ' · <?php echo esc_js(__('Base', 'eventosapp')); ?> ' + baseText + ' · <?php echo esc_js(__('Margen', 'eventosapp')); ?> ' + paper.margin + ' mm' + (contentRotation !== 0 ? ' · <?php echo esc_js(__('Contenido', 'eventosapp')); ?> ' + contentRotation + '°' : ''));
       }
 
       function evappSlotHtml(field, label, level){
@@ -1649,13 +1897,37 @@ function eventosapp_get_badge_settings($evento_id) {
     }
 
     $paper_template = eventosapp_badge_get_selected_paper_template($evento_id);
-    $paper_width_mm = eventosapp_badge_sanitize_mm($paper_template['width_mm'] ?? 99, 99, 10, 1000);
-    $paper_height_mm = eventosapp_badge_sanitize_mm($paper_template['height_mm'] ?? 55, 55, 10, 1000);
+    $paper_base_width_mm  = eventosapp_badge_sanitize_mm($paper_template['width_mm'] ?? 99, 99, 10, 1000);
+    $paper_base_height_mm = eventosapp_badge_sanitize_mm($paper_template['height_mm'] ?? 55, 55, 10, 1000);
+    $paper_orientation_info = eventosapp_badge_get_oriented_paper_dimensions(
+        $paper_base_width_mm,
+        $paper_base_height_mm,
+        $paper_template['orientation'] ?? ''
+    );
+    $paper_width_mm  = eventosapp_badge_sanitize_mm($paper_orientation_info['width_mm'], 99, 10, 1000);
+    $paper_height_mm = eventosapp_badge_sanitize_mm($paper_orientation_info['height_mm'], 55, 10, 1000);
     $paper_margin_mm = eventosapp_badge_sanitize_mm($paper_template['margin_mm'] ?? 0, 0, 0, max(0, min($paper_width_mm, $paper_height_mm) / 2 - 0.5));
+    $paper_orientation = sanitize_key($paper_orientation_info['orientation'] ?? (($paper_height_mm >= $paper_width_mm) ? 'portrait' : 'landscape'));
+    $paper_page_orientation = sanitize_key($paper_orientation_info['page_orientation'] ?? (($paper_height_mm >= $paper_width_mm) ? 'portrait' : 'landscape'));
+    $paper_content_rotation = (int) ($paper_orientation_info['content_rotation'] ?? 0);
+    if (!in_array($paper_orientation, ['portrait', 'landscape'], true)) {
+        $paper_orientation = $paper_page_orientation;
+    }
+    if (!in_array($paper_page_orientation, ['portrait', 'landscape'], true)) {
+        $paper_page_orientation = ($paper_height_mm >= $paper_width_mm) ? 'portrait' : 'landscape';
+    }
+    if (!in_array($paper_content_rotation, [-90, 0, 90], true)) {
+        $paper_content_rotation = 0;
+    }
+
+    $paper_inner_width_mm  = max(0.1, $paper_width_mm - ($paper_margin_mm * 2));
+    $paper_inner_height_mm = max(0.1, $paper_height_mm - ($paper_margin_mm * 2));
+    $paper_content_width_mm  = $paper_content_rotation !== 0 ? $paper_inner_height_mm : $paper_inner_width_mm;
+    $paper_content_height_mm = $paper_content_rotation !== 0 ? $paper_inner_width_mm : $paper_inner_height_mm;
 
     /*
      * width/height se conservan como equivalencia CSS para funciones heredadas.
-     * La impresión real usa paper_width_mm/paper_height_mm y @page en milímetros.
+     * La impresión real usa el tamaño final del lienzo en @page y en el contenedor HTML.
      */
     $width_px  = max(1, (int) round(($paper_width_mm * 96) / 25.4));
     $height_px = max(1, (int) round(($paper_height_mm * 96) / 25.4));
@@ -1665,10 +1937,18 @@ function eventosapp_get_badge_settings($evento_id) {
         'order'               => $order,
         'paper_template_key'  => sanitize_key($paper_template['key'] ?? 'legacy_standard'),
         'paper_template_name' => sanitize_text_field($paper_template['name'] ?? __('Formato de papel', 'eventosapp')),
+        'paper_base_width_mm' => $paper_base_width_mm,
+        'paper_base_height_mm'=> $paper_base_height_mm,
         'paper_width_mm'      => $paper_width_mm,
         'paper_height_mm'     => $paper_height_mm,
         'paper_margin_mm'     => $paper_margin_mm,
-        'paper_orientation'   => sanitize_key($paper_template['orientation'] ?? (($paper_height_mm >= $paper_width_mm) ? 'portrait' : 'landscape')),
+        'paper_orientation'   => $paper_orientation,
+        'paper_page_orientation' => $paper_page_orientation,
+        'paper_content_rotation' => $paper_content_rotation,
+        'paper_inner_width_mm'   => $paper_inner_width_mm,
+        'paper_inner_height_mm'  => $paper_inner_height_mm,
+        'paper_content_width_mm' => $paper_content_width_mm,
+        'paper_content_height_mm'=> $paper_content_height_mm,
         'width'               => $width_px,
         'height'              => $height_px,
         'size_large'          => max(1, (int) $get('eventosapp_badge_size_large', 24)),
@@ -1738,6 +2018,23 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
     $paper_width_mm  = eventosapp_badge_format_mm($cfg['paper_width_mm']);
     $paper_height_mm = eventosapp_badge_format_mm($cfg['paper_height_mm']);
     $paper_margin_mm = eventosapp_badge_format_mm($cfg['paper_margin_mm']);
+    $paper_inner_width_mm = eventosapp_badge_format_mm($cfg['paper_inner_width_mm'] ?? max(0.1, (float) $cfg['paper_width_mm'] - ((float) $cfg['paper_margin_mm'] * 2)));
+    $paper_inner_height_mm = eventosapp_badge_format_mm($cfg['paper_inner_height_mm'] ?? max(0.1, (float) $cfg['paper_height_mm'] - ((float) $cfg['paper_margin_mm'] * 2)));
+    $paper_content_width_mm = eventosapp_badge_format_mm($cfg['paper_content_width_mm'] ?? $cfg['paper_inner_width_mm'] ?? $cfg['paper_width_mm']);
+    $paper_content_height_mm = eventosapp_badge_format_mm($cfg['paper_content_height_mm'] ?? $cfg['paper_inner_height_mm'] ?? $cfg['paper_height_mm']);
+    $paper_orientation = sanitize_key($cfg['paper_orientation'] ?? (($cfg['paper_height_mm'] >= $cfg['paper_width_mm']) ? 'portrait' : 'landscape'));
+    if (!in_array($paper_orientation, ['portrait', 'landscape'], true)) {
+        $paper_orientation = ($cfg['paper_height_mm'] >= $cfg['paper_width_mm']) ? 'portrait' : 'landscape';
+    }
+    $paper_page_orientation = sanitize_key($cfg['paper_page_orientation'] ?? (($cfg['paper_height_mm'] >= $cfg['paper_width_mm']) ? 'portrait' : 'landscape'));
+    if (!in_array($paper_page_orientation, ['portrait', 'landscape'], true)) {
+        $paper_page_orientation = ($cfg['paper_height_mm'] >= $cfg['paper_width_mm']) ? 'portrait' : 'landscape';
+    }
+    $paper_content_rotation = (int) ($cfg['paper_content_rotation'] ?? 0);
+    if (!in_array($paper_content_rotation, [-90, 0, 90], true)) {
+        $paper_content_rotation = 0;
+    }
+    $paper_content_transform = $paper_content_rotation !== 0 ? 'rotate(' . $paper_content_rotation . 'deg)' : 'none';
     $border_width    = max(0, (int) $cfg['border_width']);
     $text_align      = sanitize_key($cfg['text_align'] ?? 'center');
     if (!in_array($text_align, ['left', 'center', 'right'], true)) {
@@ -1764,12 +2061,28 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
     width:<?php echo esc_html($paper_width_mm); ?>mm;
     height:<?php echo esc_html($paper_height_mm); ?>mm;
     margin:0 auto;
-    padding:<?php echo esc_html($paper_margin_mm); ?>mm;
+    padding:0;
+    position:relative;
+    display:flex;
+    align-items:center;
+    justify-content:center;
     background:#fff;
     overflow:hidden;
     box-sizing:border-box;
     print-color-adjust:exact;
     -webkit-print-color-adjust:exact;
+  }
+  .badge-print-safe{
+    position:absolute;
+    left:<?php echo esc_html($paper_margin_mm); ?>mm;
+    top:<?php echo esc_html($paper_margin_mm); ?>mm;
+    width:<?php echo esc_html($paper_inner_width_mm); ?>mm;
+    height:<?php echo esc_html($paper_inner_height_mm); ?>mm;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    overflow:hidden;
+    background:#fff;
   }
   .badge{
     <?php echo ($border_width > 0 ? "border:" . $border_width . "px solid #000;" : "border:none;"); ?>
@@ -1777,13 +2090,16 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
     flex-direction:<?php echo esc_attr($flex_dir); ?>;
     align-items:center;
     justify-content:center;
-    width:100%;
-    height:100%;
+    width:<?php echo esc_html($paper_content_width_mm); ?>mm;
+    height:<?php echo esc_html($paper_content_height_mm); ?>mm;
+    flex:0 0 auto;
     padding:0;
     box-sizing:border-box;
     overflow:hidden;
     background:#fff;
     text-align:<?php echo esc_attr($text_align); ?>;
+    transform:<?php echo esc_attr($paper_content_transform); ?>;
+    transform-origin:center center;
   }
   .left,.right{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;max-height:100%;}
   .left{flex:0 1 auto;}
@@ -1798,7 +2114,7 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
   @media print {
     html,body{width:<?php echo esc_html($paper_width_mm); ?>mm;height:<?php echo esc_html($paper_height_mm); ?>mm;min-height:0;background:#fff;display:block;}
     body{padding:0;}
-    .badge-print-page{width:<?php echo esc_html($paper_width_mm); ?>mm;height:<?php echo esc_html($paper_height_mm); ?>mm;margin:0;padding:<?php echo esc_html($paper_margin_mm); ?>mm;box-shadow:none;page-break-after:avoid;page-break-before:avoid;}
+    .badge-print-page{width:<?php echo esc_html($paper_width_mm); ?>mm;height:<?php echo esc_html($paper_height_mm); ?>mm;margin:0;padding:0;box-shadow:none;page-break-after:avoid;page-break-before:avoid;}
   }
 </style>
 </head>
@@ -1807,8 +2123,12 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
      data-paper-template="<?php echo esc_attr($cfg['paper_template_key']); ?>"
      data-paper-width-mm="<?php echo esc_attr($paper_width_mm); ?>"
      data-paper-height-mm="<?php echo esc_attr($paper_height_mm); ?>"
-     data-paper-margin-mm="<?php echo esc_attr($paper_margin_mm); ?>">
-  <div class="badge" data-event-id="<?php echo esc_attr($evento_id); ?>" data-ticket-id="<?php echo esc_attr($ticket_id); ?>">
+     data-paper-margin-mm="<?php echo esc_attr($paper_margin_mm); ?>"
+     data-paper-orientation="<?php echo esc_attr($paper_orientation); ?>"
+     data-paper-page-orientation="<?php echo esc_attr($paper_page_orientation); ?>"
+     data-content-rotation="<?php echo esc_attr($paper_content_rotation); ?>">
+  <div class="badge-print-safe">
+    <div class="badge" data-event-id="<?php echo esc_attr($evento_id); ?>" data-ticket-id="<?php echo esc_attr($ticket_id); ?>">
 <?php
     $active = [];
     for ($i = 1; $i <= 5; $i++) {
@@ -1885,6 +2205,7 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
         }
     }
 ?>
+    </div>
   </div>
 </div>
 <?php if ($auto_print): ?>
