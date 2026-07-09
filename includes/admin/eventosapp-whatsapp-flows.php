@@ -1208,6 +1208,294 @@ function eventosapp_whatsapp_flows_build_export_payload($flow_post_id) {
     ];
 }
 
+function eventosapp_whatsapp_flows_build_sample_import_payload() {
+    $question_types = eventosapp_whatsapp_flows_question_types();
+    $type_help = eventosapp_whatsapp_flows_type_help();
+
+    $supported_components = [];
+    foreach ( $question_types as $local_type => $whatsapp_component ) {
+        $local_type = sanitize_key((string) $local_type);
+        $supported_components[$local_type] = [
+            'whatsapp_component' => $whatsapp_component,
+            'description'        => $type_help[$local_type] ?? '',
+            'saves_answer'       => in_array($local_type, eventosapp_whatsapp_flows_input_question_types(), true),
+            'uses_options'       => in_array($local_type, ['radio', 'checkbox', 'dropdown'], true),
+            'allowed_fields'     => [
+                'slug'        => 'Nombre interno único. Usa letras minúsculas, números y guiones bajos. Ejemplo: satisfaccion_general.',
+                'label'       => 'Texto visible del componente. En componentes de texto visual es el contenido que verá el usuario.',
+                'help'        => 'Texto auxiliar opcional. EventosApp lo renderiza como TextCaption antes del campo cuando no está vacío.',
+                'placeholder' => 'Campo heredado/local. Se puede importar, pero EventosApp no lo envía a Meta porque TextInput/TextArea no aceptan placeholder en el JSON final.',
+                'type'        => 'Tipo local permitido por EventosApp. Debe coincidir con una de las claves de supported_components.',
+                'input_type'  => 'Solo aplica cuando type es text. Valores permitidos: text, email, number o phone.',
+                'required'    => 'Usa "1" para obligatorio y "0" para opcional. En componentes visuales siempre se normaliza a "0".',
+                'options'     => 'Solo aplica para radio, checkbox y dropdown. Usa objetos con id y title.',
+                'min_chars'   => 'Solo aplica a TextInput y TextArea. Usa 0 para no definir mínimo.',
+                'max_chars'   => 'Solo aplica a TextInput y TextArea. Usa 0 para no definir máximo.',
+            ],
+        ];
+    }
+
+    $sample_flow = [
+        'title'                => 'Flow de muestra para IA',
+        'description'          => 'Hola {{name}}, queremos conocer tu opinión sobre {{event_name}}. Completa este formulario de muestra creado con los componentes soportados por EventosApp.',
+        'category'             => 'SURVEY',
+        'cta'                  => 'Responder encuesta',
+        'submit_label'         => 'Enviar respuestas',
+        'screen_id'            => 'SURVEY',
+        'questions_per_screen' => 10,
+        'questions'            => [
+            [
+                'slug'        => 'seccion_intro',
+                'label'       => 'Bloque visual: encabezados y textos',
+                'help'        => '',
+                'placeholder' => '',
+                'type'        => 'heading',
+                'input_type'  => 'text',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'subtitulo_intro',
+                'label'       => 'Usa TextSubheading para separar secciones internas.',
+                'help'        => '',
+                'placeholder' => '',
+                'type'        => 'subheading',
+                'input_type'  => 'text',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'texto_contexto',
+                'label'       => 'Usa TextBody para instrucciones, contexto o textos legales cortos. No guarda respuesta.',
+                'help'        => '',
+                'placeholder' => '',
+                'type'        => 'body',
+                'input_type'  => 'text',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'nota_contexto',
+                'label'       => 'Usa TextCaption para notas breves o instrucciones complementarias.',
+                'help'        => '',
+                'placeholder' => '',
+                'type'        => 'caption',
+                'input_type'  => 'text',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'satisfaccion_general',
+                'label'       => '¿Qué tan satisfecho quedaste con el evento?',
+                'help'        => 'RadioButtonsGroup permite seleccionar una sola opción.',
+                'placeholder' => '',
+                'type'        => 'radio',
+                'input_type'  => 'text',
+                'required'    => '1',
+                'options'     => [
+                    ['id' => '1', 'title' => '1 - Muy insatisfecho'],
+                    ['id' => '2', 'title' => '2'],
+                    ['id' => '3', 'title' => '3 - Regular'],
+                    ['id' => '4', 'title' => '4'],
+                    ['id' => '5', 'title' => '5 - Muy satisfecho'],
+                ],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'temas_interes',
+                'label'       => '¿Qué temas te interesan para próximos eventos?',
+                'help'        => 'CheckboxGroup permite seleccionar varias opciones.',
+                'placeholder' => '',
+                'type'        => 'checkbox',
+                'input_type'  => 'text',
+                'required'    => '0',
+                'options'     => [
+                    ['id' => 'inteligencia_artificial', 'title' => 'Inteligencia artificial'],
+                    ['id' => 'marketing', 'title' => 'Marketing'],
+                    ['id' => 'ventas', 'title' => 'Ventas'],
+                    ['id' => 'automatizacion', 'title' => 'Automatización'],
+                ],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'medio_preferido',
+                'label'       => '¿Por qué canal prefieres recibir información?',
+                'help'        => 'Dropdown permite escoger una sola opción desde una lista.',
+                'placeholder' => '',
+                'type'        => 'dropdown',
+                'input_type'  => 'text',
+                'required'    => '1',
+                'options'     => [
+                    ['id' => 'email', 'title' => 'Correo electrónico'],
+                    ['id' => 'whatsapp', 'title' => 'WhatsApp'],
+                    ['id' => 'telefono', 'title' => 'Llamada telefónica'],
+                ],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'nombre_contacto',
+                'label'       => 'Nombre completo',
+                'help'        => 'TextInput de texto general.',
+                'placeholder' => '',
+                'type'        => 'text',
+                'input_type'  => 'text',
+                'required'    => '1',
+                'options'     => [],
+                'min_chars'   => 2,
+                'max_chars'   => 80,
+            ],
+            [
+                'slug'        => 'correo_contacto',
+                'label'       => 'Correo electrónico',
+                'help'        => 'TextInput con input_type email.',
+                'placeholder' => '',
+                'type'        => 'text',
+                'input_type'  => 'email',
+                'required'    => '1',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 120,
+            ],
+            [
+                'slug'        => 'telefono_contacto',
+                'label'       => 'Celular',
+                'help'        => 'TextInput con input_type phone.',
+                'placeholder' => '',
+                'type'        => 'text',
+                'input_type'  => 'phone',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 7,
+                'max_chars'   => 20,
+            ],
+            [
+                'slug'        => 'cantidad_asistentes',
+                'label'       => '¿Cuántas personas de tu empresa asistirían a un próximo evento?',
+                'help'        => 'TextInput con input_type number.',
+                'placeholder' => '',
+                'type'        => 'text',
+                'input_type'  => 'number',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 4,
+            ],
+            [
+                'slug'        => 'fecha_preferida',
+                'label'       => 'Fecha preferida para una próxima actividad',
+                'help'        => 'DatePicker permite seleccionar una fecha.',
+                'placeholder' => '',
+                'type'        => 'date',
+                'input_type'  => 'text',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+            [
+                'slug'        => 'comentarios_adicionales',
+                'label'       => 'Comentarios adicionales',
+                'help'        => 'TextArea permite una respuesta larga.',
+                'placeholder' => '',
+                'type'        => 'textarea',
+                'input_type'  => 'text',
+                'required'    => '0',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 600,
+            ],
+            [
+                'slug'        => 'acepta_tratamiento_datos',
+                'label'       => 'Acepto el tratamiento de mis datos personales para fines relacionados con el evento.',
+                'help'        => 'OptIn es una casilla de aceptación. Úsalo para autorizaciones explícitas.',
+                'placeholder' => '',
+                'type'        => 'optin',
+                'input_type'  => 'text',
+                'required'    => '1',
+                'options'     => [],
+                'min_chars'   => 0,
+                'max_chars'   => 0,
+            ],
+        ],
+    ];
+
+    return [
+        'schema'                 => 'eventosapp_whatsapp_flow',
+        'version'                => 1,
+        'exported_at'            => current_time('mysql'),
+        'exported_at_gmt'        => current_time('mysql', true),
+        'generator'              => 'EventosApp',
+        'purpose'                => 'Muestra importable para crear WhatsApp Flows de EventosApp con IA sin inventar componentes no soportados.',
+        'instructions_for_ai'    => [
+            'Respeta exactamente el schema eventosapp_whatsapp_flow y el bloque flow.',
+            'Usa solo los tipos locales de supported_components: heading, subheading, body, caption, radio, checkbox, dropdown, text, textarea, date y optin.',
+            'No uses componentes inventados como NPS, rating, slider, consent, file upload, image picker, rich text, matriz o firma.',
+            'Para escalas NPS o calificaciones, usa type radio y escribe manualmente cada opción en options.',
+            'Para TextInput, usa input_type text, email, number o phone. No agregues placeholder esperando que llegue a Meta.',
+            'En radio, checkbox y dropdown, cada opción debe ser un objeto con id y title. El id debe ser corto, único y en minúsculas con guiones bajos.',
+            'No agregues WABA ID, Meta Flow ID, número emisor, estados, métricas, respuestas ni tokens. EventosApp los limpia o ignora durante la importación.',
+            'Devuelve un JSON válido, sin comentarios fuera del JSON y sin Markdown.',
+        ],
+        'allowed_categories'     => eventosapp_whatsapp_flows_categories(),
+        'allowed_text_input_types' => eventosapp_whatsapp_flows_text_input_types(),
+        'supported_components'   => $supported_components,
+        'flow_contract'          => [
+            'title'                => 'Nombre visible del Flow local en EventosApp. Obligatorio.',
+            'description'          => 'Mensaje inicial. Puede usar variables internas como {{name}}, {{event_name}}, {{ticket_code}} y {{localidad}}.',
+            'category'             => 'Categoría Meta permitida por EventosApp. Recomendado para encuestas: SURVEY.',
+            'cta'                  => 'Texto del botón que abre el Flow. Máximo recomendado: 30 caracteres.',
+            'submit_label'         => 'Texto del botón final. Máximo recomendado: 30 caracteres.',
+            'screen_id'            => 'ID de pantalla inicial. Usa letras y guiones bajos. EventosApp genera pantallas adicionales automáticamente.',
+            'questions_per_screen' => 'Cantidad de campos de respuesta por pantalla. EventosApp normaliza entre 3 y 15.',
+            'questions'            => 'Lista ordenada de componentes. EventosApp conserva el orden y divide en pantallas cuando sea necesario.',
+        ],
+        'question_contract'      => [
+            'slug'        => 'Obligatorio para campos de respuesta. Debe ser único dentro del Flow.',
+            'label'       => 'Obligatorio. Texto visible para el usuario.',
+            'help'        => 'Opcional. Se renderiza como TextCaption antes del componente.',
+            'placeholder' => 'Opcional/local. No se envía a Meta en TextInput/TextArea.',
+            'type'        => 'Obligatorio. Usa únicamente una clave de supported_components.',
+            'input_type'  => 'Opcional. Solo cambia TextInput cuando type es text.',
+            'required'    => '"1" obligatorio, "0" opcional.',
+            'options'     => 'Obligatorio solo para radio, checkbox y dropdown.',
+            'min_chars'   => 'Solo TextInput/TextArea. 0 para omitir.',
+            'max_chars'   => 'Solo TextInput/TextArea. 0 para omitir.',
+        ],
+        'option_contract'        => [
+            'id'    => 'Valor interno que se guarda. Usa minúsculas, números y guiones bajos.',
+            'title' => 'Texto visible de la opción.',
+        ],
+        'normalization_rules'    => [
+            'EventosApp admite hasta 60 componentes importados por Flow.',
+            'EventosApp admite hasta 200 opciones por componente de selección.',
+            'Los componentes heading, subheading, body y caption no guardan respuesta y nunca son obligatorios.',
+            'Footer no se debe declarar en questions; EventosApp lo genera automáticamente al final de cada pantalla.',
+            'El JSON final que se envía a Meta usa SingleColumnLayout y Form de forma automática.',
+        ],
+        'flow'                   => eventosapp_whatsapp_flows_sanitize_exportable_flow($sample_flow),
+        'excluded_system_fields' => eventosapp_whatsapp_flows_system_managed_keys(),
+        'notes'                  => 'Puedes importar este archivo tal como está para ver un Flow de ejemplo. Para crear un Flow real con IA, conserva la estructura y reemplaza únicamente el contenido del bloque flow.',
+    ];
+}
+
+function eventosapp_whatsapp_flows_sample_download_url() {
+    return wp_nonce_url(
+        admin_url('admin-post.php?action=eventosapp_whatsapp_flow_sample_json'),
+        'eventosapp_whatsapp_flow_sample_json'
+    );
+}
+
 function eventosapp_whatsapp_flows_parse_import_payload($payload) {
     if ( ! is_array($payload) ) {
         return new WP_Error('invalid_payload', 'El archivo JSON no contiene una estructura válida de WhatsApp Flow.');
@@ -3104,6 +3392,35 @@ add_action('admin_post_eventosapp_whatsapp_flow_export', function() {
     exit;
 });
 
+add_action('admin_post_eventosapp_whatsapp_flow_sample_json', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+    check_admin_referer('eventosapp_whatsapp_flow_sample_json');
+
+    $payload = eventosapp_whatsapp_flows_build_sample_import_payload();
+    $json = eventosapp_whatsapp_flows_json_encode($payload, true);
+
+    if ( ! is_string($json) || $json === '' ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'page'         => 'eventosapp_whatsapp_flows_manage',
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('No se pudo construir el JSON de muestra.'),
+        ]);
+    }
+
+    while ( ob_get_level() ) {
+        ob_end_clean();
+    }
+
+    nocache_headers();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename="eventosapp-whatsapp-flow-muestra-ia.json"');
+    header('X-Content-Type-Options: nosniff');
+    echo $json;
+    exit;
+});
+
 add_action('admin_post_eventosapp_whatsapp_flow_import', function() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
@@ -4946,6 +5263,28 @@ function eventosapp_whatsapp_flows_get_default_meta_context() {
     return [$settings, $default_waba_id, $phone_accounts];
 }
 
+function eventosapp_whatsapp_flows_render_import_tools_card($title = 'Importar Flow / crear con IA') {
+    ?>
+    <div class="evapp-card">
+        <h2><?php echo esc_html($title); ?></h2>
+        <p>Importa un Flow exportado desde EventosApp o un JSON creado con IA siguiendo el formato del constructor.</p>
+        <div class="evapp-info">
+            <strong>JSON de muestra para IA:</strong> descarga una guía importable con los componentes reales soportados por este módulo: TextHeading, TextSubheading, TextBody, TextCaption, TextInput, TextArea, RadioButtonsGroup, CheckboxGroup, Dropdown, DatePicker y OptIn. También incluye las reglas de campos, opciones, validaciones y lo que no debe inventar la IA.
+        </div>
+        <p class="evapp-actions">
+            <a class="button" href="<?php echo esc_url(eventosapp_whatsapp_flows_sample_download_url()); ?>">Descargar JSON de muestra</a>
+        </p>
+        <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="evapp-actions evapp-import-flow-form">
+            <?php wp_nonce_field('eventosapp_whatsapp_flow_import'); ?>
+            <input type="hidden" name="action" value="eventosapp_whatsapp_flow_import">
+            <input type="file" name="flow_import_file" accept="application/json,.json" required>
+            <button type="submit" class="button button-primary">Importar Flow JSON</button>
+        </form>
+        <p class="description">Después de importar, el Flow queda como borrador local limpio. Revisa el contenido, selecciona WABA/número emisor si aplica y luego créalo o súbelo a Meta.</p>
+    </div>
+    <?php
+}
+
 function eventosapp_whatsapp_flows_render_page() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
@@ -4996,6 +5335,7 @@ function eventosapp_whatsapp_flows_render_page() {
             </div>
             <div class="evapp-top-actions">
                 <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_manage')); ?>">Gestionar Flows</a>
+                <a class="button" href="<?php echo esc_url(eventosapp_whatsapp_flows_sample_download_url()); ?>">Descargar JSON de muestra</a>
                 <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign&flow_id=' . absint($flow_id))); ?>">Envío masivo</a>
                 <?php if ( $flow_id ) : ?>
                     <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_duplicate', 'eventosapp_whatsapp_flow_duplicate', 'Duplicar Flow', $flow_id); ?>
@@ -5091,6 +5431,8 @@ function eventosapp_whatsapp_flows_render_page() {
             </div>
 
             <div>
+                <?php eventosapp_whatsapp_flows_render_import_tools_card(); ?>
+
                 <div class="evapp-card">
                     <h2>Flows recientes</h2>
                     <?php if ( empty($flows) ) : ?>
@@ -5199,21 +5541,10 @@ function eventosapp_whatsapp_flows_render_manage_page() {
         <?php eventosapp_whatsapp_flows_admin_styles(); ?>
         <div class="evapp-page-head">
             <div><h1>Gestionar Flows</h1><p>Consulta, edita y reutiliza todos los Flows locales creados en EventosApp.</p></div>
-            <div class="evapp-top-actions"><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear Flow</a><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign')); ?>">Envío masivo</a></div>
+            <div class="evapp-top-actions"><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows&flow_id=0')); ?>">Crear Flow</a><a class="button" href="<?php echo esc_url(eventosapp_whatsapp_flows_sample_download_url()); ?>">Descargar JSON de muestra</a><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_flows_campaign')); ?>">Envío masivo</a></div>
         </div>
         <?php eventosapp_whatsapp_flows_render_notices(); ?>
-        <div class="evapp-card">
-            <h2>Exportar / importar Flows</h2>
-            <p>Exporta el contenido editable de un Flow en JSON o importa un Flow exportado para reutilizarlo como borrador local.</p>
-            <div class="evapp-info"><strong>Qué se importa:</strong> nombre, descripción, categoría, CTA, etiqueta de envío, pantalla inicial, cantidad de preguntas por pantalla, componentes, textos, ayudas, validaciones y opciones. <strong>No se importa:</strong> ID local, Flow ID de Meta, WABA, número emisor, estado en Meta, vista previa, envíos, respuestas ni tokens.</div>
-            <form method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="evapp-actions">
-                <?php wp_nonce_field('eventosapp_whatsapp_flow_import'); ?>
-                <input type="hidden" name="action" value="eventosapp_whatsapp_flow_import">
-                <input type="file" name="flow_import_file" accept="application/json,.json" required>
-                <button type="submit" class="button button-primary">Importar Flow</button>
-            </form>
-            <p class="description">Después de importar, revisa el Flow, selecciona WABA/número emisor de este sistema si aplica y luego créalo o súbelo a Meta.</p>
-        </div>
+        <?php eventosapp_whatsapp_flows_render_import_tools_card('Exportar / importar Flows'); ?>
         <div class="evapp-card">
             <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" class="evapp-actions">
                 <input type="hidden" name="page" value="eventosapp_whatsapp_flows_manage">
