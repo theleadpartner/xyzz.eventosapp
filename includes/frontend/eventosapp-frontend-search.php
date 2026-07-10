@@ -208,7 +208,7 @@ jQuery(function($){
       var isVirtual = it.is_virtual === true || it.modalidad === 'virtual';
       var actions = (isVirtual ? btnVirtualBadge(it) : '')
         + btnCheck(it.today_status, it.ticket_id, it.today_allowed)
-        + '<button class="evfs-btn evfs-print" data-ticket-id="'+escAttr(it.ticket_id)+'" data-event-id="'+escAttr(it.event_id)+'">Imprimir escarapela</button>';
+        + '<button class="evfs-btn evfs-print" data-eventosapp-native-event="1" data-ticket-id="'+escAttr(it.ticket_id)+'" data-event-id="'+escAttr(it.event_id)+'">Imprimir escarapela</button>';
       html += '<div class="evfs-row">'
            +   '<div class="evfs-data">'
            +     '<strong>'+ escHtml((it.first_name||'') +' '+ (it.last_name||'')) +'</strong>'
@@ -365,15 +365,41 @@ jQuery(function($){
     });
   });
 
-  // Imprimir escarapela
+  // Imprimir escarapela.
+  // Antes de abrir la ventana tradicional, emite un evento cancelable para que
+  // EventosApp Android Printer Bridge pueda preparar una URL temporal firmada.
+  // Si el bridge no está activo o el equipo no es Android, se conserva intacto
+  // el comportamiento anterior con window.open().
   $(document).on('click','.evfs-print', function(){
-    var tid = $(this).data('ticket-id'),
-        eid = $(this).data('event-id');
+    var $button = $(this),
+        tid = $button.data('ticket-id'),
+        eid = $button.data('event-id');
     var url = EvFrontSearch.ajax_url
             + '?action=eventosapp_render_badge'
             + '&nonce=' + encodeURIComponent(EvFrontSearch.print_nonce)
             + '&ticket_id=' + encodeURIComponent(tid)
             + '&event_id=' + encodeURIComponent(eid);
+
+    var detail = {
+      source: 'frontend-search',
+      ticket_id: tid,
+      event_id: eid,
+      print_url: url,
+      copies: $button.data('copies') || 1
+    };
+    var bridgeEvent = null;
+    try {
+      bridgeEvent = new CustomEvent('eventosapp:print-request', {
+        detail: detail,
+        bubbles: false,
+        cancelable: true
+      });
+    } catch(error) {}
+
+    if(bridgeEvent && document.dispatchEvent(bridgeEvent) === false){
+      return;
+    }
+
     window.open(url,'_blank');
   });
 });
