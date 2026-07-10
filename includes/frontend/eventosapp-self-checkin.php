@@ -2790,10 +2790,33 @@ if ( ! function_exists('eventosapp_self_checkin_inline_js') ) {
       }, function(resp){
         if(resp && resp.success && resp.data && resp.data.print_url){
           showStatus(resp.data.already ? 'El check-in ya estaba registrado. Se enviará la escarapela a impresión.' : 'Check-in registrado. Se enviará la escarapela a impresión.', 'ok');
-          var $frame = $('<iframe class="evsc-print-frame" aria-hidden="true"></iframe>');
-          $('body').append($frame);
-          $frame.attr('src', resp.data.print_url);
-          setTimeout(function(){ $frame.remove(); }, 20000);
+
+          var bridgeDetail = {
+            source: 'self-checkin',
+            ticket_id: confirmedTicket.ticket_id,
+            event_id: eventId,
+            print_url: resp.data.print_url,
+            title: confirmedTicket.full_name || '',
+            subtitle: confirmedTicket.company || '',
+            copies: 1
+          };
+          var bridgeEvent = null;
+          try {
+            bridgeEvent = new CustomEvent('eventosapp:print-request', {
+              detail: bridgeDetail,
+              bubbles: false,
+              cancelable: true
+            });
+          } catch(error) {}
+
+          var handledByAndroidBridge = bridgeEvent && document.dispatchEvent(bridgeEvent) === false;
+          if(!handledByAndroidBridge){
+            var $frame = $('<iframe class="evsc-print-frame" aria-hidden="true"></iframe>');
+            $('body').append($frame);
+            $frame.attr('src', resp.data.print_url);
+            setTimeout(function(){ $frame.remove(); }, 20000);
+          }
+
           confirmedTicket.already_checked = true;
         } else {
           var msg = resp && resp.data && resp.data.message ? resp.data.message : 'No fue posible imprimir la escarapela.';
