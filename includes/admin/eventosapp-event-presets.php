@@ -19,17 +19,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
     final class EventosApp_Event_Presets_And_Venues {
 
-        const PRESET_POST_TYPE = 'eventosapp_event_preset';
-        const VENUE_POST_TYPE  = 'eventosapp_venue';
-        const SNAPSHOT_VERSION = 1;
-        const ADMIN_NONCE      = 'eventosapp_event_presets_admin';
-        const EVENT_NONCE      = 'eventosapp_event_presets_event';
+        // WordPress limita la clave de un post type a un máximo de 20 caracteres.
+        // La clave anterior (eventosapp_event_preset) tenía 23 y provocaba tanto
+        // "Tipo de contenido no válido" como el fallo al insertar en wp_posts.
+        const PRESET_POST_TYPE                  = 'eventosapp_preset';
+        const LEGACY_PRESET_POST_TYPE           = 'eventosapp_event_preset';
+        const LEGACY_TRUNCATED_PRESET_POST_TYPE = 'eventosapp_event_pre';
+        const VENUE_POST_TYPE                   = 'eventosapp_venue';
+        const SNAPSHOT_VERSION                  = 2;
+        const MIGRATION_OPTION                  = 'eventosapp_preset_post_type_migration_v2';
+        const ADMIN_NONCE                       = 'eventosapp_event_presets_admin';
+        const EVENT_NONCE                       = 'eventosapp_event_presets_event';
 
         /**
          * Inicializa el módulo sin reemplazar hooks existentes del plugin.
          */
         public static function init() {
             add_action( 'init', [ __CLASS__, 'register_post_types' ], 12 );
+            add_action( 'init', [ __CLASS__, 'maybe_migrate_legacy_preset_post_type' ], 13 );
+            add_action( 'admin_init', [ __CLASS__, 'redirect_legacy_admin_urls' ], 1 );
             add_action( 'admin_menu', [ __CLASS__, 'register_submenus' ], 20 );
             add_action( 'add_meta_boxes', [ __CLASS__, 'register_meta_boxes' ], 30 );
 
@@ -109,6 +117,81 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
                 'map_meta_cap'        => true,
                 'capability_type'     => 'post',
             ] );
+        }
+
+        /**
+         * Recupera cualquier registro que una instalación previa hubiera alcanzado a
+         * guardar con la clave truncada por MySQL y lo mueve al post type válido.
+         */
+        public static function maybe_migrate_legacy_preset_post_type() {
+            if ( get_option( self::MIGRATION_OPTION ) ) {
+                return;
+            }
+            if ( ! post_type_exists( self::PRESET_POST_TYPE ) ) {
+                return;
+            }
+
+            global $wpdb;
+
+            $legacy_types = [
+                self::LEGACY_PRESET_POST_TYPE,
+                self::LEGACY_TRUNCATED_PRESET_POST_TYPE,
+            ];
+            $migrated_ids = [];
+
+            foreach ( $legacy_types as $legacy_type ) {
+                $ids = $wpdb->get_col(
+                    $wpdb->prepare(
+                        "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s",
+                        $legacy_type
+                    )
+                );
+
+                if ( empty( $ids ) ) {
+                    continue;
+                }
+
+                $updated = $wpdb->update(
+                    $wpdb->posts,
+                    [ 'post_type' => self::PRESET_POST_TYPE ],
+                    [ 'post_type' => $legacy_type ],
+                    [ '%s' ],
+                    [ '%s' ]
+                );
+
+                if ( $updated !== false ) {
+                    foreach ( $ids as $post_id ) {
+                        $post_id = absint( $post_id );
+                        if ( $post_id ) {
+                            $migrated_ids[] = $post_id;
+                            clean_post_cache( $post_id );
+                        }
+                    }
+                }
+            }
+
+            update_option( self::MIGRATION_OPTION, [
+                'version'  => self::SNAPSHOT_VERSION,
+                'migrated' => count( array_unique( $migrated_ids ) ),
+                'date'     => current_time( 'mysql' ),
+            ], false );
+        }
+
+        /**
+         * Redirige enlaces antiguos guardados en favoritos o caché del navegador.
+         */
+        public static function redirect_legacy_admin_urls() {
+            if ( ! is_admin() || empty( $_GET['post_type'] ) ) {
+                return;
+            }
+
+            $requested = sanitize_key( wp_unslash( $_GET['post_type'] ) );
+            if ( ! in_array( $requested, [ self::LEGACY_PRESET_POST_TYPE, self::LEGACY_TRUNCATED_PRESET_POST_TYPE ], true ) ) {
+                return;
+            }
+
+            wp_safe_redirect( admin_url( 'edit.php?post_type=' . self::PRESET_POST_TYPE ) );
+            exit;
         }
 
         /**
@@ -334,9 +417,15 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
             $captured_at    = get_post_meta( $post->ID, '_eventosapp_preset_captured_at', true );
             $meta_count     = absint( get_post_meta( $post->ID, '_eventosapp_preset_meta_count', true ) );
             $configuration  = get_post_meta( $post->ID, '_eventosapp_preset_configuration', true );
-            $meta_keys      = is_array( $configuration ) && ! empty( $configuration['meta'] ) && is_array( $configuration['meta'] )
-                ? array_keys( $configuration['meta'] )
+            $meta_values    = is_array( $configuration ) && ! empty( $configuration['meta'] ) && is_array( $configuration['meta'] )
+                ? $configuration['meta']
                 : [];
+            $meta_keys      = array_keys( $meta_values );
+            $assets         = is_array( $configuration ) && ! empty( $configuration['assets'] ) && is_array( $configuration['assets'] )
+                ? $configuration['assets']
+                : self::build_asset_inventory( $meta_values );
+            $media_assets   = ! empty( $assets['media'] ) && is_array( $assets['media'] ) ? $assets['media'] : [];
+            $color_assets   = ! empty( $assets['colors'] ) && is_array( $assets['colors'] ) ? $assets['colors'] : [];
 
             wp_nonce_field( 'eventosapp_save_preset_post', 'eventosapp_preset_post_nonce' );
             ?>
@@ -370,6 +459,27 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
                             <details style="margin-top:8px">
                                 <summary>Ver claves incluidas</summary>
                                 <code style="display:block;margin-top:8px;white-space:normal;line-height:1.65"><?php echo esc_html( implode( ', ', $meta_keys ) ); ?></code>
+                            </details>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Imágenes, logos y colores</th>
+                    <td>
+                        <strong><?php echo esc_html( count( $media_assets ) ); ?></strong> referencias de imágenes/logos/adjuntos y
+                        <strong><?php echo esc_html( count( $color_assets ) ); ?></strong> valores de color.
+                        <p class="description">Estos valores se guardan dentro de la misma fotografía de configuración y se restauran al aplicar la preconfiguración.</p>
+                        <?php if ( $media_assets || $color_assets ) : ?>
+                            <details style="margin-top:8px">
+                                <summary>Ver recursos visuales guardados</summary>
+                                <div style="margin-top:8px;max-height:320px;overflow:auto;border:1px solid #dcdcde;background:#fff;padding:8px">
+                                    <?php foreach ( array_merge( $media_assets, $color_assets ) as $asset ) : ?>
+                                        <div style="padding:5px 0;border-bottom:1px solid #f0f0f1;word-break:break-word">
+                                            <code><?php echo esc_html( $asset['path'] ?? '' ); ?></code><br>
+                                            <span><?php echo esc_html( is_scalar( $asset['value'] ?? '' ) ? (string) $asset['value'] : wp_json_encode( $asset['value'] ?? '' ) ); ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
                             </details>
                         <?php endif; ?>
                     </td>
@@ -643,12 +753,24 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
                 return [ 'ok' => false, 'message' => 'No se encontraron ajustes reutilizables para guardar.' ];
             }
 
+            if ( ! post_type_exists( self::PRESET_POST_TYPE ) ) {
+                return [
+                    'ok'      => false,
+                    'message' => 'No se pudo crear la preconfiguración porque el tipo de contenido interno no está registrado. Verifica que el archivo eventosapp-event-presets.php esté cargado.',
+                ];
+            }
+
             if ( $preset_id ) {
-                wp_update_post( [
-                    'ID'         => $preset_id,
-                    'post_title' => $name,
-                    'post_status'=> 'publish',
-                ] );
+                $updated_id = wp_update_post( [
+                    'ID'          => $preset_id,
+                    'post_title'  => $name,
+                    'post_status' => 'publish',
+                ], true );
+
+                if ( is_wp_error( $updated_id ) || ! $updated_id ) {
+                    $error_message = is_wp_error( $updated_id ) ? $updated_id->get_error_message() : 'WordPress no devolvió un ID válido.';
+                    return [ 'ok' => false, 'message' => 'No se pudo actualizar la preconfiguración: ' . $error_message ];
+                }
             } else {
                 $preset_id = wp_insert_post( [
                     'post_type'   => self::PRESET_POST_TYPE,
@@ -657,8 +779,9 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
                     'post_author' => get_current_user_id(),
                 ], true );
 
-                if ( is_wp_error( $preset_id ) ) {
-                    return [ 'ok' => false, 'message' => 'No se pudo crear la preconfiguración: ' . $preset_id->get_error_message() ];
+                if ( is_wp_error( $preset_id ) || ! $preset_id ) {
+                    $error_message = is_wp_error( $preset_id ) ? $preset_id->get_error_message() : 'WordPress no devolvió un ID válido.';
+                    return [ 'ok' => false, 'message' => 'No se pudo crear la preconfiguración: ' . $error_message ];
                 }
             }
 
@@ -669,10 +792,25 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
             update_post_meta( $preset_id, '_eventosapp_preset_meta_count', count( $snapshot['meta'] ) );
             update_post_meta( $preset_id, '_eventosapp_preset_version', self::SNAPSHOT_VERSION );
 
+            $stored_snapshot = get_post_meta( $preset_id, '_eventosapp_preset_configuration', true );
+            if ( ! is_array( $stored_snapshot ) || empty( $stored_snapshot['meta'] ) ) {
+                return [
+                    'ok'      => false,
+                    'message' => 'La entrada fue creada, pero no se pudo verificar la fotografía de configuración en la base de datos.',
+                ];
+            }
+
+            $media_count = ! empty( $snapshot['assets']['media'] ) && is_array( $snapshot['assets']['media'] )
+                ? count( $snapshot['assets']['media'] )
+                : 0;
+            $color_count = ! empty( $snapshot['assets']['colors'] ) && is_array( $snapshot['assets']['colors'] )
+                ? count( $snapshot['assets']['colors'] )
+                : 0;
+
             return [
                 'ok'        => true,
                 'preset_id' => absint( $preset_id ),
-                'message'   => 'La preconfiguración “' . $name . '” se guardó con ' . count( $snapshot['meta'] ) . ' ajustes reutilizables.',
+                'message'   => 'La preconfiguración “' . $name . '” se guardó con ' . count( $snapshot['meta'] ) . ' ajustes, ' . $media_count . ' referencias visuales y ' . $color_count . ' colores.',
             ];
         }
 
@@ -718,7 +856,95 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
                 'client_id'       => absint( $client_id ),
                 'captured_at'     => current_time( 'mysql' ),
                 'meta'            => $snapshot,
+                // Inventario informativo. Los valores reales siguen guardados en meta.
+                'assets'          => self::build_asset_inventory( $snapshot ),
             ];
+        }
+
+        /**
+         * Genera un inventario visible de URLs/IDs de medios y colores incluidos.
+         * También inspecciona arreglos anidados, como logos extra del kiosko y variantes.
+         */
+        private static function build_asset_inventory( $snapshot ) {
+            if ( ! is_array( $snapshot ) ) {
+                return [ 'media' => [], 'colors' => [] ];
+            }
+
+            $media = [];
+            $colors = [];
+
+            foreach ( $snapshot as $meta_key => $value ) {
+                self::scan_asset_value( $value, (string) $meta_key, $media, $colors );
+            }
+
+            return [
+                'media'  => array_values( $media ),
+                'colors' => array_values( $colors ),
+            ];
+        }
+
+        /**
+         * Recorre recursivamente un valor de configuración para identificar recursos visuales.
+         */
+        private static function scan_asset_value( $value, $path, &$media, &$colors ) {
+            if ( is_array( $value ) ) {
+                foreach ( $value as $child_key => $child_value ) {
+                    self::scan_asset_value( $child_value, $path . '.' . $child_key, $media, $colors );
+                }
+                return;
+            }
+
+            if ( is_object( $value ) || $value === null || is_bool( $value ) ) {
+                return;
+            }
+
+            $string_value = trim( (string) $value );
+            if ( $string_value === '' ) {
+                return;
+            }
+
+            $path_lower = strtolower( $path );
+            $media_hints = [
+                'image', 'imagen', 'logo', 'hero', 'icon', 'strip', 'thumbnail',
+                'header_img', 'msg_img', 'background_image', 'asset',
+            ];
+            $color_hints = [
+                'color', 'hex', 'background_color', '_bg', '_fg', 'foreground', 'label_color',
+            ];
+
+            $is_media_path = false;
+            foreach ( $media_hints as $hint ) {
+                if ( strpos( $path_lower, $hint ) !== false ) {
+                    $is_media_path = true;
+                    break;
+                }
+            }
+
+            if ( $is_media_path ) {
+                $looks_like_url = (bool) preg_match( '~^https?://~i', $string_value );
+                $looks_like_id  = (bool) preg_match( '/(?:^|[._])(?:id|thumbnail_id)$/', $path_lower ) && ctype_digit( ltrim( $string_value, '+' ) );
+                if ( $looks_like_url || $looks_like_id ) {
+                    $media[ md5( $path . '|' . $string_value ) ] = [
+                        'path'  => $path,
+                        'value' => $string_value,
+                    ];
+                }
+            }
+
+            $is_color_path = false;
+            foreach ( $color_hints as $hint ) {
+                if ( strpos( $path_lower, $hint ) !== false ) {
+                    $is_color_path = true;
+                    break;
+                }
+            }
+
+            if ( $is_color_path && preg_match( '/^(?:#[0-9a-f]{3,8}|(?:rgb|hsl)a?\([^)]*\))$/i', $string_value ) ) {
+                $colors[ md5( $path . '|' . $string_value ) ] = [
+                    'path'  => $path,
+                    'value' => $string_value,
+                ];
+            }
         }
 
         /**
@@ -748,6 +974,23 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
                 '_eventosapp_wallet_logo_url',
                 '_eventosapp_wallet_hero_img_url',
                 '_eventosapp_wallet_hex_color',
+                '_eventosapp_apple_icon_url',
+                '_eventosapp_apple_logo_url',
+                '_eventosapp_apple_strip_url',
+                '_eventosapp_apple_hex_bg',
+                '_eventosapp_apple_hex_fg',
+                '_eventosapp_apple_hex_label',
+                '_eventosapp_email_header_img',
+                '_eventosapp_email_msg_img',
+                '_eventosapp_email_heading_color',
+                '_eventosapp_email_subheading_color',
+                '_eventosapp_email_text_color',
+                '_eventosapp_self_checkin_background_color',
+                '_eventosapp_self_checkin_background_image_id',
+                '_eventosapp_self_checkin_background_image_url',
+                '_eventosapp_self_checkin_main_logo_id',
+                '_eventosapp_self_checkin_main_logo_url',
+                '_eventosapp_self_checkin_extra_logos',
                 '_eventosapp_ticket_pdf',
                 '_eventosapp_ticket_ics',
                 '_eventosapp_ticket_wallet_android',
@@ -794,6 +1037,7 @@ if ( ! class_exists( 'EventosApp_Event_Presets_And_Venues' ) ) {
                 '_eventosapp_notificacion_',
                 '_eventosapp_notification_',
                 '_eventosapp_form_',
+                '_eventosapp_badge_',
                 'eventosapp_badge_',
                 'eventosapp_field_order_',
             ];
