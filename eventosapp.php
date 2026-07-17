@@ -1203,6 +1203,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-herramientas
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-embed-form.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-edicion-masiva.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-clientes-cpt.php'; // CPT Clientes / Organizadores
+require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-event-presets.php'; // Preconfiguraciones por cliente y ubicaciones reutilizables
 eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-expositores.php',
     'eventosapp-expositores.php',
@@ -1493,6 +1494,8 @@ if ( ! function_exists('eventosapp_get_admin_menu_groups') ) {
                 ['slug' => 'edit.php?post_type=eventosapp_event'],
                 ['slug' => 'edit.php?post_type=eventosapp_ticket'],
                 ['slug' => 'edit.php?post_type=eventosapp_cliente'],
+                ['slug' => 'edit.php?post_type=eventosapp_event_preset'],
+                ['slug' => 'edit.php?post_type=eventosapp_venue'],
                 ['slug' => 'edit.php?post_type=eventosapp_expositor'],
                 ['slug' => 'edit.php?post_type=eventosapp_asistente'],
                 ['slug' => 'edit.php?post_type=eventosapp_galeria'],
