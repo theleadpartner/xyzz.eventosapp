@@ -1141,6 +1141,7 @@ eventosapp_require_first_existing_file([
     'includes/frontend/eventosapp-support-assistance.php',
     'eventosapp-support-assistance.php',
 ]);
+require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-company-checkin-monitor.php'; // Monitor de empresas con check-in
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-dashboard.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-search.php';
 eventosapp_require_first_existing_file([
