@@ -41,6 +41,7 @@ function eventosapp_get_pages_config() {
         'support_team_metrics_page_id' => 0, // Métricas equipo de apoyo
         'expositor_page_id'            => 0, // Módulo Expositor
         'expositor_gestion_page_id'    => 0, // Gestión de Expositores
+        'company_checkin_page_id'       => 0, // Monitor de empresas con check-in
     ]);
 }
 
@@ -120,6 +121,10 @@ function eventosapp_get_expositor_url() {
 
 function eventosapp_get_expositor_gestion_url() {
     return eventosapp_get_configured_page_url('expositor_gestion_page_id', '#');
+}
+
+function eventosapp_get_company_checkin_url() {
+    return eventosapp_get_configured_page_url('company_checkin_page_id', '#');
 }
 
 
@@ -321,6 +326,15 @@ add_settings_field(
         ['key'=>'expositor_gestion_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_expositor_gestion]</code>']
     );
 
+    add_settings_field(
+        'company_checkin_page_id',
+        'Página del Monitor de Empresas',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'company_checkin_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_company_checkin_monitor]</code>']
+    );
+
 });
 
 function eventosapp_sanitize_pages_option($input){
@@ -344,6 +358,7 @@ function eventosapp_sanitize_pages_option($input){
         'support_team_metrics_page_id',
         'expositor_page_id',
         'expositor_gestion_page_id',
+        'company_checkin_page_id',
     ];
     foreach ($keys as $k) {
         $out[$k] = isset($input[$k]) ? absint($input[$k]) : 0;
@@ -408,6 +423,7 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_support_team_metrics]</code> — Métricas del equipo de apoyo.</li>
             <li><code>[eventosapp_expositor]</code> — Módulo de entregas del expositor.</li>
             <li><code>[eventosapp_expositor_gestion]</code> — Gestión/autorización de expositores por organizador.</li>
+            <li><code>[eventosapp_company_checkin_monitor]</code> — Monitor dinámico de empresas y asistentes con check-in.</li>
         </ul>
     </div>
 <?php }
@@ -437,6 +453,7 @@ function eventosapp_dashboard_features() {
         'support_team_metrics' => 'Métrica de equipo de apoyo',
         'expositor'            => 'Expositor',
         'expositor_gestion'    => 'Gestión de Expositores',
+        'company_checkin'       => 'Empresas con Check-In',
     ];
 }
 }
@@ -673,6 +690,7 @@ function eventosapp_feature_page_map() {
         'support_team_metrics' => 'support_team_metrics_page_id',
         'expositor'            => 'expositor_page_id',
         'expositor_gestion'    => 'expositor_gestion_page_id',
+        'company_checkin'       => 'company_checkin_page_id',
     ];
 }
 }
