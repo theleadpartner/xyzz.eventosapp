@@ -13,6 +13,9 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 			case 'flow-metrics':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v9H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M7 18h10M9 21h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 11l2-2 2 2 4-5 2 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
 
+			case 'building-checkin':
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v16M2 21h20M8 7h2M13 7h1M8 11h2M13 11h1M8 15h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="m15 16 2 2 4-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 			case 'circle-user':
 				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
 					<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -415,6 +418,7 @@ add_shortcode('eventosapp_dashboard', function(){
 		$url_support_stats  = function_exists('eventosapp_get_support_team_metrics_url')  ? eventosapp_get_support_team_metrics_url()  : '#';
 		$url_expositor      = function_exists('eventosapp_get_expositor_url')             ? eventosapp_get_expositor_url()             : '#';
 		$url_expo_gestion   = function_exists('eventosapp_get_expositor_gestion_url')     ? eventosapp_get_expositor_gestion_url()     : '#';
+		$url_company_checkin = function_exists('eventosapp_get_company_checkin_url')       ? eventosapp_get_company_checkin_url()       : '#';
 
 		?>
 		<div class="evapp-grid" role="navigation" aria-label="Panel de acciones del evento">
@@ -429,6 +433,18 @@ add_shortcode('eventosapp_dashboard', function(){
 				<a class="evapp-card" href="<?php echo esc_url($url_flow_metrics); ?>" aria-label="Métricas de Encuestas">
 					<?php echo eventosapp_dashboard_icon('flow-metrics'); ?>
 					<span class="evapp-title">Métricas de Encuestas</span>
+				</a>
+			<?php endif; ?>
+
+			<?php
+			$can_view_company_checkin = function_exists('eventosapp_company_checkin_user_can_view')
+				? eventosapp_company_checkin_user_can_view($active_event, $current_user_id)
+				: (function_exists('eventosapp_company_checkin_is_enabled') && eventosapp_company_checkin_is_enabled($active_event) && eventosapp_role_can('company_checkin'));
+			?>
+			<?php if ($can_view_company_checkin): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_company_checkin); ?>" aria-label="Empresas con Check-In">
+					<?php echo eventosapp_dashboard_icon('building-checkin'); ?>
+					<span class="evapp-title">Empresas con Check-In</span>
 				</a>
 			<?php endif; ?>
 
