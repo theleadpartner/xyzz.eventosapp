@@ -56,6 +56,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
     // NUEVO: Flag "Mensajería de WhatsApp"
     $whatsapp_enabled = get_post_meta($post->ID, '_eventosapp_ticket_whatsapp_enabled', true);
 
+    // Monitor de empresas con check-in
+    $company_checkin_monitor = get_post_meta($post->ID, '_eventosapp_ticket_company_checkin_monitor', true);
+
     wp_nonce_field('eventosapp_extras_ticket_guardar', 'eventosapp_extras_ticket_nonce');
     ?>
     <label>
@@ -180,6 +183,17 @@ function eventosapp_render_metabox_extras_ticket($post) {
         y se incluye en la exportación de base de datos.
     </small>
 
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_company_checkin_monitor" value="1" <?php checked($company_checkin_monitor, '1'); ?>>
+        <strong>🏢 Activar monitor de empresas con Check-In</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Habilita la sección del dashboard que agrupa los asistentes con check-in por Empresa y NIT.
+        El módulo normaliza los formatos del NIT y muestra los nombres asociados al mismo número.
+    </small>
+
     <?php
 }
 
@@ -250,6 +264,13 @@ add_action('save_post_eventosapp_event', function($post_id){
         $post_id,
         '_eventosapp_ticket_acompanantes_checkin',
         isset($_POST['eventosapp_ticket_acompanantes_checkin']) ? '1' : '0'
+    );
+
+    // Activar monitor de empresas con check-in
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_company_checkin_monitor',
+        isset($_POST['eventosapp_ticket_company_checkin_monitor']) ? '1' : '0'
     );
 
 }, 25); // prioridad > 20 para correr después del guardado base
