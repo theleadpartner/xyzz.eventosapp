@@ -116,6 +116,13 @@ if ( ! function_exists('eventosapp_dashboard_icon') ) {
 					<path d="M16 16l1 1 2-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>';
 
+			case 'live-raffle':
+				return '<svg class="evapp-ico" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M5 4h14v5a7 7 0 0 1-14 0V4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+					<path d="M8 20h8M12 16v4M5 7H2v1a4 4 0 0 0 4 4M19 7h3v1a4 4 0 0 1-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+					<path d="m12 6 .8 1.7 1.9.2-1.4 1.3.4 1.9-1.7-.9-1.7.9.4-1.9-1.4-1.3 1.9-.2L12 6Z"/>
+				</svg>';
+
 			default:
 				return '';
 		}
@@ -419,6 +426,7 @@ add_shortcode('eventosapp_dashboard', function(){
 		$url_expositor      = function_exists('eventosapp_get_expositor_url')             ? eventosapp_get_expositor_url()             : '#';
 		$url_expo_gestion   = function_exists('eventosapp_get_expositor_gestion_url')     ? eventosapp_get_expositor_gestion_url()     : '#';
 		$url_company_checkin = function_exists('eventosapp_get_company_checkin_url')       ? eventosapp_get_company_checkin_url()       : '#';
+		$url_live_raffle     = function_exists('eventosapp_get_live_raffle_url')           ? eventosapp_get_live_raffle_url()           : '#';
 
 		?>
 		<div class="evapp-grid" role="navigation" aria-label="Panel de acciones del evento">
@@ -445,6 +453,18 @@ add_shortcode('eventosapp_dashboard', function(){
 				<a class="evapp-card" href="<?php echo esc_url($url_company_checkin); ?>" aria-label="Empresas con Check-In">
 					<?php echo eventosapp_dashboard_icon('building-checkin'); ?>
 					<span class="evapp-title">Empresas con Check-In</span>
+				</a>
+			<?php endif; ?>
+
+			<?php
+			$can_view_live_raffle = function_exists('eventosapp_live_raffle_user_can_view')
+				? eventosapp_live_raffle_user_can_view($active_event, $current_user_id)
+				: (function_exists('eventosapp_live_raffle_is_enabled') && eventosapp_live_raffle_is_enabled($active_event) && eventosapp_role_can('live_raffle'));
+			?>
+			<?php if ($can_view_live_raffle): ?>
+				<a class="evapp-card" href="<?php echo esc_url($url_live_raffle); ?>" aria-label="Sorteo en Vivo">
+					<?php echo eventosapp_dashboard_icon('live-raffle'); ?>
+					<span class="evapp-title">Sorteo en Vivo</span>
 				</a>
 			<?php endif; ?>
 
