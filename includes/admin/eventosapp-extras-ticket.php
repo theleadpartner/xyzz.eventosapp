@@ -59,6 +59,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
     // Monitor de empresas con check-in
     $company_checkin_monitor = get_post_meta($post->ID, '_eventosapp_ticket_company_checkin_monitor', true);
 
+    // Sorteo en vivo entre asistentes con check-in
+    $live_raffle_enabled = get_post_meta($post->ID, '_eventosapp_ticket_live_raffle_enabled', true);
+
     wp_nonce_field('eventosapp_extras_ticket_guardar', 'eventosapp_extras_ticket_nonce');
     ?>
     <label>
@@ -194,6 +197,17 @@ function eventosapp_render_metabox_extras_ticket($post) {
         El módulo normaliza los formatos del NIT y muestra los nombres asociados al mismo número.
     </small>
 
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_live_raffle_enabled" value="1" <?php checked($live_raffle_enabled, '1'); ?>>
+        <strong>🎉 Activar Sorteo en Vivo</strong>
+    </label>
+    <br>
+    <small style="color:#666">
+        Habilita la sección del dashboard para realizar sorteos entre asistentes con check-in presencial o virtual.
+        Permite segmentar por modalidad, localidad, networking y transacciones con expositores, además de usar una pantalla pública para asistentes y proyección.
+    </small>
+
     <?php
 }
 
@@ -271,6 +285,13 @@ add_action('save_post_eventosapp_event', function($post_id){
         $post_id,
         '_eventosapp_ticket_company_checkin_monitor',
         isset($_POST['eventosapp_ticket_company_checkin_monitor']) ? '1' : '0'
+    );
+
+    // Activar Sorteo en Vivo
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_live_raffle_enabled',
+        isset($_POST['eventosapp_ticket_live_raffle_enabled']) ? '1' : '0'
     );
 
 }, 25); // prioridad > 20 para correr después del guardado base
