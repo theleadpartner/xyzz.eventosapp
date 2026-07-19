@@ -161,6 +161,14 @@ if ( ! function_exists('eventosapp_custom_metrics_normalize_field_key') ) {
             'modalidad_ticket'              => 'modalidad',
             'modalidad_del_ticket'          => 'modalidad',
             'tipo_modalidad'                => 'modalidad',
+            '_eventosapp_attendance_confirmation_status' => 'attendance_confirmation_status',
+            'confirmation_status'            => 'attendance_confirmation_status',
+            'confirmacion_asistencia'         => 'attendance_confirmation_status',
+            'estado_confirmacion_asistencia'  => 'attendance_confirmation_status',
+            '_eventosapp_attendance_confirmation_sent_channels' => 'attendance_confirmation_sent_channels',
+            '_eventosapp_attendance_confirmation_response_channels' => 'attendance_confirmation_response_channels',
+            '_eventosapp_attendance_confirmation_last_response_channel' => 'attendance_confirmation_last_response_channel',
+            '_eventosapp_attendance_confirmation_last_response_at' => 'attendance_confirmation_last_response_at',
         ];
 
         return isset($aliases[$field_key]) ? $aliases[$field_key] : $field_key;
@@ -223,6 +231,11 @@ if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
             [ 'key'=>'localidad', 'label'=>'Localidad', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_localidad' ],
             [ 'key'=>'modalidad', 'label'=>'Modalidad', 'type'=>'text', 'source'=>'computed' ],
             [ 'key'=>'estado_pago', 'label'=>'Estado de pago', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_estado_pago' ],
+            [ 'key'=>'attendance_confirmation_status', 'label'=>'Confirmación de asistencia', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_status' ],
+            [ 'key'=>'attendance_confirmation_sent_channels', 'label'=>'Canales consultados para confirmación', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_sent_channels' ],
+            [ 'key'=>'attendance_confirmation_response_channels', 'label'=>'Canales de respuesta de confirmación', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_response_channels' ],
+            [ 'key'=>'attendance_confirmation_last_response_channel', 'label'=>'Último canal de respuesta', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_last_response_channel' ],
+            [ 'key'=>'attendance_confirmation_last_response_at', 'label'=>'Fecha de última respuesta de confirmación', 'type'=>'date', 'source'=>'system', 'meta_key'=>'_eventosapp_attendance_confirmation_last_response_at' ],
             [ 'key'=>'checked_in_any', 'label'=>'Checked-In (algún día)', 'type'=>'text', 'source'=>'computed' ],
             [ 'key'=>'medio_checkin', 'label'=>'Medio de check-in', 'type'=>'text', 'source'=>'computed' ],
             [ 'key'=>'acompanantes_sin_qr', 'label'=>'Acompañantes sin QR', 'type'=>'number', 'source'=>'system', 'meta_key'=>'_eventosapp_ticket_acompanantes_sin_qr' ],
@@ -529,6 +542,16 @@ if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value') ) {
 
         if ( $key === 'ticket_post_id' ) return (string) $ticket_id;
         if ( $key === 'modalidad' ) return eventosapp_custom_metrics_get_ticket_modalidad_display($ticket_id, $event_id);
+        if ( strpos($key, 'attendance_confirmation_') === 0 ) {
+            if ( function_exists('eventosapp_attendance_confirmation_get_ticket_field_value') ) {
+                return eventosapp_attendance_confirmation_get_ticket_field_value($ticket_id, $key, true);
+            }
+            if ( $key === 'attendance_confirmation_status' ) {
+                $raw = sanitize_key((string)get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_status', true));
+                $labels = ['si'=>'Sí','no'=>'No','no_responde'=>'No responde','sin_consulta'=>'Sin consulta'];
+                return $labels[$raw] ?? 'Sin consulta';
+            }
+        }
         if ( $key === 'checked_in_any' ) return eventosapp_custom_metrics_ticket_checked_in_any($ticket_id, $event_id);
         if ( $key === 'medio_checkin' ) return eventosapp_custom_metrics_ticket_first_qr_label($ticket_id);
         if ( $key === 'fecha_creacion' ) return get_post_time('Y-m-d H:i:s', false, $ticket_id);
@@ -875,6 +898,37 @@ if ( ! function_exists('eventosapp_custom_metrics_ticket_modalidad_display_from_
     }
 }
 
+if ( ! function_exists('eventosapp_custom_metrics_attendance_value_from_meta') ) {
+    function eventosapp_custom_metrics_attendance_value_from_meta($key, $raw){
+        $key = eventosapp_custom_metrics_normalize_field_key($key);
+        if ( $key === 'attendance_confirmation_status' ) {
+            $raw = sanitize_key(is_scalar($raw) ? (string)$raw : '');
+            $labels = function_exists('eventosapp_attendance_confirmation_status_options')
+                ? eventosapp_attendance_confirmation_status_options()
+                : ['si'=>'Sí','no'=>'No','no_responde'=>'No responde','sin_consulta'=>'Sin consulta'];
+            return $labels[$raw] ?? ($labels['sin_consulta'] ?? 'Sin consulta');
+        }
+        if ( in_array($key, ['attendance_confirmation_sent_channels','attendance_confirmation_response_channels'], true) ) {
+            $channels = function_exists('eventosapp_attendance_confirmation_sanitize_channels')
+                ? eventosapp_attendance_confirmation_sanitize_channels($raw)
+                : (is_array($raw) ? $raw : []);
+            if ( function_exists('eventosapp_attendance_confirmation_format_channels') ) {
+                return eventosapp_attendance_confirmation_format_channels($channels);
+            }
+            $labels = ['email'=>'Correo electrónico','whatsapp'=>'WhatsApp'];
+            return implode(', ', array_map(function($channel) use ($labels){ return $labels[$channel] ?? $channel; }, $channels));
+        }
+        if ( $key === 'attendance_confirmation_last_response_channel' ) {
+            $channel = sanitize_key(is_scalar($raw) ? (string)$raw : '');
+            if ( function_exists('eventosapp_attendance_confirmation_channel_label') && $channel !== '' ) {
+                return eventosapp_attendance_confirmation_channel_label($channel);
+            }
+            return $channel === 'email' ? 'Correo electrónico' : ($channel === 'whatsapp' ? 'WhatsApp' : '');
+        }
+        return is_scalar($raw) ? (string)$raw : '';
+    }
+}
+
 if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value_from_batch') ) {
     function eventosapp_custom_metrics_extract_ticket_value_from_batch($ticket_id, $event_id, $field, $meta_map, $post_dates){
         $key = eventosapp_custom_metrics_normalize_field_key(isset($field['key']) ? (string) $field['key'] : '');
@@ -885,6 +939,11 @@ if ( ! function_exists('eventosapp_custom_metrics_extract_ticket_value_from_batc
                 eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, '_eventosapp_ticket_modalidad', ''),
                 $event_id
             );
+        }
+        if ( strpos($key, 'attendance_confirmation_') === 0 ) {
+            $meta_key = isset($field['meta_key']) ? (string)$field['meta_key'] : '';
+            $raw = $meta_key !== '' ? eventosapp_custom_metrics_get_meta_value_from_map($meta_map, $ticket_id, $meta_key, '') : '';
+            return eventosapp_custom_metrics_attendance_value_from_meta($key, $raw);
         }
         if ( $key === 'checked_in_any' ) {
             return eventosapp_custom_metrics_ticket_checked_in_any_from_meta(

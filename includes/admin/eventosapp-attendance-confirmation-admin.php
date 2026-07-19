@@ -308,24 +308,57 @@ function eventosapp_attendance_confirmation_render_bulk_send($segment_id) {
     $segment=eventosapp_attendance_confirmation_get_segment($segment_id);
     if(!$segment){echo '<div class="notice notice-error"><p>La segmentación expiró o no existe.</p></div>';return;}
     $total=absint($segment['total']);
+    $channels=eventosapp_attendance_confirmation_sanitize_channels($segment['config']['channels']??[]);
+    $limits=function_exists('eventosapp_attendance_confirmation_bulk_limits')
+        ? eventosapp_attendance_confirmation_bulk_limits('attendance_confirmation_bulk',$channels)
+        : ['batch_size'=>5,'ajax_delay_ms'=>1800,'max_execution'=>20,'memory_stop_ratio'=>0.72];
     ?>
-    <div class="evapp-attendance-card"><h2>Procesar envío</h2><p>Se procesarán <strong><?php echo esc_html($total); ?></strong> tickets en lotes de <?php echo esc_html(EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_SIZE); ?>.</p><p><button type="button" class="button button-primary button-hero" id="evapp-attendance-start" <?php disabled($total===0); ?>>Iniciar envío</button></p><div class="evapp-attendance-progress"><span id="evapp-attendance-bar"></span></div><p id="evapp-attendance-status">Listo para iniciar.</p><div class="evapp-attendance-log" id="evapp-attendance-log"></div></div>
+    <div class="evapp-attendance-card"><h2>Procesar envío</h2>
+        <p>Se procesarán <strong><?php echo esc_html($total); ?></strong> tickets con protección de recursos.</p>
+        <ul style="list-style:disc;padding-left:20px">
+            <li>Máximo <?php echo esc_html($limits['batch_size']); ?> tickets por solicitud.</li>
+            <li>Pausa mínima de <?php echo esc_html(number_format($limits['ajax_delay_ms']/1000,1,',','.')); ?> segundos entre lotes.</li>
+            <li>Corte automático por tiempo de ejecución o consumo de memoria.</li>
+            <li>Bloqueo de concurrencia para impedir dos lotes simultáneos del mismo segmento.</li>
+        </ul>
+        <p><button type="button" class="button button-primary button-hero" id="evapp-attendance-start" <?php disabled($total===0); ?>>Iniciar envío</button></p>
+        <div class="evapp-attendance-progress"><span id="evapp-attendance-bar"></span></div>
+        <p id="evapp-attendance-status">Listo para iniciar.</p><div class="evapp-attendance-log" id="evapp-attendance-log"></div>
+    </div>
     <script>
     jQuery(function($){
         const total=<?php echo (int)$total; ?>, segment='<?php echo esc_js($segment_id); ?>', nonce='<?php echo esc_js(wp_create_nonce('eventosapp_attendance_confirmation_process_batch')); ?>';
+        const defaultDelay=<?php echo (int)$limits['ajax_delay_ms']; ?>;
         let offset=0,running=false;
         const log=(text)=>$('#evapp-attendance-log').prepend($('<div>').text(text));
+        function scheduleNext(delay){ window.setTimeout(run, Math.max(750,parseInt(delay||defaultDelay,10))); }
         function run(){
             if(!running)return;
             $.post(ajaxurl,{action:'eventosapp_attendance_confirmation_process_batch',segment_id:segment,offset:offset,nonce:nonce},function(r){
-                if(!r.success){running=false;$('#evapp-attendance-status').text(r.data&&r.data.message?r.data.message:'Error procesando el lote.');return;}
-                offset=r.data.next_offset; const pct=total?Math.min(100,Math.round(offset/total*100)):100;
+                if(!r.success){
+                    running=false;
+                    $('#evapp-attendance-status').text(r.data&&r.data.message?r.data.message:'Error procesando el lote.');
+                    $('#evapp-attendance-start').prop('disabled',false);
+                    return;
+                }
+                const data=r.data||{};
+                if(data.busy){
+                    $('#evapp-attendance-status').text(data.message||'Otro lote está terminando. Se reintentará automáticamente.');
+                    scheduleNext(data.retry_after_ms||defaultDelay*2);
+                    return;
+                }
+                offset=parseInt(data.next_offset||offset,10);
+                const pct=total?Math.min(100,Math.round(offset/total*100)):100;
                 $('#evapp-attendance-bar').css('width',pct+'%');
-                $('#evapp-attendance-status').text('Procesados '+Math.min(offset,total)+' de '+total+' · Correctos '+r.data.success+' · Parciales '+r.data.partial+' · Errores '+r.data.errors);
-                (r.data.log||[]).forEach(log);
-                if(r.data.done){running=false;$('#evapp-attendance-status').append(' · Finalizado.');$('#evapp-attendance-start').prop('disabled',true);return;}
-                run();
-            }).fail(function(){running=false;$('#evapp-attendance-status').text('Error de conexión con WordPress.');});
+                $('#evapp-attendance-status').text('Procesados '+Math.min(offset,total)+' de '+total+' · Correctos '+data.success+' · Parciales '+data.partial+' · Errores '+data.errors);
+                (data.log||[]).forEach(log);
+                if(data.resource_guard_triggered){ log('El lote se pausó preventivamente por el límite de recursos; continuará desde el mismo punto.'); }
+                if(data.done){running=false;$('#evapp-attendance-status').append(' · Finalizado.');$('#evapp-attendance-start').prop('disabled',true);return;}
+                scheduleNext(data.retry_after_ms||defaultDelay);
+            }).fail(function(){
+                $('#evapp-attendance-status').text('Error de conexión con WordPress. Se reintentará sin adelantar el cursor.');
+                scheduleNext(defaultDelay*2);
+            });
         }
         $('#evapp-attendance-start').on('click',function(){if(running)return;running=true;$(this).prop('disabled',true);run();});
     });
@@ -340,28 +373,68 @@ add_action('wp_ajax_eventosapp_attendance_confirmation_process_batch', function(
     $offset=absint($_POST['offset']??0);
     $segment=eventosapp_attendance_confirmation_get_segment($segment_id);
     if(!$segment) wp_send_json_error(['message'=>'La segmentación expiró.'],404);
-    $batch=array_slice((array)$segment['ticket_ids'],$offset,EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_SIZE);
-    $batch_log=[];
-    foreach($batch as $ticket_id){
-        $result=eventosapp_attendance_confirmation_send_ticket($ticket_id,[
-            'channels'=>$segment['config']['channels'],'email_template'=>$segment['config']['email_template'],
-            'email_subject'=>$segment['config']['email_subject'],'email_message'=>$segment['config']['email_message'],
-            'whatsapp_template_id'=>$segment['config']['whatsapp_template_id'],'source'=>'bulk',
-            'source_key'=>$segment_id . ':' . absint($ticket_id),
+
+    $channels=eventosapp_attendance_confirmation_sanitize_channels($segment['config']['channels']??[]);
+    $limits=eventosapp_attendance_confirmation_bulk_limits('attendance_confirmation_bulk',$channels);
+    $scope='attendance_bulk_segment:'.$segment_id;
+    $lock=eventosapp_attendance_confirmation_acquire_lock($scope,$limits['lock_ttl']);
+    if(is_wp_error($lock)){
+        wp_send_json_success([
+            'busy'=>true,'message'=>$lock->get_error_message(),'processed'=>0,'next_offset'=>$offset,
+            'done'=>false,'success'=>absint($segment['success']??0),'partial'=>absint($segment['partial']??0),
+            'errors'=>absint($segment['errors']??0),'log'=>[],'retry_after_ms'=>$limits['ajax_delay_ms']*2,
         ]);
-        if(!empty($result['ok'])&&empty($result['partial'])){$segment['success']++;$state='OK';}
-        elseif(!empty($result['ok'])){$segment['partial']++;$state='PARCIAL';}
-        else{$segment['errors']++;$state='ERROR';}
-        $segment['processed']++;
-        $batch_log[]='#'.absint($ticket_id).' · '.$state.' · '.sanitize_text_field((string)($result['message']??''));
     }
-    $segment['log']=array_slice(array_merge($batch_log,(array)$segment['log']),0,150);
-    eventosapp_attendance_confirmation_save_segment($segment_id,$segment);
-    $next=$offset+count($batch);
-    wp_send_json_success([
-        'processed'=>count($batch),'next_offset'=>$next,'done'=>$next>=absint($segment['total']),
-        'success'=>absint($segment['success']),'partial'=>absint($segment['partial']),'errors'=>absint($segment['errors']),'log'=>$batch_log,
-    ]);
+
+    $response=[];
+    try{
+        $started=microtime(true);
+        $batch=array_slice((array)$segment['ticket_ids'],$offset,$limits['batch_size']);
+        $batch_log=[];
+        $processed_now=0;
+        $resource_guard=false;
+
+        foreach($batch as $ticket_id){
+            if(eventosapp_attendance_confirmation_should_yield($started,$processed_now,$limits)){
+                $resource_guard=true;
+                break;
+            }
+            $ticket_id=absint($ticket_id);
+            if(!$ticket_id)continue;
+            $result=eventosapp_attendance_confirmation_send_ticket($ticket_id,[
+                'channels'=>$channels,'email_template'=>$segment['config']['email_template'],
+                'email_subject'=>$segment['config']['email_subject'],'email_message'=>$segment['config']['email_message'],
+                'whatsapp_template_id'=>$segment['config']['whatsapp_template_id'],'source'=>'bulk',
+                'source_key'=>$segment_id . ':' . $ticket_id,
+            ]);
+            if(!empty($result['ok'])&&empty($result['partial'])){$segment['success']++;$state='OK';}
+            elseif(!empty($result['ok'])){$segment['partial']++;$state='PARCIAL';}
+            else{$segment['errors']++;$state='ERROR';}
+            $segment['processed']++;
+            $processed_now++;
+            $batch_log[]='#'.$ticket_id.' · '.$state.' · '.sanitize_text_field((string)($result['message']??''));
+        }
+
+        $segment['log']=array_slice(array_merge($batch_log,(array)$segment['log']),0,150);
+        eventosapp_attendance_confirmation_save_segment($segment_id,$segment);
+        $next=$offset+$processed_now;
+        $done=$next>=absint($segment['total']);
+        $response=[
+            'busy'=>false,'processed'=>$processed_now,'next_offset'=>$next,'done'=>$done,
+            'success'=>absint($segment['success']),'partial'=>absint($segment['partial']),
+            'errors'=>absint($segment['errors']),'log'=>$batch_log,
+            'retry_after_ms'=>$limits['ajax_delay_ms'],'batch_size'=>$limits['batch_size'],
+            'resource_guard_triggered'=>$resource_guard,
+        ];
+
+        if($processed_now===0&&!$done){
+            $response['retry_after_ms']=$limits['ajax_delay_ms']*2;
+        }
+    }finally{
+        eventosapp_attendance_confirmation_release_lock($scope,$lock);
+    }
+
+    wp_send_json_success($response);
 });
 
 /**
@@ -388,15 +461,28 @@ function eventosapp_attendance_confirmation_render_event_metabox($post) {
     $filters=is_array($config['filters']??null)?$config['filters']:[];
     $log=get_post_meta($post->ID,'_eventosapp_attendance_confirmation_schedule_log',true);$log=is_array($log)?$log:[];
     $last_error=get_post_meta($post->ID,'_eventosapp_attendance_confirmation_schedule_last_error',true);
+    $timezone_info=function_exists('eventosapp_attendance_confirmation_event_timezone_info')?eventosapp_attendance_confirmation_event_timezone_info($post->ID):['name'=>wp_timezone_string(),'source'=>'wordpress','current_time'=>current_time('mysql'),'utc_offset'=>''];
+    $schedule_diagnostics=function_exists('eventosapp_attendance_confirmation_schedule_diagnostics')?eventosapp_attendance_confirmation_schedule_diagnostics($post->ID,$config):[];
     wp_nonce_field('eventosapp_attendance_confirmation_save_event','eventosapp_attendance_event_nonce');
     eventosapp_attendance_confirmation_render_bulk_styles();
     ?>
     <?php if($last_error): ?><div class="notice notice-error inline"><p><?php echo esc_html($last_error); ?></p></div><?php endif; ?>
     <div class="evapp-attendance-inline"><label><input type="checkbox" name="evapp_attendance_schedule[enabled]" value="1" <?php checked(!empty($config['enabled'])); ?>> Activar envío programado</label><span class="description">WP-Cron ejecutará el trabajo cuando el sitio reciba tráfico a partir de la hora indicada.</span></div>
-    <div class="evapp-attendance-grid" style="margin-top:15px"><div class="evapp-attendance-field"><label>Fecha exacta</label><input type="date" name="evapp_attendance_schedule[date]" value="<?php echo esc_attr($config['date']??''); ?>"></div><div class="evapp-attendance-field"><label>Hora exacta</label><input type="time" name="evapp_attendance_schedule[time]" value="<?php echo esc_attr($config['time']??''); ?>"></div></div>
+    <div class="evapp-attendance-card" style="background:#f0f6fc">
+        <h3>Zona horaria efectiva</h3>
+        <p><strong><?php echo esc_html($timezone_info['name']); ?></strong> · UTC<?php echo esc_html($timezone_info['utc_offset']); ?></p>
+        <p class="description">La fecha y hora se interpretan como hora local del evento. Fuente: <?php echo esc_html($timezone_info['source_label'] ?? ($timezone_info['source']==='event'?'Zona horaria configurada en el evento':'Zona horaria general de WordPress')); ?>. Hora actual allí: <?php echo esc_html($timezone_info['current_time']); ?>.</p>
+        <?php if(!empty($timezone_info['warning'])): ?><p style="color:#b32d2e"><strong>Atención:</strong> <?php echo esc_html($timezone_info['warning']); ?></p><?php endif; ?>
+        <?php if(!empty($schedule_diagnostics['stored_event_time'])): ?>
+            <p><strong>Configuración guardada:</strong> <?php echo esc_html($schedule_diagnostics['stored_event_time']); ?><br><strong>Equivalente UTC:</strong> <?php echo esc_html($schedule_diagnostics['stored_utc_time']); ?></p>
+            <p><strong>WP-Cron pendiente:</strong> <?php echo esc_html($schedule_diagnostics['next_cron_event_time']?:'No encontrado'); ?><?php if(!empty($schedule_diagnostics['next_cron_utc_time'])): ?><br><strong>WP-Cron UTC:</strong> <?php echo esc_html($schedule_diagnostics['next_cron_utc_time']); ?><?php endif; ?></p>
+            <?php if(empty($schedule_diagnostics['cron_matches_configuration'])): ?><p style="color:#b32d2e"><strong>Atención:</strong> la tarea pendiente no coincide con la configuración o no existe. Guarda el evento para resincronizar.</p><?php else: ?><p style="color:#008a20"><strong>Verificado:</strong> WP-Cron coincide con la hora configurada.</p><?php endif; ?>
+        <?php endif; ?>
+    </div>
+    <div class="evapp-attendance-grid" style="margin-top:15px"><div class="evapp-attendance-field"><label>Fecha exacta en <?php echo esc_html($timezone_info['name']); ?></label><input type="date" name="evapp_attendance_schedule[date]" value="<?php echo esc_attr($config['date']??''); ?>"></div><div class="evapp-attendance-field"><label>Hora exacta en <?php echo esc_html($timezone_info['name']); ?></label><input type="time" name="evapp_attendance_schedule[time]" value="<?php echo esc_attr($config['time']??''); ?>"></div></div>
     <?php eventosapp_attendance_confirmation_render_message_configuration($config,'event'); ?>
     <div class="evapp-attendance-card"><h3>Filtros del envío programado</h3><?php eventosapp_attendance_confirmation_render_filter_fields('evapp_attendance_schedule[filters]',$post->ID,$filters); ?></div>
-    <div class="evapp-attendance-card"><h3>Log de programación</h3><?php if(!$log): ?><p class="description">Sin registros.</p><?php else: ?><div class="evapp-attendance-log"><?php foreach(array_slice($log,0,50) as $entry): ?><div><strong><?php echo esc_html($entry['at']??''); ?></strong> · <?php echo esc_html($entry['message']??''); ?></div><?php endforeach; ?></div><?php endif; ?></div>
+    <div class="evapp-attendance-card"><h3>Log de programación</h3><?php if(!$log): ?><p class="description">Sin registros.</p><?php else: ?><div class="evapp-attendance-log"><?php foreach(array_slice($log,0,50) as $entry): ?><div><strong><?php echo esc_html($entry['at_event_timezone']??($entry['at']??'')); ?></strong> · <?php echo esc_html($entry['message']??''); ?></div><?php endforeach; ?></div><?php endif; ?></div>
     <?php
 }
 
@@ -417,7 +503,7 @@ add_action('save_post_eventosapp_event', function($post_id){
     $config['filters']=eventosapp_attendance_confirmation_sanitize_filters(array_merge((array)($raw['filters']??[]),['evento_id'=>$post_id]));
     $result=eventosapp_attendance_confirmation_schedule_event($post_id,$config);
     if(is_wp_error($result))update_post_meta($post_id,'_eventosapp_attendance_confirmation_schedule_last_error',$result->get_error_message());else delete_post_meta($post_id,'_eventosapp_attendance_confirmation_schedule_last_error');
-},40,1);
+},120,1);
 
 /**
  * Inserta el selector de imagen dentro del metabox existente de WhatsApp.
