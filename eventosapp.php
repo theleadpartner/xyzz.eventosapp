@@ -1199,6 +1199,21 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-privacidad.p
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-api-autocomplete.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-ticket-email.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-email-masivo.php';
+
+// Confirmación de asistencia: motor, plantilla WhatsApp y administración.
+// Se cargan después de correo/WhatsApp para reutilizar sus APIs públicas sin alterar los flujos existentes.
+eventosapp_require_first_existing_file([
+    'includes/functions/eventosapp-attendance-confirmation-core.php',
+    'eventosapp-attendance-confirmation-core.php',
+]);
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-attendance-confirmation-whatsapp-template.php',
+    'eventosapp-attendance-confirmation-whatsapp-template.php',
+]);
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-attendance-confirmation-admin.php',
+    'eventosapp-attendance-confirmation-admin.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/api/eventosapp-intake-ac.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/metabox-curl.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-herramientas.php';
