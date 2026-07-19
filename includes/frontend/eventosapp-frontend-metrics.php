@@ -2567,16 +2567,23 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
     sort($all_sessions, SORT_NATURAL | SORT_FLAG_CASE);
 
     // === 3) Tickets ===
-    $q = new WP_Query([
-        'post_type'      => 'eventosapp_ticket',
-        'post_status'    => 'any',
-        'posts_per_page' => -1,
-        'fields'         => 'ids',
-        'meta_query'     => [
-            ['key'=>'_eventosapp_ticket_evento_id', 'value'=>$event_id, 'compare'=>'='],
-        ],
-    ]);
-    $ids = $q->posts;
+    // Usa el resolvedor optimizado de IDs del módulo de métricas para evitar
+    // construir objetos WP_Post o una consulta WP_Query sin límite.
+    if ( function_exists('eventosapp_metrics_get_ticket_ids_for_event') ) {
+        $ids = eventosapp_metrics_get_ticket_ids_for_event($event_id);
+    } else {
+        $q = new WP_Query([
+            'post_type'      => 'eventosapp_ticket',
+            'post_status'    => 'any',
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                ['key'=>'_eventosapp_ticket_evento_id', 'value'=>$event_id, 'compare'=>'='],
+            ],
+        ]);
+        $ids = array_map('absint', (array)$q->posts);
+    }
 
     $extra_prefix = defined('EVAPP_PUBLIC_EXTRA_PREFIX') ? EVAPP_PUBLIC_EXTRA_PREFIX : 'eventosapp_extra';
     $extra_fields = function_exists('eventosapp_get_event_extra_fields')
@@ -2588,6 +2595,8 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
         'Ticket Public ID','Ticket Post ID','Evento ID','Evento',
         'Secuencia Interna',
         'Nombre','Apellido','CC','Email','Teléfono','Empresa','NIT','Cargo','Localidad','Modalidad del Ticket',
+        'Confirmación de asistencia','Canales consultados para confirmación','Canales de respuesta de confirmación',
+        'Último canal de respuesta','Fecha de última respuesta','Conflicto de respuestas',
         'Checked-In (algún día)', 'Checked-In presencial (algún día)', 'Checked-In virtual (algún día)'
     ];
     if (!empty($extra_fields)) {
@@ -2678,6 +2687,25 @@ $headers[] = 'Fecha creación';
         $ticket_modalidad_label = function_exists('eventosapp_ticket_modalidad_options')
             ? ((eventosapp_ticket_modalidad_options())[$ticket_modalidad] ?? ucfirst($ticket_modalidad))
             : ($ticket_modalidad === 'virtual' ? 'Virtual' : 'Presencial');
+
+        $attendance_status_key = function_exists('eventosapp_attendance_confirmation_get_status')
+            ? eventosapp_attendance_confirmation_get_status($tid)
+            : sanitize_key((string)get_post_meta($tid, '_eventosapp_attendance_confirmation_status', true));
+        if ($attendance_status_key === '') $attendance_status_key = 'sin_consulta';
+        $attendance_status_label = function_exists('eventosapp_attendance_confirmation_status_label')
+            ? eventosapp_attendance_confirmation_status_label($attendance_status_key)
+            : (['si'=>'Sí','no'=>'No','no_responde'=>'No responde','sin_consulta'=>'Sin consulta'][$attendance_status_key] ?? 'Sin consulta');
+        $attendance_sent_channels = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value')
+            ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_sent_channels', true)
+            : '';
+        $attendance_response_channels = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value')
+            ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_response_channels', true)
+            : '';
+        $attendance_last_response_channel = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value')
+            ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_last_response_channel', true)
+            : sanitize_text_field((string)get_post_meta($tid, '_eventosapp_attendance_confirmation_last_response_channel', true));
+        $attendance_last_response_at = sanitize_text_field((string)get_post_meta($tid, '_eventosapp_attendance_confirmation_last_response_at', true));
+        $attendance_conflict = get_post_meta($tid, '_eventosapp_attendance_confirmation_conflict', true) === '1' ? 'SI' : 'NO';
 
         $status_arr = get_post_meta($tid, '_eventosapp_checkin_status', true);
         if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
@@ -2779,6 +2807,12 @@ $headers[] = 'Fecha creación';
         $row[] = (string)$role;
         $row[] = (string)$loc;
         $row[] = (string)$ticket_modalidad_label;
+        $row[] = (string)$attendance_status_label;
+        $row[] = (string)$attendance_sent_channels;
+        $row[] = (string)$attendance_response_channels;
+        $row[] = (string)$attendance_last_response_channel;
+        $row[] = (string)$attendance_last_response_at;
+        $row[] = (string)$attendance_conflict;
         $row[] = (string)$any_checked;
         $row[] = (string)$any_presencial_checked_label;
         $row[] = (string)$any_virtual_checked_label;
