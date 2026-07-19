@@ -1132,6 +1132,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-wallet-hooks
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-extras-ticket.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-email-header.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-sesiones.php';
+require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-live-raffle.php'; // Sorteo en vivo: gestión, filtros y pantalla pública
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-configuracion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-co-gestion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-access-staff-control-event.php'; // Control de acceso dashboard por evento
