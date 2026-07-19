@@ -790,6 +790,34 @@ function eventosapp_whatsapp_masivo_render_step1() {
                     <small>Tickets válidos para esta fecha del evento. Déjalo vacío para incluir todas las fechas.</small>
                 </div>
             </div>
+            <div class="evapp-wa-filter-row">
+                <div class="evapp-wa-filter-field">
+                    <label for="confirmation_status">Confirmación de asistencia</label>
+                    <select name="filters[confirmation_status]" id="confirmation_status">
+                        <option value="">-- Todos los estados --</option>
+                        <?php
+                        $confirmation_status_options = function_exists('eventosapp_attendance_confirmation_status_options')
+                            ? eventosapp_attendance_confirmation_status_options()
+                            : [
+                                'si'           => 'Sí',
+                                'no'           => 'No',
+                                'no_responde'  => 'No responde',
+                                'sin_consulta' => 'Sin consulta',
+                            ];
+                        foreach ( $confirmation_status_options as $value => $label ) :
+                        ?>
+                            <option value="<?php echo esc_attr($value); ?>"><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>Permite segmentar el envío según la respuesta de confirmación registrada en el ticket.</small>
+                </div>
+                <div class="evapp-wa-filter-field">
+                    <label>Estado operativo</label>
+                    <div class="evapp-wa-info-box" style="margin:0;">
+                        El estado “Sin consulta” incluye tickets antiguos que todavía no tienen el metadato creado.
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="evapp-wa-filter-section">
@@ -1079,9 +1107,10 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
             'last_sent_from'  => 'Último WhatsApp Desde',
             'last_sent_to'    => 'Último WhatsApp Hasta',
             'evento_id'       => 'Evento',
-            'localidad'       => 'Localidad',
-            'event_date'      => 'Fecha del Evento',
-            'modalidad'       => 'Modalidad del Ticket',
+            'localidad'           => 'Localidad',
+            'event_date'          => 'Fecha del Evento',
+            'modalidad'           => 'Modalidad del Ticket',
+            'confirmation_status' => 'Confirmación de asistencia',
             'created_from'    => 'Creado Desde',
             'created_to'      => 'Creado Hasta',
         ];
@@ -1102,6 +1131,11 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
                 $display_value = $opts[$value] ?? $value;
             } elseif ( $key === 'delivery_status' ) {
                 $opts = eventosapp_whatsapp_masivo_delivery_options();
+                $display_value = $opts[$value] ?? $value;
+            } elseif ( $key === 'confirmation_status' ) {
+                $opts = function_exists('eventosapp_attendance_confirmation_status_options')
+                    ? eventosapp_attendance_confirmation_status_options()
+                    : ['si'=>'Sí','no'=>'No','no_responde'=>'No responde','sin_consulta'=>'Sin consulta'];
                 $display_value = $opts[$value] ?? $value;
             }
             echo '<span class="evapp-wa-filter-tag"><strong>' . esc_html($label) . ':</strong> ' . esc_html($display_value) . '</span>';
@@ -1134,9 +1168,14 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
             <h3>WhatsApp a Procesar</h3>
             <div class="number"><?php echo esc_html(number_format_i18n($total)); ?></div>
         </div>
+        <?php
+        $bulk_limits_preview = function_exists('eventosapp_attendance_confirmation_bulk_limits')
+            ? eventosapp_attendance_confirmation_bulk_limits('whatsapp_bulk', ['whatsapp'])
+            : ['batch_size'=>5];
+        ?>
         <div class="evapp-wa-stat-card" style="background:linear-gradient(135deg,#60a5fa 0%,#2563eb 100%);">
-            <h3>Lote sugerido</h3>
-            <div class="number">5</div>
+            <h3>Lote protegido</h3>
+            <div class="number"><?php echo esc_html((int)($bulk_limits_preview['batch_size'] ?? 5)); ?></div>
         </div>
     </div>
 
@@ -1152,6 +1191,7 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
                         <th>Evento</th>
                         <th>Localidad</th>
                         <th>Modalidad</th>
+                        <th>Confirmación</th>
                         <th>Estado WhatsApp</th>
                         <th>Plantilla a usar</th>
                     </tr>
@@ -1174,6 +1214,11 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
                         $delivery_status = get_post_meta($tid, '_eventosapp_whatsapp_delivery_status', true);
                         $status_label = function_exists('eventosapp_whatsapp_status_label') ? eventosapp_whatsapp_status_label($last_status) : ($last_status ?: 'Sin estado');
                         $delivery_label = $delivery_status && function_exists('eventosapp_whatsapp_status_label') ? eventosapp_whatsapp_status_label($delivery_status) : '';
+                        $confirmation_label = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value')
+                            ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_status', true)
+                            : (function_exists('eventosapp_attendance_confirmation_status_label')
+                                ? eventosapp_attendance_confirmation_status_label(get_post_meta($tid, '_eventosapp_attendance_confirmation_status', true))
+                                : (get_post_meta($tid, '_eventosapp_attendance_confirmation_status', true) ?: 'Sin consulta'));
                         $phone_class = $phone ? 'evapp-wa-badge evapp-wa-badge-ok' : 'evapp-wa-badge evapp-wa-badge-error';
                         $template_class = eventosapp_whatsapp_masivo_is_template_approved($row_template) ? 'evapp-wa-badge' : 'evapp-wa-badge evapp-wa-badge-error';
                     ?>
@@ -1184,6 +1229,7 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
                             <td><?php echo esc_html($ticket_event_id ? get_the_title($ticket_event_id) : 'Sin evento'); ?></td>
                             <td><?php echo esc_html($localidad); ?></td>
                             <td><?php echo esc_html($modalidad_label); ?></td>
+                            <td><span class="evapp-wa-badge"><?php echo esc_html($confirmation_label); ?></span></td>
                             <td><?php echo esc_html($status_label . ($delivery_label ? ' · ' . $delivery_label : '')); ?></td>
                             <td><span class="<?php echo esc_attr($template_class); ?>"><?php echo esc_html($row_template ? (string)($row_template['name'] ?? eventosapp_whatsapp_masivo_template_label($row_template)) : 'Sin plantilla'); ?></span></td>
                         </tr>
@@ -1230,6 +1276,15 @@ function eventosapp_whatsapp_masivo_render_step3($segment_id) {
     $template_validation = eventosapp_whatsapp_masivo_validate_template_map($template_map, $required_modalidades, $event_id);
     $template_objects = isset($template_validation['templates']) && is_array($template_validation['templates']) ? $template_validation['templates'] : [];
     $modalidad_labels = eventosapp_whatsapp_masivo_ticket_modalidad_labels();
+    $bulk_limits = function_exists('eventosapp_attendance_confirmation_bulk_limits')
+        ? eventosapp_attendance_confirmation_bulk_limits('whatsapp_bulk', ['whatsapp'])
+        : [
+            'batch_size'            => 5,
+            'delay_seconds'         => 30,
+            'max_execution_seconds' => 20,
+            'memory_stop_ratio'     => 0.72,
+            'lock_ttl'              => 180,
+        ];
 
     if ( $total === 0 || empty($ticket_ids) ) {
         echo '<div class="notice notice-warning"><p>No hay tickets para enviar.</p></div>';
@@ -1268,6 +1323,13 @@ function eventosapp_whatsapp_masivo_render_step3($segment_id) {
             <h2 style="margin-top:0;">📲 Envío Masivo de WhatsApp</h2>
             <p><strong>Evento:</strong> <?php echo esc_html(get_the_title($event_id)); ?></p>
             <p><strong>Modalidad del evento:</strong> <?php echo esc_html(eventosapp_whatsapp_masivo_get_event_modalidad_label($event_id)); ?></p>
+            <div class="notice notice-info inline" style="margin:12px 0;">
+                <p><strong>Protección de recursos activa:</strong>
+                    máximo <?php echo esc_html((int)($bulk_limits['batch_size'] ?? 5)); ?> tickets por petición,
+                    pausa de <?php echo esc_html((int)($bulk_limits['delay_seconds'] ?? 30)); ?> segundos,
+                    bloqueo de concurrencia y corte preventivo por tiempo/memoria.
+                </p>
+            </div>
             <p><strong>Plantillas:</strong>
                 <?php foreach ( $required_modalidades as $mode ) :
                     $template = $template_objects[$mode] ?? null;
@@ -1314,7 +1376,9 @@ function eventosapp_whatsapp_masivo_render_step3($segment_id) {
         let skipped = 0;
         let errors = 0;
         let offset = 0;
-        const batchSize = 5;
+        const batchSize = <?php echo (int)($bulk_limits['batch_size'] ?? 5); ?>;
+        const batchDelayMs = <?php echo (int)(max(1, (int)($bulk_limits['delay_seconds'] ?? 30)) * 1000); ?>;
+        let connectionRetries = 0;
 
         function addLog(message, type = 'info') {
             const $log = $('#logContainer');
@@ -1377,30 +1441,28 @@ function eventosapp_whatsapp_masivo_render_step3($segment_id) {
                             data.logs.forEach(function(log){ addLog(log.message, log.type); });
                         }
 
+                        connectionRetries = 0;
                         updateUI();
                         if (offset < total) {
-                            setTimeout(processBatch, 1200);
+                            const retrySeconds = Math.max(1, parseInt(data.retry_after || <?php echo (int)($bulk_limits['delay_seconds'] ?? 30); ?>, 10));
+                            addLog('Pausa de seguridad de ' + retrySeconds + ' segundos antes del siguiente lote.', 'info');
+                            setTimeout(processBatch, retrySeconds * 1000);
                         }
                     } else {
-                        addLog('Error en el lote: ' + (response.data || 'Error desconocido'), 'error');
-                        errors += Math.min(batchSize, total - offset);
-                        processed += Math.min(batchSize, total - offset);
-                        offset += batchSize;
-                        updateUI();
-                        if (offset < total) {
-                            setTimeout(processBatch, 2500);
-                        }
+                        const responseData = response.data || {};
+                        const message = typeof responseData === 'object' && responseData.message ? responseData.message : (responseData || 'Error desconocido');
+                        const retrySeconds = typeof responseData === 'object' && responseData.retry_after
+                            ? Math.max(2, parseInt(responseData.retry_after, 10))
+                            : Math.max(5, Math.round(batchDelayMs / 1000));
+                        addLog('Lote no procesado: ' + message + '. Se reintentará sin avanzar el cursor.', 'warning');
+                        setTimeout(processBatch, retrySeconds * 1000);
                     }
                 },
                 error: function(xhr, status, error) {
-                    addLog('Error de conexión: ' + error, 'error');
-                    errors += Math.min(batchSize, total - offset);
-                    processed += Math.min(batchSize, total - offset);
-                    offset += batchSize;
-                    updateUI();
-                    if (offset < total) {
-                        setTimeout(processBatch, 2500);
-                    }
+                    connectionRetries++;
+                    const retrySeconds = Math.min(120, Math.max(10, Math.round(batchDelayMs / 1000)) * connectionRetries);
+                    addLog('Error de conexión. No se avanza el cursor para evitar perder tickets. Reintento en ' + retrySeconds + ' segundos.', 'error');
+                    setTimeout(processBatch, retrySeconds * 1000);
                 }
             });
         }
@@ -1631,45 +1693,94 @@ add_action('admin_post_eventosapp_whatsapp_masivo_create_segment', function() {
  */
 add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
     if ( ! current_user_can('manage_options') ) {
-        wp_send_json_error('No autorizado');
+        wp_send_json_error(['message'=>'No autorizado.'], 403);
     }
 
     check_ajax_referer('eventosapp_whatsapp_masivo_process');
 
     $segment_id = isset($_POST['segment_id']) ? sanitize_key((string) wp_unslash($_POST['segment_id'])) : '';
     $offset = isset($_POST['offset']) ? max(0, absint($_POST['offset'])) : 0;
-    $batch_size = isset($_POST['batch_size']) ? min(10, max(1, absint($_POST['batch_size']))) : 5;
 
     if ( $segment_id === '' ) {
-        wp_send_json_error('Segmento inválido');
+        wp_send_json_error(['message'=>'Segmento inválido.'], 400);
     }
 
     $segment = get_option(eventosapp_whatsapp_masivo_segment_option_key($segment_id));
     if ( ! $segment || ! is_array($segment) ) {
-        wp_send_json_error('Segmento no encontrado');
+        wp_send_json_error(['message'=>'Segmento no encontrado.'], 404);
     }
 
-    $ticket_ids = isset($segment['ticket_ids']) && is_array($segment['ticket_ids']) ? array_map('absint', $segment['ticket_ids']) : [];
+    $ticket_ids = isset($segment['ticket_ids']) && is_array($segment['ticket_ids'])
+        ? array_values(array_filter(array_map('absint', $segment['ticket_ids'])))
+        : [];
     $event_id = absint($segment['event_id'] ?? ($segment['filters']['evento_id'] ?? 0));
     $required_modalidades = eventosapp_whatsapp_masivo_get_event_allowed_modalidades($event_id);
     $template_map = eventosapp_whatsapp_masivo_get_segment_template_map($segment);
     $template_validation = eventosapp_whatsapp_masivo_validate_template_map($template_map, $required_modalidades, $event_id);
 
     if ( empty($template_validation['ok']) ) {
-        wp_send_json_error((string)($template_validation['message'] ?? 'El mapeo de plantillas no está completo o contiene plantillas no aprobadas.'));
+        wp_send_json_error([
+            'message'=>(string)($template_validation['message'] ?? 'El mapeo de plantillas no está completo o contiene plantillas no aprobadas.'),
+        ], 400);
     }
 
+    $limits = function_exists('eventosapp_attendance_confirmation_bulk_limits')
+        ? eventosapp_attendance_confirmation_bulk_limits('whatsapp_bulk', ['whatsapp'])
+        : [
+            'batch_size'       => 5,
+            'delay_seconds'    => 30,
+            'max_execution'    => 20,
+            'memory_stop_ratio'=> 0.72,
+            'lock_ttl'         => 180,
+        ];
+
+    // El navegador no puede aumentar el lote. El servidor impone siempre el límite efectivo.
+    $requested_batch_size = isset($_POST['batch_size']) ? absint($_POST['batch_size']) : (int)($limits['batch_size'] ?? 5);
+    $batch_size = max(1, min((int)($limits['batch_size'] ?? 5), $requested_batch_size ?: (int)($limits['batch_size'] ?? 5)));
+
+    $lock_scope = 'whatsapp_bulk:' . $segment_id;
+    $lock_token = function_exists('eventosapp_attendance_confirmation_acquire_lock')
+        ? eventosapp_attendance_confirmation_acquire_lock($lock_scope, (int)($limits['lock_ttl'] ?? 180))
+        : 'legacy_lock';
+
+    if ( is_wp_error($lock_token) ) {
+        wp_send_json_error([
+            'message'     => $lock_token->get_error_message(),
+            'retry_after' => max(5, (int)($limits['delay_seconds'] ?? 30)),
+            'busy'        => true,
+        ], 409);
+    }
+
+    $started_at = microtime(true);
     $batch = array_values(array_filter(array_map('absint', array_slice($ticket_ids, $offset, $batch_size))));
     if ( ! empty($batch) ) {
         update_meta_cache('post', $batch);
     }
+
     $sent = 0;
     $errors = 0;
     $skipped = 0;
+    $processed_now = 0;
     $logs = [];
+    $resource_guard = '';
     $map_hash = md5((string) wp_json_encode($template_map));
 
     foreach ( $batch as $ticket_id ) {
+        if (
+            function_exists('eventosapp_attendance_confirmation_should_yield')
+            && eventosapp_attendance_confirmation_should_yield($started_at, $processed_now, $limits)
+        ) {
+            $resource_guard = 'El lote se detuvo preventivamente por tiempo de ejecución o memoria. Continuará desde el mismo cursor.';
+            $logs[] = [
+                'message' => $resource_guard,
+                'type'    => 'warning',
+            ];
+            break;
+        }
+
+        // Se cuenta al comenzar cada ticket para que cualquier continue avance exactamente un registro.
+        $processed_now++;
+
         $ticket_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
         if ( ! $ticket_code ) {
             $ticket_code = (string) $ticket_id;
@@ -1697,17 +1808,23 @@ add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
 
         if ( $sender_key_for_segment !== '' && function_exists('eventosapp_whatsapp_template_matches_sender') && ! eventosapp_whatsapp_template_matches_sender($template, $sender_key_for_segment, true) ) {
             $errors++;
-            $template_sender_label = function_exists('eventosapp_whatsapp_get_template_sender_label') ? eventosapp_whatsapp_get_template_sender_label($template) : sanitize_text_field((string)($template['sender_phone_label'] ?? ''));
+            $template_sender_label = function_exists('eventosapp_whatsapp_get_template_sender_label')
+                ? eventosapp_whatsapp_get_template_sender_label($template)
+                : sanitize_text_field((string)($template['sender_phone_label'] ?? ''));
+
             eventosapp_whatsapp_masivo_activity_log('whatsapp_masivo_plantilla_incompatible_numero', [
-                'ticket_id'                     => $ticket_id,
-                'event_id'                      => $ticket_event_id ?: $event_id,
-                'segment_id'                    => $segment_id,
-                'ticket_modalidad'              => $ticket_modalidad,
-                'sender_phone_number_id'        => $sender_key_for_segment,
-                'template_id'                   => $template_id,
-                'template_sender_phone_number_id'=> function_exists('eventosapp_whatsapp_get_template_sender_phone_number_id') ? eventosapp_whatsapp_get_template_sender_phone_number_id($template) : sanitize_text_field((string)($template['sender_phone_number_id'] ?? '')),
-                'template_sender_label'         => $template_sender_label,
+                'ticket_id'                      => $ticket_id,
+                'event_id'                       => $ticket_event_id ?: $event_id,
+                'segment_id'                     => $segment_id,
+                'ticket_modalidad'               => $ticket_modalidad,
+                'sender_phone_number_id'         => $sender_key_for_segment,
+                'template_id'                    => $template_id,
+                'template_sender_phone_number_id'=> function_exists('eventosapp_whatsapp_get_template_sender_phone_number_id')
+                    ? eventosapp_whatsapp_get_template_sender_phone_number_id($template)
+                    : sanitize_text_field((string)($template['sender_phone_number_id'] ?? '')),
+                'template_sender_label'          => $template_sender_label,
             ]);
+
             $logs[] = [
                 'message' => 'Ticket ' . $ticket_code . ': error — la plantilla de la modalidad ' . $ticket_modalidad . ' está marcada para otro número emisor' . ($template_sender_label !== '' ? ' (' . $template_sender_label . ')' : '') . '.',
                 'type'    => 'error',
@@ -1715,14 +1832,17 @@ add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
             continue;
         }
 
-        $source_key = 'whatsapp_bulk_' . $segment_id . '_' . $ticket_modalidad . '_' . md5($map_hash . '|' . $template_id . '|' . (string)($template['name'] ?? '') . '|' . (string)($template['language'] ?? '') . '|' . $sender_key_for_segment);
+        $source_key = 'whatsapp_bulk_' . $segment_id . '_' . $ticket_modalidad . '_' . md5(
+            $map_hash . '|' . $template_id . '|' . (string)($template['name'] ?? '') . '|' .
+            (string)($template['language'] ?? '') . '|' . $sender_key_for_segment
+        );
 
         $result = eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $template_id, [
-            'context'     => 'whatsapp_bulk_send',
-            'source_key'  => $source_key,
-            'skip_rules'  => empty($segment['respect_rules']),
-            'force'       => false,
-            'segment_id'  => $segment_id,
+            'context'    => 'whatsapp_bulk_send',
+            'source_key' => $source_key,
+            'skip_rules' => empty($segment['respect_rules']),
+            'force'      => false,
+            'segment_id' => $segment_id,
         ]);
 
         if ( ! empty($result['skipped_rules']) ) {
@@ -1752,19 +1872,26 @@ add_action('wp_ajax_eventosapp_whatsapp_masivo_process_batch', function() {
             ];
         }
 
-        usleep(150000);
+        // Micro-pausa dentro del lote para no concentrar conexiones HTTP consecutivas.
+        usleep(250000);
     }
 
-    $processed_total = (int) get_option('evapp_whatsapp_masivo_processed_' . $segment_id, 0) + count($batch);
+    $processed_total = (int) get_option('evapp_whatsapp_masivo_processed_' . $segment_id, 0) + $processed_now;
     update_option('evapp_whatsapp_masivo_processed_' . $segment_id, $processed_total, false);
 
+    if ( function_exists('eventosapp_attendance_confirmation_release_lock') ) {
+        eventosapp_attendance_confirmation_release_lock($lock_scope, $lock_token);
+    }
+
     wp_send_json_success([
-        'processed'   => count($batch),
-        'sent'        => $sent,
-        'skipped'     => $skipped,
-        'errors'      => $errors,
-        'next_offset' => $offset + $batch_size,
-        'logs'        => $logs,
+        'processed'      => $processed_now,
+        'sent'           => $sent,
+        'skipped'        => $skipped,
+        'errors'         => $errors,
+        'next_offset'    => $offset + $processed_now,
+        'retry_after'    => max(10, (int)($limits['delay_seconds'] ?? 30)),
+        'resource_guard' => $resource_guard,
+        'logs'           => $logs,
     ]);
 });
 
@@ -1818,7 +1945,9 @@ function eventosapp_whatsapp_masivo_get_filtered_tickets($filters) {
         'post_type'      => 'eventosapp_ticket',
         'post_status'    => 'any',
         'fields'         => 'ids',
-        'posts_per_page' => -1,
+        'posts_per_page' => 300,
+        'orderby'        => 'ID',
+        'order'          => 'ASC',
         'no_found_rows'  => true,
     ];
 
@@ -1839,6 +1968,37 @@ function eventosapp_whatsapp_masivo_get_filtered_tickets($filters) {
             'value'   => sanitize_text_field((string) $filters['localidad']),
             'compare' => '=',
         ];
+    }
+
+    if ( ! empty($filters['confirmation_status']) ) {
+        $confirmation_status = sanitize_key((string) $filters['confirmation_status']);
+        if ( function_exists('eventosapp_attendance_confirmation_status_meta_query') ) {
+            $confirmation_clause = eventosapp_attendance_confirmation_status_meta_query($confirmation_status);
+            if ( ! empty($confirmation_clause) ) {
+                $meta_query[] = $confirmation_clause;
+            }
+        } elseif ( in_array($confirmation_status, ['si','no','no_responde','sin_consulta'], true) ) {
+            if ( $confirmation_status === 'sin_consulta' ) {
+                $meta_query[] = [
+                    'relation' => 'OR',
+                    [
+                        'key'     => '_eventosapp_attendance_confirmation_status',
+                        'value'   => 'sin_consulta',
+                        'compare' => '=',
+                    ],
+                    [
+                        'key'     => '_eventosapp_attendance_confirmation_status',
+                        'compare' => 'NOT EXISTS',
+                    ],
+                ];
+            } else {
+                $meta_query[] = [
+                    'key'     => '_eventosapp_attendance_confirmation_status',
+                    'value'   => $confirmation_status,
+                    'compare' => '=',
+                ];
+            }
+        }
     }
 
     $modalidad_filter = '';
@@ -1943,11 +2103,27 @@ function eventosapp_whatsapp_masivo_get_filtered_tickets($filters) {
         $args['date_query'] = $date_query;
     }
 
-    $query = new WP_Query($args);
-    $ticket_ids = array_map('absint', (array) $query->posts);
-    if ( ! empty($ticket_ids) ) {
-        update_meta_cache('post', $ticket_ids);
-    }
+    // Consulta paginada para que la creación del segmento no concentre
+    // todos los tickets del evento en una única consulta y un único pico de memoria.
+    $ticket_ids = [];
+    $page = 1;
+    $max_pages_guard = 10000;
+    do {
+        $args['paged'] = $page;
+        $query = new WP_Query($args);
+        $page_ids = array_values(array_filter(array_map('absint', (array)$query->posts)));
+        if ( empty($page_ids) ) {
+            unset($query);
+            break;
+        }
+        update_meta_cache('post', $page_ids);
+        $ticket_ids = array_merge($ticket_ids, $page_ids);
+        $page_count = count($page_ids);
+        unset($query, $page_ids);
+        $page++;
+    } while ( $page_count >= (int)$args['posts_per_page'] && $page <= $max_pages_guard );
+
+    $ticket_ids = array_values(array_unique($ticket_ids));
 
     if ( ! empty($filters['event_date']) ) {
         $event_date = sanitize_text_field((string) $filters['event_date']);

@@ -431,6 +431,20 @@ function eventosapp_email_masivo_render_step1() {
                     <small>Filtra tickets presenciales o virtuales</small>
                 </div>
             </div>
+
+            <div class="evapp-filter-row">
+                <div class="evapp-filter-field">
+                    <label for="confirmation_status">Confirmación de asistencia</label>
+                    <select name="filters[confirmation_status]" id="confirmation_status">
+                        <option value="">-- Todos los estados --</option>
+                        <option value="si">Sí</option>
+                        <option value="no">No</option>
+                        <option value="no_responde">No responde</option>
+                        <option value="sin_consulta">Sin consulta</option>
+                    </select>
+                    <small>Usa el estado registrado por el módulo de confirmación de asistencia.</small>
+                </div>
+            </div>
         </div>
 
         <!-- Filtros de Fecha de Creación -->
@@ -583,6 +597,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
             'localidad' => 'Localidad',
             'event_date' => 'Fecha del Evento',
             'modalidad' => 'Modalidad del Ticket',
+            'confirmation_status' => 'Confirmación de asistencia',
             'created_from' => 'Creado Desde',
             'created_to' => 'Creado Hasta'
         ];
@@ -602,6 +617,11 @@ function eventosapp_email_masivo_render_step2($segment_id) {
             if ($key === 'modalidad') {
                 $modalidad_opts = function_exists('eventosapp_ticket_modalidad_options') ? eventosapp_ticket_modalidad_options() : ['presencial' => 'Presencial', 'virtual' => 'Virtual'];
                 $display_value = $modalidad_opts[$value] ?? $value;
+            }
+            if ($key === 'confirmation_status') {
+                $display_value = function_exists('eventosapp_attendance_confirmation_status_label')
+                    ? eventosapp_attendance_confirmation_status_label($value)
+                    : (['si'=>'Sí','no'=>'No','no_responde'=>'No responde','sin_consulta'=>'Sin consulta'][$value] ?? $value);
             }
             
             echo '<span class="evapp-filter-tag"><strong>'.esc_html($label).':</strong> '.esc_html($display_value).'</span>';
@@ -649,6 +669,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                         <th>Evento</th>
                         <th>Localidad</th>
                         <th>Modalidad</th>
+                        <th>Confirmación</th>
                         <th>Variante / Plantilla</th>
                         <th>Estado Email</th>
                     </tr>
@@ -664,6 +685,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                         $localidad = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
                         $modalidad_label = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($tid) : ucfirst((string) get_post_meta($tid, '_eventosapp_ticket_modalidad', true));
                         $email_status = get_post_meta($tid, '_eventosapp_ticket_email_sent_status', true);
+                        $confirmation_label = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value') ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_status', true) : 'Sin consulta';
                         $ticket_id = get_post_meta($tid, 'eventosapp_ticketID', true);
                         $variant_summary = eventosapp_email_masivo_prepare_ticket_variant($tid, 'email_bulk_preview');
                         $variant_label = eventosapp_email_masivo_format_variant_label($variant_summary);
@@ -683,6 +705,7 @@ function eventosapp_email_masivo_render_step2($segment_id) {
                             <td><?php echo esc_html(get_the_title($evento_id)); ?></td>
                             <td><?php echo esc_html($localidad); ?></td>
                             <td><?php echo esc_html($modalidad_label ?: 'Presencial'); ?></td>
+                            <td><?php echo esc_html($confirmation_label); ?></td>
                             <td><span class="<?php echo esc_attr($variant_badge_class); ?>"><?php echo esc_html($variant_label); ?></span></td>
                             <td>
                                 <span style="background: <?php echo $status_color; ?>; color: white; padding: 3px 8px; border-radius: 3px; font-size: 11px;">
@@ -741,6 +764,10 @@ function eventosapp_email_masivo_render_step3($segment_id) {
         return;
     }
 
+    $bulk_limits = function_exists('eventosapp_attendance_confirmation_bulk_limits')
+        ? eventosapp_attendance_confirmation_bulk_limits('email_bulk', ['email'])
+        : ['batch_size'=>5,'ajax_delay_ms'=>5000,'max_execution'=>20,'memory_stop_ratio'=>0.72,'lock_ttl'=>180];
+
     ?>
     <style>
         .evapp-sending-container { max-width: 800px; margin: 20px auto; }
@@ -765,6 +792,7 @@ function eventosapp_email_masivo_render_step3($segment_id) {
     <div class="evapp-sending-container">
         <div class="evapp-sending-card">
             <h2 style="margin-top: 0;">📤 Envío Masivo de Tickets</h2>
+            <p class="description">Protección activa: máximo <?php echo esc_html($bulk_limits['batch_size']); ?> correos por solicitud, pausa de <?php echo esc_html(number_format($bulk_limits['ajax_delay_ms']/1000,1,',','.')); ?> segundos, bloqueo de concurrencia y corte preventivo por memoria/tiempo.</p>
             
             <div class="evapp-status-message evapp-status-processing" id="statusMessage">
                 <strong>🔄 Preparando envío...</strong>
@@ -815,7 +843,8 @@ function eventosapp_email_masivo_render_step3($segment_id) {
         let sent = 0;
         let errors = 0;
         let offset = 0;
-        const batchSize = 10; // Enviar de 10 en 10
+        const batchSize = <?php echo (int)$bulk_limits['batch_size']; ?>;
+        const batchDelay = <?php echo (int)$bulk_limits['ajax_delay_ms']; ?>;
 
         function addLog(message, type = 'info') {
             const $log = $('#logContainer');
@@ -883,31 +912,26 @@ function eventosapp_email_masivo_render_step3($segment_id) {
                         
                         // Continuar con el siguiente lote después de una pequeña pausa
                         if (offset < total) {
-                            setTimeout(processBatch, 1000); // 1 segundo entre lotes
+                            setTimeout(processBatch, parseInt(data.retry_after_ms || batchDelay, 10));
                         }
                     } else {
-                        addLog('Error en el lote: ' + (response.data || 'Error desconocido'), 'error');
-                        errors += batchSize;
-                        processed += batchSize;
-                        offset += batchSize;
-                        updateUI();
-                        
-                        // Continuar a pesar del error
+                        const responseData = response.data || {};
+                        const message = typeof responseData === 'object' && responseData.message
+                            ? responseData.message
+                            : (responseData || 'Error desconocido');
+                        const retryDelay = typeof responseData === 'object' && responseData.retry_after_ms
+                            ? parseInt(responseData.retry_after_ms, 10)
+                            : batchDelay * 2;
+                        addLog('Lote no procesado: ' + message + '. Se reintentará sin avanzar el cursor.', 'error');
                         if (offset < total) {
-                            setTimeout(processBatch, 2000);
+                            setTimeout(processBatch, Math.max(batchDelay, retryDelay));
                         }
                     }
                 },
                 error: function(xhr, status, error) {
-                    addLog('Error de conexión: ' + error, 'error');
-                    errors += batchSize;
-                    processed += batchSize;
-                    offset += batchSize;
-                    updateUI();
-                    
-                    // Continuar a pesar del error
+                    addLog('Error de conexión. No se avanza el cursor para evitar perder tickets. Se reintentará.', 'error');
                     if (offset < total) {
-                        setTimeout(processBatch, 2000);
+                        setTimeout(processBatch, batchDelay * 2);
                     }
                 }
             });
@@ -1000,99 +1024,85 @@ add_action('wp_ajax_eventosapp_get_event_extra_fields', function(){
  */
 add_action('wp_ajax_eventosapp_email_masivo_process_batch', function(){
     check_ajax_referer('eventosapp_email_masivo_process');
-    
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('No autorizado');
-    }
+    if (!current_user_can('manage_options')) wp_send_json_error('No autorizado');
 
-    $segment_id = isset($_POST['segment_id']) ? sanitize_text_field($_POST['segment_id']) : '';
-    $offset = isset($_POST['offset']) ? intval($_POST['offset']) : 0;
-    $batch_size = isset($_POST['batch_size']) ? intval($_POST['batch_size']) : 10;
-
+    $segment_id = isset($_POST['segment_id']) ? sanitize_key((string)wp_unslash($_POST['segment_id'])) : '';
+    $offset = isset($_POST['offset']) ? max(0, absint($_POST['offset'])) : 0;
     $segment = get_option('evapp_email_segment_' . $segment_id);
-    if (!$segment || !is_array($segment)) {
-        wp_send_json_error('Segmento no encontrado');
+    if (!$segment || !is_array($segment)) wp_send_json_error('Segmento no encontrado');
+
+    $limits = function_exists('eventosapp_attendance_confirmation_bulk_limits')
+        ? eventosapp_attendance_confirmation_bulk_limits('email_bulk', ['email'])
+        : ['batch_size'=>5,'ajax_delay_ms'=>5000,'max_execution'=>20,'memory_stop_ratio'=>0.72,'lock_ttl'=>180];
+    $scope = 'email_bulk_segment:' . $segment_id;
+    $lock = function_exists('eventosapp_attendance_confirmation_acquire_lock')
+        ? eventosapp_attendance_confirmation_acquire_lock($scope, $limits['lock_ttl'])
+        : wp_generate_password(12, false, false);
+
+    if (is_wp_error($lock)) {
+        wp_send_json_success([
+            'busy'=>true,'processed'=>0,'sent'=>0,'errors'=>0,'next_offset'=>$offset,
+            'retry_after_ms'=>$limits['ajax_delay_ms']*2,'logs'=>[['message'=>$lock->get_error_message(),'type'=>'info']],
+        ]);
     }
 
-    $ticket_ids = $segment['ticket_ids'] ?? [];
-    $batch = array_values(array_filter(array_map('absint', array_slice($ticket_ids, $offset, $batch_size))));
-    if ( ! empty($batch) ) {
-        update_meta_cache('post', $batch);
-    }
-    
-    $sent = 0;
-    $errors = 0;
-    $logs = [];
+    $response=[];
+    try {
+        $ticket_ids = $segment['ticket_ids'] ?? [];
+        $batch = array_values(array_filter(array_map('absint', array_slice($ticket_ids, $offset, $limits['batch_size']))));
+        if (!empty($batch)) update_meta_cache('post', $batch);
+        $sent=0; $errors=0; $logs=[]; $processed=0; $started=microtime(true); $resource_guard=false;
 
-    foreach($batch as $ticket_id) {
-        $ticket_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
-        $email = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
-        
-        if (!$email || !is_email($email)) {
-            $errors++;
-            $logs[] = [
-                'message' => "Ticket {$ticket_code}: Email inválido",
-                'type' => 'error'
-            ];
-            continue;
-        }
+        foreach($batch as $ticket_id) {
+            if (function_exists('eventosapp_attendance_confirmation_should_yield') && eventosapp_attendance_confirmation_should_yield($started,$processed,$limits)) {
+                $resource_guard=true;
+                break;
+            }
+            $ticket_code = get_post_meta($ticket_id, 'eventosapp_ticketID', true);
+            $email = get_post_meta($ticket_id, '_eventosapp_asistente_email', true);
+            $processed++;
 
-        // Preparar variante antes de construir y enviar el correo masivo.
-        $variant_summary = eventosapp_email_masivo_prepare_ticket_variant($ticket_id, 'email_bulk_send');
-        $variant_label = eventosapp_email_masivo_format_variant_label($variant_summary);
+            if (!$email || !is_email($email)) {
+                $errors++;
+                $logs[]=['message'=>"Ticket {$ticket_code}: Email inválido",'type'=>'error'];
+                continue;
+            }
 
-        $logs[] = [
-            'message' => "Ticket {$ticket_code}: {$variant_label}",
-            'type' => !empty($variant_summary['applied']) ? 'info' : 'info'
-        ];
+            $variant_summary = eventosapp_email_masivo_prepare_ticket_variant($ticket_id, 'email_bulk_send');
+            $variant_label = eventosapp_email_masivo_format_variant_label($variant_summary);
+            $logs[]=['message'=>"Ticket {$ticket_code}: {$variant_label}",'type'=>'info'];
 
-        // Enviar usando la función existente. eventosapp_send_ticket_email_now vuelve a validar la variante,
-        // por lo que este módulo queda compatible incluso si el ticket cambió entre la vista previa y el envío.
-        if (function_exists('eventosapp_send_ticket_email_now')) {
-            list($ok, $msg) = eventosapp_send_ticket_email_now($ticket_id, [
-                'source' => 'bulk',
-                'force' => false,
-                'variant_context' => [
-                    'applied' => !empty($variant_summary['applied']),
-                    'reason' => (string) ($variant_summary['reason'] ?? ''),
-                    'variant_key' => (string) ($variant_summary['variant_key'] ?? ''),
-                    'variant_name' => (string) ($variant_summary['variant_name'] ?? ''),
-                    'email_template' => (string) ($variant_summary['email_template'] ?? ''),
-                ],
-            ]);
-
-            if ($ok) {
-                $sent++;
-                $logs[] = [
-                    'message' => "Ticket {$ticket_code}: Enviado correctamente a {$email} ({$variant_label})",
-                    'type' => 'success'
-                ];
+            if (function_exists('eventosapp_send_ticket_email_now')) {
+                list($ok,$msg)=eventosapp_send_ticket_email_now($ticket_id,[
+                    'source'=>'bulk','force'=>false,
+                    'variant_context'=>[
+                        'applied'=>!empty($variant_summary['applied']),
+                        'reason'=>(string)($variant_summary['reason']??''),
+                        'variant_key'=>(string)($variant_summary['variant_key']??''),
+                        'variant_name'=>(string)($variant_summary['variant_name']??''),
+                        'email_template'=>(string)($variant_summary['email_template']??''),
+                    ],
+                ]);
+                if($ok){$sent++;$logs[]=['message'=>"Ticket {$ticket_code}: Enviado correctamente a {$email} ({$variant_label})",'type'=>'success'];}
+                else{$errors++;$logs[]=['message'=>"Ticket {$ticket_code}: Error - ".($msg?:'Desconocido')." ({$variant_label})",'type'=>'error'];}
             } else {
                 $errors++;
-                $logs[] = [
-                    'message' => "Ticket {$ticket_code}: Error - " . ($msg ?: 'Desconocido') . " ({$variant_label})",
-                    'type' => 'error'
-                ];
+                $logs[]=['message'=>"Ticket {$ticket_code}: Función de envío no disponible ({$variant_label})",'type'=>'error'];
             }
-        } else {
-            $errors++;
-            $logs[] = [
-                'message' => "Ticket {$ticket_code}: Función de envío no disponible ({$variant_label})",
-                'type' => 'error'
-            ];
+
+            usleep(120000);
         }
 
-        // Pequeña pausa entre envíos
-        usleep(100000); // 0.1 segundos
+        $response=[
+            'busy'=>false,'processed'=>$processed,'sent'=>$sent,'errors'=>$errors,
+            'next_offset'=>$offset+$processed,'logs'=>$logs,'retry_after_ms'=>$limits['ajax_delay_ms'],
+            'resource_guard_triggered'=>$resource_guard,
+        ];
+    } finally {
+        if (function_exists('eventosapp_attendance_confirmation_release_lock')) eventosapp_attendance_confirmation_release_lock($scope,$lock);
     }
 
-    wp_send_json_success([
-        'processed' => count($batch),
-        'sent' => $sent,
-        'errors' => $errors,
-        'next_offset' => $offset + $batch_size,
-        'logs' => $logs
-    ]);
+    wp_send_json_success($response);
 });
 
 /**
@@ -1103,7 +1113,9 @@ function eventosapp_email_masivo_get_filtered_tickets($filters) {
         'post_type' => 'eventosapp_ticket',
         'post_status' => 'any',
         'fields' => 'ids',
-        'posts_per_page' => -1,
+        'posts_per_page' => 300,
+        'orderby' => 'ID',
+        'order' => 'ASC',
         'no_found_rows' => true,
     ];
 
@@ -1126,6 +1138,24 @@ function eventosapp_email_masivo_get_filtered_tickets($filters) {
             'value' => sanitize_text_field($filters['localidad']),
             'compare' => '='
         ];
+    }
+
+    // Filtro por confirmación de asistencia. "Sin consulta" incluye tickets antiguos sin meta.
+    if (!empty($filters['confirmation_status'])) {
+        if (function_exists('eventosapp_attendance_confirmation_status_meta_query')) {
+            $clause = eventosapp_attendance_confirmation_status_meta_query($filters['confirmation_status']);
+            if (is_array($clause)) $meta_query[] = $clause;
+        } else {
+            $status = sanitize_key((string)$filters['confirmation_status']);
+            if ($status === 'sin_consulta') {
+                $meta_query[] = ['relation'=>'OR',
+                    ['key'=>'_eventosapp_attendance_confirmation_status','value'=>'sin_consulta','compare'=>'='],
+                    ['key'=>'_eventosapp_attendance_confirmation_status','compare'=>'NOT EXISTS'],
+                ];
+            } elseif (in_array($status,['si','no','no_responde'],true)) {
+                $meta_query[] = ['key'=>'_eventosapp_attendance_confirmation_status','value'=>$status,'compare'=>'='];
+            }
+        }
     }
 
     $modalidad_filter = '';
@@ -1261,11 +1291,27 @@ function eventosapp_email_masivo_get_filtered_tickets($filters) {
         $args['date_query'] = $date_query;
     }
 
-    $query = new WP_Query($args);
-    $ticket_ids = array_map('absint', (array) $query->posts);
-    if ( ! empty($ticket_ids) ) {
-        update_meta_cache('post', $ticket_ids);
-    }
+    // Consulta paginada: evita que WordPress intente resolver todos los tickets
+    // en una sola operación SQL/PHP cuando el evento tiene una base grande.
+    $ticket_ids = [];
+    $page = 1;
+    $max_pages_guard = 10000;
+    do {
+        $args['paged'] = $page;
+        $query = new WP_Query($args);
+        $page_ids = array_values(array_filter(array_map('absint', (array)$query->posts)));
+        if ( empty($page_ids) ) {
+            unset($query);
+            break;
+        }
+        update_meta_cache('post', $page_ids);
+        $ticket_ids = array_merge($ticket_ids, $page_ids);
+        $page_count = count($page_ids);
+        unset($query, $page_ids);
+        $page++;
+    } while ( $page_count >= (int)$args['posts_per_page'] && $page <= $max_pages_guard );
+
+    $ticket_ids = array_values(array_unique($ticket_ids));
 
     // Filtro adicional por fecha específica del evento
     if (!empty($filters['event_date'])) {

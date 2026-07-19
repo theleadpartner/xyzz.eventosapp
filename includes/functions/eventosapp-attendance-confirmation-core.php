@@ -13,13 +13,25 @@
 if ( ! defined('ABSPATH') ) exit;
 
 if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_VERSION') ) {
-    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_VERSION', '2026.07.19.2');
+    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_VERSION', '2026.07.19.3');
 }
 if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_SEGMENT_PREFIX') ) {
     define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_SEGMENT_PREFIX', 'evapp_attendance_segment_');
 }
 if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_SIZE') ) {
-    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_SIZE', 15);
+    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_SIZE', 5);
+}
+if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_DELAY') ) {
+    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_DELAY', 30);
+}
+if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_MAX_EXECUTION_SECONDS') ) {
+    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_MAX_EXECUTION_SECONDS', 20);
+}
+if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_MEMORY_STOP_RATIO') ) {
+    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_MEMORY_STOP_RATIO', 0.72);
+}
+if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_LOCK_TTL') ) {
+    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_LOCK_TTL', 180);
 }
 if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK') ) {
     define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK', 'eventosapp_attendance_confirmation_start_scheduled_job');
@@ -102,6 +114,249 @@ function eventosapp_attendance_confirmation_sanitize_channels($channels) {
         }
     }
     return $clean;
+}
+
+
+/**
+ * Registro canónico de campos de confirmación disponible para filtros,
+ * métricas, exportaciones y motores de reglas.
+ */
+function eventosapp_attendance_confirmation_field_definitions() {
+    return [
+        'attendance_confirmation_status' => [
+            'key'       => 'attendance_confirmation_status',
+            'label'     => 'Confirmación de asistencia',
+            'type'      => 'text',
+            'source'    => 'computed',
+            'meta_key'  => '_eventosapp_attendance_confirmation_status',
+            'options'   => eventosapp_attendance_confirmation_status_options(),
+        ],
+        'attendance_confirmation_sent_channels' => [
+            'key'       => 'attendance_confirmation_sent_channels',
+            'label'     => 'Canales consultados para confirmación',
+            'type'      => 'text',
+            'source'    => 'computed',
+            'meta_key'  => '_eventosapp_attendance_confirmation_sent_channels',
+        ],
+        'attendance_confirmation_response_channels' => [
+            'key'       => 'attendance_confirmation_response_channels',
+            'label'     => 'Canales de respuesta de confirmación',
+            'type'      => 'text',
+            'source'    => 'computed',
+            'meta_key'  => '_eventosapp_attendance_confirmation_response_channels',
+        ],
+        'attendance_confirmation_last_response_channel' => [
+            'key'       => 'attendance_confirmation_last_response_channel',
+            'label'     => 'Último canal de respuesta',
+            'type'      => 'text',
+            'source'    => 'computed',
+            'meta_key'  => '_eventosapp_attendance_confirmation_last_response_channel',
+        ],
+        'attendance_confirmation_last_response_at' => [
+            'key'       => 'attendance_confirmation_last_response_at',
+            'label'     => 'Fecha de última respuesta',
+            'type'      => 'date',
+            'source'    => 'system',
+            'meta_key'  => '_eventosapp_attendance_confirmation_last_response_at',
+        ],
+    ];
+}
+
+function eventosapp_attendance_confirmation_status_meta_query($status) {
+    $status = eventosapp_attendance_confirmation_sanitize_status($status, '');
+    if ( $status === '' ) return null;
+
+    if ( $status === 'sin_consulta' ) {
+        return [
+            'relation' => 'OR',
+            [
+                'key'     => '_eventosapp_attendance_confirmation_status',
+                'value'   => 'sin_consulta',
+                'compare' => '=',
+            ],
+            [
+                'key'     => '_eventosapp_attendance_confirmation_status',
+                'compare' => 'NOT EXISTS',
+            ],
+        ];
+    }
+
+    return [
+        'key'     => '_eventosapp_attendance_confirmation_status',
+        'value'   => $status,
+        'compare' => '=',
+    ];
+}
+
+function eventosapp_attendance_confirmation_get_channels($ticket_id, $type = 'sent') {
+    $ticket_id = absint($ticket_id);
+    if ( ! $ticket_id ) return [];
+    $keys = eventosapp_attendance_confirmation_meta_keys();
+    $meta_key = $type === 'response' ? $keys['response_channels'] : $keys['sent_channels'];
+    return eventosapp_attendance_confirmation_sanitize_channels(get_post_meta($ticket_id, $meta_key, true));
+}
+
+function eventosapp_attendance_confirmation_format_channels($channels) {
+    $labels = [];
+    foreach ( eventosapp_attendance_confirmation_sanitize_channels($channels) as $channel ) {
+        $labels[] = eventosapp_attendance_confirmation_channel_label($channel);
+    }
+    return implode(', ', $labels);
+}
+
+function eventosapp_attendance_confirmation_get_ticket_field_value($ticket_id, $field = 'attendance_confirmation_status', $display = true) {
+    $ticket_id = absint($ticket_id);
+    $field = sanitize_key((string) $field);
+    if ( ! $ticket_id ) return '';
+
+    switch ( $field ) {
+        case 'attendance_confirmation_status':
+        case 'confirmation_status':
+            $status = eventosapp_attendance_confirmation_get_status($ticket_id);
+            return $display ? eventosapp_attendance_confirmation_status_label($status) : $status;
+        case 'attendance_confirmation_sent_channels':
+            $channels = eventosapp_attendance_confirmation_get_channels($ticket_id, 'sent');
+            return $display ? eventosapp_attendance_confirmation_format_channels($channels) : $channels;
+        case 'attendance_confirmation_response_channels':
+            $channels = eventosapp_attendance_confirmation_get_channels($ticket_id, 'response');
+            return $display ? eventosapp_attendance_confirmation_format_channels($channels) : $channels;
+        case 'attendance_confirmation_last_response_channel':
+            $channel = sanitize_key((string)get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_last_response_channel', true));
+            return $display && $channel !== '' ? eventosapp_attendance_confirmation_channel_label($channel) : $channel;
+        case 'attendance_confirmation_last_response_at':
+            return sanitize_text_field((string)get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_last_response_at', true));
+    }
+
+    return '';
+}
+
+/**
+ * Filtros genéricos para módulos que ya consumen un registro común de campos.
+ * Los módulos antiguos que mantienen listas propias se integran desde el archivo
+ * eventosapp-attendance-confirmation-integrations.php.
+ */
+add_filter('eventosapp_ticket_field_registry', function($fields) {
+    $fields = is_array($fields) ? $fields : [];
+    return array_merge($fields, eventosapp_attendance_confirmation_field_definitions());
+}, 20);
+
+add_filter('eventosapp_ticket_filter_fields', function($fields) {
+    $fields = is_array($fields) ? $fields : [];
+    $fields['attendance_confirmation_status'] = 'Confirmación de asistencia';
+    return $fields;
+}, 20);
+
+/**
+ * Límites compartidos para procesamiento masivo. Son deliberadamente
+ * conservadores y pueden ajustarse con el filtro correspondiente.
+ */
+function eventosapp_attendance_confirmation_bulk_limits($context = 'attendance_confirmation', $channels = []) {
+    $context = sanitize_key((string)$context);
+    $channels = eventosapp_attendance_confirmation_sanitize_channels($channels);
+    $both_channels = count($channels) > 1;
+
+    $limits = [
+        'batch_size'         => $both_channels ? 3 : EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_SIZE,
+        'delay_seconds'      => EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_DELAY,
+        'ajax_delay_ms'      => 3000,
+        'max_execution'      => EVENTOSAPP_ATTENDANCE_CONFIRMATION_MAX_EXECUTION_SECONDS,
+        'memory_stop_ratio'  => EVENTOSAPP_ATTENDANCE_CONFIRMATION_MEMORY_STOP_RATIO,
+        'lock_ttl'           => EVENTOSAPP_ATTENDANCE_CONFIRMATION_LOCK_TTL,
+        'scan_size'          => 100,
+    ];
+
+    if ( $context === 'email_bulk' ) {
+        $limits['batch_size'] = 5;
+        $limits['ajax_delay_ms'] = 5000;
+    } elseif ( $context === 'whatsapp_bulk' ) {
+        $limits['batch_size'] = 5;
+        $limits['ajax_delay_ms'] = 30000;
+    }
+
+    $limits = apply_filters('eventosapp_bulk_processing_limits', $limits, $context, $channels);
+    $limits = is_array($limits) ? $limits : [];
+    $limits['batch_size'] = max(1, min(10, absint($limits['batch_size'] ?? 5)));
+    $limits['delay_seconds'] = max(10, min(300, absint($limits['delay_seconds'] ?? 30)));
+    $limits['ajax_delay_ms'] = max(750, min(60000, absint($limits['ajax_delay_ms'] ?? 1800)));
+    $limits['max_execution'] = max(8, min(45, absint($limits['max_execution'] ?? 20)));
+    $limits['memory_stop_ratio'] = max(0.50, min(0.90, (float)($limits['memory_stop_ratio'] ?? 0.72)));
+    $limits['lock_ttl'] = max(60, min(600, absint($limits['lock_ttl'] ?? 180)));
+    $limits['scan_size'] = max(25, min(500, absint($limits['scan_size'] ?? 100)));
+    return $limits;
+}
+
+function eventosapp_attendance_confirmation_memory_limit_bytes() {
+    $value = trim((string)ini_get('memory_limit'));
+    if ( $value === '' || $value === '-1' ) return 0;
+    $unit = strtolower(substr($value, -1));
+    $number = (float)$value;
+    if ( $unit === 'g' ) $number *= 1024;
+    if ( in_array($unit, ['g', 'm'], true) ) $number *= 1024;
+    if ( in_array($unit, ['g', 'm', 'k'], true) ) $number *= 1024;
+    return max(0, (int)$number);
+}
+
+function eventosapp_attendance_confirmation_should_yield($started_at, $processed, $limits) {
+    $started_at = (float)$started_at;
+    $processed = absint($processed);
+    $limits = is_array($limits) ? $limits : [];
+
+    if ( $processed > 0 && (microtime(true) - $started_at) >= (float)($limits['max_execution'] ?? 20) ) {
+        return true;
+    }
+
+    $memory_limit = eventosapp_attendance_confirmation_memory_limit_bytes();
+    if ( $processed > 0 && $memory_limit > 0 ) {
+        $ratio = memory_get_usage(true) / $memory_limit;
+        if ( $ratio >= (float)($limits['memory_stop_ratio'] ?? 0.72) ) return true;
+    }
+
+    return false;
+}
+
+function eventosapp_attendance_confirmation_lock_option_name($scope) {
+    return '_evapp_attendance_lock_' . substr(md5((string)$scope), 0, 24);
+}
+
+function eventosapp_attendance_confirmation_acquire_lock($scope, $ttl = EVENTOSAPP_ATTENDANCE_CONFIRMATION_LOCK_TTL) {
+    $scope = sanitize_text_field((string)$scope);
+    $ttl = max(30, absint($ttl));
+    $option = eventosapp_attendance_confirmation_lock_option_name($scope);
+    $now = time();
+    $existing = get_option($option, null);
+
+    if ( is_array($existing) && ! empty($existing['expires']) && absint($existing['expires']) <= $now ) {
+        delete_option($option);
+        $existing = null;
+    }
+
+    if ( is_array($existing) ) {
+        return new WP_Error('bulk_locked', 'Ya existe un lote de este proceso en ejecución. Espera a que termine antes de iniciar otro.');
+    }
+
+    $token = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : wp_generate_password(32, false, false);
+    $lock = [
+        'token'      => $token,
+        'scope'      => $scope,
+        'created_at' => $now,
+        'expires'    => $now + $ttl,
+    ];
+
+    if ( ! add_option($option, $lock, '', false) ) {
+        return new WP_Error('bulk_locked', 'No se pudo obtener el bloqueo del lote porque otro proceso se adelantó.');
+    }
+
+    return $token;
+}
+
+function eventosapp_attendance_confirmation_release_lock($scope, $token) {
+    $option = eventosapp_attendance_confirmation_lock_option_name($scope);
+    $existing = get_option($option, null);
+    if ( is_array($existing) && ! empty($existing['token']) && hash_equals((string)$existing['token'], (string)$token) ) {
+        delete_option($option);
+        return true;
+    }
+    return false;
 }
 
 function eventosapp_attendance_confirmation_get_status($ticket_id) {
@@ -940,32 +1195,38 @@ function eventosapp_attendance_confirmation_sanitize_filters($filters) {
     return $clean;
 }
 
-function eventosapp_attendance_confirmation_get_filtered_tickets($filters) {
+function eventosapp_attendance_confirmation_build_query_args($filters, $posts_per_page = -1) {
     $filters = eventosapp_attendance_confirmation_sanitize_filters($filters);
     $args = [
-        'post_type'=>'eventosapp_ticket','post_status'=>'any','fields'=>'ids','posts_per_page'=>-1,'no_found_rows'=>true,
+        'post_type'      => 'eventosapp_ticket',
+        'post_status'    => 'any',
+        'fields'         => 'ids',
+        'posts_per_page' => (int)$posts_per_page,
+        'no_found_rows'  => true,
+        'orderby'        => 'ID',
+        'order'          => 'ASC',
+        'cache_results'  => false,
     ];
     $meta_query = ['relation'=>'AND'];
     $date_query = [];
+
     if ( ! empty($filters['evento_id']) ) $meta_query[] = ['key'=>'_eventosapp_ticket_evento_id','value'=>absint($filters['evento_id']),'compare'=>'='];
     if ( ! empty($filters['localidad']) ) $meta_query[] = ['key'=>'_eventosapp_asistente_localidad','value'=>$filters['localidad'],'compare'=>'='];
+
     if ( ! empty($filters['confirmation_status']) ) {
-        $status = eventosapp_attendance_confirmation_sanitize_status($filters['confirmation_status'], '');
-        if ( $status === 'sin_consulta' ) {
-            $meta_query[] = ['relation'=>'OR',
-                ['key'=>'_eventosapp_attendance_confirmation_status','value'=>'sin_consulta','compare'=>'='],
-                ['key'=>'_eventosapp_attendance_confirmation_status','compare'=>'NOT EXISTS'],
-            ];
-        } elseif ( $status !== '' ) {
-            $meta_query[] = ['key'=>'_eventosapp_attendance_confirmation_status','value'=>$status,'compare'=>'='];
-        }
+        $confirmation_clause = eventosapp_attendance_confirmation_status_meta_query($filters['confirmation_status']);
+        if ( is_array($confirmation_clause) ) $meta_query[] = $confirmation_clause;
     }
+
     if ( ! empty($filters['delivery_status']) ) $meta_query[] = ['key'=>'_eventosapp_attendance_confirmation_whatsapp_delivery_status','value'=>sanitize_key($filters['delivery_status']),'compare'=>'='];
     if ( ! empty($filters['creation_channel']) ) $meta_query[] = ['key'=>'_eventosapp_creation_channel','value'=>sanitize_key($filters['creation_channel']),'compare'=>'='];
     if ( ! empty($filters['extra_fields']) ) {
-        foreach ( $filters['extra_fields'] as $key => $value ) $meta_query[] = ['key'=>'_eventosapp_extra_' . sanitize_key($key),'value'=>$value,'compare'=>'LIKE'];
+        foreach ( $filters['extra_fields'] as $key => $value ) {
+            $meta_query[] = ['key'=>'_eventosapp_extra_' . sanitize_key($key),'value'=>$value,'compare'=>'LIKE'];
+        }
     }
     if ( count($meta_query) > 1 ) $args['meta_query'] = $meta_query;
+
     if ( ! empty($filters['created_from']) || ! empty($filters['created_to']) ) {
         if ( ! empty($filters['created_from']) ) $date_query['after'] = $filters['created_from'] . ' 00:00:00';
         if ( ! empty($filters['created_to']) ) $date_query['before'] = $filters['created_to'] . ' 23:59:59';
@@ -973,38 +1234,131 @@ function eventosapp_attendance_confirmation_get_filtered_tickets($filters) {
         $args['date_query'] = [$date_query];
     }
     if ( ! empty($filters['search']) ) $args['s'] = $filters['search'];
-    $query = new WP_Query($args);
-    $ids = array_map('absint', (array)$query->posts);
-    if ( ! empty($ids) ) update_meta_cache('post', $ids);
+
+    return $args;
+}
+
+function eventosapp_attendance_confirmation_ticket_matches_post_filters($ticket_id, $filters) {
+    $ticket_id = absint($ticket_id);
+    $filters = eventosapp_attendance_confirmation_sanitize_filters($filters);
+    if ( ! $ticket_id ) return false;
 
     $modalidad = ! empty($filters['modalidad']) ? sanitize_key($filters['modalidad']) : '';
     if ( in_array($modalidad, ['presencial','virtual'], true) && function_exists('eventosapp_get_ticket_modalidad') ) {
-        $ids = array_values(array_filter($ids, function($id) use ($modalidad){ return eventosapp_get_ticket_modalidad($id) === $modalidad; }));
+        if ( eventosapp_get_ticket_modalidad($ticket_id) !== $modalidad ) return false;
     }
+
     if ( ! empty($filters['event_date']) ) {
         $date = sanitize_text_field((string)$filters['event_date']);
-        $ids = array_values(array_filter($ids, function($id) use ($date){
-            $event_id = absint(get_post_meta($id, '_eventosapp_ticket_evento_id', true));
-            return in_array($date, eventosapp_attendance_confirmation_event_dates($event_id), true);
-        }));
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        if ( ! in_array($date, eventosapp_attendance_confirmation_event_dates($event_id), true) ) return false;
     }
+
     if ( ! empty($filters['email_status']) ) {
         $want = sanitize_key($filters['email_status']);
-        $ids = array_values(array_filter($ids, function($id) use ($want){
-            $channels = eventosapp_attendance_confirmation_sanitize_channels(get_post_meta($id, '_eventosapp_attendance_confirmation_sent_channels', true));
-            $sent = in_array('email', $channels, true);
-            return $want === 'enviado' ? $sent : ! $sent;
-        }));
+        $sent = in_array('email', eventosapp_attendance_confirmation_get_channels($ticket_id, 'sent'), true);
+        if ( $want === 'enviado' && ! $sent ) return false;
+        if ( $want === 'no_enviado' && $sent ) return false;
     }
+
     if ( ! empty($filters['whatsapp_status']) ) {
         $want = sanitize_key($filters['whatsapp_status']);
-        $ids = array_values(array_filter($ids, function($id) use ($want){
-            $channels = eventosapp_attendance_confirmation_sanitize_channels(get_post_meta($id, '_eventosapp_attendance_confirmation_sent_channels', true));
-            $sent = in_array('whatsapp', $channels, true);
-            return $want === 'enviado' ? $sent : ! $sent;
-        }));
+        $sent = in_array('whatsapp', eventosapp_attendance_confirmation_get_channels($ticket_id, 'sent'), true);
+        if ( $want === 'enviado' && ! $sent ) return false;
+        if ( $want === 'no_enviado' && $sent ) return false;
     }
+
+    return true;
+}
+
+function eventosapp_attendance_confirmation_query_ids_after($args, $after_id = 0) {
+    global $wpdb;
+    $after_id = absint($after_id);
+    $where_filter = null;
+
+    if ( $after_id > 0 ) {
+        $where_filter = function($where, $query) use ($wpdb, $after_id) {
+            return $where . $wpdb->prepare(" AND {$wpdb->posts}.ID > %d", $after_id);
+        };
+        add_filter('posts_where', $where_filter, 10, 2);
+    }
+
+    try {
+        $query = new WP_Query($args);
+        $ids = array_values(array_filter(array_map('absint', (array)$query->posts)));
+    } finally {
+        if ( $where_filter ) remove_filter('posts_where', $where_filter, 10);
+    }
+
     return $ids;
+}
+
+/**
+ * Obtiene una página de tickets sin cargar el universo completo en memoria.
+ * El cursor es el último Post ID realmente examinado, por lo que no pierde
+ * registros aunque existan filtros calculados después de la consulta SQL.
+ */
+function eventosapp_attendance_confirmation_get_filtered_tickets_page($filters, $after_id = 0, $limit = 5, $scan_size = 100) {
+    $filters = eventosapp_attendance_confirmation_sanitize_filters($filters);
+    $after_id = absint($after_id);
+    $limit = max(1, min(100, absint($limit)));
+    $scan_size = max($limit, min(500, absint($scan_size)));
+    $found = [];
+    $cursor = $after_id;
+    $done = false;
+    $scanned = 0;
+    $guard = 0;
+
+    while ( count($found) < $limit && ! $done && $guard < 100 ) {
+        $guard++;
+        $args = eventosapp_attendance_confirmation_build_query_args($filters, $scan_size);
+        $page_ids = eventosapp_attendance_confirmation_query_ids_after($args, $cursor);
+        if ( empty($page_ids) ) {
+            $done = true;
+            break;
+        }
+
+        update_meta_cache('post', $page_ids);
+        foreach ( $page_ids as $ticket_id ) {
+            $cursor = absint($ticket_id);
+            $scanned++;
+            if ( eventosapp_attendance_confirmation_ticket_matches_post_filters($ticket_id, $filters) ) {
+                $found[] = $ticket_id;
+                if ( count($found) >= $limit ) break;
+            }
+        }
+
+        if ( count($page_ids) < $scan_size && $cursor >= max($page_ids) ) {
+            $done = true;
+        }
+
+        unset($page_ids);
+    }
+
+    return [
+        'ticket_ids'  => $found,
+        'next_cursor' => $cursor,
+        'done'        => $done,
+        'scanned'     => $scanned,
+    ];
+}
+
+function eventosapp_attendance_confirmation_get_filtered_tickets($filters) {
+    $filters = eventosapp_attendance_confirmation_sanitize_filters($filters);
+    $ids = [];
+    $cursor = 0;
+    $guard = 0;
+
+    do {
+        $guard++;
+        $page = eventosapp_attendance_confirmation_get_filtered_tickets_page($filters, $cursor, 500, 500);
+        $ids = array_merge($ids, (array)$page['ticket_ids']);
+        $next_cursor = absint($page['next_cursor'] ?? 0);
+        if ( $next_cursor <= $cursor && empty($page['done']) ) break;
+        $cursor = $next_cursor;
+    } while ( empty($page['done']) && $guard < 10000 );
+
+    return array_values(array_unique(array_map('absint', $ids)));
 }
 
 function eventosapp_attendance_confirmation_segment_key($segment_id) {
@@ -1021,15 +1375,137 @@ function eventosapp_attendance_confirmation_get_segment($segment_id) {
 }
 
 /**
- * Logs y programación por evento.
+ * Logs, zona horaria y programación por evento.
  */
+function eventosapp_attendance_confirmation_event_timezone_info($event_id) {
+    $event_id = absint($event_id);
+    $stored = $event_id ? sanitize_text_field((string)get_post_meta($event_id, '_eventosapp_zona_horaria', true)) : '';
+    $stored_valid = false;
+
+    if ( $stored !== '' ) {
+        try {
+            new DateTimeZone($stored);
+            $stored_valid = true;
+        } catch (Throwable $e) {
+            $stored_valid = false;
+        }
+    }
+
+    if ( function_exists('eventosapp_get_event_timezone_object') ) {
+        $timezone = eventosapp_get_event_timezone_object($event_id);
+    } else {
+        $timezone = wp_timezone();
+    }
+
+    if ( ! $timezone instanceof DateTimeZone ) $timezone = wp_timezone();
+
+    if ( $stored_valid ) {
+        $source = 'event';
+        $source_label = 'Zona horaria configurada en el evento';
+        $warning = '';
+    } elseif ( $stored !== '' ) {
+        $source = 'wordpress_invalid_event_timezone';
+        $source_label = 'Zona horaria general de WordPress';
+        $warning = 'La zona horaria guardada en el evento no es válida y se está usando la zona general de WordPress.';
+    } else {
+        $source = 'wordpress';
+        $source_label = 'Zona horaria general de WordPress';
+        $warning = '';
+    }
+
+    $now = new DateTimeImmutable('now', $timezone);
+
+    return [
+        'object'       => $timezone,
+        'name'         => $timezone->getName(),
+        'source'       => $source,
+        'source_label' => $source_label,
+        'warning'      => $warning,
+        'stored_value' => $stored,
+        'current_time' => $now->format('Y-m-d H:i:s'),
+        'utc_offset'   => $now->format('P'),
+    ];
+}
+
+function eventosapp_attendance_confirmation_parse_event_datetime($event_id, $date, $time) {
+    $date = sanitize_text_field((string)$date);
+    $time = sanitize_text_field((string)$time);
+    if ( ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || ! preg_match('/^\d{2}:\d{2}$/', $time) ) {
+        return new WP_Error('invalid_datetime', 'Fecha u hora inválida.');
+    }
+
+    $tz_info = eventosapp_attendance_confirmation_event_timezone_info($event_id);
+    $tz = $tz_info['object'];
+    $local_value = $date . ' ' . $time;
+    $dt = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $local_value, $tz);
+    $errors = DateTimeImmutable::getLastErrors();
+
+    if ( ! $dt instanceof DateTimeImmutable || ($errors !== false && (! empty($errors['warning_count']) || ! empty($errors['error_count']))) ) {
+        return new WP_Error('invalid_datetime', 'No se pudo interpretar la fecha programada en la zona horaria del evento.');
+    }
+
+    // Detecta horas inexistentes o normalizadas automáticamente por cambios DST.
+    if ( $dt->format('Y-m-d H:i') !== $local_value ) {
+        return new WP_Error('invalid_local_time', 'La hora indicada no existe en la zona horaria del evento por un cambio de horario. Selecciona otra hora.');
+    }
+
+    return [
+        'datetime'       => $dt,
+        'timestamp'      => $dt->getTimestamp(),
+        'timezone'       => $tz_info['name'],
+        'timezone_source'=> $tz_info['source'],
+        'utc_offset'     => $dt->format('P'),
+        'local'          => $dt->format('Y-m-d H:i:s'),
+        'utc'            => $dt->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+    ];
+}
+
+function eventosapp_attendance_confirmation_format_timestamp_for_event($event_id, $timestamp, $format = 'Y-m-d H:i:s T') {
+    $timestamp = absint($timestamp);
+    if ( ! $timestamp ) return '';
+    $tz_info = eventosapp_attendance_confirmation_event_timezone_info($event_id);
+    return (new DateTimeImmutable('@' . $timestamp))->setTimezone($tz_info['object'])->format($format);
+}
+
+function eventosapp_attendance_confirmation_schedule_diagnostics($event_id, $config = null) {
+    $event_id = absint($event_id);
+    if ( $config === null ) $config = get_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', true);
+    $config = is_array($config) ? $config : [];
+    $schedule_id = sanitize_key((string)($config['schedule_id'] ?? ''));
+    $next = $schedule_id !== '' ? wp_next_scheduled(EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, [$event_id, $schedule_id]) : false;
+    $stored_timestamp = absint($config['timestamp'] ?? 0);
+
+    return [
+        'enabled'                  => ! empty($config['enabled']),
+        'timezone'                 => sanitize_text_field((string)($config['timezone'] ?? eventosapp_attendance_confirmation_event_timezone_info($event_id)['name'])),
+        'timezone_source'          => sanitize_key((string)($config['timezone_source'] ?? 'event')),
+        'stored_timestamp'         => $stored_timestamp,
+        'stored_event_time'        => $stored_timestamp ? eventosapp_attendance_confirmation_format_timestamp_for_event($event_id, $stored_timestamp) : '',
+        'stored_utc_time'          => $stored_timestamp ? gmdate('Y-m-d H:i:s', $stored_timestamp) . ' UTC' : '',
+        'next_cron_timestamp'      => $next ? absint($next) : 0,
+        'next_cron_event_time'     => $next ? eventosapp_attendance_confirmation_format_timestamp_for_event($event_id, $next) : '',
+        'next_cron_utc_time'       => $next ? gmdate('Y-m-d H:i:s', $next) . ' UTC' : '',
+        'cron_matches_configuration'=> $next && $stored_timestamp ? abs($next - $stored_timestamp) <= 1 : false,
+    ];
+}
+
 function eventosapp_attendance_confirmation_event_log($event_id, $entry) {
     $event_id = absint($event_id);
     if ( ! $event_id ) return;
     $log = get_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule_log', true);
     $log = is_array($log) ? $log : [];
-    $entry = array_merge(['at'=>current_time('mysql'),'type'=>'info','message'=>'','meta'=>[]], is_array($entry)?$entry:[]);
+    $tz_info = eventosapp_attendance_confirmation_event_timezone_info($event_id);
+    $entry = array_merge([
+        'at'                  => current_time('mysql'),
+        'at_event_timezone'   => $tz_info['current_time'] . ' ' . $tz_info['name'],
+        'at_utc'              => gmdate('Y-m-d H:i:s') . ' UTC',
+        'type'                => 'info',
+        'message'             => '',
+        'meta'                => [],
+    ], is_array($entry)?$entry:[]);
     $entry['at'] = sanitize_text_field((string)$entry['at']);
+    $entry['at_event_timezone'] = sanitize_text_field((string)$entry['at_event_timezone']);
+    $entry['at_utc'] = sanitize_text_field((string)$entry['at_utc']);
     $entry['type'] = sanitize_key((string)$entry['type']);
     $entry['message'] = sanitize_textarea_field((string)$entry['message']);
     if ( function_exists('eventosapp_whatsapp_sanitize_log_context') ) $entry['meta'] = eventosapp_whatsapp_sanitize_log_context($entry['meta']);
@@ -1042,8 +1518,10 @@ function eventosapp_attendance_confirmation_unschedule_event($event_id) {
     $event_id = absint($event_id);
     $config = get_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', true);
     if ( is_array($config) && ! empty($config['schedule_id']) ) {
-        $timestamp = wp_next_scheduled(EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, [$event_id, $config['schedule_id']]);
-        if ( $timestamp ) wp_unschedule_event($timestamp, EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, [$event_id, $config['schedule_id']]);
+        $args = [$event_id, sanitize_key((string)$config['schedule_id'])];
+        while ( $timestamp = wp_next_scheduled(EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, $args) ) {
+            wp_unschedule_event($timestamp, EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, $args);
+        }
     }
 }
 
@@ -1070,29 +1548,16 @@ function eventosapp_attendance_confirmation_schedule_event($event_id, $config) {
 
     $date = sanitize_text_field((string)($config['date'] ?? ''));
     $time = sanitize_text_field((string)($config['time'] ?? ''));
-    if ( ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || ! preg_match('/^\d{2}:\d{2}$/', $time) ) {
-        return new WP_Error('invalid_datetime', 'Fecha u hora inválida.');
-    }
+    $parsed = eventosapp_attendance_confirmation_parse_event_datetime($event_id, $date, $time);
+    if ( is_wp_error($parsed) ) return $parsed;
 
-    $tz = function_exists('eventosapp_get_event_timezone_object')
-        ? eventosapp_get_event_timezone_object($event_id)
-        : wp_timezone();
-
-    try {
-        $dt = new DateTime($date . ' ' . $time . ':00', $tz);
-    } catch (Throwable $e) {
-        return new WP_Error('invalid_datetime', 'No se pudo interpretar la fecha programada.');
-    }
-
-    $timestamp = $dt->getTimestamp();
-    if ( $timestamp <= time() + 30 ) {
-        return new WP_Error('past_datetime', 'La fecha programada debe estar en el futuro.');
+    $timestamp = absint($parsed['timestamp']);
+    if ( $timestamp <= time() + 60 ) {
+        return new WP_Error('past_datetime', 'La fecha programada debe estar al menos un minuto en el futuro.');
     }
 
     $channels = eventosapp_attendance_confirmation_sanitize_channels($config['channels'] ?? []);
-    if ( empty($channels) ) {
-        return new WP_Error('no_channels', 'Selecciona al menos un canal.');
-    }
+    if ( empty($channels) ) return new WP_Error('no_channels', 'Selecciona al menos un canal.');
 
     $schedule_id = sanitize_key('rsvp_' . $event_id . '_' . wp_generate_password(10, false, false));
     $stored = [
@@ -1101,11 +1566,13 @@ function eventosapp_attendance_confirmation_schedule_event($event_id, $config) {
         'date'                 => $date,
         'time'                 => $time,
         'timestamp'            => $timestamp,
-        'timezone'             => $tz->getName(),
+        'timezone'             => $parsed['timezone'],
+        'timezone_source'      => $parsed['timezone_source'],
+        'utc_offset'           => $parsed['utc_offset'],
+        'scheduled_local'      => $parsed['local'],
+        'scheduled_utc'        => $parsed['utc'],
         'channels'             => $channels,
-        'filters'              => eventosapp_attendance_confirmation_sanitize_filters(
-            array_merge((array)($config['filters'] ?? []), ['evento_id'=>$event_id])
-        ),
+        'filters'              => eventosapp_attendance_confirmation_sanitize_filters(array_merge((array)($config['filters'] ?? []), ['evento_id'=>$event_id])),
         'email_template'       => sanitize_file_name((string)($config['email_template'] ?? 'attendance-confirmation.html')),
         'email_subject'        => sanitize_text_field((string)($config['email_subject'] ?? 'Confirma tu asistencia a {{evento_nombre}}')),
         'email_message'        => sanitize_textarea_field((string)($config['email_message'] ?? '')),
@@ -1114,74 +1581,87 @@ function eventosapp_attendance_confirmation_schedule_event($event_id, $config) {
         'created_by'           => get_current_user_id(),
     ];
 
-    /*
-     * Primero se registra la nueva tarea. Solo si WordPress la acepta se
-     * reemplaza la configuración y se elimina la programación anterior.
-     * Así una fecha inválida o un fallo de cron no deja el evento sin tarea.
-     */
-    $scheduled = wp_schedule_single_event(
-        $timestamp,
-        EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK,
-        [$event_id, $schedule_id],
-        true
-    );
+    $scheduled = wp_schedule_single_event($timestamp, EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, [$event_id, $schedule_id], true);
+    if ( is_wp_error($scheduled) ) return $scheduled;
+    if ( ! $scheduled ) return new WP_Error('schedule_failed', 'WordPress no pudo registrar la tarea programada.');
 
-    if ( is_wp_error($scheduled) ) {
-        return $scheduled;
-    }
-    if ( ! $scheduled ) {
-        return new WP_Error('schedule_failed', 'WordPress no pudo registrar la tarea programada.');
+    $verified_timestamp = wp_next_scheduled(EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, [$event_id, $schedule_id]);
+    if ( ! $verified_timestamp || abs($verified_timestamp - $timestamp) > 1 ) {
+        if ( $verified_timestamp ) wp_unschedule_event($verified_timestamp, EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, [$event_id, $schedule_id]);
+        return new WP_Error('schedule_verification_failed', 'La tarea fue creada, pero WordPress no confirmó la misma fecha y hora. La configuración anterior se conserva.');
     }
 
     update_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', $stored);
 
     if ( ! empty($previous['schedule_id']) ) {
-        $previous_id = (string)$previous['schedule_id'];
-        $previous_timestamp = wp_next_scheduled(
-            EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK,
-            [$event_id, $previous_id]
-        );
-        if ( $previous_timestamp ) {
-            wp_unschedule_event(
-                $previous_timestamp,
-                EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK,
-                [$event_id, $previous_id]
-            );
+        $previous_args = [$event_id, sanitize_key((string)$previous['schedule_id'])];
+        while ( $previous_timestamp = wp_next_scheduled(EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, $previous_args) ) {
+            wp_unschedule_event($previous_timestamp, EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, $previous_args);
         }
     }
 
     eventosapp_attendance_confirmation_event_log($event_id, [
         'type'    => 'scheduled',
-        'message' => 'Envío programado para ' . $date . ' ' . $time . ' (' . $tz->getName() . ').',
-        'meta'    => $stored,
+        'message' => 'Envío programado para ' . $parsed['local'] . ' (' . $parsed['timezone'] . ', UTC' . $parsed['utc_offset'] . '). Equivalente UTC: ' . $parsed['utc'] . '.',
+        'meta'    => array_merge($stored, ['cron_verified_timestamp'=>$verified_timestamp]),
     ]);
 
-    return ['ok'=>true,'message'=>'Envío programado.','config'=>$stored];
+    return ['ok'=>true,'message'=>'Envío programado en la zona horaria del evento.','config'=>$stored];
 }
 
 add_action(EVENTOSAPP_ATTENDANCE_CONFIRMATION_SCHEDULE_HOOK, function($event_id, $schedule_id) {
     $event_id = absint($event_id);
     $schedule_id = sanitize_key((string)$schedule_id);
-    $config = get_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', true);
-    if ( ! is_array($config) || empty($config['enabled']) || sanitize_key((string)($config['schedule_id'] ?? '')) !== $schedule_id ) {
-        eventosapp_attendance_confirmation_event_log($event_id, ['type'=>'cancelled','message'=>'La programación ya no estaba vigente al ejecutarse.']);
-        return;
+    $scope = 'attendance_schedule_start:' . $event_id . ':' . $schedule_id;
+    $lock = eventosapp_attendance_confirmation_acquire_lock($scope, 180);
+    if ( is_wp_error($lock) ) return;
+
+    try {
+        $config = get_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', true);
+        if ( ! is_array($config) || empty($config['enabled']) || sanitize_key((string)($config['schedule_id'] ?? '')) !== $schedule_id ) {
+            eventosapp_attendance_confirmation_event_log($event_id, ['type'=>'cancelled','message'=>'La programación ya no estaba vigente al ejecutarse.']);
+            return;
+        }
+
+        $job_id = sanitize_key('job_' . $event_id . '_' . time() . '_' . wp_generate_password(6, false, false));
+        $job = [
+            'job_id'       => $job_id,
+            'event_id'     => $event_id,
+            'schedule_id'  => $schedule_id,
+            'cursor'       => 0,
+            'processed'    => 0,
+            'scanned'      => 0,
+            'success'      => 0,
+            'partial'      => 0,
+            'errors'       => 0,
+            'started_at'   => current_time('mysql'),
+            'started_utc'  => gmdate('Y-m-d H:i:s'),
+            'planned_timestamp' => absint($config['timestamp'] ?? 0),
+            'config'       => $config,
+        ];
+        update_option('evapp_attendance_job_' . $job_id, $job, false);
+        update_post_meta($event_id, '_eventosapp_attendance_confirmation_last_job_id', $job_id);
+        $config['enabled'] = 0;
+        $config['last_started_at'] = current_time('mysql');
+        $config['last_job_id'] = $job_id;
+        update_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', $config);
+
+        eventosapp_attendance_confirmation_event_log($event_id, [
+            'type'=>'job_started',
+            'message'=>'Trabajo programado iniciado en lotes controlados.',
+            'meta'=>[
+                'job_id'=>$job_id,
+                'planned_event_time'=>eventosapp_attendance_confirmation_format_timestamp_for_event($event_id, absint($job['planned_timestamp'])),
+                'planned_utc'=>$job['planned_timestamp'] ? gmdate('Y-m-d H:i:s', $job['planned_timestamp']) : '',
+                'actual_event_time'=>eventosapp_attendance_confirmation_format_timestamp_for_event($event_id, time()),
+                'actual_utc'=>gmdate('Y-m-d H:i:s'),
+            ],
+        ]);
+
+        wp_schedule_single_event(time() + 5, EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, [$job_id]);
+    } finally {
+        eventosapp_attendance_confirmation_release_lock($scope, $lock);
     }
-    $ticket_ids = eventosapp_attendance_confirmation_get_filtered_tickets($config['filters'] ?? ['evento_id'=>$event_id]);
-    $job_id = sanitize_key('job_' . $event_id . '_' . time() . '_' . wp_generate_password(6, false, false));
-    $job = [
-        'job_id'=>$job_id,'event_id'=>$event_id,'schedule_id'=>$schedule_id,'ticket_ids'=>$ticket_ids,
-        'offset'=>0,'total'=>count($ticket_ids),'success'=>0,'partial'=>0,'errors'=>0,'started_at'=>current_time('mysql'),
-        'config'=>$config,
-    ];
-    update_option('evapp_attendance_job_' . $job_id, $job, false);
-    update_post_meta($event_id, '_eventosapp_attendance_confirmation_last_job_id', $job_id);
-    $config['enabled'] = 0;
-    $config['last_started_at'] = current_time('mysql');
-    $config['last_job_id'] = $job_id;
-    update_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', $config);
-    eventosapp_attendance_confirmation_event_log($event_id, ['type'=>'job_started','message'=>'Trabajo programado iniciado con ' . count($ticket_ids) . ' tickets.','meta'=>['job_id'=>$job_id]]);
-    wp_schedule_single_event(time() + 5, EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, [$job_id]);
 }, 10, 2);
 
 add_action(EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, function($job_id) {
@@ -1189,34 +1669,103 @@ add_action(EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, function($job_id) {
     $option_key = 'evapp_attendance_job_' . $job_id;
     $job = get_option($option_key, null);
     if ( ! is_array($job) ) return;
-    $batch = array_slice((array)$job['ticket_ids'], absint($job['offset']), EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_SIZE);
-    foreach ( $batch as $ticket_id ) {
-        $source_key = $job_id . ':' . absint($ticket_id);
-        $result = eventosapp_attendance_confirmation_send_ticket($ticket_id, [
-            'channels'=>$job['config']['channels'] ?? ['email'],
-            'email_template'=>$job['config']['email_template'] ?? 'attendance-confirmation.html',
-            'email_subject'=>$job['config']['email_subject'] ?? 'Confirma tu asistencia a {{evento_nombre}}',
-            'email_message'=>$job['config']['email_message'] ?? '',
-            'whatsapp_template_id'=>$job['config']['whatsapp_template_id'] ?? eventosapp_attendance_confirmation_whatsapp_template_id(),
-            'source'=>'scheduled','source_key'=>$source_key,
-        ]);
-        if ( ! empty($result['ok']) && empty($result['partial']) ) $job['success']++;
-        elseif ( ! empty($result['ok']) ) $job['partial']++;
-        else $job['errors']++;
-    }
-    $job['offset'] = absint($job['offset']) + count($batch);
-    $job['updated_at'] = current_time('mysql');
-    update_option($option_key, $job, false);
-    if ( $job['offset'] < $job['total'] ) {
-        wp_schedule_single_event(time() + 60, EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, [$job_id]);
+
+    $channels = eventosapp_attendance_confirmation_sanitize_channels($job['config']['channels'] ?? ['email']);
+    $limits = eventosapp_attendance_confirmation_bulk_limits('attendance_confirmation_scheduled', $channels);
+    $scope = 'attendance_scheduled_batch:' . $job_id;
+    $lock = eventosapp_attendance_confirmation_acquire_lock($scope, $limits['lock_ttl']);
+    if ( is_wp_error($lock) ) {
+        wp_schedule_single_event(time() + $limits['delay_seconds'], EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, [$job_id]);
         return;
     }
-    $job['finished_at'] = current_time('mysql');
-    update_option($option_key, $job, false);
-    update_post_meta(absint($job['event_id']), '_eventosapp_attendance_confirmation_last_job', $job);
-    eventosapp_attendance_confirmation_event_log(absint($job['event_id']), [
-        'type'=>'job_finished','message'=>'Trabajo finalizado. Correctos: ' . absint($job['success']) . ', parciales: ' . absint($job['partial']) . ', errores: ' . absint($job['errors']) . '.',
-        'meta'=>['job_id'=>$job_id,'total'=>$job['total'],'success'=>$job['success'],'partial'=>$job['partial'],'errors'=>$job['errors']],
-    ]);
-    delete_option($option_key);
+
+    try {
+        $started = microtime(true);
+        $page = eventosapp_attendance_confirmation_get_filtered_tickets_page(
+            $job['config']['filters'] ?? ['evento_id'=>absint($job['event_id'])],
+            absint($job['cursor'] ?? 0),
+            $limits['batch_size'],
+            $limits['scan_size']
+        );
+
+        $ticket_ids = (array)($page['ticket_ids'] ?? []);
+        $processed_this_run = 0;
+        $last_processed_ticket_id = 0;
+        foreach ( $ticket_ids as $ticket_id ) {
+            if ( eventosapp_attendance_confirmation_should_yield($started, $processed_this_run, $limits) ) break;
+
+            $source_key = $job_id . ':' . absint($ticket_id);
+            $result = eventosapp_attendance_confirmation_send_ticket($ticket_id, [
+                'channels'=>$channels,
+                'email_template'=>$job['config']['email_template'] ?? 'attendance-confirmation.html',
+                'email_subject'=>$job['config']['email_subject'] ?? 'Confirma tu asistencia a {{evento_nombre}}',
+                'email_message'=>$job['config']['email_message'] ?? '',
+                'whatsapp_template_id'=>$job['config']['whatsapp_template_id'] ?? eventosapp_attendance_confirmation_whatsapp_template_id(),
+                'source'=>'scheduled','source_key'=>$source_key,
+            ]);
+            if ( ! empty($result['ok']) && empty($result['partial']) ) $job['success']++;
+            elseif ( ! empty($result['ok']) ) $job['partial']++;
+            else $job['errors']++;
+            $processed_this_run++;
+            $last_processed_ticket_id = absint($ticket_id);
+            $job['processed'] = absint($job['processed'] ?? 0) + 1;
+        }
+
+        /*
+         * Solo se adopta el cursor completo del escaneo cuando todos los tickets
+         * seleccionados para este lote fueron procesados. Si se activó el corte
+         * preventivo por tiempo/memoria, se conserva el último ID realmente
+         * procesado para que ningún destinatario quede saltado.
+         */
+        if ( $processed_this_run >= count($ticket_ids) ) {
+            $job['cursor'] = absint($page['next_cursor'] ?? $job['cursor'] ?? 0);
+            $job['scanned'] = absint($job['scanned'] ?? 0) + absint($page['scanned'] ?? 0);
+        } elseif ( $last_processed_ticket_id > 0 ) {
+            $job['cursor'] = $last_processed_ticket_id;
+        }
+        $job['updated_at'] = current_time('mysql');
+        update_option($option_key, $job, false);
+
+        $done = ! empty($page['done']) && $processed_this_run >= count($ticket_ids);
+        if ( ! $done ) {
+            $scheduled = wp_schedule_single_event(time() + $limits['delay_seconds'], EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, [$job_id], true);
+            if ( is_wp_error($scheduled) || ! $scheduled ) {
+                eventosapp_attendance_confirmation_event_log(absint($job['event_id']), [
+                    'type'=>'batch_reschedule_error',
+                    'message'=>'No se pudo programar el siguiente lote. El trabajo puede reanudarse manualmente desde el log.',
+                    'meta'=>['job_id'=>$job_id,'cursor'=>$job['cursor']],
+                ]);
+            }
+            return;
+        }
+
+        $job['finished_at'] = current_time('mysql');
+        $job['finished_utc'] = gmdate('Y-m-d H:i:s');
+        update_post_meta(absint($job['event_id']), '_eventosapp_attendance_confirmation_last_job', $job);
+        eventosapp_attendance_confirmation_event_log(absint($job['event_id']), [
+            'type'=>'job_finished',
+            'message'=>'Trabajo finalizado. Procesados: ' . absint($job['processed']) . ', correctos: ' . absint($job['success']) . ', parciales: ' . absint($job['partial']) . ', errores: ' . absint($job['errors']) . '.',
+            'meta'=>[
+                'job_id'=>$job_id,
+                'processed'=>$job['processed'],
+                'scanned'=>$job['scanned'],
+                'success'=>$job['success'],
+                'partial'=>$job['partial'],
+                'errors'=>$job['errors'],
+            ],
+        ]);
+        delete_option($option_key);
+    } catch (Throwable $e) {
+        $job['last_error'] = sanitize_text_field($e->getMessage());
+        $job['updated_at'] = current_time('mysql');
+        update_option($option_key, $job, false);
+        eventosapp_attendance_confirmation_event_log(absint($job['event_id']), [
+            'type'=>'batch_exception',
+            'message'=>'El lote se detuvo de forma segura por un error y se reintentará.',
+            'meta'=>['job_id'=>$job_id,'error'=>$e->getMessage()],
+        ]);
+        wp_schedule_single_event(time() + min(300, $limits['delay_seconds'] * 2), EVENTOSAPP_ATTENDANCE_CONFIRMATION_BATCH_HOOK, [$job_id]);
+    } finally {
+        eventosapp_attendance_confirmation_release_lock($scope, $lock);
+    }
 }, 10, 1);
