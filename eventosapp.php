@@ -1214,6 +1214,10 @@ eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-attendance-confirmation-admin.php',
     'eventosapp-attendance-confirmation-admin.php',
 ]);
+eventosapp_require_first_existing_file([
+    'includes/functions/eventosapp-attendance-confirmation-integrations.php',
+    'eventosapp-attendance-confirmation-integrations.php',
+]);
 require_once plugin_dir_path(__FILE__) . 'includes/api/eventosapp-intake-ac.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/metabox-curl.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-herramientas.php';
