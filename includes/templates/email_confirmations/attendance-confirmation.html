@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Confirmación de asistencia</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f6fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f3f6fa;">
+    <tr>
+      <td align="center" style="padding:28px 14px;">
+        <table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 12px 32px rgba(15,23,42,.08);">
+          <tr>
+            <td style="padding:0;line-height:0;">{{header_block}}</td>
+          </tr>
+          <tr>
+            <td style="padding:34px 34px 12px 34px;">
+              <p style="margin:0 0 10px;font-size:14px;line-height:1.5;color:#667085;">CONFIRMACIÓN DE ASISTENCIA</p>
+              <h1 style="margin:0 0 18px;font-size:28px;line-height:1.2;color:#101828;">¿Podemos contar con tu asistencia?</h1>
+              <p style="margin:0 0 18px;font-size:16px;line-height:1.7;color:#344054;">Hola <strong>{{nombre_completo}}</strong>, queremos confirmar tu asistencia a <strong>{{evento_nombre}}</strong>.</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f8fafc;border:1px solid #e4e7ec;border-radius:10px;margin:0 0 24px;">
+                <tr><td style="padding:18px 20px;font-size:15px;line-height:1.8;color:#344054;"><strong>Fecha:</strong> {{evento_fecha}}<br><strong>Hora:</strong> {{evento_hora}}<br><strong>Lugar:</strong> {{evento_lugar}}<br><strong>Modalidad:</strong> {{modalidad}}</td></tr>
+              </table>
+              <p style="margin:0 0 14px;font-size:16px;line-height:1.6;color:#344054;text-align:center;">Selecciona una opción:</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td align="center" style="padding:4px 4px 12px;">
+                    <a href="{{url_si}}" style="display:inline-block;background:#16854b;color:#ffffff;text-decoration:none;font-size:16px;font-weight:bold;line-height:1;padding:15px 25px;border-radius:8px;margin:5px;">Sí, asistiré</a>
+                    <a href="{{url_no}}" style="display:inline-block;background:#b42318;color:#ffffff;text-decoration:none;font-size:16px;font-weight:bold;line-height:1;padding:15px 25px;border-radius:8px;margin:5px;">No podré asistir</a>
+                  </td>
+                </tr>
+              </table>
+              {{custom_message}}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:22px 34px 30px;font-size:12px;line-height:1.6;color:#667085;text-align:center;">Este mensaje fue enviado por el sistema de confirmación de asistencia de EventosApp.</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
