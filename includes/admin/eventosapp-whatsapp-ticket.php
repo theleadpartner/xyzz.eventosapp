@@ -196,11 +196,29 @@ function eventosapp_whatsapp_get_event_sender_phone_number_id($event_id, $settin
     $event_id = absint($event_id);
     $settings = is_array($settings) ? wp_parse_args($settings, eventosapp_whatsapp_default_settings()) : eventosapp_whatsapp_get_settings();
     $accounts = eventosapp_whatsapp_get_phone_accounts($settings);
-    $default_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['phone_number_id'] ?? '');
 
+    // Cuando el evento está vinculado a un Cliente de EventosApp, los números
+    // administrados por el operador se limitan a ese cliente. Los números
+    // históricos globales se conservan para compatibilidad.
+    if ( $event_id && function_exists('eventosapp_wa_operator_filter_phone_accounts_for_event') ) {
+        $accounts = eventosapp_wa_operator_filter_phone_accounts_for_event($accounts, $event_id);
+    }
+
+    $default_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['phone_number_id'] ?? '');
     $selected = $event_id ? eventosapp_whatsapp_sanitize_phone_number_id(get_post_meta($event_id, '_eventosapp_whatsapp_sender_phone_number_id', true)) : '';
+
     if ( $selected !== '' && isset($accounts[$selected]) ) {
         return $selected;
+    }
+
+    // Si el cliente tiene números incorporados por Embedded Signup, usa su
+    // número predeterminado antes del fallback global.
+    if ( $event_id && function_exists('eventosapp_wa_operator_get_event_client_id') && function_exists('eventosapp_wa_operator_default_phone_for_client') ) {
+        $client_id = eventosapp_wa_operator_get_event_client_id($event_id);
+        $client_default = $client_id ? eventosapp_wa_operator_default_phone_for_client($client_id) : '';
+        if ( $client_default !== '' && isset($accounts[$client_default]) ) {
+            return $client_default;
+        }
     }
 
     if ( $default_phone_number_id !== '' && isset($accounts[$default_phone_number_id]) ) {
@@ -228,6 +246,16 @@ function eventosapp_whatsapp_resolve_sender_settings($event_id = 0, $settings = 
         : eventosapp_whatsapp_sanitize_phone_account_label($settings['phone_number_label'] ?? '', 'Número WhatsApp');
     $settings['_resolved_sender_account'] = is_array($account) ? $account : [];
 
+    // Inyecta el token cifrado y la WABA del cliente cuando el número fue
+    // incorporado por el Operador WhatsApp. Si no existe, no altera el fallback.
+    if ( function_exists('eventosapp_wa_operator_apply_credentials_to_settings') ) {
+        $settings = eventosapp_wa_operator_apply_credentials_to_settings(
+            $settings,
+            $settings['sender_phone_number_id'] ?? '',
+            is_array($account) ? ($account['waba_id'] ?? '') : ''
+        );
+    }
+
     return $settings;
 }
 
@@ -248,6 +276,14 @@ function eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id($phone_n
         $settings['sender_phone_number_id'] = $phone_number_id;
         $settings['sender_phone_label'] = eventosapp_whatsapp_sanitize_phone_account_label($accounts[$phone_number_id]['alias'] ?? '', 'Número WhatsApp');
         $settings['_resolved_sender_account'] = $accounts[$phone_number_id];
+
+        if ( function_exists('eventosapp_wa_operator_apply_credentials_to_settings') ) {
+            $settings = eventosapp_wa_operator_apply_credentials_to_settings(
+                $settings,
+                $phone_number_id,
+                $accounts[$phone_number_id]['waba_id'] ?? ''
+            );
+        }
     }
 
     return $settings;
@@ -421,6 +457,30 @@ function eventosapp_whatsapp_graph_api_request($method, $path, $body = null, $se
     $method = strtoupper((string) $method);
     $settings = is_array($settings) ? wp_parse_args($settings, eventosapp_whatsapp_default_settings()) : eventosapp_whatsapp_get_settings();
     $query_args = is_array($query_args) ? $query_args : [];
+    $path = ltrim((string) $path, '/');
+
+    if ( $path === '' ) {
+        return [
+            'ok' => false,
+            'http_code' => 0,
+            'message' => 'Ruta Graph API vacía.',
+            'response' => null,
+        ];
+    }
+
+    /**
+     * Permite que el Operador WhatsApp resuelva el token correcto por WABA o
+     * Phone Number ID sin cambiar las llamadas existentes de plantillas,
+     * Flows, Inbox, campañas o tickets.
+     */
+    $settings = apply_filters(
+        'eventosapp_whatsapp_graph_api_request_settings',
+        $settings,
+        $method,
+        $path,
+        $body,
+        $query_args
+    );
 
     $access_token = trim((string)($settings['access_token'] ?? ''));
     $api_version = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($settings['api_version'] ?? 'v23.0'));
@@ -434,17 +494,7 @@ function eventosapp_whatsapp_graph_api_request($method, $path, $body = null, $se
         return [
             'ok' => false,
             'http_code' => 0,
-            'message' => 'Falta Access Token en WhatsApp Tickets.',
-            'response' => null,
-        ];
-    }
-
-    $path = ltrim((string) $path, '/');
-    if ( $path === '' ) {
-        return [
-            'ok' => false,
-            'http_code' => 0,
-            'message' => 'Ruta Graph API vacía.',
+            'message' => 'Falta Access Token en WhatsApp Tickets o en la cuenta administrada por el operador.',
             'response' => null,
         ];
     }
@@ -486,7 +536,7 @@ function eventosapp_whatsapp_graph_api_request($method, $path, $body = null, $se
         'ok' => $ok,
         'http_code' => $code,
         'message' => $ok ? 'Solicitud aceptada por Meta.' : eventosapp_whatsapp_extract_api_error($decoded, $raw_body, $code),
-        'response' => $decoded ?: $raw_body,
+        'response' => is_array($decoded) ? $decoded : $raw_body,
         'endpoint' => $endpoint,
     ];
 }
@@ -4416,27 +4466,39 @@ if ( ! function_exists('eventosapp_whatsapp_render_event_sender_phone_select') )
         $event_id = absint($event_id);
         $settings = eventosapp_whatsapp_get_settings();
         $accounts = eventosapp_whatsapp_get_phone_accounts($settings);
+        if ( $event_id && function_exists('eventosapp_wa_operator_filter_phone_accounts_for_event') ) {
+            $accounts = eventosapp_wa_operator_filter_phone_accounts_for_event($accounts, $event_id);
+        }
+
         $current = eventosapp_whatsapp_get_event_selected_sender_phone_number_id($event_id);
         $default_phone_number_id = eventosapp_whatsapp_sanitize_phone_number_id($settings['phone_number_id'] ?? '');
+
+        if ( $event_id && function_exists('eventosapp_wa_operator_get_event_client_id') && function_exists('eventosapp_wa_operator_default_phone_for_client') ) {
+            $client_id = eventosapp_wa_operator_get_event_client_id($event_id);
+            $client_default = $client_id ? eventosapp_wa_operator_default_phone_for_client($client_id) : '';
+            if ( $client_default !== '' && isset($accounts[$client_default]) ) {
+                $default_phone_number_id = $client_default;
+            }
+        }
         ?>
         <label for="evapp_eventosapp_whatsapp_sender_phone_number_id">Número emisor WhatsApp del evento</label>
         <div class="evapp-wa-visual-field">
             <?php if ( empty($accounts) ) : ?>
                 <p class="evapp-wa-visual-help" style="margin-top:0;">
-                    Aún no hay números emisores configurados. Configura primero el Phone Number ID por defecto en <strong>WhatsApp Tickets → API de WhatsApp Cloud</strong>.
+                    Aún no hay números emisores configurados. Configura WhatsApp Tickets o conecta una cuenta desde <strong>Operador WhatsApp</strong>.
                 </p>
             <?php else : ?>
                 <select id="evapp_eventosapp_whatsapp_sender_phone_number_id" name="eventosapp_whatsapp_sender_phone_number_id" data-default-phone-number-id="<?php echo esc_attr($default_phone_number_id); ?>">
-                    <option value=""><?php echo esc_html('Automático: número por defecto' . ($default_phone_number_id && isset($accounts[$default_phone_number_id]) ? ' — ' . $accounts[$default_phone_number_id]['label'] : '')); ?></option>
+                    <option value=""><?php echo esc_html('Automático: número del cliente o número global' . ($default_phone_number_id && isset($accounts[$default_phone_number_id]) ? ' — ' . $accounts[$default_phone_number_id]['label'] : '')); ?></option>
                     <?php foreach ( $accounts as $account_id => $account ) : ?>
                         <option value="<?php echo esc_attr($account_id); ?>" <?php selected($current, $account_id); ?>><?php echo esc_html($account['label']); ?></option>
                     <?php endforeach; ?>
                     <?php if ( $current !== '' && ! isset($accounts[$current]) ) : ?>
-                        <option value="<?php echo esc_attr($current); ?>" selected><?php echo esc_html('Número guardado no disponible — ' . $current); ?></option>
+                        <option value="<?php echo esc_attr($current); ?>" selected><?php echo esc_html('Número guardado no disponible para este cliente — ' . $current); ?></option>
                     <?php endif; ?>
                 </select>
                 <p class="evapp-wa-visual-help">
-                    Este número se usará en envíos manuales del ticket, envíos masivos, envíos automáticos al crear tickets y recordatorios del evento. Si lo dejas en automático, se usará el número por defecto global.
+                    Este número se usará en envíos manuales, masivos, automáticos y recordatorios. Los números administrados por el operador se limitan al cliente vinculado al evento.
                 </p>
             <?php endif; ?>
         </div>
@@ -4874,6 +4936,9 @@ if ( ! function_exists('eventosapp_whatsapp_get_event_satisfaction_flow_sender_p
         $event_id = absint($event_id);
         $settings = is_array($settings) ? wp_parse_args($settings, eventosapp_whatsapp_default_settings()) : eventosapp_whatsapp_get_settings();
         $accounts = eventosapp_whatsapp_get_phone_accounts($settings);
+        if ( $event_id && function_exists('eventosapp_wa_operator_filter_phone_accounts_for_event') ) {
+            $accounts = eventosapp_wa_operator_filter_phone_accounts_for_event($accounts, $event_id);
+        }
         $selected = $event_id ? eventosapp_whatsapp_get_event_selected_satisfaction_flow_sender_phone_number_id($event_id) : '';
 
         if ( $selected !== '' && isset($accounts[$selected]) ) {
@@ -5044,16 +5109,21 @@ if ( ! function_exists('eventosapp_whatsapp_render_event_satisfaction_flow_sende
         $event_id = absint($event_id);
         $settings = eventosapp_whatsapp_get_settings();
         $accounts = eventosapp_whatsapp_get_phone_accounts($settings);
+        if ( $event_id && function_exists('eventosapp_wa_operator_filter_phone_accounts_for_event') ) {
+            $accounts = eventosapp_wa_operator_filter_phone_accounts_for_event($accounts, $event_id);
+        }
         $current = eventosapp_whatsapp_get_event_selected_satisfaction_flow_sender_phone_number_id($event_id);
         $event_sender_phone_number_id = eventosapp_whatsapp_get_event_sender_phone_number_id($event_id, $settings);
-        $event_sender_account = eventosapp_whatsapp_get_phone_account($event_sender_phone_number_id, $settings);
+        $event_sender_account = isset($accounts[$event_sender_phone_number_id])
+            ? $accounts[$event_sender_phone_number_id]
+            : eventosapp_whatsapp_get_phone_account($event_sender_phone_number_id, $settings);
         $default_label = is_array($event_sender_account) ? sanitize_text_field((string)($event_sender_account['label'] ?? ($event_sender_account['alias'] ?? $event_sender_phone_number_id))) : ($event_sender_phone_number_id ?: 'número por defecto');
         ?>
         <label for="evapp_eventosapp_whatsapp_satisfaction_flow_sender_phone_number_id">Número emisor para enviar el Flow</label>
         <div class="evapp-wa-visual-field">
             <?php if ( empty($accounts) ) : ?>
                 <p class="evapp-wa-visual-help" style="margin-top:0;">
-                    Aún no hay números emisores configurados. Configura primero el Phone Number ID por defecto en <strong>WhatsApp Tickets → API de WhatsApp Cloud</strong>.
+                    Aún no hay números emisores disponibles para este evento.
                 </p>
             <?php else : ?>
                 <select id="evapp_eventosapp_whatsapp_satisfaction_flow_sender_phone_number_id" name="eventosapp_whatsapp_satisfaction_flow_sender_phone_number_id" data-event-sender-phone-number-id="<?php echo esc_attr($event_sender_phone_number_id); ?>">
@@ -5062,11 +5132,11 @@ if ( ! function_exists('eventosapp_whatsapp_render_event_satisfaction_flow_sende
                         <option value="<?php echo esc_attr($account_id); ?>" <?php selected($current, $account_id); ?>><?php echo esc_html($account['label']); ?></option>
                     <?php endforeach; ?>
                     <?php if ( $current !== '' && ! isset($accounts[$current]) ) : ?>
-                        <option value="<?php echo esc_attr($current); ?>" selected><?php echo esc_html('Número guardado no disponible — ' . $current); ?></option>
+                        <option value="<?php echo esc_attr($current); ?>" selected><?php echo esc_html('Número guardado no disponible para este cliente — ' . $current); ?></option>
                     <?php endif; ?>
                 </select>
                 <p class="evapp-wa-visual-help">
-                    Este número solo aplica para la encuesta de satisfacción por Flow. Si lo dejas en automático, se usará el número emisor WhatsApp del evento configurado arriba.
+                    Este número solo aplica para la encuesta de satisfacción por Flow. Si lo dejas en automático, usará el número emisor del evento.
                 </p>
             <?php endif; ?>
         </div>
@@ -5379,7 +5449,10 @@ function eventosapp_whatsapp_save_event_visuals_metabox($post_id, $post = null, 
         $selected_sender = eventosapp_whatsapp_sanitize_phone_number_id(wp_unslash($_POST['eventosapp_whatsapp_sender_phone_number_id']));
         $settings = eventosapp_whatsapp_get_settings();
         $accounts = eventosapp_whatsapp_get_phone_accounts($settings);
-        $default_sender = eventosapp_whatsapp_sanitize_phone_number_id($settings['phone_number_id'] ?? '');
+        if ( function_exists('eventosapp_wa_operator_filter_phone_accounts_for_event') ) {
+            $accounts = eventosapp_wa_operator_filter_phone_accounts_for_event($accounts, $post_id);
+        }
+        $default_sender = eventosapp_whatsapp_get_event_sender_phone_number_id($post_id, $settings);
 
         if ( $selected_sender !== '' && isset($accounts[$selected_sender]) && $selected_sender !== $default_sender ) {
             update_post_meta($post_id, '_eventosapp_whatsapp_sender_phone_number_id', $selected_sender);
@@ -5423,6 +5496,9 @@ function eventosapp_whatsapp_save_event_visuals_metabox($post_id, $post = null, 
         $selected_flow_sender = eventosapp_whatsapp_sanitize_phone_number_id(wp_unslash($_POST['eventosapp_whatsapp_satisfaction_flow_sender_phone_number_id']));
         $settings = eventosapp_whatsapp_get_settings();
         $accounts = eventosapp_whatsapp_get_phone_accounts($settings);
+        if ( function_exists('eventosapp_wa_operator_filter_phone_accounts_for_event') ) {
+            $accounts = eventosapp_wa_operator_filter_phone_accounts_for_event($accounts, $post_id);
+        }
         $event_sender = eventosapp_whatsapp_get_event_sender_phone_number_id($post_id, $settings);
 
         if ( $selected_flow_sender !== '' && isset($accounts[$selected_flow_sender]) && $selected_flow_sender !== $event_sender ) {
@@ -7891,6 +7967,30 @@ function eventosapp_whatsapp_serve_webhook_request($transport = 'admin_post') {
     eventosapp_whatsapp_store_webhook_transport_debug($transport, (string) $raw, [
         'stage' => 'payload_received',
     ]);
+
+    /**
+     * Compatibilidad segura: por defecto el filtro devuelve true. El módulo
+     * Operador lo valida con X-Hub-Signature-256 solo cuando el administrador
+     * activó esa opción y existe un App Secret cifrado.
+     */
+    $signature_valid = apply_filters(
+        'eventosapp_whatsapp_verify_webhook_signature',
+        true,
+        (string) $raw,
+        $_SERVER
+    );
+    if ( ! $signature_valid ) {
+        eventosapp_whatsapp_store_webhook_transport_debug($transport, (string) $raw, [
+            'stage' => 'invalid_signature',
+            'signature_present' => ! empty($_SERVER['HTTP_X_HUB_SIGNATURE_256']),
+        ]);
+        status_header(401);
+        wp_send_json([
+            'ok' => false,
+            'message' => 'Firma del webhook inválida.',
+            'transport' => $transport,
+        ]);
+    }
 
     $payload = json_decode((string)$raw, true);
 

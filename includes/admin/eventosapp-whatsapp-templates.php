@@ -679,13 +679,18 @@ function eventosapp_whatsapp_templates_resolve_sender_account($phone_number_id =
     if ( $phone_number_id !== '' && isset($accounts[$phone_number_id]) && is_array($accounts[$phone_number_id]) ) {
         $account = $accounts[$phone_number_id];
         $is_default_sender = $is_default_sender || ! empty($account['is_default']);
+        $account_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($account['waba_id'] ?? '');
 
         return [
             'phone_number_id' => $phone_number_id,
             'alias'           => sanitize_text_field((string)($account['alias'] ?? 'Número WhatsApp')),
             'label'           => sanitize_text_field((string)($account['label'] ?? (($account['alias'] ?? 'Número WhatsApp') . ' — ' . $phone_number_id))),
-            'waba_id'         => $is_default_sender ? eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '') : '',
+            'waba_id'         => $account_waba_id !== ''
+                ? $account_waba_id
+                : ($is_default_sender ? eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '') : ''),
             'is_default'      => $is_default_sender,
+            'operator_managed'=> ! empty($account['operator_managed']),
+            'client_post_id'  => absint($account['client_post_id'] ?? 0),
         ];
     }
 
@@ -695,6 +700,8 @@ function eventosapp_whatsapp_templates_resolve_sender_account($phone_number_id =
         'label'           => $phone_number_id !== '' ? 'Número no disponible — ' . $phone_number_id : 'Número por defecto',
         'waba_id'         => $is_default_sender ? eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '') : '',
         'is_default'      => $is_default_sender,
+        'operator_managed'=> false,
+        'client_post_id'  => 0,
     ];
 }
 
@@ -707,13 +714,19 @@ function eventosapp_whatsapp_templates_get_template_waba_id($template, $template
     $sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '');
     $account = eventosapp_whatsapp_templates_resolve_sender_account($sender_phone, $template_settings);
 
+    // Las cuentas incorporadas por Operador WhatsApp ya conocen su WABA.
+    $account_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($account['waba_id'] ?? '');
+    if ( $account_waba_id !== '' ) {
+        return $account_waba_id;
+    }
+
     if ( ! empty($account['is_default']) ) {
         $default_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '');
         return $default_waba_id !== '' ? $default_waba_id : eventosapp_whatsapp_templates_sanitize_waba_id($template['waba_id'] ?? '');
     }
 
-    // Para números distintos al principal, el WABA pertenece a la plantilla.
-    // Esto evita que la aprobación se envíe por error al WABA global del número por defecto.
+    // Compatibilidad hacia atrás para números adicionales administrados
+    // manualmente antes de la capa de operador.
     return eventosapp_whatsapp_templates_sanitize_waba_id($template['waba_id'] ?? '');
 }
 
@@ -1212,22 +1225,6 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
 function eventosapp_whatsapp_templates_api_request($method, $path, $body = null) {
     $method = strtoupper((string) $method);
     $wa_settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
-    $access_token = trim((string)($wa_settings['access_token'] ?? ''));
-    $api_version  = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($wa_settings['api_version'] ?? 'v23.0'));
-    $timeout      = min(60, max(5, absint($wa_settings['request_timeout'] ?? 20)));
-
-    if ( $api_version === '' ) {
-        $api_version = 'v23.0';
-    }
-
-    if ( $access_token === '' ) {
-        return [
-            'ok' => false,
-            'http_code' => 0,
-            'message' => 'Falta Access Token en WhatsApp Tickets.',
-            'response' => null,
-        ];
-    }
 
     if ( ! empty($wa_settings['dry_run']) && $wa_settings['dry_run'] === '1' ) {
         return [
@@ -1243,8 +1240,41 @@ function eventosapp_whatsapp_templates_api_request($method, $path, $body = null)
         ];
     }
 
-    $endpoint = sprintf('https://graph.facebook.com/%s/%s', rawurlencode($api_version), ltrim($path, '/'));
+    // El cliente Graph central resuelve automáticamente el token por WABA
+    // cuando la ruta pertenece a una cuenta administrada por Operador WhatsApp.
+    if ( function_exists('eventosapp_whatsapp_graph_api_request') ) {
+        $result = eventosapp_whatsapp_graph_api_request($method, $path, $body, $wa_settings);
+        if ( function_exists('eventosapp_whatsapp_log') ) {
+            eventosapp_whatsapp_log(! empty($result['ok']) ? 'Plantilla WhatsApp API OK' : 'Plantilla WhatsApp API error', [
+                'method' => $method,
+                'path' => $path,
+                'http_code' => $result['http_code'] ?? 0,
+                'request_body' => is_array($body) ? $body : null,
+                'response' => $result['response'] ?? null,
+            ]);
+        }
+        return $result;
+    }
 
+    // Fallback para instalaciones parciales donde WhatsApp Tickets todavía no
+    // cargó su cliente Graph.
+    $access_token = trim((string)($wa_settings['access_token'] ?? ''));
+    $api_version  = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($wa_settings['api_version'] ?? 'v23.0'));
+    $timeout      = min(60, max(5, absint($wa_settings['request_timeout'] ?? 20)));
+
+    if ( $api_version === '' ) {
+        $api_version = 'v23.0';
+    }
+    if ( $access_token === '' ) {
+        return [
+            'ok' => false,
+            'http_code' => 0,
+            'message' => 'Falta Access Token en WhatsApp Tickets o en la cuenta administrada por el operador.',
+            'response' => null,
+        ];
+    }
+
+    $endpoint = sprintf('https://graph.facebook.com/%s/%s', rawurlencode($api_version), ltrim($path, '/'));
     $args = [
         'timeout' => $timeout,
         'headers' => [
@@ -1253,13 +1283,11 @@ function eventosapp_whatsapp_templates_api_request($method, $path, $body = null)
         ],
         'method' => $method,
     ];
-
     if ( $body !== null ) {
         $args['body'] = wp_json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     $response = wp_remote_request($endpoint, $args);
-
     if ( is_wp_error($response) ) {
         return [
             'ok' => false,
@@ -1274,23 +1302,11 @@ function eventosapp_whatsapp_templates_api_request($method, $path, $body = null)
     $decoded = json_decode($raw_body, true);
     $ok = $code >= 200 && $code < 300;
 
-    if ( function_exists('eventosapp_whatsapp_log') ) {
-        eventosapp_whatsapp_log($ok ? 'Plantilla WhatsApp API OK' : 'Plantilla WhatsApp API error', [
-            'method' => $method,
-            'path' => $path,
-            'http_code' => $code,
-            'request_body' => is_array($body) ? $body : null,
-            'response' => $decoded ?: $raw_body,
-        ]);
-    }
-
-    $message = $ok ? 'Solicitud aceptada por Meta.' : eventosapp_whatsapp_templates_extract_api_error($decoded, $raw_body, $code);
-
     return [
         'ok' => $ok,
         'http_code' => $code,
-        'message' => $message,
-        'response' => $decoded ?: $raw_body,
+        'message' => $ok ? 'Solicitud aceptada por Meta.' : eventosapp_whatsapp_templates_extract_api_error($decoded, $raw_body, $code),
+        'response' => is_array($decoded) ? $decoded : $raw_body,
     ];
 }
 
@@ -1390,13 +1406,28 @@ function eventosapp_whatsapp_templates_validate_header_sample_file($file) {
 /**
  * Sube una imagen de muestra a Meta y devuelve el Header Sample Handle.
  */
-function eventosapp_whatsapp_templates_upload_header_sample_to_meta($file) {
+function eventosapp_whatsapp_templates_upload_header_sample_to_meta($file, $template = []) {
     $settings = eventosapp_whatsapp_templates_get_settings();
     $wa_settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
+    $template = is_array($template) ? $template : [];
 
+    $sender_phone_number_id = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '');
+    if ( $sender_phone_number_id !== '' && function_exists('eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id') ) {
+        $wa_settings = eventosapp_whatsapp_resolve_sender_settings_by_phone_number_id($sender_phone_number_id, $wa_settings);
+    }
+
+    $operator_settings = function_exists('eventosapp_wa_operator_get_settings') ? eventosapp_wa_operator_get_settings() : [];
     $app_id = preg_replace('/\D+/', '', (string)($settings['app_id'] ?? ''));
+    if ( $app_id === '' && ! empty($operator_settings['app_id']) ) {
+        $app_id = preg_replace('/\D+/', '', (string)$operator_settings['app_id']);
+    }
+
     $access_token = trim((string)($wa_settings['access_token'] ?? ''));
-    $api_version  = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($wa_settings['api_version'] ?? 'v23.0'));
+    if ( $access_token === '' && function_exists('eventosapp_wa_operator_get_any_access_token') ) {
+        $access_token = eventosapp_wa_operator_get_any_access_token();
+    }
+
+    $api_version  = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($wa_settings['api_version'] ?? ($operator_settings['api_version'] ?? 'v23.0')));
     $timeout      = min(60, max(5, absint($wa_settings['request_timeout'] ?? 20)));
 
     if ( $api_version === '' ) {
@@ -2584,7 +2615,7 @@ add_action('admin_post_eventosapp_whatsapp_templates_save_template', function() 
             $upload_ok = false;
             $upload_message = 'Seleccionaste un archivo de muestra, pero el encabezado de la plantilla no está configurado como Imagen dinámica.';
         } else {
-            $upload_result = eventosapp_whatsapp_templates_upload_header_sample_to_meta($_FILES['header_sample_file']);
+            $upload_result = eventosapp_whatsapp_templates_upload_header_sample_to_meta($_FILES['header_sample_file'], $template);
             if ( ! empty($upload_result['ok']) ) {
                 $file_meta = is_array($upload_result['file'] ?? null) ? $upload_result['file'] : [];
                 $template['header_sample_handle'] = eventosapp_whatsapp_templates_sanitize_header_handle($upload_result['handle'] ?? '');

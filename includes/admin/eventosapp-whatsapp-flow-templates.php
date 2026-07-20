@@ -383,7 +383,10 @@ function eventosapp_whatsapp_flow_templates_resolve_sender_account($phone_number
             'phone_number_id' => $phone_number_id,
             'alias'           => sanitize_text_field((string)($account['alias'] ?? 'Número WhatsApp')),
             'label'           => sanitize_text_field((string)($account['label'] ?? (($account['alias'] ?? 'Número WhatsApp') . ' — ' . $phone_number_id))),
+            'waba_id'         => eventosapp_whatsapp_flow_templates_sanitize_waba_id($account['waba_id'] ?? ''),
             'is_default'      => $is_default,
+            'operator_managed'=> ! empty($account['operator_managed']),
+            'client_post_id'  => absint($account['client_post_id'] ?? 0),
         ];
     }
 
@@ -391,7 +394,10 @@ function eventosapp_whatsapp_flow_templates_resolve_sender_account($phone_number
         'phone_number_id' => $phone_number_id,
         'alias'           => $phone_number_id !== '' ? 'Número no disponible' : 'Número por defecto',
         'label'           => $phone_number_id !== '' ? 'Número no disponible — ' . $phone_number_id : 'Número por defecto',
+        'waba_id'         => '',
         'is_default'      => $is_default,
+        'operator_managed'=> false,
+        'client_post_id'  => 0,
     ];
 }
 
@@ -400,6 +406,11 @@ function eventosapp_whatsapp_flow_templates_get_template_waba_id($template, $set
     $settings = is_array($settings) ? $settings : (function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : []);
     $sender_account = eventosapp_whatsapp_flow_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
     $template_waba_id = eventosapp_whatsapp_flow_templates_sanitize_waba_id($template['waba_id'] ?? '');
+
+    $operator_waba_id = eventosapp_whatsapp_flow_templates_sanitize_waba_id($sender_account['waba_id'] ?? '');
+    if ( $operator_waba_id !== '' ) {
+        return $operator_waba_id;
+    }
 
     if ( ! empty($sender_account['is_default']) ) {
         $default_waba_id = eventosapp_whatsapp_flow_templates_get_default_waba_id($settings);
