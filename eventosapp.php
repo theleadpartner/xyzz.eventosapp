@@ -1167,6 +1167,18 @@ eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-ticket.php',
     'eventosapp-whatsapp-ticket.php',
 ]);
+
+// Operador WhatsApp / Tech Provider: capa multicliente, Embedded Signup,
+// credenciales cifradas, sincronización, verificación y registro de números.
+eventosapp_require_first_existing_file([
+    'includes/functions/eventosapp-whatsapp-operator-core.php',
+    'eventosapp-whatsapp-operator-core.php',
+]);
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-whatsapp-onboarding.php',
+    'eventosapp-whatsapp-onboarding.php',
+]);
+
 eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-templates.php',
     'eventosapp-whatsapp-templates.php',
