@@ -2591,6 +2591,76 @@ function eventosapp_whatsapp_render_log_details($value) {
 }
 
 /**
+ * Navegación unificada del Centro de WhatsApp.
+ *
+ * No fusiona motores ni opciones en una única tabla. Mantiene cada módulo
+ * independiente y compatible, pero ofrece una sola navegación administrativa
+ * para configuración propia, operador multicliente, plantillas, Flows, Inbox
+ * y auditoría.
+ */
+function eventosapp_whatsapp_hub_items() {
+    return [
+        'own' => [
+            'label' => 'Envío propio',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_tickets'),
+        ],
+        'operator' => [
+            'label' => 'Operador / terceros',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_operator'),
+        ],
+        'accounts' => [
+            'label' => 'WABAs',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_operator&tab=accounts'),
+        ],
+        'phones' => [
+            'label' => 'Números',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_operator&tab=phones'),
+        ],
+        'display_names' => [
+            'label' => 'Nombres visibles',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_operator&tab=display_names'),
+        ],
+        'templates' => [
+            'label' => 'Plantillas',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_templates'),
+        ],
+        'flows' => [
+            'label' => 'Flows',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_flows'),
+        ],
+        'inbox' => [
+            'label' => 'Inbox',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_inbox'),
+        ],
+        'logs' => [
+            'label' => 'Logs',
+            'url'   => admin_url('admin.php?page=eventosapp_whatsapp_log'),
+        ],
+    ];
+}
+
+function eventosapp_whatsapp_render_hub_nav($active = 'own') {
+    static $styles_printed = false;
+    $active = sanitize_key((string)$active);
+
+    if ( ! $styles_printed ) {
+        $styles_printed = true;
+        echo '<style>
+        .evapp-wa-hub-nav{display:flex;gap:7px;flex-wrap:wrap;margin:14px 0 18px;padding:12px;background:#fff;border:1px solid #dcdcde;border-radius:10px}
+        .evapp-wa-hub-nav a{display:inline-flex;align-items:center;min-height:32px;padding:0 11px;border:1px solid #c3c4c7;border-radius:6px;text-decoration:none;background:#f6f7f7;color:#1d2327;font-weight:600}
+        .evapp-wa-hub-nav a:hover{border-color:#2271b1;color:#135e96;background:#fff}
+        .evapp-wa-hub-nav a.active{background:#2271b1;border-color:#2271b1;color:#fff}
+        </style>';
+    }
+
+    echo '<nav class="evapp-wa-hub-nav" aria-label="Centro de WhatsApp">';
+    foreach ( eventosapp_whatsapp_hub_items() as $key => $item ) {
+        echo '<a class="' . ($active === $key ? 'active' : '') . '" href="' . esc_url($item['url']) . '">' . esc_html($item['label']) . '</a>';
+    }
+    echo '</nav>';
+}
+
+/**
  * Agrega sección de configuración global en el menú EventosApp.
  */
 add_action('admin_menu', function() {
@@ -2898,13 +2968,17 @@ function eventosapp_whatsapp_render_settings_page() {
     $webhook_urls = function_exists('eventosapp_whatsapp_get_webhook_urls') ? eventosapp_whatsapp_get_webhook_urls() : ['recommended' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook'), 'admin_post' => admin_url('admin-post.php?action=eventosapp_whatsapp_webhook')];
     $webhook_url = $webhook_urls['recommended'] ?? admin_url('admin-post.php?action=eventosapp_whatsapp_webhook');
     $last_test = isset($settings['last_test_result']) && is_array($settings['last_test_result']) ? $settings['last_test_result'] : [];
+    $effective_phone_accounts = eventosapp_whatsapp_get_phone_accounts($settings);
+    $operator_phone_accounts = array_filter($effective_phone_accounts, static function($account) {
+        return is_array($account) && ! empty($account['operator_managed']);
+    });
     ?>
     <div class="wrap eventosapp-whatsapp-settings">
-        <h1>WhatsApp Tickets</h1>
+        <h1>Centro de WhatsApp de EventosApp</h1>
         <p>
-            Configura el envío de tickets por WhatsApp usando WhatsApp Cloud API de Meta.
-            El sistema enviará una imagen del QR de WhatsApp con el resumen del ticket y sus enlaces principales.
+            Configura el canal propio de EventosApp y accede desde un solo lugar al operador multicliente, WABAs, números, nombres visibles, plantillas, Flows, Inbox y auditoría.
         </p>
+        <?php eventosapp_whatsapp_render_hub_nav('own'); ?>
 
         <?php if ( isset($_GET['evapp_whatsapp_saved']) ) : ?>
             <div class="notice notice-success is-dismissible"><p><strong>EventosApp:</strong> Configuración de WhatsApp guardada.</p></div>
@@ -2956,8 +3030,38 @@ function eventosapp_whatsapp_render_settings_page() {
             .evapp-wa-action-form label{font-weight:600;display:block;margin-bottom:6px;}
             .evapp-wa-action-form select,.evapp-wa-action-form input[type="text"],.evapp-wa-action-form input[type="password"]{width:100%;margin-bottom:8px;}
             .evapp-wa-status-pill{display:inline-block;padding:2px 7px;border-radius:999px;background:#eef6ff;border:1px solid #b8d6f3;font-size:12px;font-weight:600;}
-            @media (max-width: 782px){.evapp-wa-grid{grid-template-columns:1fr;}.evapp-wa-phone-account-row{grid-template-columns:1fr;}.evapp-wa-action-form{width:100%;}}
+            .evapp-wa-architecture{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:980px;margin:18px 0;}
+            .evapp-wa-architecture>div{background:#fff;border:1px solid #dcdcde;border-radius:9px;padding:16px;}
+            .evapp-wa-architecture h2{margin:0 0 8px;}
+            .evapp-wa-readonly-list{width:100%;border-collapse:collapse;margin-top:8px;}
+            .evapp-wa-readonly-list th,.evapp-wa-readonly-list td{border-bottom:1px solid #dcdcde;padding:8px;text-align:left;vertical-align:top;}
+            .evapp-wa-readonly-list th{background:#f6f7f7;}
+            .evapp-wa-steps{counter-reset:evappwastep;display:grid;gap:12px;margin:16px 0;}
+            .evapp-wa-step{counter-increment:evappwastep;position:relative;border:1px solid #dcdcde;border-radius:8px;padding:14px 14px 14px 56px;background:#fff;}
+            .evapp-wa-step:before{content:counter(evappwastep);position:absolute;left:14px;top:14px;width:28px;height:28px;border-radius:50%;background:#2271b1;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;}
+            .evapp-wa-step h3{margin:0 0 6px;}
+            .evapp-wa-step p{margin:5px 0;}
+            .evapp-wa-warning{border-left:4px solid #dba617;background:#fff8e5;padding:12px;margin:12px 0;}
+            .evapp-wa-good{border-left:4px solid #00a32a;background:#edfaef;padding:12px;margin:12px 0;}
+            @media (max-width: 782px){.evapp-wa-grid,.evapp-wa-architecture{grid-template-columns:1fr;}.evapp-wa-phone-account-row{grid-template-columns:1fr;}.evapp-wa-action-form{width:100%;}}
         </style>
+
+        <div class="evapp-wa-architecture">
+            <div>
+                <h2>Canal propio de EventosApp</h2>
+                <p>Esta pantalla conserva la configuración histórica global: número por defecto, token de respaldo, prueba rápida, webhook, diagnóstico y procesos de envío de tickets.</p>
+                <p><strong>Se mantiene como fallback</strong> para eventos que no estén vinculados a un número administrado por el Operador WhatsApp.</p>
+            </div>
+            <div>
+                <h2>Operador WhatsApp</h2>
+                <p>Administra WABAs y números propios o de terceros con credenciales cifradas por cuenta. Los números importados se agregan automáticamente a los selectores existentes.</p>
+                <p><a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_operator')); ?>">Abrir Operador WhatsApp</a></p>
+            </div>
+        </div>
+
+        <div class="evapp-wa-warning">
+            <strong>Unificación segura:</strong> la interfaz ahora funciona como un solo Centro de WhatsApp, pero los motores internos continúan separados. Esto evita migrar o borrar configuraciones, plantillas, Flows, campañas, Inbox, logs o metadatos existentes.
+        </div>
 
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
             <?php wp_nonce_field('eventosapp_whatsapp_save_settings', 'eventosapp_whatsapp_settings_nonce'); ?>
@@ -3005,13 +3109,35 @@ function eventosapp_whatsapp_render_settings_page() {
                             <?php endforeach; ?>
                         </div>
                         <p style="margin:10px 0 0;"><button type="button" class="button button-secondary" id="evapp-wa-add-phone-account">+ Agregar número emisor</button></p>
-                        <p class="evapp-wa-help">Agrega aquí los Phone Number ID de los organizadores. Todos usarán el mismo Access Token de la app, siempre que el usuario de sistema tenga permisos sobre esos números. El WABA ID para aprobar plantillas se define desde Plantillas WhatsApp en cada plantilla que use un número distinto al principal.</p>
+                        <p class="evapp-wa-help">Estos son números adicionales históricos y usan el Access Token global de esta pantalla. Para cuentas con token propio, incorpóralas desde Operador WhatsApp; no las dupliques aquí.</p>
                     </div>
 
-                    <label for="evapp_wa_access_token">Access Token</label>
+                    <label>Números administrados por Operador</label>
+                    <div>
+                        <?php if ( empty($operator_phone_accounts) ) : ?>
+                            <p class="evapp-wa-help">No hay números importados por Operador WhatsApp. La configuración global continúa funcionando sin cambios.</p>
+                        <?php else : ?>
+                            <table class="evapp-wa-readonly-list">
+                                <thead><tr><th>Número / alias</th><th>Phone Number ID</th><th>WABA</th><th>Cliente</th></tr></thead>
+                                <tbody>
+                                <?php foreach ( $operator_phone_accounts as $operator_account ) : ?>
+                                    <tr>
+                                        <td><?php echo esc_html($operator_account['alias'] ?? 'Número WhatsApp'); ?></td>
+                                        <td><code><?php echo esc_html($operator_account['phone_number_id'] ?? ''); ?></code></td>
+                                        <td><?php echo esc_html($operator_account['waba_id'] ?? '—'); ?></td>
+                                        <td><?php echo esc_html(! empty($operator_account['client_post_id']) ? get_the_title(absint($operator_account['client_post_id'])) : 'Sin cliente'); ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <p class="evapp-wa-help">Son de solo lectura aquí. Su token se resuelve automáticamente por Phone Number ID/WABA desde el Operador.</p>
+                        <?php endif; ?>
+                    </div>
+
+                    <label for="evapp_wa_access_token">Access Token global de respaldo</label>
                     <div>
                         <input type="password" id="evapp_wa_access_token" name="access_token" value="" autocomplete="new-password" placeholder="<?php echo $token_saved ? esc_attr('Token guardado. Déjalo vacío para conservarlo.') : esc_attr('Pega aquí el token de Meta'); ?>">
-                        <p class="evapp-wa-help">Por seguridad no se muestra el token guardado. Si escribes uno nuevo, reemplazará al anterior.</p>
+                        <p class="evapp-wa-help">Por seguridad no se muestra el token guardado. Se usa únicamente para el número principal y los números adicionales históricos. Los números del Operador usan la credencial cifrada de su propia WABA.</p>
                     </div>
 
                     <label for="evapp_wa_country">Indicativo por defecto</label>
@@ -3161,12 +3287,39 @@ function eventosapp_whatsapp_render_settings_page() {
         $last_display_name_webhook = get_option('eventosapp_whatsapp_last_display_name_webhook', []);
         $last_display_name_webhook = is_array($last_display_name_webhook) ? ($last_display_name_webhook['_last'] ?? $last_display_name_webhook) : [];
         $last_status_response = isset($last_display_name_status['response']) && is_array($last_display_name_status['response']) ? $last_display_name_status['response'] : [];
+        $last_current_status = strtoupper(sanitize_text_field((string)($last_status_response['new_name_status'] ?? ($last_status_response['name_status'] ?? ''))));
+        $last_status_is_approved = in_array($last_current_status, ['APPROVED','AVAILABLE_WITHOUT_REVIEW'], true);
         ?>
-        <div class="evapp-wa-card">
+        <div class="evapp-wa-card" id="evapp-wa-display-name">
             <h2>Nombre visible del número WhatsApp</h2>
-            <p class="evapp-wa-help">
-                Desde aquí puedes solicitar a Meta el cambio del nombre visible de un Phone Number ID usando el campo <span class="evapp-wa-code">new_display_name</span>, consultar el estado y volver a registrar el número cuando el nombre esté aprobado. Para recibir la decisión automática de Meta, activa el campo de webhook <span class="evapp-wa-code">phone_number_name_update</span> en tu app de Meta.
+            <p>
+                Este proceso usa el mismo motor para números globales y números administrados por el Operador. Cuando el número pertenece al Operador, EventosApp resuelve automáticamente el token cifrado de su WABA.
             </p>
+            <p><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_operator&tab=display_names')); ?>">Abrir gestión guiada por número</a></p>
+
+            <div class="evapp-wa-warning">
+                <strong>Regla principal:</strong> solicitar un nombre, verificar un número y registrar un número son procesos distintos. Un nombre rechazado no se corrige desregistrando la línea. Primero corrige la relación pública entre marca, dominio y razón social.
+            </div>
+
+            <div class="evapp-wa-steps">
+                <div class="evapp-wa-step">
+                    <h3>Preparar el nombre</h3>
+                    <p>Usa el nombre público exacto de la marca. Debe coincidir con el sitio web, logo, correos corporativos y documentos públicos.</p>
+                    <p class="evapp-wa-help">Evita slogans, servicios genéricos, ubicaciones, frases promocionales y mayúsculas innecesarias.</p>
+                </div>
+                <div class="evapp-wa-step">
+                    <h3>Enviar a revisión de Meta</h3>
+                    <p>Selecciona el Phone Number ID, escribe el nombre y envíalo una sola vez. La respuesta inicial solo confirma que Meta recibió la solicitud.</p>
+                </div>
+                <div class="evapp-wa-step">
+                    <h3>Esperar o consultar la decisión</h3>
+                    <p>El estado puede ser PENDING, APPROVED, REJECTED o DECLINED. Activa <code>phone_number_name_update</code> para recibir la decisión por webhook.</p>
+                </div>
+                <div class="evapp-wa-step">
+                    <h3>Aplicar el nombre aprobado</h3>
+                    <p>Solo cuando Meta reporte APPROVED, vuelve a registrar el número con el PIN de verificación en dos pasos de 6 dígitos.</p>
+                </div>
+            </div>
 
             <?php if ( ! empty($last_status_response) ) : ?>
                 <table class="evapp-wa-status-table" style="margin-top:12px;">
@@ -3178,56 +3331,65 @@ function eventosapp_whatsapp_render_settings_page() {
                         <tr><th>Estado del nuevo nombre</th><td><span class="evapp-wa-status-pill"><?php echo esc_html(eventosapp_whatsapp_display_name_status_label($last_status_response['new_name_status'] ?? '')); ?></span></td></tr>
                     </tbody>
                 </table>
+                <div class="<?php echo $last_status_is_approved ? 'evapp-wa-good' : 'evapp-wa-warning'; ?>">
+                    <?php if ( $last_status_is_approved ) : ?>
+                        <strong>Meta reporta el nombre como aprobado.</strong> Ya puedes ejecutar “Volver a registrar número” usando el PIN correcto.
+                    <?php elseif ( in_array($last_current_status, ['REJECTED','DECLINED'], true) ) : ?>
+                        <strong>Meta rechazó el nombre.</strong> No vuelvas a registrar el número. Corrige el nombre o la evidencia pública de la marca antes de enviar una nueva solicitud.
+                    <?php else : ?>
+                        <strong>La solicitud todavía no está aprobada.</strong> Espera o consulta nuevamente antes de volver a registrar el número.
+                    <?php endif; ?>
+                </div>
             <?php endif; ?>
 
             <?php if ( empty($display_name_accounts) ) : ?>
-                <p class="evapp-wa-help" style="margin-top:12px;">Primero guarda el Phone Number ID por defecto o agrega números emisores adicionales en la sección API de WhatsApp Cloud.</p>
+                <p class="evapp-wa-help" style="margin-top:12px;">Primero guarda el Phone Number ID por defecto o importa números desde Operador WhatsApp.</p>
             <?php else : ?>
                 <div class="evapp-wa-actions-row">
                     <form class="evapp-wa-action-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                         <?php wp_nonce_field('eventosapp_whatsapp_display_name_request', 'eventosapp_whatsapp_display_name_nonce'); ?>
                         <input type="hidden" name="action" value="eventosapp_whatsapp_display_name_request">
-                        <label for="evapp_wa_display_name_phone_request">Solicitar nombre visible</label>
+                        <label for="evapp_wa_display_name_phone_request">Paso 1 · Solicitar nombre visible</label>
                         <select id="evapp_wa_display_name_phone_request" name="display_phone_number_id">
                             <?php foreach ( $display_name_accounts as $account_id => $account ) : ?>
                                 <option value="<?php echo esc_attr($account_id); ?>"><?php echo esc_html($account['label']); ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <input type="text" name="new_display_name" value="" placeholder="Ej: EventosApp" autocomplete="off" maxlength="512">
+                        <input type="text" name="new_display_name" value="" placeholder="Ej: EventosApp" autocomplete="off" maxlength="512" required>
                         <?php submit_button('Enviar a revisión de Meta', 'secondary', 'submit', false); ?>
-                        <p class="evapp-wa-help">Usa el nombre de marca más directo posible. Evita frases largas, descriptores genéricos o textos que no coincidan con la marca.</p>
+                        <p class="evapp-wa-help">No repitas el envío si ya existe una solicitud pendiente.</p>
                     </form>
 
                     <form class="evapp-wa-action-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                         <?php wp_nonce_field('eventosapp_whatsapp_display_name_check', 'eventosapp_whatsapp_display_name_nonce'); ?>
                         <input type="hidden" name="action" value="eventosapp_whatsapp_display_name_check">
-                        <label for="evapp_wa_display_name_phone_check">Consultar estado</label>
+                        <label for="evapp_wa_display_name_phone_check">Paso 2 · Consultar estado</label>
                         <select id="evapp_wa_display_name_phone_check" name="display_phone_number_id">
                             <?php foreach ( $display_name_accounts as $account_id => $account ) : ?>
                                 <option value="<?php echo esc_attr($account_id); ?>"><?php echo esc_html($account['label']); ?></option>
                             <?php endforeach; ?>
                         </select>
                         <?php submit_button('Consultar en Meta', 'secondary', 'submit', false); ?>
-                        <p class="evapp-wa-help">Consulta el nombre aprobado actual y, si Meta lo expone, el nuevo nombre pendiente o aprobado.</p>
+                        <p class="evapp-wa-help">Actualiza el nombre aprobado actual y el nuevo nombre cuando Meta expone esos campos.</p>
                     </form>
 
                     <form class="evapp-wa-action-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                         <?php wp_nonce_field('eventosapp_whatsapp_display_name_register', 'eventosapp_whatsapp_display_name_nonce'); ?>
                         <input type="hidden" name="action" value="eventosapp_whatsapp_display_name_register">
-                        <label for="evapp_wa_display_name_phone_register">Aplicar nombre aprobado</label>
+                        <label for="evapp_wa_display_name_phone_register">Paso 3 · Aplicar nombre aprobado</label>
                         <select id="evapp_wa_display_name_phone_register" name="display_phone_number_id">
                             <?php foreach ( $display_name_accounts as $account_id => $account ) : ?>
                                 <option value="<?php echo esc_attr($account_id); ?>"><?php echo esc_html($account['label']); ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <input type="password" name="display_name_pin" value="" placeholder="PIN de 6 dígitos" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="new-password">
-                        <?php submit_button('Volver a registrar número', 'secondary', 'submit', false); ?>
-                        <p class="evapp-wa-help">Ejecuta esta acción solo cuando el nuevo nombre aparezca aprobado. Es el paso que sincroniza el nombre aprobado con los servidores de WhatsApp.</p>
+                        <input type="password" name="display_name_pin" value="" placeholder="PIN de 6 dígitos" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="new-password" required>
+                        <?php submit_button('Volver a registrar número', $last_status_is_approved ? 'primary' : 'secondary', 'submit', false); ?>
+                        <p class="evapp-wa-help">Ejecuta esta acción únicamente cuando el nombre del número seleccionado esté aprobado.</p>
                     </form>
                 </div>
             <?php endif; ?>
 
-            <h3>Últimos resultados</h3>
+            <h3>Últimos resultados técnicos</h3>
             <table class="evapp-wa-status-table">
                 <tbody>
                     <tr><th>Última solicitud enviada</th><td><?php eventosapp_whatsapp_render_display_name_result_summary($last_display_name_request); ?></td></tr>
