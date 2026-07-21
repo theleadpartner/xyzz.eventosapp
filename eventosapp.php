@@ -1178,7 +1178,6 @@ eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-onboarding.php',
     'eventosapp-whatsapp-onboarding.php',
 ]);
-
 eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-templates.php',
     'eventosapp-whatsapp-templates.php',
