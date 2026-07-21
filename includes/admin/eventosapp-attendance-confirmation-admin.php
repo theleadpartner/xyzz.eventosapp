@@ -73,6 +73,56 @@ function eventosapp_attendance_confirmation_admin_template_label($template) {
     return $title . ($name !== '' ? ' — ' . $name : '') . ' · ' . $status;
 }
 
+/**
+ * Determina si una plantilla de confirmación está aprobada para envío.
+ */
+function eventosapp_attendance_confirmation_admin_template_is_approved($template) {
+    if ( function_exists('eventosapp_attendance_confirmation_whatsapp_template_is_approved') ) {
+        return eventosapp_attendance_confirmation_whatsapp_template_is_approved($template);
+    }
+    if ( function_exists('eventosapp_whatsapp_is_template_approved') ) {
+        return eventosapp_whatsapp_is_template_approved($template);
+    }
+    return in_array(strtoupper((string)($template['meta_status'] ?? '')), ['APPROVED','ACTIVE'], true);
+}
+
+/**
+ * Resuelve la plantilla seleccionada conservando configuraciones guardadas y,
+ * para nuevos envíos, priorizando una plantilla aprobada.
+ */
+function eventosapp_attendance_confirmation_admin_resolve_template_id($requested, $templates) {
+    $requested = sanitize_key((string)$requested);
+    $templates = is_array($templates) ? $templates : [];
+
+    if ( $requested !== '' && isset($templates[$requested]) ) {
+        return $requested;
+    }
+
+    foreach ( $templates as $template_id => $template ) {
+        if ( eventosapp_attendance_confirmation_admin_template_is_approved($template) ) {
+            return sanitize_key((string)$template_id);
+        }
+    }
+
+    if ( isset($templates['attendance_confirmation']) ) {
+        return 'attendance_confirmation';
+    }
+
+    $template_ids = array_keys($templates);
+    $first = reset($template_ids);
+    return $first ? sanitize_key((string)$first) : 'attendance_confirmation';
+}
+
+/**
+ * URL del inventario especializado de plantillas de confirmación.
+ */
+function eventosapp_attendance_confirmation_admin_templates_url($args = []) {
+    return add_query_arg(
+        array_merge(['page'=>'eventosapp_attendance_confirmation_template'], is_array($args) ? $args : []),
+        admin_url('admin.php')
+    );
+}
+
 function eventosapp_attendance_confirmation_render_notice_from_query() {
     if ( empty($_GET['evapp_attendance_msg']) ) return;
     $ok = ! empty($_GET['evapp_attendance_ok']);
@@ -84,18 +134,26 @@ function eventosapp_attendance_confirmation_render_bulk_page() {
     if ( ! eventosapp_attendance_confirmation_admin_can_manage() ) wp_die('No tienes permisos para acceder a esta sección.');
     $step = max(1, min(3, absint($_GET['step'] ?? 1)));
     $segment_id = sanitize_key((string)($_GET['segment_id'] ?? ''));
+
+    eventosapp_attendance_confirmation_render_bulk_styles();
     echo '<div class="wrap evapp-attendance-wrap">';
-    echo '<h1>Confirmación Masiva de Asistencia</h1>';
-    echo '<p class="description">Envía la consulta de confirmación por correo, WhatsApp o ambos canales, usando segmentación avanzada.</p>';
+    echo '<div class="evapp-attendance-page-head">';
+    echo '<div><span class="evapp-attendance-kicker">EventosApp · Asistencia</span><h1>Confirmación Masiva de Asistencia</h1><p>Segmenta asistentes y envía la consulta por correo, WhatsApp o ambos canales, usando cualquiera de las plantillas de confirmación disponibles.</p></div>';
+    echo '<div class="evapp-attendance-page-actions"><a class="button" href="' . esc_url(eventosapp_attendance_confirmation_admin_templates_url()) . '">Gestionar plantillas</a><a class="button button-primary" href="' . esc_url(eventosapp_attendance_confirmation_admin_templates_url(['view'=>'new'])) . '">Crear plantilla</a></div>';
+    echo '</div>';
+
     eventosapp_attendance_confirmation_render_notice_from_query();
-    echo '<h2 class="nav-tab-wrapper">';
-    $tabs = [1=>'Configuración y filtros',2=>'Vista previa',3=>'Envío'];
+
+    echo '<div class="evapp-attendance-steps">';
+    $tabs = [1=>'1. Configuración y filtros',2=>'2. Vista previa',3=>'3. Envío'];
     foreach ( $tabs as $number => $label ) {
         $url = add_query_arg(['page'=>'eventosapp_attendance_confirmation_bulk','step'=>$number], admin_url('admin.php'));
         if ( $segment_id && $number > 1 ) $url = add_query_arg('segment_id', $segment_id, $url);
-        echo '<a class="nav-tab ' . ($step === $number ? 'nav-tab-active' : '') . '" href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
+        $class = $step === $number ? 'is-active' : ($step > $number ? 'is-complete' : '');
+        echo '<a class="evapp-attendance-step ' . esc_attr($class) . '" href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
     }
-    echo '</h2>';
+    echo '</div>';
+
     if ( $step === 2 ) eventosapp_attendance_confirmation_render_bulk_preview($segment_id);
     elseif ( $step === 3 ) eventosapp_attendance_confirmation_render_bulk_send($segment_id);
     else eventosapp_attendance_confirmation_render_bulk_form();
@@ -105,7 +163,55 @@ function eventosapp_attendance_confirmation_render_bulk_page() {
 function eventosapp_attendance_confirmation_render_bulk_styles() {
     ?>
     <style>
-    .evapp-attendance-wrap{max-width:1320px}.evapp-attendance-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.evapp-attendance-card{background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:20px;margin-top:18px}.evapp-attendance-card h2,.evapp-attendance-card h3{margin-top:0}.evapp-attendance-field{margin-bottom:14px}.evapp-attendance-field label{display:block;font-weight:600;margin-bottom:5px}.evapp-attendance-field input[type=text],.evapp-attendance-field input[type=date],.evapp-attendance-field input[type=time],.evapp-attendance-field select,.evapp-attendance-field textarea{width:100%;max-width:none}.evapp-attendance-inline{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.evapp-attendance-help{color:#646970;font-size:12px;margin-top:4px}.evapp-attendance-table{width:100%;border-collapse:collapse}.evapp-attendance-table th,.evapp-attendance-table td{padding:9px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}.evapp-attendance-badge{display:inline-block;padding:3px 8px;border-radius:999px;background:#eef3ff;color:#2745a6;font-size:11px;font-weight:600}.evapp-attendance-progress{height:18px;background:#e5e7eb;border-radius:999px;overflow:hidden}.evapp-attendance-progress>span{display:block;height:100%;width:0;background:#2271b1;transition:width .2s}.evapp-attendance-log{max-height:280px;overflow:auto;background:#f6f7f7;border:1px solid #dcdcde;border-radius:6px;padding:10px}.evapp-attendance-log div{padding:5px 0;border-bottom:1px solid #ddd}.evapp-attendance-log div:last-child{border-bottom:0}@media(max-width:900px){.evapp-attendance-grid{grid-template-columns:1fr}}
+    .evapp-attendance-wrap{max-width:1440px;margin-top:18px}
+    .evapp-attendance-page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:22px;margin:18px 0 20px}
+    .evapp-attendance-page-head h1{margin:0 0 7px;font-size:28px;line-height:1.2}
+    .evapp-attendance-page-head p{margin:0;color:#646970;font-size:14px;line-height:1.5;max-width:860px}
+    .evapp-attendance-kicker{display:block;color:#3858e9;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+    .evapp-attendance-page-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+    .evapp-attendance-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 18px;max-width:980px}
+    .evapp-attendance-step{display:block;text-decoration:none;background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:11px 14px;color:#50575e;font-weight:600}
+    .evapp-attendance-step:hover{color:#2271b1;border-color:#72aee6}
+    .evapp-attendance-step.is-active{background:#2271b1;border-color:#2271b1;color:#fff}
+    .evapp-attendance-step.is-complete{background:#edfaef;border-color:#b8dfc5;color:#16753b}
+    .evapp-attendance-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+    .evapp-attendance-card{background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:22px;margin-top:18px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .evapp-attendance-card h2,.evapp-attendance-card h3,.evapp-attendance-card h4{margin-top:0}
+    .evapp-attendance-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:18px}
+    .evapp-attendance-card-head h2,.evapp-attendance-card-head h3{margin:0 0 4px}
+    .evapp-attendance-card-head p{margin:0;color:#646970}
+    .evapp-attendance-field{margin-bottom:14px}
+    .evapp-attendance-field:last-child{margin-bottom:0}
+    .evapp-attendance-field label{display:block;font-weight:600;margin-bottom:6px;color:#1d2327}
+    .evapp-attendance-field input[type=text],.evapp-attendance-field input[type=date],.evapp-attendance-field input[type=time],.evapp-attendance-field input[type=search],.evapp-attendance-field select,.evapp-attendance-field textarea{width:100%;max-width:none}
+    .evapp-attendance-inline{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+    .evapp-attendance-help{color:#646970;font-size:12px;line-height:1.45;margin:5px 0 0}
+    .evapp-attendance-channel-switches{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+    .evapp-attendance-channel-switch{display:flex;align-items:center;gap:8px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:999px;padding:8px 13px;font-weight:600}
+    .evapp-attendance-channel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+    .evapp-attendance-channel-card{border:1px solid #dcdcde;border-radius:12px;padding:18px;background:#fff;transition:.15s ease}
+    .evapp-attendance-channel-card.is-disabled{opacity:.58;background:#f6f7f7}
+    .evapp-attendance-channel-card h3{display:flex;align-items:center;gap:8px;margin:0 0 14px}
+    .evapp-attendance-template-summary{background:#f0f6fc;border-left:4px solid #72aee6;padding:10px 12px;margin-top:12px;line-height:1.45}
+    .evapp-attendance-template-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    .evapp-attendance-table-wrap{overflow:auto;border:1px solid #e2e4e7;border-radius:10px}
+    .evapp-attendance-table{width:100%;min-width:860px;border-collapse:collapse;background:#fff}
+    .evapp-attendance-table th{background:#f6f7f7;color:#50575e;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+    .evapp-attendance-table th,.evapp-attendance-table td{padding:11px 12px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}
+    .evapp-attendance-table tr:last-child td{border-bottom:0}
+    .evapp-attendance-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:#eef3ff;color:#2745a6;font-size:11px;font-weight:700}
+    .evapp-attendance-summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .evapp-attendance-summary-item{background:#f6f7f7;border:1px solid #e2e4e7;border-radius:10px;padding:14px}
+    .evapp-attendance-summary-item strong{display:block;font-size:19px;line-height:1.2;margin-bottom:4px;color:#1d2327}
+    .evapp-attendance-summary-item span{font-size:12px;color:#646970;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+    .evapp-attendance-progress{height:18px;background:#e5e7eb;border-radius:999px;overflow:hidden}
+    .evapp-attendance-progress>span{display:block;height:100%;width:0;background:#2271b1;transition:width .2s}
+    .evapp-attendance-log{max-height:280px;overflow:auto;background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:10px}
+    .evapp-attendance-log div{padding:6px 0;border-bottom:1px solid #ddd}
+    .evapp-attendance-log div:last-child{border-bottom:0}
+    .evapp-attendance-empty{background:#f6f7f7;border:1px dashed #c3c4c7;border-radius:10px;padding:18px;text-align:center;color:#646970}
+    @media(max-width:1000px){.evapp-attendance-grid,.evapp-attendance-channel-grid{grid-template-columns:1fr}.evapp-attendance-summary-grid{grid-template-columns:1fr 1fr}}
+    @media(max-width:782px){.evapp-attendance-page-head{display:block}.evapp-attendance-page-actions{justify-content:flex-start;margin-top:14px}.evapp-attendance-steps{grid-template-columns:1fr}.evapp-attendance-summary-grid{grid-template-columns:1fr}}
     </style>
     <?php
 }
@@ -189,33 +295,84 @@ function eventosapp_attendance_confirmation_render_message_configuration($values
     $email_templates = eventosapp_attendance_confirmation_email_templates();
     $wa_templates = eventosapp_attendance_confirmation_get_whatsapp_templates(false);
     $channels = eventosapp_attendance_confirmation_sanitize_channels($values['channels'] ?? ['email']);
+    $selected_template_id = eventosapp_attendance_confirmation_admin_resolve_template_id($values['whatsapp_template_id'] ?? '', $wa_templates);
+    $approved_templates = [];
+    $other_templates = [];
+    foreach ( $wa_templates as $template_id => $template ) {
+        if ( eventosapp_attendance_confirmation_admin_template_is_approved($template) ) $approved_templates[$template_id] = $template;
+        else $other_templates[$template_id] = $template;
+    }
+    $selected_template = $wa_templates[$selected_template_id] ?? null;
     ?>
-    <div class="evapp-attendance-card">
-        <h2>Canales y plantillas</h2>
-        <div class="evapp-attendance-inline" style="margin-bottom:18px">
-            <label><input type="checkbox" name="<?php echo esc_attr($name_prefix); ?>[channels][]" value="email" <?php checked(in_array('email',$channels,true)); ?>> Correo electrónico</label>
-            <label><input type="checkbox" name="<?php echo esc_attr($name_prefix); ?>[channels][]" value="whatsapp" <?php checked(in_array('whatsapp',$channels,true)); ?>> WhatsApp</label>
+    <div class="evapp-attendance-card evapp-attendance-message-card">
+        <div class="evapp-attendance-card-head">
+            <div><h2>Canales y plantillas</h2><p>Activa los canales que usarás y configura el contenido asociado a cada uno.</p></div>
+            <a class="button" href="<?php echo esc_url(eventosapp_attendance_confirmation_admin_templates_url()); ?>">Inventario de plantillas</a>
         </div>
-        <div class="evapp-attendance-grid">
-            <div>
-                <h3>Correo</h3>
-                <div class="evapp-attendance-field"><label>Plantilla de correo</label><select name="<?php echo esc_attr($name_prefix); ?>[email_template]">
-                    <?php foreach($email_templates as $file=>$label): ?><option value="<?php echo esc_attr($file); ?>" <?php selected($values['email_template']??'attendance-confirmation.html',$file); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?>
-                </select><p class="evapp-attendance-help">Usa automáticamente el cabezote configurado en “Email del Ticket — Plantilla y Header”.</p></div>
-                <div class="evapp-attendance-field"><label>Asunto</label><input type="text" name="<?php echo esc_attr($name_prefix); ?>[email_subject]" value="<?php echo esc_attr($values['email_subject']??'Confirma tu asistencia a {{evento_nombre}}'); ?>"><p class="evapp-attendance-help">Variables: {{nombre_completo}}, {{evento_nombre}}, {{evento_fecha}}, {{evento_hora}}, {{evento_lugar}}.</p></div>
-                <div class="evapp-attendance-field"><label>Mensaje adicional</label><textarea name="<?php echo esc_attr($name_prefix); ?>[email_message]" rows="5"><?php echo esc_textarea($values['email_message']??''); ?></textarea></div>
-            </div>
-            <div>
-                <h3>WhatsApp</h3>
-                <div class="evapp-attendance-field"><label>Plantilla con botones Sí / No</label><select name="<?php echo esc_attr($name_prefix); ?>[whatsapp_template_id]">
-                    <?php if(!$wa_templates): ?><option value="attendance_confirmation">Plantilla no creada todavía</option><?php endif; ?>
-                    <?php foreach($wa_templates as $id=>$template): ?><option value="<?php echo esc_attr($id); ?>" <?php selected($values['whatsapp_template_id']??'attendance_confirmation',$id); ?>><?php echo esc_html(eventosapp_attendance_confirmation_admin_template_label($template)); ?></option><?php endforeach; ?>
-                </select><p class="evapp-attendance-help">Solo se enviarán plantillas con estado APPROVED o ACTIVE en Meta.</p></div>
-                <p><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_attendance_confirmation_template')); ?>">Configurar plantilla de confirmación</a></p>
-                <?php if($context==='bulk'): ?><p class="evapp-attendance-help">La imagen se toma del campo “Imagen para confirmación de asistencia” configurado dentro del metabox de WhatsApp del evento.</p><?php endif; ?>
-            </div>
+
+        <div class="evapp-attendance-channel-switches">
+            <label class="evapp-attendance-channel-switch"><input class="evapp-attendance-channel-toggle" type="checkbox" data-channel="email" name="<?php echo esc_attr($name_prefix); ?>[channels][]" value="email" <?php checked(in_array('email',$channels,true)); ?>> Correo electrónico</label>
+            <label class="evapp-attendance-channel-switch"><input class="evapp-attendance-channel-toggle" type="checkbox" data-channel="whatsapp" name="<?php echo esc_attr($name_prefix); ?>[channels][]" value="whatsapp" <?php checked(in_array('whatsapp',$channels,true)); ?>> WhatsApp</label>
+        </div>
+
+        <div class="evapp-attendance-channel-grid">
+            <section class="evapp-attendance-channel-card" data-channel-panel="email">
+                <h3>✉️ Correo electrónico</h3>
+                <div class="evapp-attendance-field">
+                    <label>Plantilla de correo</label>
+                    <select name="<?php echo esc_attr($name_prefix); ?>[email_template]">
+                        <?php foreach($email_templates as $file=>$label): ?><option value="<?php echo esc_attr($file); ?>" <?php selected($values['email_template']??'attendance-confirmation.html',$file); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?>
+                    </select>
+                    <p class="evapp-attendance-help">Usa automáticamente el cabezote configurado en “Email del Ticket — Plantilla y Header”.</p>
+                </div>
+                <div class="evapp-attendance-field">
+                    <label>Asunto</label>
+                    <input type="text" name="<?php echo esc_attr($name_prefix); ?>[email_subject]" value="<?php echo esc_attr($values['email_subject']??'Confirma tu asistencia a {{evento_nombre}}'); ?>">
+                    <p class="evapp-attendance-help">Variables: {{nombre_completo}}, {{evento_nombre}}, {{evento_fecha}}, {{evento_hora}}, {{evento_lugar}}.</p>
+                </div>
+                <div class="evapp-attendance-field">
+                    <label>Mensaje adicional</label>
+                    <textarea name="<?php echo esc_attr($name_prefix); ?>[email_message]" rows="5"><?php echo esc_textarea($values['email_message']??''); ?></textarea>
+                </div>
+            </section>
+
+            <section class="evapp-attendance-channel-card" data-channel-panel="whatsapp">
+                <h3>💬 WhatsApp</h3>
+                <div class="evapp-attendance-field">
+                    <label>Plantilla con botones Sí / No</label>
+                    <select name="<?php echo esc_attr($name_prefix); ?>[whatsapp_template_id]" class="evapp-attendance-template-select">
+                        <?php if(!$wa_templates): ?><option value="attendance_confirmation">No hay plantillas disponibles</option><?php endif; ?>
+                        <?php if($approved_templates): ?><optgroup label="Aprobadas y listas para enviar"><?php foreach($approved_templates as $id=>$template): ?><option value="<?php echo esc_attr($id); ?>" <?php selected($selected_template_id,$id); ?>><?php echo esc_html(eventosapp_attendance_confirmation_admin_template_label($template)); ?></option><?php endforeach; ?></optgroup><?php endif; ?>
+                        <?php if($other_templates): ?><optgroup label="En preparación o revisión"><?php foreach($other_templates as $id=>$template): ?><option value="<?php echo esc_attr($id); ?>" <?php selected($selected_template_id,$id); ?>><?php echo esc_html(eventosapp_attendance_confirmation_admin_template_label($template)); ?></option><?php endforeach; ?></optgroup><?php endif; ?>
+                    </select>
+                    <p class="evapp-attendance-help">Los envíos inmediatos solo aceptan plantillas APPROVED o ACTIVE. Las pendientes pueden dejarse seleccionadas en una programación futura.</p>
+                </div>
+                <div class="evapp-attendance-template-summary">
+                    <strong><?php echo esc_html(count($wa_templates)); ?> plantilla<?php echo count($wa_templates)===1?'':'s'; ?> en inventario</strong><br>
+                    <?php echo esc_html(count($approved_templates)); ?> aprobada<?php echo count($approved_templates)===1?'':'s'; ?> disponible<?php echo count($approved_templates)===1?'':'s'; ?> para envío.
+                    <?php if(is_array($selected_template)): ?><br>Selección actual: <strong><?php echo esc_html($selected_template['title']??$selected_template['name']??$selected_template_id); ?></strong>.<?php endif; ?>
+                </div>
+                <div class="evapp-attendance-template-actions">
+                    <a class="button button-primary" href="<?php echo esc_url(eventosapp_attendance_confirmation_admin_templates_url()); ?>">Gestionar inventario</a>
+                    <a class="button" href="<?php echo esc_url(eventosapp_attendance_confirmation_admin_templates_url(['view'=>'new'])); ?>">Crear nueva plantilla</a>
+                    <?php if($selected_template_id && isset($wa_templates[$selected_template_id])): ?><a class="button" href="<?php echo esc_url(eventosapp_attendance_confirmation_admin_templates_url(['view'=>'edit','template_id'=>$selected_template_id])); ?>">Editar seleccionada</a><?php endif; ?>
+                </div>
+                <?php if($context==='bulk'): ?><p class="evapp-attendance-help">La imagen real se toma del campo “Imagen para confirmación de asistencia” configurado dentro del metabox de WhatsApp del evento.</p><?php endif; ?>
+            </section>
         </div>
     </div>
+    <script>
+    jQuery(function($){
+        function refreshAttendanceChannels(){
+            $('.evapp-attendance-channel-toggle').each(function(){
+                const channel=$(this).data('channel');
+                $('[data-channel-panel="'+channel+'"]').toggleClass('is-disabled',!this.checked);
+            });
+        }
+        $(document).on('change','.evapp-attendance-channel-toggle',refreshAttendanceChannels);
+        refreshAttendanceChannels();
+    });
+    </script>
     <?php
 }
 
@@ -227,9 +384,9 @@ function eventosapp_attendance_confirmation_render_bulk_form() {
         <input type="hidden" name="action" value="eventosapp_attendance_confirmation_create_segment">
         <?php wp_nonce_field('eventosapp_attendance_confirmation_create_segment','evapp_attendance_nonce'); ?>
         <div class="evapp-attendance-card">
-            <h2>Evento y segmentación</h2>
+            <div class="evapp-attendance-card-head"><div><h2>Evento y segmentación</h2><p>Selecciona el evento y define exactamente qué asistentes recibirán la consulta.</p></div></div>
             <div class="evapp-attendance-field"><label>Evento</label><select name="filters[evento_id]" id="evapp-attendance-event" required><option value="">Selecciona un evento</option><?php foreach($events as $event): ?><option value="<?php echo esc_attr($event->ID); ?>"><?php echo esc_html($event->post_title); ?></option><?php endforeach; ?></select></div>
-            <div id="evapp-attendance-dynamic-filters"><p class="description">Selecciona el evento para cargar localidades y campos adicionales.</p></div>
+            <div id="evapp-attendance-dynamic-filters"><div class="evapp-attendance-empty">Selecciona el evento para cargar localidades y campos adicionales.</div></div>
         </div>
         <?php eventosapp_attendance_confirmation_render_message_configuration([], 'bulk'); ?>
         <p><?php submit_button('Crear segmentación y previsualizar','primary','submit',false); ?></p>
@@ -238,8 +395,8 @@ function eventosapp_attendance_confirmation_render_bulk_form() {
     jQuery(function($){
         $('#evapp-attendance-event').on('change',function(){
             const id=$(this).val(), target=$('#evapp-attendance-dynamic-filters');
-            if(!id){target.html('<p class="description">Selecciona el evento para cargar localidades y campos adicionales.</p>');return;}
-            target.html('<p>Cargando filtros…</p>');
+            if(!id){target.html('<div class="evapp-attendance-empty">Selecciona el evento para cargar localidades y campos adicionales.</div>');return;}
+            target.html('<div class="evapp-attendance-empty">Cargando filtros…</div>');
             $.post(ajaxurl,{action:'eventosapp_attendance_confirmation_filter_fields',event_id:id,nonce:'<?php echo esc_js(wp_create_nonce('eventosapp_attendance_confirmation_filter_fields')); ?>'},function(r){
                 target.html(r.success?r.data.html:'<p class="notice notice-error">'+(r.data&&r.data.message?r.data.message:'No se pudieron cargar los filtros.')+'</p>');
             });
@@ -276,6 +433,11 @@ add_action('admin_post_eventosapp_attendance_confirmation_create_segment', funct
     $config=eventosapp_attendance_confirmation_sanitize_config(wp_unslash($_POST['config']??[]));
     if(empty($filters['evento_id'])||get_post_type(absint($filters['evento_id']))!=='eventosapp_event') wp_die('Debes seleccionar un evento válido.');
     if(empty($config['channels'])) wp_die('Debes seleccionar al menos un canal.');
+    if(in_array('whatsapp',$config['channels'],true)){
+        $wa_template=eventosapp_attendance_confirmation_get_whatsapp_template($config['whatsapp_template_id']);
+        if(!is_array($wa_template)||empty($wa_template['attendance_confirmation'])) wp_die('La plantilla WhatsApp seleccionada no existe en el inventario de confirmación.');
+        if(!eventosapp_attendance_confirmation_admin_template_is_approved($wa_template)) wp_die('La plantilla WhatsApp seleccionada todavía no está aprobada o activa en Meta. Consulta su estado o selecciona otra plantilla antes de iniciar el envío.');
+    }
     $ticket_ids=eventosapp_attendance_confirmation_get_filtered_tickets($filters);
     $segment_id='seg_' . time() . '_' . strtolower(wp_generate_password(8,false,false));
     $segment=[
@@ -292,14 +454,29 @@ function eventosapp_attendance_confirmation_render_bulk_preview($segment_id) {
     $segment=eventosapp_attendance_confirmation_get_segment($segment_id);
     if(!$segment){echo '<div class="notice notice-error"><p>La segmentación expiró o no existe.</p></div>';return;}
     $ids=(array)$segment['ticket_ids'];
+    $channels=eventosapp_attendance_confirmation_sanitize_channels($segment['config']['channels']??[]);
+    $template_label='No aplica';
+    if(in_array('whatsapp',$channels,true)){
+        $template=eventosapp_attendance_confirmation_get_whatsapp_template($segment['config']['whatsapp_template_id']??'');
+        $template_label=is_array($template)?eventosapp_attendance_confirmation_admin_template_label($template):'Plantilla no disponible';
+    }
     ?>
-    <div class="evapp-attendance-card"><h2>Resumen</h2><p><strong><?php echo esc_html(count($ids)); ?></strong> tickets cumplen los filtros.</p><p>Canales: <?php echo esc_html(implode(', ',array_map('eventosapp_attendance_confirmation_channel_label',$segment['config']['channels']))); ?></p></div>
-    <div class="evapp-attendance-card"><h2>Vista previa de destinatarios</h2>
-    <?php if(!$ids): ?><p>No hay tickets para enviar.</p><?php else: ?><table class="evapp-attendance-table"><thead><tr><th>Ticket</th><th>Asistente</th><th>Contacto</th><th>Localidad / modalidad</th><th>Confirmación</th></tr></thead><tbody>
-    <?php foreach(array_slice($ids,0,100) as $id): $values=eventosapp_attendance_confirmation_template_values($id); ?>
-    <tr><td>#<?php echo esc_html($id); ?><br><small><?php echo esc_html(get_post_meta($id,'eventosapp_ticketID',true)); ?></small></td><td><?php echo esc_html($values['nombre_completo']); ?></td><td><?php echo esc_html(get_post_meta($id,'_eventosapp_asistente_email',true)); ?><br><?php echo esc_html(get_post_meta($id,'_eventosapp_asistente_tel',true)); ?></td><td><?php echo esc_html($values['localidad']); ?><br><small><?php echo esc_html($values['modalidad']); ?></small></td><td><span class="evapp-attendance-badge"><?php echo esc_html(eventosapp_attendance_confirmation_status_label(eventosapp_attendance_confirmation_get_status($id))); ?></span></td></tr>
-    <?php endforeach; ?></tbody></table><?php if(count($ids)>100): ?><p class="description">Se muestran los primeros 100 tickets.</p><?php endif; ?><?php endif; ?></div>
-    <p><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_attendance_confirmation_bulk')); ?>">Volver</a><?php if($ids): ?> <a class="button button-primary" href="<?php echo esc_url(add_query_arg(['page'=>'eventosapp_attendance_confirmation_bulk','step'=>3,'segment_id'=>$segment_id],admin_url('admin.php'))); ?>">Continuar al envío</a><?php endif; ?></p>
+    <div class="evapp-attendance-card">
+        <div class="evapp-attendance-card-head"><div><h2>Resumen de la segmentación</h2><p>Verifica el alcance y la configuración antes de iniciar.</p></div></div>
+        <div class="evapp-attendance-summary-grid">
+            <div class="evapp-attendance-summary-item"><strong><?php echo esc_html(count($ids)); ?></strong><span>Tickets encontrados</span></div>
+            <div class="evapp-attendance-summary-item"><strong><?php echo esc_html(implode(' + ',array_map('eventosapp_attendance_confirmation_channel_label',$channels))); ?></strong><span>Canales</span></div>
+            <div class="evapp-attendance-summary-item"><strong style="font-size:14px"><?php echo esc_html($template_label); ?></strong><span>Plantilla WhatsApp</span></div>
+        </div>
+    </div>
+    <div class="evapp-attendance-card">
+        <div class="evapp-attendance-card-head"><div><h2>Vista previa de destinatarios</h2><p>Se muestran como máximo los primeros 100 registros.</p></div></div>
+        <?php if(!$ids): ?><div class="evapp-attendance-empty">No hay tickets para enviar con los filtros seleccionados.</div><?php else: ?><div class="evapp-attendance-table-wrap"><table class="evapp-attendance-table"><thead><tr><th>Ticket</th><th>Asistente</th><th>Contacto</th><th>Localidad / modalidad</th><th>Confirmación</th></tr></thead><tbody>
+        <?php foreach(array_slice($ids,0,100) as $id): $values=eventosapp_attendance_confirmation_template_values($id); ?>
+        <tr><td>#<?php echo esc_html($id); ?><br><small><?php echo esc_html(get_post_meta($id,'eventosapp_ticketID',true)); ?></small></td><td><?php echo esc_html($values['nombre_completo']); ?></td><td><?php echo esc_html(get_post_meta($id,'_eventosapp_asistente_email',true)); ?><br><?php echo esc_html(get_post_meta($id,'_eventosapp_asistente_tel',true)); ?></td><td><?php echo esc_html($values['localidad']); ?><br><small><?php echo esc_html($values['modalidad']); ?></small></td><td><span class="evapp-attendance-badge"><?php echo esc_html(eventosapp_attendance_confirmation_status_label(eventosapp_attendance_confirmation_get_status($id))); ?></span></td></tr>
+        <?php endforeach; ?></tbody></table></div><?php endif; ?>
+    </div>
+    <p><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_attendance_confirmation_bulk')); ?>">Volver a configuración</a><?php if($ids): ?> <a class="button button-primary" href="<?php echo esc_url(add_query_arg(['page'=>'eventosapp_attendance_confirmation_bulk','step'=>3,'segment_id'=>$segment_id],admin_url('admin.php'))); ?>">Continuar al envío</a><?php endif; ?></p>
     <?php
 }
 
@@ -542,25 +719,59 @@ function eventosapp_attendance_confirmation_render_ticket_metabox($post){
     $responses=eventosapp_attendance_confirmation_sanitize_channels(get_post_meta($post->ID,$keys['response_channels'],true));
     $history=eventosapp_attendance_confirmation_safe_history(get_post_meta($post->ID,$keys['history'],true));
     $conflict=get_post_meta($post->ID,$keys['conflict'],true)==='1';
+    $wa_templates=eventosapp_attendance_confirmation_get_whatsapp_templates(false);
+    $selected_template_id=eventosapp_attendance_confirmation_admin_resolve_template_id('', $wa_templates);
     ?>
-    <style>.evapp-att-ticket-row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #eee}.evapp-att-ticket-history{max-height:220px;overflow:auto;margin-top:10px;background:#f6f7f7;padding:8px;border-radius:6px}.evapp-att-ticket-history div{padding:6px 0;border-bottom:1px solid #ddd;font-size:11px}</style>
+    <style>
+    .evapp-att-ticket-row{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #eee}
+    .evapp-att-ticket-history{max-height:220px;overflow:auto;margin-top:10px;background:#f6f7f7;padding:8px;border-radius:6px}
+    .evapp-att-ticket-history div{padding:6px 0;border-bottom:1px solid #ddd;font-size:11px}
+    .evapp-att-ticket-actions{display:grid;gap:8px;margin-top:12px}
+    .evapp-att-ticket-actions form{margin:0;padding:10px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:7px}
+    .evapp-att-ticket-actions select{width:100%;margin:7px 0}
+    </style>
     <div class="evapp-att-ticket-row"><strong>Estado</strong><span class="evapp-attendance-badge"><?php echo esc_html(eventosapp_attendance_confirmation_status_label($status)); ?></span></div>
     <div class="evapp-att-ticket-row"><strong>Enviado por</strong><span><?php echo $sent?esc_html(implode(', ',array_map('eventosapp_attendance_confirmation_channel_label',$sent))):'—'; ?></span></div>
     <div class="evapp-att-ticket-row"><strong>Respondió por</strong><span><?php echo $responses?esc_html(implode(', ',array_map('eventosapp_attendance_confirmation_channel_label',$responses))):'—'; ?></span></div>
     <div class="evapp-att-ticket-row"><strong>Último envío</strong><span><?php echo esc_html(get_post_meta($post->ID,$keys['last_sent_at'],true)?:'—'); ?></span></div>
     <div class="evapp-att-ticket-row"><strong>Última respuesta</strong><span><?php echo esc_html(get_post_meta($post->ID,$keys['last_response_at'],true)?:'—'); ?></span></div>
     <?php if($conflict): ?><div class="notice notice-warning inline"><p>Hay respuestas diferentes registradas en el historial. El estado visible corresponde a la respuesta más reciente.</p></div><?php endif; ?>
-    <p><a class="button" href="<?php echo esc_url(wp_nonce_url(add_query_arg(['action'=>'eventosapp_attendance_confirmation_send_ticket','ticket_id'=>$post->ID,'channels'=>'email'],admin_url('admin-post.php')),'eventosapp_attendance_confirmation_send_ticket')); ?>">Enviar correo</a> <a class="button" href="<?php echo esc_url(wp_nonce_url(add_query_arg(['action'=>'eventosapp_attendance_confirmation_send_ticket','ticket_id'=>$post->ID,'channels'=>'whatsapp'],admin_url('admin-post.php')),'eventosapp_attendance_confirmation_send_ticket')); ?>">Enviar WhatsApp</a></p>
+
+    <div class="evapp-att-ticket-actions">
+        <a class="button" href="<?php echo esc_url(wp_nonce_url(add_query_arg(['action'=>'eventosapp_attendance_confirmation_send_ticket','ticket_id'=>$post->ID,'channels'=>'email'],admin_url('admin-post.php')),'eventosapp_attendance_confirmation_send_ticket')); ?>">Enviar correo de confirmación</a>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <input type="hidden" name="action" value="eventosapp_attendance_confirmation_send_ticket">
+            <input type="hidden" name="ticket_id" value="<?php echo esc_attr($post->ID); ?>">
+            <input type="hidden" name="channels" value="whatsapp">
+            <?php wp_nonce_field('eventosapp_attendance_confirmation_send_ticket'); ?>
+            <strong>Enviar por WhatsApp</strong>
+            <select name="whatsapp_template_id" required>
+                <?php if(!$wa_templates): ?><option value="">No hay plantillas disponibles</option><?php endif; ?>
+                <?php foreach($wa_templates as $template_id=>$template): $approved=eventosapp_attendance_confirmation_admin_template_is_approved($template); ?>
+                    <option value="<?php echo esc_attr($template_id); ?>" <?php selected($selected_template_id,$template_id); ?> <?php disabled(!$approved); ?>><?php echo esc_html(eventosapp_attendance_confirmation_admin_template_label($template)); ?><?php echo $approved?'':' · No disponible'; ?></option>
+                <?php endforeach; ?>
+            </select>
+            <button class="button button-primary" type="submit" <?php disabled(empty(array_filter($wa_templates,'eventosapp_attendance_confirmation_admin_template_is_approved'))); ?>>Enviar plantilla seleccionada</button>
+            <p class="description" style="margin-bottom:0"><a href="<?php echo esc_url(eventosapp_attendance_confirmation_admin_templates_url()); ?>">Gestionar inventario</a></p>
+        </form>
+    </div>
     <?php if($history): ?><div class="evapp-att-ticket-history"><?php foreach(array_slice($history,0,25) as $entry): ?><div><strong><?php echo esc_html($entry['at']??''); ?></strong><br><?php echo esc_html($entry['message']??''); ?></div><?php endforeach; ?></div><?php endif; ?>
     <?php
 }
 
 add_action('admin_post_eventosapp_attendance_confirmation_send_ticket', function(){
-    $ticket_id=absint($_GET['ticket_id']??0);
+    $ticket_id=absint($_REQUEST['ticket_id']??0);
     if(!$ticket_id||!current_user_can('edit_post',$ticket_id))wp_die('Permisos insuficientes.');
     check_admin_referer('eventosapp_attendance_confirmation_send_ticket');
-    $channels=eventosapp_attendance_confirmation_sanitize_channels($_GET['channels']??'email');
-    $result=eventosapp_attendance_confirmation_send_ticket($ticket_id,['channels'=>$channels,'source'=>'ticket_metabox','force'=>true,'source_key'=>'ticket_metabox:'.$ticket_id.':'.time()]);
+    $channels=eventosapp_attendance_confirmation_sanitize_channels($_REQUEST['channels']??'email');
+    $whatsapp_template_id=sanitize_key((string)($_REQUEST['whatsapp_template_id']??eventosapp_attendance_confirmation_whatsapp_template_id()));
+    $result=eventosapp_attendance_confirmation_send_ticket($ticket_id,[
+        'channels'=>$channels,
+        'whatsapp_template_id'=>$whatsapp_template_id,
+        'source'=>'ticket_metabox',
+        'force'=>true,
+        'source_key'=>'ticket_metabox:'.$ticket_id.':'.time(),
+    ]);
     wp_safe_redirect(add_query_arg(['post'=>$ticket_id,'action'=>'edit','evapp_attendance_ok'=>!empty($result['ok'])?1:0,'evapp_attendance_msg'=>rawurlencode($result['message']??'Proceso ejecutado.')],admin_url('post.php')));exit;
 });
 

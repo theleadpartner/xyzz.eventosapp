@@ -734,6 +734,14 @@ function eventosapp_whatsapp_flow_templates_build_send_payload($template, $flow_
     $template = wp_parse_args(is_array($template) ? $template : [], eventosapp_whatsapp_flow_templates_default_item());
     $template = eventosapp_whatsapp_flow_templates_prepare_template_for_meta($template);
     $context = is_array($context) ? $context : [];
+    if ( function_exists('eventosapp_whatsapp_flows_normalize_send_context') ) {
+        $context = eventosapp_whatsapp_flows_normalize_send_context(
+            $context,
+            absint($template['flow_post_id'] ?? 0),
+            absint($context['event_id'] ?? 0),
+            absint($context['ticket_id'] ?? 0)
+        );
+    }
     $parameters = [];
 
     if ( strpos((string)$template['body'], '{{1}}') !== false ) {
@@ -785,12 +793,21 @@ function eventosapp_whatsapp_flow_templates_build_send_payload($template, $flow_
         ];
     }
 
-    $flow_action_data = [
-        'eventosapp_flow_post_id' => (string) absint($template['flow_post_id'] ?? 0),
-        'eventosapp_event_id'     => (string) absint($context['event_id'] ?? 0),
-        'eventosapp_ticket_id'    => (string) absint($context['ticket_id'] ?? 0),
-        'eventosapp_ticket_code'  => (string)($context['ticket_code'] ?? ''),
-    ];
+    $flow_post_id_for_data = absint($template['flow_post_id'] ?? 0);
+    $event_id_for_data = absint($context['event_id'] ?? 0);
+    $ticket_id_for_data = absint($context['ticket_id'] ?? 0);
+    if ( function_exists('eventosapp_whatsapp_flows_build_flow_action_data') ) {
+        $flow_action_data = eventosapp_whatsapp_flows_build_flow_action_data($context, $flow_post_id_for_data, $event_id_for_data, $ticket_id_for_data);
+    } else {
+        $flow_action_data = [
+            'eventosapp_flow_post_id' => (string) $flow_post_id_for_data,
+            'eventosapp_event_id'     => (string) $event_id_for_data,
+            'eventosapp_ticket_id'    => (string) $ticket_id_for_data,
+            'eventosapp_ticket_code'  => sanitize_text_field((string)($context['ticket_code'] ?? '')),
+            'name'                    => sanitize_text_field((string)($context['name'] ?? 'Asistente')),
+            'event_name'              => sanitize_text_field((string)($context['event_name'] ?? 'Evento')),
+        ];
+    }
 
     $components[] = [
         'type'       => 'button',
