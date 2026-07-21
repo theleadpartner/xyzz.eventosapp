@@ -1153,6 +1153,11 @@ eventosapp_require_first_existing_file([
     'includes/frontend/eventosapp-self-checkin-elementor.php',
     'eventosapp-self-checkin-elementor.php',
 ]);
+// API nativa para la aplicación Android de Autogestión Kiosko.
+eventosapp_require_first_existing_file([
+    'includes/api/eventosapp-kiosk-api.php',
+    'eventosapp-kiosk-api.php',
+]);
 eventosapp_require_first_existing_file([
     'includes/frontend/eventosapp-dashboard-elementor.php',
     'eventosapp-dashboard-elementor.php',
@@ -2526,6 +2531,10 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
         ? eventosapp_self_checkin_auth_keyboard_mode($selected)
         : (in_array('full_name', $selected, true) || in_array('last_name', $selected, true) ? 'letters' : 'numbers');
 
+    $kiosk_enabled = function_exists('eventosapp_kiosk_api_event_is_enabled')
+        ? eventosapp_kiosk_api_event_is_enabled($post->ID)
+        : (get_post_meta($post->ID, '_eventosapp_self_checkin_enabled', true) === '1');
+
     wp_nonce_field('eventosapp_self_checkin_auth_guardar', 'eventosapp_self_checkin_auth_nonce');
     ?>
     <style>
@@ -2541,6 +2550,13 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
         .evapp-kiosk-auth-preview strong{color:#111827}
     </style>
     <div class="evapp-kiosk-auth-box">
+        <label style="display:flex;align-items:flex-start;gap:10px;margin:0 0 14px;padding:12px;border:1px solid #93c5fd;border-radius:10px;background:#fff;">
+            <input type="checkbox" name="eventosapp_self_checkin_enabled" value="1" <?php checked($kiosk_enabled); ?> style="margin-top:2px;">
+            <span>
+                <strong style="display:block;color:#111827;">Habilitar este evento en la aplicación Android de Autogestión Kiosko</strong>
+                <small style="display:block;margin-top:4px;color:#64748b;line-height:1.4;">Solo los eventos habilitados aparecerán para los usuarios autorizados que ingresen en la aplicación. Al desactivarlo, el kiosko web existente no se elimina y la configuración se conserva.</small>
+            </span>
+        </label>
         <p class="evapp-kiosk-auth-title">Datos permitidos para buscar asistentes en el kiosko</p>
         <p class="evapp-kiosk-auth-help">Esta configuración aplica solo para este evento. Puedes activar uno o varios datos. Si activas nombres o apellidos como único criterio, el teclado táctil abrirá primero en letras; si activas identificación o celular, abrirá primero en números. El asistente siempre podrá cambiar entre letras y números desde el panel.</p>
         <div class="evapp-kiosk-auth-grid">
@@ -3091,6 +3107,7 @@ function eventosapp_save_self_checkin_auth_metabox($post_id) {
         $fields = ['identification'];
     }
 
+    update_post_meta($post_id, '_eventosapp_self_checkin_enabled', !empty($_POST['eventosapp_self_checkin_enabled']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_self_checkin_auth_fields', $fields);
 }
 
