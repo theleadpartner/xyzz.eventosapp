@@ -721,13 +721,17 @@ function eventosapp_attendance_confirmation_render_ticket_metabox($post){
     $conflict=get_post_meta($post->ID,$keys['conflict'],true)==='1';
     $wa_templates=eventosapp_attendance_confirmation_get_whatsapp_templates(false);
     $selected_template_id=eventosapp_attendance_confirmation_admin_resolve_template_id('', $wa_templates);
+    $approved_templates=array_filter($wa_templates,'eventosapp_attendance_confirmation_admin_template_is_approved');
+    $has_approved_templates=!empty($approved_templates);
+    $template_select_id='evapp-attendance-whatsapp-template-'.absint($post->ID);
+    $template_button_id='evapp-attendance-whatsapp-send-'.absint($post->ID);
     ?>
     <style>
     .evapp-att-ticket-row{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #eee}
     .evapp-att-ticket-history{max-height:220px;overflow:auto;margin-top:10px;background:#f6f7f7;padding:8px;border-radius:6px}
     .evapp-att-ticket-history div{padding:6px 0;border-bottom:1px solid #ddd;font-size:11px}
     .evapp-att-ticket-actions{display:grid;gap:8px;margin-top:12px}
-    .evapp-att-ticket-actions form{margin:0;padding:10px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:7px}
+    .evapp-att-ticket-whatsapp-panel{margin:0;padding:10px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:7px}
     .evapp-att-ticket-actions select{width:100%;margin:7px 0}
     </style>
     <div class="evapp-att-ticket-row"><strong>Estado</strong><span class="evapp-attendance-badge"><?php echo esc_html(eventosapp_attendance_confirmation_status_label($status)); ?></span></div>
@@ -739,22 +743,66 @@ function eventosapp_attendance_confirmation_render_ticket_metabox($post){
 
     <div class="evapp-att-ticket-actions">
         <a class="button" href="<?php echo esc_url(wp_nonce_url(add_query_arg(['action'=>'eventosapp_attendance_confirmation_send_ticket','ticket_id'=>$post->ID,'channels'=>'email'],admin_url('admin-post.php')),'eventosapp_attendance_confirmation_send_ticket')); ?>">Enviar correo de confirmación</a>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-            <input type="hidden" name="action" value="eventosapp_attendance_confirmation_send_ticket">
-            <input type="hidden" name="ticket_id" value="<?php echo esc_attr($post->ID); ?>">
-            <input type="hidden" name="channels" value="whatsapp">
-            <?php wp_nonce_field('eventosapp_attendance_confirmation_send_ticket'); ?>
+
+        <?php
+        /**
+         * No se debe imprimir un <form> dentro de un metabox del editor clásico.
+         * WordPress ya envuelve toda la pantalla del ticket en el formulario #post;
+         * un formulario anidado invalida el DOM, puede cerrar el formulario principal
+         * y evita que el botón Actualizar envíe los campos y nonces del ticket.
+         *
+         * Cada opción aprobada guarda una URL admin-post firmada y el botón navega
+         * a esa URL sin alterar el formulario principal del ticket.
+         */
+        ?>
+        <div class="evapp-att-ticket-whatsapp-panel">
             <strong>Enviar por WhatsApp</strong>
-            <select name="whatsapp_template_id" required>
+            <select id="<?php echo esc_attr($template_select_id); ?>" <?php disabled(!$has_approved_templates); ?>>
                 <?php if(!$wa_templates): ?><option value="">No hay plantillas disponibles</option><?php endif; ?>
-                <?php foreach($wa_templates as $template_id=>$template): $approved=eventosapp_attendance_confirmation_admin_template_is_approved($template); ?>
-                    <option value="<?php echo esc_attr($template_id); ?>" <?php selected($selected_template_id,$template_id); ?> <?php disabled(!$approved); ?>><?php echo esc_html(eventosapp_attendance_confirmation_admin_template_label($template)); ?><?php echo $approved?'':' · No disponible'; ?></option>
+                <?php foreach($wa_templates as $template_id=>$template):
+                    $approved=eventosapp_attendance_confirmation_admin_template_is_approved($template);
+                    $whatsapp_send_url=$approved
+                        ? wp_nonce_url(
+                            add_query_arg([
+                                'action'=>'eventosapp_attendance_confirmation_send_ticket',
+                                'ticket_id'=>$post->ID,
+                                'channels'=>'whatsapp',
+                                'whatsapp_template_id'=>$template_id,
+                            ],admin_url('admin-post.php')),
+                            'eventosapp_attendance_confirmation_send_ticket'
+                        )
+                        : '';
+                ?>
+                    <option value="<?php echo esc_url($whatsapp_send_url); ?>" <?php selected($selected_template_id,$template_id); ?> <?php disabled(!$approved); ?>><?php echo esc_html(eventosapp_attendance_confirmation_admin_template_label($template)); ?><?php echo $approved?'':' · No disponible'; ?></option>
                 <?php endforeach; ?>
             </select>
-            <button class="button button-primary" type="submit" <?php disabled(empty(array_filter($wa_templates,'eventosapp_attendance_confirmation_admin_template_is_approved'))); ?>>Enviar plantilla seleccionada</button>
+            <button id="<?php echo esc_attr($template_button_id); ?>" class="button button-primary" type="button" <?php disabled(!$has_approved_templates); ?>>Enviar plantilla seleccionada</button>
             <p class="description" style="margin-bottom:0"><a href="<?php echo esc_url(eventosapp_attendance_confirmation_admin_templates_url()); ?>">Gestionar inventario</a></p>
-        </form>
+        </div>
     </div>
+
+    <script>
+    (function(){
+        const select=document.getElementById(<?php echo wp_json_encode($template_select_id); ?>);
+        const button=document.getElementById(<?php echo wp_json_encode($template_button_id); ?>);
+        if(!select||!button)return;
+
+        const syncButtonState=function(){
+            button.disabled=!select.value;
+        };
+
+        select.addEventListener('change',syncButtonState);
+        button.addEventListener('click',function(event){
+            event.preventDefault();
+            if(!select.value)return;
+            button.disabled=true;
+            window.location.assign(select.value);
+        });
+
+        syncButtonState();
+    })();
+    </script>
+
     <?php if($history): ?><div class="evapp-att-ticket-history"><?php foreach(array_slice($history,0,25) as $entry): ?><div><strong><?php echo esc_html($entry['at']??''); ?></strong><br><?php echo esc_html($entry['message']??''); ?></div><?php endforeach; ?></div><?php endif; ?>
     <?php
 }
