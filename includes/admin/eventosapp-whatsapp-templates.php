@@ -278,6 +278,594 @@ function eventosapp_whatsapp_templates_quality_summary($quality_score) {
     return sanitize_text_field((string) $quality_score);
 }
 
+
+/**
+ * Normaliza los estados de plantilla devueltos por Meta.
+ */
+function eventosapp_whatsapp_templates_normalize_meta_status($status, $fallback = 'LOCAL') {
+    $status = strtoupper(sanitize_key((string) $status));
+    $aliases = [
+        'IN_REVIEW'      => 'PENDING',
+        'PENDING_REVIEW' => 'PENDING',
+        'UNDER_REVIEW'   => 'PENDING',
+        'EN_REVISION'    => 'PENDING',
+    ];
+
+    if ( isset($aliases[$status]) ) {
+        $status = $aliases[$status];
+    }
+
+    if ( $status === '' ) {
+        $status = strtoupper(sanitize_key((string) $fallback));
+        if ( $status === '' ) {
+            return '';
+        }
+    }
+
+    return $status;
+}
+
+/**
+ * Etiqueta administrativa consistente para cualquier estado conocido.
+ */
+function eventosapp_whatsapp_templates_meta_status_label($status) {
+    $status = eventosapp_whatsapp_templates_normalize_meta_status($status);
+    $labels = [
+        'LOCAL'      => 'Local, sin enviar',
+        'PENDING'    => 'En revisión',
+        'APPROVED'   => 'Aprobada',
+        'ACTIVE'     => 'Activa',
+        'REJECTED'   => 'Rechazada',
+        'IN_APPEAL'  => 'En apelación',
+        'PAUSED'     => 'Pausada',
+        'DISABLED'   => 'Deshabilitada',
+        'DELETED'    => 'Eliminada en Meta',
+        'UNKNOWN'    => 'Estado desconocido',
+        'DRY_RUN'    => 'Prueba interna',
+    ];
+
+    return $labels[$status] ?? $status;
+}
+
+/**
+ * Meta suele devolver rejected_reason="NONE" incluso cuando no existe rechazo.
+ * Este helper evita mostrarlo como una alerta falsa.
+ */
+function eventosapp_whatsapp_templates_normalize_rejected_reason($reason) {
+    if ( is_array($reason) ) {
+        foreach ( ['message', 'reason', 'code', 'title'] as $key ) {
+            if ( isset($reason[$key]) && is_scalar($reason[$key]) ) {
+                $reason = $reason[$key];
+                break;
+            }
+        }
+    }
+
+    if ( ! is_scalar($reason) ) {
+        return '';
+    }
+
+    $reason = trim(sanitize_text_field((string) $reason));
+    $normalized = strtoupper(str_replace([' ', '-'], '_', $reason));
+    if ( in_array($normalized, ['', 'NONE', 'NULL', 'N_A', 'NA', 'NOT_APPLICABLE', 'NO_REJECTION', 'NO_REASON', 'UNSPECIFIED'], true) ) {
+        return '';
+    }
+
+    return $reason;
+}
+
+/**
+ * Extrae todos los campos útiles de error que Meta puede devolver.
+ */
+function eventosapp_whatsapp_templates_error_context($response) {
+    $response = is_array($response) ? $response : [];
+    $error = isset($response['error']) && is_array($response['error']) ? $response['error'] : [];
+    $error_data = isset($error['error_data']) && is_array($error['error_data']) ? $error['error_data'] : [];
+
+    return [
+        'message'            => sanitize_text_field((string)($error['message'] ?? '')),
+        'type'               => sanitize_text_field((string)($error['type'] ?? '')),
+        'code'               => absint($error['code'] ?? 0),
+        'subcode'            => absint($error['error_subcode'] ?? 0),
+        'error_user_title'   => sanitize_text_field((string)($error['error_user_title'] ?? '')),
+        'error_user_message' => sanitize_text_field((string)($error['error_user_msg'] ?? '')),
+        'details'            => sanitize_text_field((string)($error_data['details'] ?? '')),
+        'messaging_product'  => sanitize_text_field((string)($error_data['messaging_product'] ?? '')),
+        'fbtrace_id'         => sanitize_text_field((string)($error['fbtrace_id'] ?? '')),
+    ];
+}
+
+/**
+ * Infiere el tipo de operación a partir del método y la ruta Graph.
+ */
+function eventosapp_whatsapp_templates_detect_api_operation($method, $path) {
+    $method = strtoupper((string) $method);
+    $path = ltrim((string) $path, '/');
+    $path_without_query = strtok($path, '?');
+
+    if ( $method === 'POST' && preg_match('#^[^/]+/message_templates$#', (string) $path_without_query) ) {
+        return 'create';
+    }
+    if ( $method === 'POST' ) {
+        return 'update';
+    }
+    if ( $method === 'GET' && strpos($path_without_query, '/message_templates') !== false ) {
+        return 'list';
+    }
+    if ( $method === 'GET' ) {
+        return 'status';
+    }
+    if ( $method === 'DELETE' ) {
+        return 'delete';
+    }
+
+    return 'request';
+}
+
+/**
+ * Clasifica respuestas de error para que todas las pantallas muestren la misma
+ * explicación, sin depender del texto variable que Meta entregue.
+ */
+function eventosapp_whatsapp_templates_classify_api_error($result) {
+    $result = is_array($result) ? $result : [];
+    $response = is_array($result['response'] ?? null) ? $result['response'] : [];
+    $error = eventosapp_whatsapp_templates_error_context($response);
+    $haystack = strtolower(implode(' ', array_filter([
+        $error['message'],
+        $error['error_user_title'],
+        $error['error_user_message'],
+        $error['details'],
+        is_scalar($result['technical_message'] ?? null) ? (string)$result['technical_message'] : '',
+    ])));
+
+    if ( $error['subcode'] === 2388003 || strpos($haystack, 'only be edited if rejected') !== false || strpos($haystack, 'can only be edited if rejected') !== false || strpos($haystack, 'solo se pueden editar si se rechazaron') !== false ) {
+        return 'template_edit_locked';
+    }
+    if ( strpos($haystack, 'already exists') !== false || strpos($haystack, 'duplicate') !== false || strpos($haystack, 'same name') !== false || strpos($haystack, 'ya existe') !== false || strpos($haystack, 'nombre de plantilla') !== false && strpos($haystack, 'existe') !== false ) {
+        return 'template_duplicate';
+    }
+    if ( $error['code'] === 190 || strpos($haystack, 'access token') !== false || strpos($haystack, 'oauth') !== false ) {
+        return 'authentication';
+    }
+    if ( in_array($error['code'], [10, 200, 294], true) || strpos($haystack, 'permission') !== false || strpos($haystack, 'permiso') !== false ) {
+        return 'permission';
+    }
+    if ( in_array($error['code'], [4, 17, 32, 613, 80004], true) || strpos($haystack, 'rate limit') !== false || strpos($haystack, 'too many') !== false ) {
+        return 'rate_limit';
+    }
+    if ( strpos($haystack, 'header') !== false && (strpos($haystack, 'handle') !== false || strpos($haystack, 'media') !== false || strpos($haystack, 'image') !== false) ) {
+        return 'header_sample';
+    }
+    if ( (int)($result['http_code'] ?? 0) === 404 || $error['code'] === 803 || strpos($haystack, 'unsupported get request') !== false || strpos($haystack, 'does not exist') !== false ) {
+        return 'not_found';
+    }
+    if ( $error['code'] === 100 ) {
+        return 'invalid_parameter';
+    }
+    if ( (int)($result['http_code'] ?? 0) >= 500 ) {
+        return 'meta_unavailable';
+    }
+
+    return 'meta_api';
+}
+
+/**
+ * Mensaje humano único para los distintos errores de plantillas.
+ */
+function eventosapp_whatsapp_templates_error_message($error_type, $error, $http_code = 0) {
+    $messages = [
+        'template_duplicate'  => 'Meta no creó la plantilla porque ya existe otra con el mismo nombre técnico e idioma dentro de ese WABA. Usa un nombre técnico diferente para crear una nueva versión o sincroniza el registro existente.',
+        'template_edit_locked'=> 'Meta rechazó la actualización porque la plantilla remota no está en estado Rechazada. Las plantillas aprobadas, activas o en revisión deben conservarse; crea una nueva versión con otro nombre técnico.',
+        'authentication'      => 'Meta rechazó la solicitud por un problema con el Access Token. Revisa que el token esté vigente y pertenezca al WABA seleccionado.',
+        'permission'          => 'Meta rechazó la solicitud por permisos insuficientes. Revisa los permisos de administración de WhatsApp y de plantillas para el WABA seleccionado.',
+        'rate_limit'          => 'Meta aplicó un límite temporal de solicitudes. Espera unos minutos antes de volver a intentar.',
+        'header_sample'       => 'Meta rechazó la muestra del encabezado. Genera un Header Sample Handle nuevo con una imagen JPG o PNG y vuelve a enviar.',
+        'not_found'           => 'La plantilla o el recurso remoto ya no existe, no pertenece al WABA consultado o el token no puede verlo.',
+        'invalid_parameter'   => 'Meta rechazó uno o más parámetros de la plantilla. Revisa nombre técnico, idioma, categoría, variables, encabezado y botones.',
+        'meta_unavailable'    => 'Meta presentó un error temporal al procesar la solicitud. Intenta nuevamente más tarde.',
+        'meta_api'            => 'Meta rechazó la solicitud de la plantilla.',
+    ];
+
+    $message = $messages[$error_type] ?? $messages['meta_api'];
+    $technical = array_values(array_unique(array_filter([
+        $error['error_user_title'] ?? '',
+        $error['error_user_message'] ?? '',
+        $error['message'] ?? '',
+        $error['details'] ?? '',
+    ])));
+
+    if ( ! empty($technical) ) {
+        $message .= ' Detalle de Meta: ' . implode(' | ', $technical) . '.';
+    }
+
+    $codes = [];
+    if ( $http_code ) $codes[] = 'HTTP ' . absint($http_code);
+    if ( ! empty($error['code']) ) $codes[] = 'código ' . absint($error['code']);
+    if ( ! empty($error['subcode']) ) $codes[] = 'subcódigo ' . absint($error['subcode']);
+    if ( ! empty($codes) ) {
+        $message .= ' (' . implode(' · ', $codes) . ')';
+    }
+
+    return sanitize_text_field($message);
+}
+
+/**
+ * Enriquece cualquier resultado del cliente Graph con una estructura estable.
+ */
+function eventosapp_whatsapp_templates_enrich_api_result($result, $method, $path, $body = null) {
+    $result = is_array($result) ? $result : [];
+    $result['ok'] = ! empty($result['ok']);
+    $result['http_code'] = absint($result['http_code'] ?? 0);
+    $result['operation'] = eventosapp_whatsapp_templates_detect_api_operation($method, $path);
+    $result['request_path'] = sanitize_text_field((string) $path);
+    $response = $result['response'] ?? null;
+    if ( is_string($response) ) {
+        $decoded = json_decode($response, true);
+        if ( is_array($decoded) ) $response = $decoded;
+    }
+    $result['response'] = $response;
+    $result['technical_message'] = sanitize_text_field((string)($result['message'] ?? ''));
+
+    if ( $result['ok'] ) {
+        $response_array = is_array($response) ? $response : [];
+        $meta_id = sanitize_text_field((string)($response_array['id'] ?? ''));
+        $meta_status = eventosapp_whatsapp_templates_normalize_meta_status($response_array['status'] ?? '', '');
+        $meta_category = eventosapp_whatsapp_templates_normalize_meta_category($response_array['category'] ?? '');
+        $count = isset($response_array['data']) && is_array($response_array['data']) ? count($response_array['data']) : null;
+        $parts = [];
+
+        if ( $result['operation'] === 'create' ) {
+            $parts[] = 'Meta recibió la nueva plantilla para revisión';
+        } elseif ( $result['operation'] === 'update' ) {
+            $parts[] = 'Meta recibió la actualización de la plantilla existente';
+        } elseif ( $result['operation'] === 'status' ) {
+            $parts[] = 'Estado consultado correctamente en Meta';
+        } elseif ( $result['operation'] === 'list' ) {
+            $parts[] = 'Consulta de plantillas completada en Meta';
+        } else {
+            $parts[] = 'Solicitud procesada correctamente por Meta';
+        }
+
+        if ( $meta_id !== '' ) $parts[] = 'ID ' . $meta_id;
+        if ( $meta_status !== '' && $meta_status !== 'LOCAL' ) $parts[] = 'estado ' . eventosapp_whatsapp_templates_meta_status_label($meta_status);
+        if ( $meta_category !== '' ) $parts[] = 'categoría ' . eventosapp_whatsapp_templates_category_label($meta_category);
+        if ( $count !== null ) $parts[] = $count . ' registro(s) recibido(s)';
+
+        $result['meta_id'] = $meta_id;
+        $result['meta_status'] = $meta_status;
+        $result['meta_category'] = $meta_category;
+        $result['error_type'] = '';
+        $result['error_code'] = 0;
+        $result['error_subcode'] = 0;
+        $result['error_user_title'] = '';
+        $result['error_user_message'] = '';
+        $result['fbtrace_id'] = '';
+        $result['notice_level'] = 'success';
+        $result['message'] = sanitize_text_field(implode('. ', $parts) . '.');
+        return $result;
+    }
+
+    $response_array = is_array($response) ? $response : [];
+    $error = eventosapp_whatsapp_templates_error_context($response_array);
+    $error_type = eventosapp_whatsapp_templates_classify_api_error(array_merge($result, ['response' => $response_array]));
+    $result['error_type'] = $error_type;
+    $result['error_code'] = $error['code'];
+    $result['error_subcode'] = $error['subcode'];
+    $result['error_user_title'] = $error['error_user_title'];
+    $result['error_user_message'] = $error['error_user_message'];
+    $result['fbtrace_id'] = $error['fbtrace_id'];
+    $result['notice_level'] = in_array($error_type, ['template_duplicate', 'template_edit_locked', 'not_found'], true) ? 'warning' : 'error';
+    $result['message'] = eventosapp_whatsapp_templates_error_message($error_type, $error, $result['http_code']);
+
+    return $result;
+}
+
+/**
+ * Resumen técnico persistible para la interfaz administrativa.
+ */
+function eventosapp_whatsapp_templates_result_summary($result) {
+    $result = is_array($result) ? $result : [];
+    return [
+        'operation'          => sanitize_key((string)($result['operation'] ?? '')),
+        'ok'                 => ! empty($result['ok']) ? 1 : 0,
+        'notice_level'       => sanitize_key((string)($result['notice_level'] ?? (! empty($result['ok']) ? 'success' : 'error'))),
+        'http_code'          => absint($result['http_code'] ?? 0),
+        'message'            => sanitize_text_field((string)($result['message'] ?? '')),
+        'technical_message'  => sanitize_text_field((string)($result['technical_message'] ?? '')),
+        'error_type'         => sanitize_key((string)($result['error_type'] ?? '')),
+        'error_code'         => absint($result['error_code'] ?? 0),
+        'error_subcode'      => absint($result['error_subcode'] ?? 0),
+        'error_user_title'   => sanitize_text_field((string)($result['error_user_title'] ?? '')),
+        'error_user_message' => sanitize_text_field((string)($result['error_user_message'] ?? '')),
+        'fbtrace_id'         => sanitize_text_field((string)($result['fbtrace_id'] ?? '')),
+        'meta_id'            => sanitize_text_field((string)($result['meta_id'] ?? '')),
+        'meta_status'        => eventosapp_whatsapp_templates_normalize_meta_status($result['meta_status'] ?? '', ''),
+        'meta_category'      => eventosapp_whatsapp_templates_normalize_meta_category($result['meta_category'] ?? ''),
+    ];
+}
+
+/**
+ * Añade un historial corto de cambios y respuestas para que los cambios de Meta
+ * sean visibles sin almacenar payloads extensos indefinidamente.
+ */
+function eventosapp_whatsapp_templates_append_meta_history($template, $operation, $result = [], $before = []) {
+    $template = is_array($template) ? $template : [];
+    $before = is_array($before) ? $before : [];
+    $summary = eventosapp_whatsapp_templates_result_summary($result);
+    $entry = [
+        'at'                => current_time('mysql'),
+        'operation'         => sanitize_key((string) $operation),
+        'ok'                => $summary['ok'],
+        'notice_level'      => $summary['notice_level'],
+        'http_code'         => $summary['http_code'],
+        'message'           => $summary['message'],
+        'error_type'        => $summary['error_type'],
+        'error_code'        => $summary['error_code'],
+        'error_subcode'     => $summary['error_subcode'],
+        'previous_status'   => eventosapp_whatsapp_templates_normalize_meta_status($before['meta_status'] ?? '', ''),
+        'status'            => eventosapp_whatsapp_templates_normalize_meta_status($template['meta_status'] ?? '', ''),
+        'previous_category' => eventosapp_whatsapp_templates_normalize_meta_category($before['meta_category'] ?? ''),
+        'category'          => eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? ''),
+        'previous_meta_id'  => sanitize_text_field((string)($before['meta_template_id'] ?? '')),
+        'meta_id'           => sanitize_text_field((string)($template['meta_template_id'] ?? '')),
+        'rejected_reason'   => eventosapp_whatsapp_templates_normalize_rejected_reason($template['meta_rejected_reason'] ?? ''),
+    ];
+
+    $history = isset($template['meta_history']) && is_array($template['meta_history']) ? $template['meta_history'] : [];
+    $signature_data = $entry;
+    unset($signature_data['at']);
+    $signature = md5(wp_json_encode($signature_data));
+    $last = ! empty($history) && is_array(end($history)) ? end($history) : [];
+    $last_signature_data = $last;
+    unset($last_signature_data['at']);
+    $last_signature = $last ? md5(wp_json_encode($last_signature_data)) : '';
+
+    if ( $signature !== $last_signature ) {
+        $history[] = $entry;
+    }
+
+    $template['meta_history'] = array_slice($history, -20);
+    $template['last_meta_result'] = $summary;
+    return $template;
+}
+
+/**
+ * Aplica una fotografía remota y registra cambios de estado/categoría.
+ */
+function eventosapp_whatsapp_templates_apply_remote_snapshot($template, $remote, $operation = 'sync', $result = []) {
+    $template = is_array($template) ? $template : [];
+    $remote = is_array($remote) ? $remote : [];
+    $before = $template;
+
+    if ( ! empty($remote['id']) ) {
+        $template['meta_template_id'] = sanitize_text_field((string) $remote['id']);
+    }
+    if ( isset($remote['status']) && $remote['status'] !== '' ) {
+        $template['meta_status'] = eventosapp_whatsapp_templates_normalize_meta_status($remote['status'], 'UNKNOWN');
+    }
+    if ( isset($remote['category']) ) {
+        $template['meta_category'] = eventosapp_whatsapp_templates_normalize_meta_category($remote['category']);
+    }
+    $template['meta_rejected_reason'] = eventosapp_whatsapp_templates_normalize_rejected_reason($remote['rejected_reason'] ?? '');
+    $template['meta_remote_name'] = sanitize_key((string)($remote['name'] ?? ($template['meta_remote_name'] ?? '')));
+    $template['meta_remote_language'] = sanitize_text_field((string)($remote['language'] ?? ($template['meta_remote_language'] ?? '')));
+    $template['meta_quality_score'] = eventosapp_whatsapp_templates_quality_summary($remote['quality_score'] ?? '');
+    $template['last_checked_at'] = current_time('mysql');
+
+    $requested_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+    $remote_category = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
+    $mismatch = $remote_category !== '' && $remote_category !== $requested_category;
+    $previous_mismatch = ! empty($before['meta_category_mismatch']);
+    $template['meta_category_mismatch'] = $mismatch ? '1' : '0';
+    if ( $mismatch && ( ! $previous_mismatch || $remote_category !== eventosapp_whatsapp_templates_normalize_meta_category($before['meta_category'] ?? '') ) ) {
+        $template['meta_category_changed_at'] = current_time('mysql');
+        $template['meta_category_previous'] = eventosapp_whatsapp_templates_normalize_meta_category($before['meta_category'] ?? $requested_category);
+    }
+
+    if ( ! empty($result) ) {
+        $template['last_api_message'] = sanitize_text_field((string)($result['message'] ?? ''));
+        $template['last_api_response'] = function_exists('eventosapp_whatsapp_sanitize_log_context')
+            ? eventosapp_whatsapp_sanitize_log_context($result['response'] ?? $remote)
+            : ($result['response'] ?? $remote);
+    }
+
+    $template = eventosapp_whatsapp_templates_append_meta_history($template, $operation, $result, $before);
+    return $template;
+}
+
+/**
+ * Consulta todas las páginas de plantillas de un WABA.
+ */
+function eventosapp_whatsapp_templates_fetch_remote_templates($waba_id, $fields = '') {
+    $waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($waba_id);
+    if ( $waba_id === '' ) {
+        return [
+            'ok' => false,
+            'message' => 'No se puede consultar Meta porque falta el WABA ID.',
+            'data' => [],
+            'pages' => 0,
+            'notice_level' => 'error',
+        ];
+    }
+
+    $fields = sanitize_text_field((string) $fields);
+    if ( $fields === '' ) {
+        $fields = 'id,name,status,category,language,rejected_reason,quality_score';
+    }
+
+    $all = [];
+    $after = '';
+    $pages = 0;
+    $last_result = [];
+    $partial_error = null;
+
+    do {
+        $query = [
+            'limit'  => 100,
+            'fields' => $fields,
+        ];
+        if ( $after !== '' ) $query['after'] = $after;
+        $path = rawurlencode($waba_id) . '/message_templates?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $last_result = eventosapp_whatsapp_templates_api_request('GET', $path);
+        $pages++;
+
+        if ( empty($last_result['ok']) || ! is_array($last_result['response'] ?? null) ) {
+            $partial_error = $last_result;
+            break;
+        }
+
+        $page_data = isset($last_result['response']['data']) && is_array($last_result['response']['data'])
+            ? $last_result['response']['data']
+            : [];
+        foreach ( $page_data as $remote ) {
+            if ( is_array($remote) ) $all[] = $remote;
+        }
+
+        $after = sanitize_text_field((string)($last_result['response']['paging']['cursors']['after'] ?? ''));
+        $has_next = ! empty($last_result['response']['paging']['next']) && $after !== '';
+    } while ( $has_next && $pages < 50 );
+
+    if ( $partial_error && empty($all) ) {
+        $partial_error['data'] = [];
+        $partial_error['pages'] = $pages;
+        return $partial_error;
+    }
+
+    $message = 'Meta devolvió ' . count($all) . ' plantilla(s) del WABA en ' . $pages . ' página(s).';
+    if ( $partial_error ) {
+        $message .= ' La consulta fue parcial: ' . sanitize_text_field((string)($partial_error['message'] ?? 'una página presentó error'));
+    }
+
+    return [
+        'ok' => true,
+        'partial' => (bool) $partial_error,
+        'message' => $message,
+        'data' => $all,
+        'pages' => $pages,
+        'response' => $last_result['response'] ?? [],
+        'notice_level' => $partial_error ? 'warning' : 'success',
+    ];
+}
+
+/**
+ * Busca coincidencia remota exacta por nombre técnico e idioma dentro del WABA.
+ */
+function eventosapp_whatsapp_templates_find_remote_template($waba_id, $name, $language) {
+    $name = eventosapp_whatsapp_templates_sanitize_template_name($name);
+    $language = sanitize_text_field((string) $language);
+    $list = eventosapp_whatsapp_templates_fetch_remote_templates($waba_id);
+    if ( empty($list['ok']) ) {
+        $list['found'] = false;
+        $list['matches'] = [];
+        return $list;
+    }
+
+    $matches = [];
+    foreach ( $list['data'] as $remote ) {
+        if ( ! is_array($remote) ) continue;
+        if ( eventosapp_whatsapp_templates_sanitize_template_name($remote['name'] ?? '') === $name && sanitize_text_field((string)($remote['language'] ?? '')) === $language ) {
+            $matches[] = $remote;
+        }
+    }
+
+    return array_merge($list, [
+        'found' => ! empty($matches),
+        'ambiguous' => count($matches) > 1,
+        'matches' => $matches,
+        'remote' => $matches[0] ?? null,
+    ]);
+}
+
+/**
+ * Consulta una plantilla remota por ID.
+ */
+function eventosapp_whatsapp_templates_get_remote_template_by_id($meta_template_id) {
+    $meta_template_id = sanitize_text_field((string) $meta_template_id);
+    if ( $meta_template_id === '' ) {
+        return [
+            'ok' => false,
+            'message' => 'No se recibió un ID de plantilla de Meta.',
+            'error_type' => 'not_found',
+            'notice_level' => 'warning',
+        ];
+    }
+
+    $fields = 'id,name,status,category,language,rejected_reason,quality_score';
+    return eventosapp_whatsapp_templates_api_request('GET', rawurlencode($meta_template_id) . '?fields=' . rawurlencode($fields));
+}
+
+/**
+ * Busca duplicados locales dentro del mismo WABA, nombre e idioma.
+ */
+function eventosapp_whatsapp_templates_find_local_duplicate($name, $language, $waba_id, $exclude_id = '') {
+    $name = eventosapp_whatsapp_templates_sanitize_template_name($name);
+    $language = sanitize_text_field((string) $language);
+    $waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($waba_id);
+    $exclude_id = sanitize_key((string) $exclude_id);
+    $settings = eventosapp_whatsapp_templates_get_settings();
+
+    foreach ( (array)($settings['templates'] ?? []) as $template_id => $template ) {
+        if ( ! is_array($template) || sanitize_key((string)$template_id) === $exclude_id ) continue;
+        if ( eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '') !== $name ) continue;
+        if ( sanitize_text_field((string)($template['language'] ?? '')) !== $language ) continue;
+        $candidate_waba = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
+        if ( $candidate_waba === $waba_id ) {
+            return sanitize_key((string) $template_id);
+        }
+    }
+
+    return '';
+}
+
+/**
+ * Imprime el último resultado técnico y el historial reciente.
+ */
+function eventosapp_whatsapp_templates_render_meta_diagnostics($template, $compact = false) {
+    $template = is_array($template) ? $template : [];
+    $result = isset($template['last_meta_result']) && is_array($template['last_meta_result']) ? $template['last_meta_result'] : [];
+    $history = isset($template['meta_history']) && is_array($template['meta_history']) ? array_reverse($template['meta_history']) : [];
+    $reason = eventosapp_whatsapp_templates_normalize_rejected_reason($template['meta_rejected_reason'] ?? '');
+
+    if ( empty($result) && empty($history) && $reason === '' ) {
+        return;
+    }
+
+    echo '<details class="evapp-wa-meta-details"' . ($compact ? '' : ' open') . '>';
+    echo '<summary>Detalle de Meta y cambios recientes</summary>';
+    echo '<div class="evapp-wa-meta-details-body">';
+
+    if ( ! empty($result) ) {
+        echo '<p><strong>Última operación:</strong> ' . esc_html($result['operation'] ?: 'consulta') . '<br>';
+        echo '<strong>Resultado:</strong> ' . esc_html(! empty($result['ok']) ? 'Procesado' : 'Con novedad') . '<br>';
+        if ( ! empty($result['http_code']) ) echo '<strong>HTTP:</strong> ' . esc_html($result['http_code']) . '<br>';
+        if ( ! empty($result['error_type']) ) echo '<strong>Tipo:</strong> ' . esc_html($result['error_type']) . '<br>';
+        if ( ! empty($result['error_code']) ) echo '<strong>Código:</strong> ' . esc_html($result['error_code']) . '<br>';
+        if ( ! empty($result['error_subcode']) ) echo '<strong>Subcódigo:</strong> ' . esc_html($result['error_subcode']) . '<br>';
+        if ( ! empty($result['fbtrace_id']) ) echo '<strong>Trace ID:</strong> ' . esc_html($result['fbtrace_id']) . '<br>';
+        echo '</p>';
+        if ( ! empty($result['message']) ) echo '<p>' . esc_html($result['message']) . '</p>';
+    }
+
+    if ( $reason !== '' ) {
+        echo '<p><strong>Motivo de rechazo:</strong> ' . esc_html($reason) . '</p>';
+    }
+
+    if ( ! empty($history) ) {
+        echo '<ol class="evapp-wa-meta-history">';
+        foreach ( array_slice($history, 0, 8) as $entry ) {
+            if ( ! is_array($entry) ) continue;
+            $label = sanitize_text_field((string)($entry['message'] ?? ''));
+            if ( $label === '' ) {
+                $label = eventosapp_whatsapp_templates_meta_status_label($entry['status'] ?? 'UNKNOWN');
+            }
+            echo '<li><strong>' . esc_html($entry['at'] ?? '') . '</strong> · ' . esc_html($entry['operation'] ?? 'sync') . '<br><span>' . esc_html($label) . '</span></li>';
+        }
+        echo '</ol>';
+    }
+
+    echo '</div></details>';
+}
+
 /**
  * Detecta cuántos botones URL activos tiene una plantilla.
  *
@@ -567,6 +1155,31 @@ function eventosapp_whatsapp_templates_get_settings() {
             $changed = true;
         }
 
+        $normalized_meta_status = eventosapp_whatsapp_templates_normalize_meta_status($template['meta_status'] ?? 'LOCAL');
+        if ( (string)($template['meta_status'] ?? '') !== $normalized_meta_status ) {
+            $settings['templates'][$template_id]['meta_status'] = $normalized_meta_status;
+            $changed = true;
+        }
+
+        $normalized_rejected_reason = eventosapp_whatsapp_templates_normalize_rejected_reason($template['meta_rejected_reason'] ?? '');
+        if ( (string)($template['meta_rejected_reason'] ?? '') !== $normalized_rejected_reason ) {
+            $settings['templates'][$template_id]['meta_rejected_reason'] = $normalized_rejected_reason;
+            $changed = true;
+        }
+
+        if ( ! isset($settings['templates'][$template_id]['meta_history']) || ! is_array($settings['templates'][$template_id]['meta_history']) ) {
+            $settings['templates'][$template_id]['meta_history'] = [];
+            $changed = true;
+        } elseif ( count($settings['templates'][$template_id]['meta_history']) > 20 ) {
+            $settings['templates'][$template_id]['meta_history'] = array_slice($settings['templates'][$template_id]['meta_history'], -20);
+            $changed = true;
+        }
+
+        if ( ! isset($settings['templates'][$template_id]['last_meta_result']) || ! is_array($settings['templates'][$template_id]['last_meta_result']) ) {
+            $settings['templates'][$template_id]['last_meta_result'] = [];
+            $changed = true;
+        }
+
         $normalized_button_count = eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
         if ( (string)($template['button_count'] ?? '') !== (string)$normalized_button_count ) {
             $settings['templates'][$template_id]['button_count'] = (string)$normalized_button_count;
@@ -714,19 +1327,13 @@ function eventosapp_whatsapp_templates_get_template_waba_id($template, $template
     $sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '');
     $account = eventosapp_whatsapp_templates_resolve_sender_account($sender_phone, $template_settings);
 
-    // Las cuentas incorporadas por Operador WhatsApp ya conocen su WABA.
-    $account_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($account['waba_id'] ?? '');
-    if ( $account_waba_id !== '' ) {
-        return $account_waba_id;
-    }
-
     if ( ! empty($account['is_default']) ) {
         $default_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '');
         return $default_waba_id !== '' ? $default_waba_id : eventosapp_whatsapp_templates_sanitize_waba_id($template['waba_id'] ?? '');
     }
 
-    // Compatibilidad hacia atrás para números adicionales administrados
-    // manualmente antes de la capa de operador.
+    // Para números distintos al principal, el WABA pertenece a la plantilla.
+    // Esto evita que la aprobación se envíe por error al WABA global del número por defecto.
     return eventosapp_whatsapp_templates_sanitize_waba_id($template['waba_id'] ?? '');
 }
 
@@ -970,6 +1577,11 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         $language = 'es';
     }
 
+    $name = eventosapp_whatsapp_templates_sanitize_template_name($raw['name'] ?? ($existing['name'] ?? ''));
+    if ( $name === '' ) {
+        $name = 'eventosapp_template_' . substr(md5($id), 0, 8);
+    }
+
     $header_format = ! empty($raw['header_format']) ? strtoupper(sanitize_key($raw['header_format'])) : ($existing['header_format'] ?? 'NONE');
     if ( ! in_array($header_format, ['NONE', 'TEXT', 'IMAGE'], true) ) {
         $header_format = 'NONE';
@@ -978,6 +1590,11 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
     $modality = ! empty($raw['modality']) ? sanitize_key($raw['modality']) : ($existing['modality'] ?? 'custom');
     if ( ! in_array($modality, ['presencial', 'virtual', 'custom'], true) ) {
         $modality = 'custom';
+    }
+
+    $button_mode = sanitize_key((string)($raw['button_mode'] ?? ($existing['button_mode'] ?? 'url')));
+    if ( ! in_array($button_mode, ['url', 'quick_reply'], true) ) {
+        $button_mode = 'url';
     }
 
     $template_settings = eventosapp_whatsapp_templates_get_settings();
@@ -991,75 +1608,112 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         $existing_effective_sender_phone = eventosapp_whatsapp_templates_get_default_phone_number_id();
     }
 
-    $sender_changed = ! empty($existing) && $effective_sender_phone !== '' && $existing_effective_sender_phone !== '' && $effective_sender_phone !== $existing_effective_sender_phone;
+    $sender_changed = ! empty($existing)
+        && $effective_sender_phone !== ''
+        && $existing_effective_sender_phone !== ''
+        && $effective_sender_phone !== $existing_effective_sender_phone;
+
     $posted_waba_id = array_key_exists('waba_id', $raw)
         ? eventosapp_whatsapp_templates_sanitize_waba_id($raw['waba_id'])
         : eventosapp_whatsapp_templates_sanitize_waba_id($existing['waba_id'] ?? '');
 
-    if ( ! empty($sender_account['is_default']) ) {
+    $account_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($sender_account['waba_id'] ?? '');
+    if ( $account_waba_id !== '' ) {
+        $effective_waba_id = $account_waba_id;
+    } elseif ( ! empty($sender_account['is_default']) ) {
         $effective_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($template_settings['waba_id'] ?? '');
     } else {
         $effective_waba_id = $posted_waba_id;
     }
 
-    $existing_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($existing['waba_id'] ?? '');
+    $existing_waba_id = ! empty($existing)
+        ? eventosapp_whatsapp_templates_get_template_waba_id($existing, $template_settings)
+        : '';
     $remote_waba_changed = ! empty($existing)
         && $effective_waba_id !== ''
         && $existing_waba_id !== ''
         && $effective_waba_id !== $existing_waba_id
-        && ( ! empty($existing['meta_template_id']) || strtoupper((string)($existing['meta_status'] ?? 'LOCAL')) !== 'LOCAL' );
-    $remote_context_changed = $sender_changed || $remote_waba_changed;
+        && ( ! empty($existing['meta_template_id']) || eventosapp_whatsapp_templates_normalize_meta_status($existing['meta_status'] ?? 'LOCAL') !== 'LOCAL' );
+
+    $name_changed = ! empty($existing)
+        && eventosapp_whatsapp_templates_sanitize_template_name($existing['name'] ?? '') !== $name;
+    $language_changed = ! empty($existing)
+        && sanitize_text_field((string)($existing['language'] ?? '')) !== $language;
+    $identity_changed = $name_changed || $language_changed;
+    $has_remote_identity = ! empty($existing['meta_template_id'])
+        || eventosapp_whatsapp_templates_normalize_meta_status($existing['meta_status'] ?? 'LOCAL') !== 'LOCAL';
+    $remote_context_changed = $has_remote_identity && ($sender_changed || $remote_waba_changed || $identity_changed);
+    $header_sample_context_changed = $remote_context_changed || $sender_changed || $remote_waba_changed;
+
+    $reset_reasons = [];
+    if ( $name_changed ) $reset_reasons[] = 'cambió el nombre técnico';
+    if ( $language_changed ) $reset_reasons[] = 'cambió el idioma';
+    if ( $sender_changed ) $reset_reasons[] = 'cambió el número emisor';
+    if ( $remote_waba_changed ) $reset_reasons[] = 'cambió el WABA';
+    $reset_message = $remote_context_changed
+        ? 'Se desvinculó la identidad remota porque ' . implode(', ', $reset_reasons) . '. El próximo envío se procesará como una plantilla nueva y no intentará editar la anterior.'
+        : '';
+
     $button_count_source = array_key_exists('button_count', $raw) ? $raw['button_count'] : ($existing['button_count'] ?? '');
     $button_count_fallback = ! empty($raw) ? $raw : $existing;
     $button_count = eventosapp_whatsapp_templates_normalize_button_count($button_count_source, $button_count_fallback);
 
-    $template = wp_parse_args([
+    $template = [
         'id'                   => $id,
+        'attendance_confirmation' => ! empty($existing['attendance_confirmation']) ? '1' : (! empty($raw['attendance_confirmation']) ? '1' : ''),
         'is_default'           => ! empty($existing['is_default']) && $existing['is_default'] === '1' ? '1' : '0',
         'base_key'             => ! empty($existing['base_key']) ? sanitize_key($existing['base_key']) : $modality,
-        'name'                 => eventosapp_whatsapp_templates_sanitize_template_name($raw['name'] ?? ($existing['name'] ?? '')),
+        'name'                 => $name,
         'language'             => $language,
         'category'             => $category,
         'modality'             => $modality,
         'title'                => sanitize_text_field($raw['title'] ?? ($existing['title'] ?? '')),
         'header_format'        => $header_format,
         'header_text'          => sanitize_text_field($raw['header_text'] ?? ($existing['header_text'] ?? '')),
-        'header_sample_handle' => eventosapp_whatsapp_templates_sanitize_header_handle($raw['header_sample_handle'] ?? ($existing['header_sample_handle'] ?? '')),
-        'header_sample_file_name' => sanitize_file_name($existing['header_sample_file_name'] ?? ''),
-        'header_sample_file_type' => sanitize_mime_type($existing['header_sample_file_type'] ?? ''),
-        'header_sample_file_size' => absint($existing['header_sample_file_size'] ?? 0),
-        'header_sample_uploaded_at' => sanitize_text_field($existing['header_sample_uploaded_at'] ?? ''),
+        'header_sample_handle' => $header_sample_context_changed ? '' : eventosapp_whatsapp_templates_sanitize_header_handle($raw['header_sample_handle'] ?? ($existing['header_sample_handle'] ?? '')),
+        'header_sample_file_name' => $header_sample_context_changed ? '' : sanitize_file_name($existing['header_sample_file_name'] ?? ''),
+        'header_sample_file_type' => $header_sample_context_changed ? '' : sanitize_mime_type($existing['header_sample_file_type'] ?? ''),
+        'header_sample_file_size' => $header_sample_context_changed ? 0 : absint($existing['header_sample_file_size'] ?? 0),
+        'header_sample_uploaded_at' => $header_sample_context_changed ? '' : sanitize_text_field($existing['header_sample_uploaded_at'] ?? ''),
         'body_text'            => sanitize_textarea_field($raw['body_text'] ?? ($existing['body_text'] ?? '')),
         'body_examples'        => sanitize_textarea_field($raw['body_examples'] ?? ($existing['body_examples'] ?? '')),
         'body_text_meta'       => sanitize_textarea_field($existing['body_text_meta'] ?? ''),
         'body_variable_map'    => eventosapp_whatsapp_templates_sanitize_body_variable_map($existing['body_variable_map'] ?? []),
         'body_variable_signature' => sanitize_text_field($existing['body_variable_signature'] ?? ''),
         'footer_text'          => sanitize_text_field($raw['footer_text'] ?? ($existing['footer_text'] ?? '')),
+        'button_mode'          => $button_mode,
         'button_count'         => (string) $button_count,
         'button_1_text'        => sanitize_text_field($raw['button_1_text'] ?? ($existing['button_1_text'] ?? '')),
-        'button_1_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_1_url'] ?? ($existing['button_1_url'] ?? '')),
-        'button_1_example'     => eventosapp_whatsapp_templates_sanitize_button_example($raw['button_1_example'] ?? ($existing['button_1_example'] ?? '')),
+        'button_1_url'         => $button_mode === 'quick_reply' ? '' : eventosapp_whatsapp_templates_sanitize_url_template($raw['button_1_url'] ?? ($existing['button_1_url'] ?? '')),
+        'button_1_example'     => $button_mode === 'quick_reply' ? '' : eventosapp_whatsapp_templates_sanitize_button_example($raw['button_1_example'] ?? ($existing['button_1_example'] ?? '')),
         'button_2_text'        => sanitize_text_field($raw['button_2_text'] ?? ($existing['button_2_text'] ?? '')),
-        'button_2_url'         => eventosapp_whatsapp_templates_sanitize_url_template($raw['button_2_url'] ?? ($existing['button_2_url'] ?? '')),
-        'button_2_example'     => eventosapp_whatsapp_templates_sanitize_button_example($raw['button_2_example'] ?? ($existing['button_2_example'] ?? '')),
+        'button_2_url'         => $button_mode === 'quick_reply' ? '' : eventosapp_whatsapp_templates_sanitize_url_template($raw['button_2_url'] ?? ($existing['button_2_url'] ?? '')),
+        'button_2_example'     => $button_mode === 'quick_reply' ? '' : eventosapp_whatsapp_templates_sanitize_button_example($raw['button_2_example'] ?? ($existing['button_2_example'] ?? '')),
         'sender_phone_number_id' => $effective_sender_phone,
         'sender_phone_label'   => sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp'))),
         'waba_id'              => $effective_waba_id,
         'meta_template_id'     => $remote_context_changed ? '' : sanitize_text_field($existing['meta_template_id'] ?? ''),
-        'meta_status'          => $remote_context_changed ? 'LOCAL' : sanitize_text_field($existing['meta_status'] ?? 'LOCAL'),
-        'meta_category'        => eventosapp_whatsapp_templates_normalize_meta_category($existing['meta_category'] ?? ''),
-        'meta_rejected_reason' => $remote_context_changed ? '' : sanitize_text_field($existing['meta_rejected_reason'] ?? ''),
-        'last_api_message'     => $remote_context_changed ? 'Número emisor o WABA cambiado. Debes enviar esta plantilla nuevamente a Meta para el WABA correspondiente.' : sanitize_text_field($existing['last_api_message'] ?? ''),
+        'meta_status'          => $remote_context_changed ? 'LOCAL' : eventosapp_whatsapp_templates_normalize_meta_status($existing['meta_status'] ?? 'LOCAL'),
+        'meta_category'        => $remote_context_changed ? '' : eventosapp_whatsapp_templates_normalize_meta_category($existing['meta_category'] ?? ''),
+        'meta_rejected_reason' => $remote_context_changed ? '' : eventosapp_whatsapp_templates_normalize_rejected_reason($existing['meta_rejected_reason'] ?? ''),
+        'meta_remote_name'     => $remote_context_changed ? '' : sanitize_key((string)($existing['meta_remote_name'] ?? '')),
+        'meta_remote_language' => $remote_context_changed ? '' : sanitize_text_field((string)($existing['meta_remote_language'] ?? '')),
+        'meta_quality_score'   => $remote_context_changed ? '' : sanitize_text_field((string)($existing['meta_quality_score'] ?? '')),
+        'meta_category_mismatch' => $remote_context_changed ? '0' : (! empty($existing['meta_category_mismatch']) ? '1' : '0'),
+        'meta_category_changed_at' => $remote_context_changed ? '' : sanitize_text_field((string)($existing['meta_category_changed_at'] ?? '')),
+        'meta_category_previous' => $remote_context_changed ? '' : eventosapp_whatsapp_templates_normalize_meta_category($existing['meta_category_previous'] ?? ''),
+        'meta_link_source'     => $remote_context_changed ? '' : sanitize_key((string)($existing['meta_link_source'] ?? '')),
+        'meta_identity_reset_at' => $remote_context_changed ? current_time('mysql') : sanitize_text_field((string)($existing['meta_identity_reset_at'] ?? '')),
+        'meta_identity_reset_reason' => $remote_context_changed ? $reset_message : sanitize_text_field((string)($existing['meta_identity_reset_reason'] ?? '')),
+        'last_api_message'     => $remote_context_changed ? $reset_message : sanitize_text_field($existing['last_api_message'] ?? ''),
         'last_api_response'    => $remote_context_changed ? [] : (isset($existing['last_api_response']) && is_array($existing['last_api_response']) ? $existing['last_api_response'] : []),
+        'last_meta_result'     => $remote_context_changed ? [] : (isset($existing['last_meta_result']) && is_array($existing['last_meta_result']) ? $existing['last_meta_result'] : []),
+        'meta_history'         => isset($existing['meta_history']) && is_array($existing['meta_history']) ? $existing['meta_history'] : [],
         'last_submitted_at'    => $remote_context_changed ? '' : sanitize_text_field($existing['last_submitted_at'] ?? ''),
         'last_checked_at'      => $remote_context_changed ? '' : sanitize_text_field($existing['last_checked_at'] ?? ''),
         'created_at'           => sanitize_text_field($existing['created_at'] ?? current_time('mysql')),
         'updated_at'           => current_time('mysql'),
-    ], []);
-
-    if ( $template['name'] === '' ) {
-        $template['name'] = 'eventosapp_template_' . substr(md5($id), 0, 8);
-    }
+    ];
 
     if ( $template['title'] === '' ) {
         $template['title'] = $template['name'];
@@ -1067,17 +1721,30 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
 
     $template = eventosapp_whatsapp_templates_prune_disabled_buttons($template);
 
-    if ( strpos($template['button_1_url'], '{{1}}') !== false && $template['button_1_example'] === '' ) {
-        $template['button_1_example'] = eventosapp_whatsapp_templates_default_button_variable_example();
-    }
-    if ( strpos($template['button_2_url'], '{{1}}') !== false && $template['button_2_example'] === '' ) {
-        $template['button_2_example'] = eventosapp_whatsapp_templates_default_button_variable_example();
+    if ( $button_mode !== 'quick_reply' ) {
+        if ( strpos($template['button_1_url'], '{{1}}') !== false && $template['button_1_example'] === '' ) {
+            $template['button_1_example'] = eventosapp_whatsapp_templates_default_button_variable_example();
+        }
+        if ( strpos($template['button_2_url'], '{{1}}') !== false && $template['button_2_example'] === '' ) {
+            $template['button_2_example'] = eventosapp_whatsapp_templates_default_button_variable_example();
+        }
     }
 
     $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'], $template['body_examples']);
     $template['body_text_meta'] = sanitize_textarea_field($prepared_body['text'] ?? $template['body_text']);
     $template['body_variable_map'] = eventosapp_whatsapp_templates_sanitize_body_variable_map($prepared_body['variable_numbers'] ?? []);
     $template['body_variable_signature'] = sanitize_text_field($prepared_body['signature'] ?? md5((string)$template['body_text']));
+
+    if ( $remote_context_changed ) {
+        $reset_result = [
+            'ok' => true,
+            'operation' => 'identity_reset',
+            'notice_level' => 'warning',
+            'message' => $reset_message,
+            'http_code' => 0,
+        ];
+        $template = eventosapp_whatsapp_templates_append_meta_history($template, 'identity_reset', $reset_result, $existing);
+    }
 
     return $template;
 }
@@ -1086,6 +1753,7 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
  * Valida plantilla antes de enviarla a Meta.
  */
 function eventosapp_whatsapp_templates_validate_for_meta($template) {
+    $template = is_array($template) ? $template : [];
     $errors = [];
 
     $category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
@@ -1093,8 +1761,15 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
         $errors[] = 'La categoría de la plantilla no es compatible con este módulo. Usa Utility o Marketing.';
     }
 
-    if ( empty($template['name']) ) {
+    $name = eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '');
+    if ( $name === '' ) {
         $errors[] = 'Falta el nombre técnico de la plantilla.';
+    } elseif ( $name !== (string)($template['name'] ?? '') ) {
+        $errors[] = 'El nombre técnico solo puede contener minúsculas, números y guion bajo.';
+    }
+
+    if ( empty($template['language']) ) {
+        $errors[] = 'Falta el idioma de la plantilla.';
     }
 
     if ( empty($template['body_text']) ) {
@@ -1106,7 +1781,7 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
         }
     }
 
-    if ( ! empty($template['header_format']) && $template['header_format'] === 'IMAGE' ) {
+    if ( ! empty($template['header_format']) && strtoupper((string)$template['header_format']) === 'IMAGE' ) {
         if ( empty($template['header_sample_handle']) ) {
             $errors[] = 'La plantilla usa encabezado de imagen. Para enviarla a Meta debes subir una imagen de muestra para generar el Header Sample Handle, o pegar un handle válido generado por Meta.';
         } elseif ( preg_match('/^https?:\/\//i', (string) $template['header_sample_handle']) ) {
@@ -1114,13 +1789,28 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
         }
     }
 
+    $button_mode = sanitize_key((string)($template['button_mode'] ?? 'url'));
     $buttons = 0;
     foreach ( eventosapp_whatsapp_templates_get_enabled_button_numbers($template) as $i ) {
         $text = trim((string)($template['button_' . $i . '_text'] ?? ''));
         $url  = trim((string)($template['button_' . $i . '_url'] ?? ''));
+
+        if ( $button_mode === 'quick_reply' ) {
+            if ( $text === '' ) {
+                $errors[] = 'Cada botón de respuesta rápida debe tener texto.';
+                continue;
+            }
+            $length = function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
+            if ( $length > 25 ) {
+                $errors[] = 'Cada botón de respuesta rápida puede tener máximo 25 caracteres.';
+            }
+            $buttons++;
+            continue;
+        }
+
         if ( $text !== '' || $url !== '' ) {
             if ( $text === '' || $url === '' ) {
-                $errors[] = 'Cada botón debe tener texto y URL.';
+                $errors[] = 'Cada botón URL debe tener texto y URL.';
             }
             if ( substr_count($url, '{{1}}') > 1 ) {
                 $errors[] = 'Cada botón URL solo puede usar una variable dinámica {{1}}.';
@@ -1135,20 +1825,24 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
         }
     }
 
+    if ( $button_mode === 'quick_reply' && $buttons < 1 ) {
+        $errors[] = 'La plantilla debe tener al menos un botón de respuesta rápida.';
+    }
     if ( $buttons > 2 ) {
-        $errors[] = 'WhatsApp solo permite hasta 2 botones URL en esta estructura.';
+        $errors[] = 'Esta interfaz admite máximo 2 botones por plantilla.';
     }
 
-    return $errors;
+    return array_values(array_unique($errors));
 }
 
 /**
  * Construye componentes para crear/actualizar plantilla en Meta.
  */
 function eventosapp_whatsapp_templates_build_meta_components($template) {
+    $template = is_array($template) ? $template : [];
     $components = [];
 
-    if ( ! empty($template['header_format']) && $template['header_format'] === 'IMAGE' ) {
+    if ( ! empty($template['header_format']) && strtoupper((string)$template['header_format']) === 'IMAGE' ) {
         $components[] = [
             'type'    => 'HEADER',
             'format'  => 'IMAGE',
@@ -1156,7 +1850,7 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
                 'header_handle' => [ $template['header_sample_handle'] ],
             ],
         ];
-    } elseif ( ! empty($template['header_format']) && $template['header_format'] === 'TEXT' && ! empty($template['header_text']) ) {
+    } elseif ( ! empty($template['header_format']) && strtoupper((string)$template['header_format']) === 'TEXT' && ! empty($template['header_text']) ) {
         $components[] = [
             'type'   => 'HEADER',
             'format' => 'TEXT',
@@ -1185,13 +1879,22 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
         ];
     }
 
+    $button_mode = sanitize_key((string)($template['button_mode'] ?? 'url'));
     $buttons = [];
     foreach ( eventosapp_whatsapp_templates_get_enabled_button_numbers($template) as $i ) {
         $text = trim((string)($template['button_' . $i . '_text'] ?? ''));
-        $url  = trim((string)($template['button_' . $i . '_url'] ?? ''));
-        if ( $text === '' || $url === '' ) {
+        if ( $text === '' ) continue;
+
+        if ( $button_mode === 'quick_reply' ) {
+            $buttons[] = [
+                'type' => 'QUICK_REPLY',
+                'text' => $text,
+            ];
             continue;
         }
+
+        $url = trim((string)($template['button_' . $i . '_url'] ?? ''));
+        if ( $url === '' ) continue;
 
         $button = [
             'type' => 'URL',
@@ -1224,10 +1927,11 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
  */
 function eventosapp_whatsapp_templates_api_request($method, $path, $body = null) {
     $method = strtoupper((string) $method);
+    $path = ltrim((string) $path, '/');
     $wa_settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
 
     if ( ! empty($wa_settings['dry_run']) && $wa_settings['dry_run'] === '1' ) {
-        return [
+        $result = [
             'ok' => true,
             'http_code' => 0,
             'message' => 'Modo prueba interno: solicitud de plantilla simulada, no se llamó a Meta.',
@@ -1238,43 +1942,53 @@ function eventosapp_whatsapp_templates_api_request($method, $path, $body = null)
                 'category' => is_array($body) && ! empty($body['category']) ? eventosapp_whatsapp_templates_sanitize_category($body['category']) : 'UTILITY',
             ],
         ];
+        return eventosapp_whatsapp_templates_enrich_api_result($result, $method, $path, $body);
     }
 
-    // El cliente Graph central resuelve automáticamente el token por WABA
-    // cuando la ruta pertenece a una cuenta administrada por Operador WhatsApp.
+    // El cliente Graph central es la fuente única cuando está cargado. Además de
+    // mantener compatibilidad con el número principal, puede resolver tokens por
+    // WABA cuando el operador de WhatsApp administra cuentas adicionales.
     if ( function_exists('eventosapp_whatsapp_graph_api_request') ) {
         $result = eventosapp_whatsapp_graph_api_request($method, $path, $body, $wa_settings);
+        $result = eventosapp_whatsapp_templates_enrich_api_result($result, $method, $path, $body);
+
         if ( function_exists('eventosapp_whatsapp_log') ) {
             eventosapp_whatsapp_log(! empty($result['ok']) ? 'Plantilla WhatsApp API OK' : 'Plantilla WhatsApp API error', [
                 'method' => $method,
                 'path' => $path,
+                'operation' => $result['operation'] ?? '',
                 'http_code' => $result['http_code'] ?? 0,
+                'error_type' => $result['error_type'] ?? '',
+                'error_code' => $result['error_code'] ?? 0,
+                'error_subcode' => $result['error_subcode'] ?? 0,
                 'request_body' => is_array($body) ? $body : null,
                 'response' => $result['response'] ?? null,
             ]);
         }
+
         return $result;
     }
 
-    // Fallback para instalaciones parciales donde WhatsApp Tickets todavía no
-    // cargó su cliente Graph.
     $access_token = trim((string)($wa_settings['access_token'] ?? ''));
     $api_version  = preg_replace('/[^a-zA-Z0-9\.\-_]/', '', (string)($wa_settings['api_version'] ?? 'v23.0'));
     $timeout      = min(60, max(5, absint($wa_settings['request_timeout'] ?? 20)));
 
-    if ( $api_version === '' ) {
-        $api_version = 'v23.0';
-    }
+    if ( $api_version === '' ) $api_version = 'v23.0';
     if ( $access_token === '' ) {
-        return [
+        return eventosapp_whatsapp_templates_enrich_api_result([
             'ok' => false,
             'http_code' => 0,
             'message' => 'Falta Access Token en WhatsApp Tickets o en la cuenta administrada por el operador.',
-            'response' => null,
-        ];
+            'response' => [
+                'error' => [
+                    'message' => 'Falta Access Token para ejecutar la solicitud Graph API.',
+                    'code' => 190,
+                ],
+            ],
+        ], $method, $path, $body);
     }
 
-    $endpoint = sprintf('https://graph.facebook.com/%s/%s', rawurlencode($api_version), ltrim($path, '/'));
+    $endpoint = sprintf('https://graph.facebook.com/%s/%s', rawurlencode($api_version), $path);
     $args = [
         'timeout' => $timeout,
         'headers' => [
@@ -1289,38 +2003,67 @@ function eventosapp_whatsapp_templates_api_request($method, $path, $body = null)
 
     $response = wp_remote_request($endpoint, $args);
     if ( is_wp_error($response) ) {
-        return [
+        return eventosapp_whatsapp_templates_enrich_api_result([
             'ok' => false,
             'http_code' => 0,
             'message' => $response->get_error_message(),
-            'response' => null,
-        ];
+            'response' => [
+                'error' => [
+                    'message' => $response->get_error_message(),
+                    'type' => 'wordpress_http_error',
+                ],
+            ],
+        ], $method, $path, $body);
     }
 
     $code = (int) wp_remote_retrieve_response_code($response);
     $raw_body = (string) wp_remote_retrieve_body($response);
     $decoded = json_decode($raw_body, true);
-    $ok = $code >= 200 && $code < 300;
-
-    return [
-        'ok' => $ok,
+    $result = [
+        'ok' => $code >= 200 && $code < 300,
         'http_code' => $code,
-        'message' => $ok ? 'Solicitud aceptada por Meta.' : eventosapp_whatsapp_templates_extract_api_error($decoded, $raw_body, $code),
+        'message' => $code >= 200 && $code < 300 ? 'Solicitud aceptada por Meta.' : eventosapp_whatsapp_templates_extract_api_error($decoded, $raw_body, $code),
         'response' => is_array($decoded) ? $decoded : $raw_body,
+        'endpoint' => $endpoint,
     ];
+    $result = eventosapp_whatsapp_templates_enrich_api_result($result, $method, $path, $body);
+
+    if ( function_exists('eventosapp_whatsapp_log') ) {
+        eventosapp_whatsapp_log(! empty($result['ok']) ? 'Plantilla WhatsApp API OK' : 'Plantilla WhatsApp API error', [
+            'method' => $method,
+            'path' => $path,
+            'operation' => $result['operation'] ?? '',
+            'http_code' => $result['http_code'] ?? 0,
+            'error_type' => $result['error_type'] ?? '',
+            'error_code' => $result['error_code'] ?? 0,
+            'error_subcode' => $result['error_subcode'] ?? 0,
+            'request_body' => is_array($body) ? $body : null,
+            'response' => $result['response'] ?? null,
+        ]);
+    }
+
+    return $result;
 }
 
 /**
  * Extrae errores de Meta.
  */
 function eventosapp_whatsapp_templates_extract_api_error($decoded, $raw_body, $code) {
-    if ( function_exists('eventosapp_whatsapp_extract_api_error') ) {
+    $response = is_array($decoded) ? $decoded : [];
+    $result = [
+        'ok' => false,
+        'http_code' => absint($code),
+        'response' => $response,
+        'technical_message' => is_string($raw_body) ? $raw_body : '',
+    ];
+    $error = eventosapp_whatsapp_templates_error_context($response);
+    $error_type = eventosapp_whatsapp_templates_classify_api_error($result);
+
+    if ( empty($response) && function_exists('eventosapp_whatsapp_extract_api_error') ) {
         return eventosapp_whatsapp_extract_api_error($decoded, $raw_body, $code);
     }
-    if ( is_array($decoded) && ! empty($decoded['error']['message']) ) {
-        return 'Meta API: ' . sanitize_text_field($decoded['error']['message']);
-    }
-    return 'Meta API HTTP ' . (int) $code;
+
+    return eventosapp_whatsapp_templates_error_message($error_type, $error, $code);
 }
 
 /**
@@ -1592,14 +2335,25 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
     $template_id = sanitize_key((string) $template_id);
     $settings = eventosapp_whatsapp_templates_get_settings();
 
-    if ( empty($settings['templates'][$template_id]) ) {
-        return ['ok' => false, 'message' => 'Plantilla local no encontrada.'];
+    if ( empty($settings['templates'][$template_id]) || ! is_array($settings['templates'][$template_id]) ) {
+        return [
+            'ok' => false,
+            'message' => 'Plantilla local no encontrada.',
+            'error_type' => 'not_found',
+            'notice_level' => 'error',
+        ];
     }
 
     $template = $settings['templates'][$template_id];
+    $before = $template;
     $waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
     if ( $waba_id === '' ) {
-        return ['ok' => false, 'message' => 'Configura el WhatsApp Business Account ID del número emisor al que pertenece esta plantilla.'];
+        return [
+            'ok' => false,
+            'message' => 'Configura el WhatsApp Business Account ID del número emisor al que pertenece esta plantilla.',
+            'error_type' => 'invalid_parameter',
+            'notice_level' => 'error',
+        ];
     }
 
     $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
@@ -1612,16 +2366,154 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
     $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
     $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
     $template['waba_id'] = $waba_id;
+    $template['meta_rejected_reason'] = eventosapp_whatsapp_templates_normalize_rejected_reason($template['meta_rejected_reason'] ?? '');
     $settings['templates'][$template_id] = $template;
     eventosapp_whatsapp_templates_update_settings($settings);
 
-    $errors = eventosapp_whatsapp_templates_validate_for_meta($template);
-    if ( ! empty($errors) ) {
-        return ['ok' => false, 'message' => implode(' ', $errors)];
+    $local_duplicate_id = eventosapp_whatsapp_templates_find_local_duplicate(
+        $template['name'] ?? '',
+        $template['language'] ?? '',
+        $waba_id,
+        $template_id
+    );
+    if ( $local_duplicate_id !== '' ) {
+        $result = [
+            'ok' => false,
+            'operation' => empty($template['meta_template_id']) ? 'create' : 'update',
+            'notice_level' => 'warning',
+            'error_type' => 'template_duplicate',
+            'message' => 'No se envió la plantilla porque el inventario local ya contiene otra plantilla con el mismo nombre técnico, idioma y WABA. Registro en conflicto: ' . $local_duplicate_id . '.',
+            'http_code' => 0,
+        ];
+        $template = eventosapp_whatsapp_templates_append_meta_history($template, 'local_duplicate_blocked', $result, $before);
+        $template['last_api_message'] = $result['message'];
+        $settings['templates'][$template_id] = $template;
+        eventosapp_whatsapp_templates_update_settings($settings);
+        return $result;
     }
 
-    $category_advice = eventosapp_whatsapp_templates_category_advice($template);
-    $marketing_signals = eventosapp_whatsapp_templates_detect_marketing_signals($template);
+    $errors = eventosapp_whatsapp_templates_validate_for_meta($template);
+    if ( ! empty($errors) ) {
+        $result = [
+            'ok' => false,
+            'operation' => empty($template['meta_template_id']) ? 'create' : 'update',
+            'notice_level' => 'error',
+            'error_type' => 'invalid_parameter',
+            'message' => implode(' ', $errors),
+            'http_code' => 0,
+        ];
+        $template = eventosapp_whatsapp_templates_append_meta_history($template, 'validation_failed', $result, $before);
+        $template['last_api_message'] = $result['message'];
+        $settings['templates'][$template_id] = $template;
+        eventosapp_whatsapp_templates_update_settings($settings);
+        return $result;
+    }
+
+    $meta_template_id = sanitize_text_field((string)($template['meta_template_id'] ?? ''));
+    if ( $meta_template_id !== '' ) {
+        $remote_result = eventosapp_whatsapp_templates_get_remote_template_by_id($meta_template_id);
+        if ( ! empty($remote_result['ok']) && is_array($remote_result['response'] ?? null) ) {
+            $remote = $remote_result['response'];
+            $remote_name = eventosapp_whatsapp_templates_sanitize_template_name($remote['name'] ?? '');
+            $remote_language = sanitize_text_field((string)($remote['language'] ?? ''));
+            $local_name = eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '');
+            $local_language = sanitize_text_field((string)($template['language'] ?? ''));
+
+            if ( ($remote_name !== '' && $remote_name !== $local_name) || ($remote_language !== '' && $remote_language !== $local_language) ) {
+                $template['meta_template_id'] = '';
+                $template['meta_status'] = 'LOCAL';
+                $template['meta_category'] = '';
+                $template['meta_rejected_reason'] = '';
+                $template['meta_link_source'] = '';
+                $template['last_api_message'] = 'El ID remoto guardado pertenecía a otro nombre o idioma. EventosApp lo desvinculó y procesará esta configuración como una plantilla nueva.';
+                $template = eventosapp_whatsapp_templates_append_meta_history($template, 'remote_identity_detached', [
+                    'ok' => true,
+                    'operation' => 'identity_reset',
+                    'notice_level' => 'warning',
+                    'message' => $template['last_api_message'],
+                    'http_code' => $remote_result['http_code'] ?? 0,
+                ], $before);
+                $meta_template_id = '';
+            } else {
+                $template = eventosapp_whatsapp_templates_apply_remote_snapshot($template, $remote, 'preflight_status', $remote_result);
+                $remote_status = eventosapp_whatsapp_templates_normalize_meta_status($template['meta_status'] ?? 'UNKNOWN');
+                if ( $remote_status !== 'REJECTED' ) {
+                    $result = [
+                        'ok' => false,
+                        'operation' => 'update',
+                        'notice_level' => 'warning',
+                        'error_type' => 'template_edit_locked',
+                        'http_code' => 0,
+                        'meta_id' => $template['meta_template_id'] ?? '',
+                        'meta_status' => $remote_status,
+                        'meta_category' => $template['meta_category'] ?? '',
+                        'message' => 'No se enviaron cambios a Meta. La plantilla remota está ' . eventosapp_whatsapp_templates_meta_status_label($remote_status) . ' y Meta solo permite editar plantillas rechazadas. Duplica la plantilla o cambia el nombre técnico para crear una nueva versión.',
+                    ];
+                    $template['last_api_message'] = $result['message'];
+                    $template = eventosapp_whatsapp_templates_append_meta_history($template, 'update_blocked', $result, $before);
+                    $settings['templates'][$template_id] = $template;
+                    eventosapp_whatsapp_templates_update_settings($settings);
+                    return $result;
+                }
+            }
+        } elseif ( ($remote_result['error_type'] ?? '') === 'not_found' ) {
+            $template['meta_template_id'] = '';
+            $template['meta_status'] = 'LOCAL';
+            $template['meta_category'] = '';
+            $template['meta_rejected_reason'] = '';
+            $template['meta_link_source'] = '';
+            $template['last_api_message'] = 'El ID remoto ya no pudo encontrarse. EventosApp eliminó el vínculo obsoleto y verificará el nombre antes de crear una plantilla nueva.';
+            $template = eventosapp_whatsapp_templates_append_meta_history($template, 'stale_remote_id_cleared', [
+                'ok' => true,
+                'operation' => 'identity_reset',
+                'notice_level' => 'warning',
+                'message' => $template['last_api_message'],
+                'http_code' => $remote_result['http_code'] ?? 0,
+            ], $before);
+            $meta_template_id = '';
+        } else {
+            $template['last_api_message'] = sanitize_text_field((string)($remote_result['message'] ?? 'No se pudo verificar la plantilla remota antes de editarla.'));
+            $template['last_api_response'] = is_array($remote_result['response'] ?? null) ? $remote_result['response'] : [];
+            $template = eventosapp_whatsapp_templates_append_meta_history($template, 'preflight_failed', $remote_result, $before);
+            $settings['templates'][$template_id] = $template;
+            eventosapp_whatsapp_templates_update_settings($settings);
+            return $remote_result;
+        }
+    }
+
+    if ( $meta_template_id === '' ) {
+        $remote_match = eventosapp_whatsapp_templates_find_remote_template($waba_id, $template['name'] ?? '', $template['language'] ?? '');
+        if ( empty($remote_match['ok']) ) {
+            $template['last_api_message'] = sanitize_text_field((string)($remote_match['message'] ?? 'No se pudo comprobar si el nombre ya existe en Meta.'));
+            $template = eventosapp_whatsapp_templates_append_meta_history($template, 'duplicate_preflight_failed', $remote_match, $before);
+            $settings['templates'][$template_id] = $template;
+            eventosapp_whatsapp_templates_update_settings($settings);
+            return $remote_match;
+        }
+
+        if ( ! empty($remote_match['found']) && is_array($remote_match['remote'] ?? null) ) {
+            $remote = $remote_match['remote'];
+            $duplicate_result = [
+                'ok' => false,
+                'operation' => 'create',
+                'notice_level' => 'warning',
+                'error_type' => 'template_duplicate',
+                'http_code' => 0,
+                'meta_id' => sanitize_text_field((string)($remote['id'] ?? '')),
+                'meta_status' => eventosapp_whatsapp_templates_normalize_meta_status($remote['status'] ?? 'UNKNOWN'),
+                'meta_category' => eventosapp_whatsapp_templates_normalize_meta_category($remote['category'] ?? ''),
+                'message' => 'No se creó una plantilla duplicada. Meta ya tiene el nombre técnico “' . sanitize_text_field((string)($template['name'] ?? '')) . '” para el idioma ' . sanitize_text_field((string)($template['language'] ?? '')) . ' en este WABA. EventosApp vinculó el registro local a la plantilla remota encontrada; cambia el nombre técnico para crear una versión nueva.',
+                'response' => $remote,
+            ];
+            $template = eventosapp_whatsapp_templates_apply_remote_snapshot($template, $remote, 'remote_duplicate_detected', $duplicate_result);
+            $template['meta_link_source'] = 'name_match';
+            $template['meta_duplicate_detected_at'] = current_time('mysql');
+            $template['last_api_message'] = $duplicate_result['message'];
+            $settings['templates'][$template_id] = $template;
+            eventosapp_whatsapp_templates_update_settings($settings);
+            return $duplicate_result;
+        }
+    }
 
     $payload = [
         'name'       => $template['name'],
@@ -1631,92 +2523,64 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
     ];
 
     if ( function_exists('eventosapp_whatsapp_log') ) {
-        eventosapp_whatsapp_log('Plantilla WhatsApp enviada a Meta con número emisor', [
+        eventosapp_whatsapp_log('Plantilla WhatsApp enviada a Meta con identidad verificada', [
             'template_id' => $template_id,
             'template_name' => $template['name'] ?? '',
+            'operation' => $meta_template_id !== '' ? 'update_rejected' : 'create',
             'requested_category' => $requested_category,
-            'current_meta_category' => eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? ''),
-            'category_advice' => $category_advice,
-            'marketing_signals' => $marketing_signals,
             'sender_phone_number_id' => $template['sender_phone_number_id'] ?? '',
             'sender_phone_label' => $template['sender_phone_label'] ?? '',
             'waba_id' => $waba_id,
-            'has_meta_template_id' => ! empty($template['meta_template_id']) ? 1 : 0,
-            'meta_template_id' => $template['meta_template_id'] ?? '',
+            'meta_template_id' => $meta_template_id,
+            'button_mode' => $template['button_mode'] ?? 'url',
             'button_count' => $template['button_count'] ?? '',
             'header_format' => $template['header_format'] ?? '',
             'body_variable_map' => $template['body_variable_map'] ?? [],
         ]);
     }
 
-    if ( ! empty($template['meta_template_id']) ) {
-        $path = rawurlencode($template['meta_template_id']);
-        $api_result = eventosapp_whatsapp_templates_api_request('POST', $path, [
+    if ( $meta_template_id !== '' ) {
+        $api_result = eventosapp_whatsapp_templates_api_request('POST', rawurlencode($meta_template_id), [
             'category'   => $requested_category,
             'components' => $payload['components'],
         ]);
+        $operation = 'update';
     } else {
-        $path = rawurlencode($waba_id) . '/message_templates';
-        $api_result = eventosapp_whatsapp_templates_api_request('POST', $path, $payload);
+        $api_result = eventosapp_whatsapp_templates_api_request('POST', rawurlencode($waba_id) . '/message_templates', $payload);
+        $operation = 'create';
     }
 
     $response = is_array($api_result['response'] ?? null) ? $api_result['response'] : [];
+    $template['last_submitted_at'] = current_time('mysql');
+    $template['last_api_message'] = sanitize_text_field((string)($api_result['message'] ?? ''));
+    $template['last_api_response'] = function_exists('eventosapp_whatsapp_sanitize_log_context')
+        ? eventosapp_whatsapp_sanitize_log_context($response)
+        : $response;
 
     if ( ! empty($api_result['ok']) ) {
-        if ( ! empty($response['id']) ) {
-            $template['meta_template_id'] = sanitize_text_field((string) $response['id']);
+        if ( empty($response['id']) && $meta_template_id !== '' ) $response['id'] = $meta_template_id;
+        if ( empty($response['status']) ) $response['status'] = 'PENDING';
+        if ( empty($response['category']) ) $response['category'] = $requested_category;
+        if ( empty($response['name']) ) $response['name'] = $template['name'];
+        if ( empty($response['language']) ) $response['language'] = $template['language'];
+        $template = eventosapp_whatsapp_templates_apply_remote_snapshot($template, $response, $operation, $api_result);
+        $template['meta_link_source'] = $operation === 'create' ? 'created_by_eventosapp' : ($template['meta_link_source'] ?? 'updated_by_eventosapp');
+        $api_result['message'] = trim((string)$api_result['message'] . ' ' . eventosapp_whatsapp_templates_category_status_message($requested_category, $template['meta_category'] ?? ''));
+        $template['last_api_message'] = sanitize_text_field($api_result['message']);
+    } else {
+        if ( ($api_result['error_type'] ?? '') === 'template_duplicate' ) {
+            $race_match = eventosapp_whatsapp_templates_find_remote_template($waba_id, $template['name'] ?? '', $template['language'] ?? '');
+            if ( ! empty($race_match['found']) && is_array($race_match['remote'] ?? null) ) {
+                $template = eventosapp_whatsapp_templates_apply_remote_snapshot($template, $race_match['remote'], 'remote_duplicate_detected', $api_result);
+                $template['meta_link_source'] = 'name_match_after_create';
+            }
         }
-        if ( ! empty($response['status']) ) {
-            $template['meta_status'] = sanitize_text_field((string) $response['status']);
-        } elseif ( empty($template['meta_status']) || $template['meta_status'] === 'LOCAL' ) {
-            $template['meta_status'] = 'PENDING';
-        }
-
-        $response_category = eventosapp_whatsapp_templates_normalize_meta_category($response['category'] ?? '');
-        if ( $response_category !== '' ) {
-            $template['meta_category'] = $response_category;
-        } elseif ( empty($template['meta_category']) ) {
-            $template['meta_category'] = $requested_category;
-        }
-
-        $template['meta_rejected_reason'] = '';
-        $template['last_submitted_at'] = current_time('mysql');
+        $template = eventosapp_whatsapp_templates_append_meta_history($template, $operation . '_failed', $api_result, $before);
     }
 
-    $api_message = sanitize_text_field((string)($api_result['message'] ?? ''));
-    if ( ! empty($api_result['ok']) ) {
-        $category_message = eventosapp_whatsapp_templates_category_status_message($requested_category, $template['meta_category'] ?? '');
-        $api_message = trim($api_message . ' ' . $category_message);
-        if ( $requested_category === 'UTILITY' && ! empty($marketing_signals) ) {
-            $api_message = trim($api_message . ' Aviso: el contenido tiene señales promocionales y Meta puede moverlo a Marketing.');
-        }
-    }
-
-    $api_result['message'] = $api_message !== '' ? $api_message : ($api_result['message'] ?? '');
-    $template['last_api_message'] = sanitize_text_field((string)$api_result['message']);
-    $template['last_api_response'] = $response;
     $template['updated_at'] = current_time('mysql');
     $settings['templates'][$template_id] = $template;
     eventosapp_whatsapp_templates_update_settings($settings);
-
-    if ( function_exists('eventosapp_whatsapp_log') ) {
-        eventosapp_whatsapp_log('Plantilla WhatsApp respuesta Meta categorización', [
-            'template_id' => $template_id,
-            'template_name' => $template['name'] ?? '',
-            'ok' => ! empty($api_result['ok']) ? 1 : 0,
-            'http_code' => $api_result['http_code'] ?? 0,
-            'requested_category' => $requested_category,
-            'meta_category' => eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? ''),
-            'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
-            'meta_status' => $template['meta_status'] ?? '',
-            'meta_template_id' => $template['meta_template_id'] ?? '',
-            'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
-            'quality_score' => eventosapp_whatsapp_templates_quality_summary($response['quality_score'] ?? ''),
-            'message' => $api_result['message'] ?? '',
-            'marketing_signals' => $marketing_signals,
-            'response' => $response,
-        ]);
-    }
 
     return $api_result;
 }
@@ -1728,48 +2592,49 @@ function eventosapp_whatsapp_templates_check_status($template_id) {
     $template_id = sanitize_key((string) $template_id);
     $settings = eventosapp_whatsapp_templates_get_settings();
 
-    if ( empty($settings['templates'][$template_id]) ) {
-        return ['ok' => false, 'message' => 'Plantilla local no encontrada.'];
+    if ( empty($settings['templates'][$template_id]) || ! is_array($settings['templates'][$template_id]) ) {
+        return [
+            'ok' => false,
+            'message' => 'Plantilla local no encontrada.',
+            'error_type' => 'not_found',
+            'notice_level' => 'error',
+        ];
     }
 
     $template = $settings['templates'][$template_id];
+    $before = $template;
     if ( empty($template['meta_template_id']) ) {
         return eventosapp_whatsapp_templates_sync_template_by_name($template_id);
     }
 
-    $fields = 'id,name,status,category,language,rejected_reason,quality_score';
-    $path = rawurlencode($template['meta_template_id']) . '?fields=' . rawurlencode($fields);
-    $api_result = eventosapp_whatsapp_templates_api_request('GET', $path);
-
-    if ( ! empty($api_result['ok']) && is_array($api_result['response']) ) {
-        $response = $api_result['response'];
-        $template['meta_template_id'] = ! empty($response['id']) ? sanitize_text_field((string)$response['id']) : $template['meta_template_id'];
-        $template['meta_status'] = ! empty($response['status']) ? sanitize_text_field((string)$response['status']) : $template['meta_status'];
-        $template['meta_category'] = ! empty($response['category']) ? eventosapp_whatsapp_templates_normalize_meta_category($response['category']) : eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
-        $template['meta_rejected_reason'] = ! empty($response['rejected_reason']) ? sanitize_text_field((string)$response['rejected_reason']) : '';
+    $api_result = eventosapp_whatsapp_templates_get_remote_template_by_id($template['meta_template_id']);
+    if ( ! empty($api_result['ok']) && is_array($api_result['response'] ?? null) ) {
+        $template = eventosapp_whatsapp_templates_apply_remote_snapshot($template, $api_result['response'], 'status_check', $api_result);
         $template['waba_id'] = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
-        $template['last_checked_at'] = current_time('mysql');
-        $category_message = eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? '');
-        $template['last_api_message'] = sanitize_text_field(trim((string)($api_result['message'] ?? '') . ' ' . $category_message));
-        $template['last_api_response'] = $response;
+        $template['last_api_message'] = sanitize_text_field(trim((string)($api_result['message'] ?? '') . ' ' . eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? '')));
         $settings['templates'][$template_id] = $template;
         eventosapp_whatsapp_templates_update_settings($settings);
-
-        if ( function_exists('eventosapp_whatsapp_log') ) {
-            eventosapp_whatsapp_log('Plantilla WhatsApp estado consultado en Meta', [
-                'template_id' => $template_id,
-                'template_name' => $template['name'] ?? '',
-                'requested_category' => eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY'),
-                'meta_category' => $template['meta_category'] ?? '',
-                'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
-                'meta_status' => $template['meta_status'] ?? '',
-                'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
-                'quality_score' => eventosapp_whatsapp_templates_quality_summary($response['quality_score'] ?? ''),
-                'last_api_message' => $template['last_api_message'] ?? '',
-                'response' => $response,
-            ]);
-        }
+        $api_result['message'] = $template['last_api_message'];
+        return $api_result;
     }
+
+    if ( ($api_result['error_type'] ?? '') === 'not_found' ) {
+        $old_id = sanitize_text_field((string)($template['meta_template_id'] ?? ''));
+        $template['meta_template_id'] = '';
+        $template['meta_status'] = 'LOCAL';
+        $template['meta_category'] = '';
+        $template['meta_rejected_reason'] = '';
+        $template['meta_link_source'] = '';
+        $api_result['notice_level'] = 'warning';
+        $api_result['message'] = 'El ID remoto ' . $old_id . ' ya no pudo encontrarse. Se eliminó el vínculo obsoleto del registro local. Puedes volver a enviarlo con el mismo nombre después de verificar que no exista en Meta.';
+    }
+
+    $template['last_checked_at'] = current_time('mysql');
+    $template['last_api_message'] = sanitize_text_field((string)($api_result['message'] ?? 'No se pudo consultar el estado.'));
+    $template['last_api_response'] = is_array($api_result['response'] ?? null) ? $api_result['response'] : [];
+    $template = eventosapp_whatsapp_templates_append_meta_history($template, 'status_check_failed', $api_result, $before);
+    $settings['templates'][$template_id] = $template;
+    eventosapp_whatsapp_templates_update_settings($settings);
 
     return $api_result;
 }
@@ -1781,70 +2646,93 @@ function eventosapp_whatsapp_templates_sync_template_by_name($template_id) {
     $template_id = sanitize_key((string) $template_id);
     $settings = eventosapp_whatsapp_templates_get_settings();
 
-    if ( empty($settings['templates'][$template_id]) ) {
-        return ['ok' => false, 'message' => 'Plantilla local no encontrada.'];
+    if ( empty($settings['templates'][$template_id]) || ! is_array($settings['templates'][$template_id]) ) {
+        return [
+            'ok' => false,
+            'message' => 'Plantilla local no encontrada.',
+            'error_type' => 'not_found',
+            'notice_level' => 'error',
+        ];
     }
 
     $template = $settings['templates'][$template_id];
+    $before = $template;
     $waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
     if ( $waba_id === '' ) {
-        return ['ok' => false, 'message' => 'Configura el WhatsApp Business Account ID del número emisor de esta plantilla.'];
+        return [
+            'ok' => false,
+            'message' => 'Configura el WhatsApp Business Account ID del número emisor de esta plantilla.',
+            'error_type' => 'invalid_parameter',
+            'notice_level' => 'error',
+        ];
     }
 
-    $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
-    $fields = 'id,name,status,category,language,rejected_reason,quality_score';
-    $path = rawurlencode($waba_id) . '/message_templates?limit=100&fields=' . rawurlencode($fields);
-    $api_result = eventosapp_whatsapp_templates_api_request('GET', $path);
-
-    if ( empty($api_result['ok']) || empty($api_result['response']['data']) || ! is_array($api_result['response']['data']) ) {
-        return $api_result;
+    $match = eventosapp_whatsapp_templates_find_remote_template($waba_id, $template['name'] ?? '', $template['language'] ?? '');
+    if ( empty($match['ok']) ) {
+        $template['last_checked_at'] = current_time('mysql');
+        $template['last_api_message'] = sanitize_text_field((string)($match['message'] ?? 'No se pudo consultar Meta por nombre.'));
+        $template = eventosapp_whatsapp_templates_append_meta_history($template, 'name_sync_failed', $match, $before);
+        $settings['templates'][$template_id] = $template;
+        eventosapp_whatsapp_templates_update_settings($settings);
+        return $match;
     }
 
-    $found = null;
-    foreach ( $api_result['response']['data'] as $remote ) {
-        if ( ! is_array($remote) ) {
-            continue;
-        }
-        if ( ($remote['name'] ?? '') === $template['name'] && ($remote['language'] ?? '') === $template['language'] ) {
-            $found = $remote;
-            break;
-        }
+    if ( empty($match['found']) || ! is_array($match['remote'] ?? null) ) {
+        $result = [
+            'ok' => false,
+            'operation' => 'status',
+            'notice_level' => 'warning',
+            'error_type' => 'not_found',
+            'http_code' => 0,
+            'message' => 'No se encontró en Meta una plantilla con este nombre técnico, idioma y WABA. El registro local continúa sin vínculo remoto.',
+            'response' => [],
+        ];
+        $template['last_checked_at'] = current_time('mysql');
+        $template['last_api_message'] = $result['message'];
+        $template = eventosapp_whatsapp_templates_append_meta_history($template, 'name_sync_not_found', $result, $before);
+        $settings['templates'][$template_id] = $template;
+        eventosapp_whatsapp_templates_update_settings($settings);
+        return $result;
     }
 
-    if ( ! $found ) {
-        return ['ok' => false, 'message' => 'No se encontró esta plantilla en Meta por nombre e idioma.', 'response' => $api_result['response']];
+    if ( ! empty($match['ambiguous']) ) {
+        $result = [
+            'ok' => false,
+            'operation' => 'status',
+            'notice_level' => 'warning',
+            'error_type' => 'ambiguous_remote_match',
+            'http_code' => 0,
+            'message' => 'Meta devolvió más de una coincidencia con el mismo nombre e idioma. No se vinculó automáticamente para evitar asociar el registro incorrecto.',
+            'response' => $match['matches'],
+        ];
+        $template['last_api_message'] = $result['message'];
+        $template = eventosapp_whatsapp_templates_append_meta_history($template, 'name_sync_ambiguous', $result, $before);
+        $settings['templates'][$template_id] = $template;
+        eventosapp_whatsapp_templates_update_settings($settings);
+        return $result;
     }
 
-    $template['meta_template_id'] = ! empty($found['id']) ? sanitize_text_field((string)$found['id']) : '';
-    $template['meta_status'] = ! empty($found['status']) ? sanitize_text_field((string)$found['status']) : 'UNKNOWN';
-    $template['meta_category'] = ! empty($found['category']) ? eventosapp_whatsapp_templates_normalize_meta_category($found['category']) : '';
-    $template['meta_rejected_reason'] = ! empty($found['rejected_reason']) ? sanitize_text_field((string)$found['rejected_reason']) : '';
-    $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
-    $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
+    $remote = $match['remote'];
+    $result = [
+        'ok' => true,
+        'operation' => 'status',
+        'notice_level' => 'success',
+        'http_code' => 200,
+        'message' => 'Plantilla vinculada y sincronizada desde Meta por nombre técnico, idioma y WABA.',
+        'meta_id' => sanitize_text_field((string)($remote['id'] ?? '')),
+        'meta_status' => eventosapp_whatsapp_templates_normalize_meta_status($remote['status'] ?? 'UNKNOWN'),
+        'meta_category' => eventosapp_whatsapp_templates_normalize_meta_category($remote['category'] ?? ''),
+        'response' => $remote,
+    ];
+    $template = eventosapp_whatsapp_templates_apply_remote_snapshot($template, $remote, 'name_sync', $result);
+    $template['meta_link_source'] = 'name_sync';
     $template['waba_id'] = $waba_id;
-    $template['last_checked_at'] = current_time('mysql');
-    $category_message = eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? '');
-    $template['last_api_message'] = sanitize_text_field('Plantilla sincronizada desde Meta por nombre e idioma. ' . $category_message);
-    $template['last_api_response'] = $found;
+    $template['last_api_message'] = sanitize_text_field($result['message'] . ' ' . eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? ''));
     $settings['templates'][$template_id] = $template;
     eventosapp_whatsapp_templates_update_settings($settings);
+    $result['message'] = $template['last_api_message'];
 
-    if ( function_exists('eventosapp_whatsapp_log') ) {
-        eventosapp_whatsapp_log('Plantilla WhatsApp sincronizada por nombre', [
-            'template_id' => $template_id,
-            'template_name' => $template['name'] ?? '',
-            'requested_category' => eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY'),
-            'meta_category' => $template['meta_category'] ?? '',
-            'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
-            'meta_status' => $template['meta_status'] ?? '',
-            'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
-            'quality_score' => eventosapp_whatsapp_templates_quality_summary($found['quality_score'] ?? ''),
-            'waba_id' => $waba_id,
-            'response' => $found,
-        ]);
-    }
-
-    return ['ok' => true, 'message' => 'Estado sincronizado desde Meta. ' . $category_message, 'response' => $found];
+    return $result;
 }
 
 /**
@@ -1853,106 +2741,178 @@ function eventosapp_whatsapp_templates_sync_template_by_name($template_id) {
 function eventosapp_whatsapp_templates_sync_all() {
     $settings = eventosapp_whatsapp_templates_get_settings();
     $templates = isset($settings['templates']) && is_array($settings['templates']) ? $settings['templates'] : [];
-
     $waba_ids = [];
-    $default_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($settings['waba_id'] ?? '');
-    if ( $default_waba_id !== '' ) {
-        $waba_ids[$default_waba_id] = $default_waba_id;
-    }
 
+    $default_waba_id = eventosapp_whatsapp_templates_sanitize_waba_id($settings['waba_id'] ?? '');
+    if ( $default_waba_id !== '' ) $waba_ids[$default_waba_id] = $default_waba_id;
     foreach ( $templates as $template ) {
-        if ( ! is_array($template) ) {
-            continue;
-        }
+        if ( ! is_array($template) ) continue;
         $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
-        if ( $template_waba_id !== '' ) {
-            $waba_ids[$template_waba_id] = $template_waba_id;
-        }
+        if ( $template_waba_id !== '' ) $waba_ids[$template_waba_id] = $template_waba_id;
     }
 
     if ( empty($waba_ids) ) {
-        return ['ok' => false, 'message' => 'Configura al menos un WhatsApp Business Account ID para sincronizar plantillas.'];
-    }
-
-    $fields = 'id,name,status,category,language,rejected_reason,quality_score';
-    $remote_by_waba = [];
-    $last_response = [];
-
-    foreach ( $waba_ids as $waba_id ) {
-        $path = rawurlencode($waba_id) . '/message_templates?limit=100&fields=' . rawurlencode($fields);
-        $api_result = eventosapp_whatsapp_templates_api_request('GET', $path);
-        $last_response[$waba_id] = $api_result['response'] ?? null;
-
-        if ( empty($api_result['ok']) || empty($api_result['response']['data']) || ! is_array($api_result['response']['data']) ) {
-            continue;
-        }
-
-        $remote_by_waba[$waba_id] = $api_result['response']['data'];
-    }
-
-    if ( empty($remote_by_waba) ) {
         return [
             'ok' => false,
-            'message' => 'No se pudieron consultar plantillas en los WABA configurados.',
-            'response' => $last_response,
+            'message' => 'Configura al menos un WhatsApp Business Account ID para sincronizar plantillas.',
+            'notice_level' => 'error',
         ];
     }
 
-    $updated = 0;
-    foreach ( $settings['templates'] as $local_id => $template ) {
-        if ( ! is_array($template) ) {
+    $remote_by_waba = [];
+    $query_errors = [];
+    foreach ( $waba_ids as $waba_id ) {
+        $list = eventosapp_whatsapp_templates_fetch_remote_templates($waba_id);
+        if ( empty($list['ok']) ) {
+            $query_errors[$waba_id] = $list;
             continue;
         }
+        $by_id = [];
+        $by_name_language = [];
+        foreach ( $list['data'] as $remote ) {
+            if ( ! is_array($remote) ) continue;
+            $remote_id = sanitize_text_field((string)($remote['id'] ?? ''));
+            if ( $remote_id !== '' ) $by_id[$remote_id] = $remote;
+            $key = eventosapp_whatsapp_templates_sanitize_template_name($remote['name'] ?? '') . '|' . sanitize_text_field((string)($remote['language'] ?? ''));
+            if ( $key !== '|' ) {
+                if ( ! isset($by_name_language[$key]) ) $by_name_language[$key] = [];
+                $by_name_language[$key][] = $remote;
+            }
+        }
+        $remote_by_waba[$waba_id] = [
+            'by_id' => $by_id,
+            'by_name_language' => $by_name_language,
+            'count' => count($list['data']),
+        ];
+    }
 
+    if ( empty($remote_by_waba) ) {
+        $first_error = reset($query_errors);
+        return [
+            'ok' => false,
+            'message' => is_array($first_error) ? ($first_error['message'] ?? 'No se pudieron consultar plantillas en los WABA configurados.') : 'No se pudieron consultar plantillas en los WABA configurados.',
+            'response' => $query_errors,
+            'notice_level' => 'error',
+        ];
+    }
+
+    $counts = [
+        'updated' => 0,
+        'unchanged' => 0,
+        'missing' => 0,
+        'ambiguous' => 0,
+        'recategorized' => 0,
+        'waba_errors' => count($query_errors),
+    ];
+
+    foreach ( $templates as $local_id => $template ) {
+        if ( ! is_array($template) ) continue;
         $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
         if ( $template_waba_id === '' || empty($remote_by_waba[$template_waba_id]) ) {
+            $counts['missing']++;
             continue;
         }
 
-        foreach ( $remote_by_waba[$template_waba_id] as $remote ) {
-            if ( ! is_array($remote) ) {
+        $before = $template;
+        $remote = null;
+        $meta_id = sanitize_text_field((string)($template['meta_template_id'] ?? ''));
+        if ( $meta_id !== '' && isset($remote_by_waba[$template_waba_id]['by_id'][$meta_id]) ) {
+            $remote = $remote_by_waba[$template_waba_id]['by_id'][$meta_id];
+        } else {
+            $key = eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '') . '|' . sanitize_text_field((string)($template['language'] ?? ''));
+            $matches = $remote_by_waba[$template_waba_id]['by_name_language'][$key] ?? [];
+            if ( count($matches) === 1 ) {
+                $remote = $matches[0];
+            } elseif ( count($matches) > 1 ) {
+                $counts['ambiguous']++;
+                $result = [
+                    'ok' => false,
+                    'operation' => 'status',
+                    'notice_level' => 'warning',
+                    'error_type' => 'ambiguous_remote_match',
+                    'message' => 'La sincronización encontró varias coincidencias remotas con el mismo nombre e idioma. No se cambió el vínculo local.',
+                    'http_code' => 0,
+                ];
+                $template['last_api_message'] = $result['message'];
+                $template = eventosapp_whatsapp_templates_append_meta_history($template, 'sync_ambiguous', $result, $before);
+                $settings['templates'][$local_id] = $template;
                 continue;
             }
-            if ( ($remote['name'] ?? '') !== ($template['name'] ?? '') || ($remote['language'] ?? '') !== ($template['language'] ?? '') ) {
-                continue;
-            }
-
-            $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
-            $template['meta_template_id'] = ! empty($remote['id']) ? sanitize_text_field((string)$remote['id']) : ($template['meta_template_id'] ?? '');
-            $template['meta_status'] = ! empty($remote['status']) ? sanitize_text_field((string)$remote['status']) : ($template['meta_status'] ?? 'UNKNOWN');
-            $template['meta_category'] = ! empty($remote['category']) ? eventosapp_whatsapp_templates_normalize_meta_category($remote['category']) : eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
-            $template['meta_rejected_reason'] = ! empty($remote['rejected_reason']) ? sanitize_text_field((string)$remote['rejected_reason']) : '';
-            $template['sender_phone_number_id'] = eventosapp_whatsapp_templates_sanitize_phone_number_id($sender_account['phone_number_id'] ?? ($template['sender_phone_number_id'] ?? ''));
-            $template['sender_phone_label'] = sanitize_text_field((string)($sender_account['alias'] ?? ($sender_account['label'] ?? 'Número WhatsApp')));
-            $template['waba_id'] = $template_waba_id;
-            $template['last_checked_at'] = current_time('mysql');
-            $template['last_api_message'] = sanitize_text_field(eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? ''));
-            $template['last_api_response'] = $remote;
-            $settings['templates'][$local_id] = $template;
-            $updated++;
-
-            if ( function_exists('eventosapp_whatsapp_log') ) {
-                eventosapp_whatsapp_log('Plantilla WhatsApp sincronizada en lote', [
-                    'template_id' => $local_id,
-                    'template_name' => $template['name'] ?? '',
-                    'requested_category' => eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY'),
-                    'meta_category' => $template['meta_category'] ?? '',
-                    'category_mismatch' => eventosapp_whatsapp_templates_category_mismatch($template) ? 1 : 0,
-                    'meta_status' => $template['meta_status'] ?? '',
-                    'meta_rejected_reason' => $template['meta_rejected_reason'] ?? '',
-                    'quality_score' => eventosapp_whatsapp_templates_quality_summary($remote['quality_score'] ?? ''),
-                    'waba_id' => $template_waba_id,
-                ]);
-            }
-            break;
         }
+
+        if ( ! is_array($remote) ) {
+            $counts['missing']++;
+            $result = [
+                'ok' => false,
+                'operation' => 'status',
+                'notice_level' => 'warning',
+                'error_type' => 'not_found',
+                'message' => 'La sincronización no encontró coincidencia en Meta por ID ni por nombre e idioma.',
+                'http_code' => 0,
+            ];
+            $template['last_api_message'] = $result['message'];
+            $template['last_checked_at'] = current_time('mysql');
+            $template = eventosapp_whatsapp_templates_append_meta_history($template, 'sync_not_found', $result, $before);
+            $settings['templates'][$local_id] = $template;
+            continue;
+        }
+
+        $result = [
+            'ok' => true,
+            'operation' => 'status',
+            'notice_level' => 'success',
+            'http_code' => 200,
+            'message' => 'Estado sincronizado desde Meta.',
+            'meta_id' => sanitize_text_field((string)($remote['id'] ?? '')),
+            'meta_status' => eventosapp_whatsapp_templates_normalize_meta_status($remote['status'] ?? 'UNKNOWN'),
+            'meta_category' => eventosapp_whatsapp_templates_normalize_meta_category($remote['category'] ?? ''),
+            'response' => $remote,
+        ];
+        $template = eventosapp_whatsapp_templates_apply_remote_snapshot($template, $remote, 'sync_all', $result);
+        $template['meta_link_source'] = $meta_id !== '' ? ($template['meta_link_source'] ?? 'id_sync') : 'name_sync';
+        $template['waba_id'] = $template_waba_id;
+        $template['last_api_message'] = sanitize_text_field('Estado sincronizado desde Meta. ' . eventosapp_whatsapp_templates_category_status_message($template['category'] ?? 'UTILITY', $template['meta_category'] ?? ''));
+
+        if ( eventosapp_whatsapp_templates_category_mismatch($template) ) $counts['recategorized']++;
+        $before_signature = maybe_serialize([
+            $before['meta_template_id'] ?? '',
+            $before['meta_status'] ?? '',
+            $before['meta_category'] ?? '',
+            eventosapp_whatsapp_templates_normalize_rejected_reason($before['meta_rejected_reason'] ?? ''),
+        ]);
+        $after_signature = maybe_serialize([
+            $template['meta_template_id'] ?? '',
+            $template['meta_status'] ?? '',
+            $template['meta_category'] ?? '',
+            $template['meta_rejected_reason'] ?? '',
+        ]);
+        if ( $before_signature === $after_signature ) $counts['unchanged']++;
+        else $counts['updated']++;
+        $settings['templates'][$local_id] = $template;
     }
 
     $settings['last_sync_at'] = current_time('mysql');
-    $settings['last_message'] = 'Sincronización ejecutada por WABA. Plantillas locales actualizadas: ' . $updated;
+    $settings['last_message'] = sprintf(
+        'Actualizadas: %d. Sin cambios: %d. Sin coincidencia: %d. Ambiguas: %d. Recategorizadas por Meta: %d. WABA con error: %d.',
+        $counts['updated'],
+        $counts['unchanged'],
+        $counts['missing'],
+        $counts['ambiguous'],
+        $counts['recategorized'],
+        $counts['waba_errors']
+    );
     eventosapp_whatsapp_templates_update_settings($settings);
 
-    return ['ok' => true, 'message' => $settings['last_message'], 'response' => $last_response];
+    $has_success = ($counts['updated'] + $counts['unchanged']) > 0;
+    $has_warnings = $counts['missing'] > 0 || $counts['ambiguous'] > 0 || $counts['waba_errors'] > 0;
+    return [
+        'ok' => $has_success,
+        'partial' => $has_warnings,
+        'notice_level' => $has_warnings ? 'warning' : 'success',
+        'message' => 'Sincronización terminada. ' . $settings['last_message'],
+        'counts' => $counts,
+        'response' => $query_errors,
+    ];
 }
 /**
  * Render principal del módulo.
@@ -1972,13 +2932,23 @@ function eventosapp_whatsapp_templates_render_page() {
     $template_id = isset($_GET['template_id']) ? sanitize_key(wp_unslash($_GET['template_id'])) : '';
     $notice = isset($_GET['evapp_wa_tpl_msg']) ? sanitize_text_field(wp_unslash($_GET['evapp_wa_tpl_msg'])) : '';
     $notice_ok = isset($_GET['evapp_wa_tpl_ok']) ? sanitize_text_field(wp_unslash($_GET['evapp_wa_tpl_ok'])) === '1' : false;
+    $notice_level = isset($_GET['evapp_wa_tpl_level']) ? sanitize_key(wp_unslash($_GET['evapp_wa_tpl_level'])) : ($notice_ok ? 'success' : 'error');
+    if ( ! in_array($notice_level, ['success', 'warning', 'error', 'info'], true) ) {
+        $notice_level = $notice_ok ? 'success' : 'error';
+    }
+    $notice_class = [
+        'success' => 'notice-success',
+        'warning' => 'notice-warning',
+        'info'    => 'notice-info',
+        'error'   => 'notice-error',
+    ][$notice_level];
     ?>
     <div class="wrap eventosapp-wa-templates">
         <h1>Plantillas WhatsApp</h1>
         <p>Administra plantillas WhatsApp de tipo <strong>Utility</strong> y <strong>Marketing</strong> para tickets presenciales y virtuales. La aprobación final, la categoría efectiva y cualquier recategorización siempre las determina Meta.</p>
 
         <?php if ( $notice !== '' ) : ?>
-            <div class="notice <?php echo $notice_ok ? 'notice-success' : 'notice-error'; ?> is-dismissible"><p><strong>EventosApp:</strong> <?php echo esc_html($notice); ?></p></div>
+            <div class="notice <?php echo esc_attr($notice_class); ?> is-dismissible"><p><strong>EventosApp:</strong> <?php echo esc_html($notice); ?></p></div>
         <?php endif; ?>
 
         <style>
@@ -2013,6 +2983,12 @@ function eventosapp_whatsapp_templates_render_page() {
             .evapp-wa-tpl-button-box input[type="text"]{background:#fff;}
             .evapp-wa-tpl-image-preview{display:flex;align-items:center;gap:12px;margin-top:8px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:8px;padding:9px;max-width:720px;}
             .evapp-wa-tpl-image-preview img{max-width:190px;max-height:88px;width:auto;height:auto;object-fit:cover;background:#fff;border:1px solid #dcdcde;border-radius:6px;}
+            .evapp-wa-meta-details{margin-top:8px;border:1px solid #dcdcde;border-radius:6px;background:#fff;}
+            .evapp-wa-meta-details summary{cursor:pointer;padding:7px 9px;font-weight:600;color:#2271b1;}
+            .evapp-wa-meta-details-body{padding:0 9px 9px;font-size:12px;line-height:1.45;color:#50575e;}
+            .evapp-wa-meta-details-body p{margin:7px 0;}
+            .evapp-wa-meta-history{margin:8px 0 0 18px;max-height:190px;overflow:auto;}
+            .evapp-wa-meta-history li{margin-bottom:7px;padding-bottom:7px;border-bottom:1px solid #edf0f2;}
         </style>
 
         <div class="evapp-wa-tpl-card">
@@ -2166,7 +3142,7 @@ function eventosapp_whatsapp_templates_render_list($settings) {
             <tbody>
                 <?php foreach ( $templates as $template_id => $template ) : ?>
                     <?php if ( ! is_array($template) ) continue; ?>
-                    <?php $status = ! empty($template['meta_status']) ? strtoupper($template['meta_status']) : 'LOCAL'; ?>
+                    <?php $status = eventosapp_whatsapp_templates_normalize_meta_status($template['meta_status'] ?? 'LOCAL'); ?>
                     <tr>
                         <td>
                             <strong><?php echo esc_html($template['title'] ?? $template['name'] ?? $template_id); ?></strong><br>
@@ -2190,7 +3166,8 @@ function eventosapp_whatsapp_templates_render_list($settings) {
                             $requested_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
                             $remote_category = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
                             $category_mismatch = eventosapp_whatsapp_templates_category_mismatch($template);
-                            $quality_summary = eventosapp_whatsapp_templates_quality_summary($template['last_api_response']['quality_score'] ?? '');
+                            $quality_summary = sanitize_text_field((string)($template['meta_quality_score'] ?? ''));
+                            if ( $quality_summary === '' ) $quality_summary = eventosapp_whatsapp_templates_quality_summary($template['last_api_response']['quality_score'] ?? '');
                             ?>
                             <?php echo esc_html($template['language'] ?? 'es'); ?><br>
                             <small>Solicitada:</small> <span class="evapp-wa-category <?php echo esc_attr($requested_category); ?>"><?php echo esc_html(eventosapp_whatsapp_templates_category_label($requested_category)); ?></span>
@@ -2198,17 +3175,19 @@ function eventosapp_whatsapp_templates_render_list($settings) {
                                 <br><small>Meta:</small> <span class="evapp-wa-category <?php echo esc_attr($remote_category); ?>"><?php echo esc_html(eventosapp_whatsapp_templates_category_label($remote_category)); ?></span>
                             <?php endif; ?>
                             <?php if ( $category_mismatch ) : ?>
-                                <small class="evapp-wa-cat-mismatch">Recategorizada por Meta</small>
+                                <small class="evapp-wa-cat-mismatch">Recategorizada por Meta<?php if ( ! empty($template['meta_category_changed_at']) ) : ?> · <?php echo esc_html($template['meta_category_changed_at']); ?><?php endif; ?></small>
                             <?php endif; ?>
                             <?php if ( $quality_summary !== '' ) : ?>
                                 <br><small>Calidad: <?php echo esc_html($quality_summary); ?></small>
                             <?php endif; ?>
                         </td>
                         <td>
-                            <span class="evapp-wa-status <?php echo esc_attr($status); ?>"><?php echo esc_html($status); ?></span>
-                            <?php if ( ! empty($template['meta_rejected_reason']) ) : ?><br><small><?php echo esc_html($template['meta_rejected_reason']); ?></small><?php endif; ?>
+                            <span class="evapp-wa-status <?php echo esc_attr($status); ?>"><?php echo esc_html(eventosapp_whatsapp_templates_meta_status_label($status)); ?></span>
+                            <?php $normalized_reason = eventosapp_whatsapp_templates_normalize_rejected_reason($template['meta_rejected_reason'] ?? ''); ?>
+                            <?php if ( $normalized_reason !== '' ) : ?><br><small style="color:#b32d2e;"><?php echo esc_html($normalized_reason); ?></small><?php endif; ?>
                             <?php if ( ! empty($template['last_checked_at']) ) : ?><br><small>Consulta: <?php echo esc_html($template['last_checked_at']); ?></small><?php endif; ?>
                             <?php if ( ! empty($template['last_api_message']) ) : ?><br><small><?php echo esc_html($template['last_api_message']); ?></small><?php endif; ?>
+                            <?php eventosapp_whatsapp_templates_render_meta_diagnostics($template, true); ?>
                         </td>
                         <td>
                             <?php
@@ -2554,10 +3533,16 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
 /**
  * Redirección con mensaje al módulo.
  */
-function eventosapp_whatsapp_templates_redirect($ok, $message, $extra_args = []) {
+function eventosapp_whatsapp_templates_redirect($ok, $message, $extra_args = [], $level = '') {
+    $level = sanitize_key((string)$level);
+    if ( ! in_array($level, ['success', 'warning', 'error', 'info'], true) ) {
+        $level = $ok ? 'success' : 'error';
+    }
+
     $args = array_merge([
         'page' => 'eventosapp_whatsapp_templates',
         'evapp_wa_tpl_ok' => $ok ? '1' : '0',
+        'evapp_wa_tpl_level' => $level,
         'evapp_wa_tpl_msg' => rawurlencode((string) $message),
     ], $extra_args);
 
@@ -2602,6 +3587,17 @@ add_action('admin_post_eventosapp_whatsapp_templates_save_template', function() 
     $raw_template = isset($_POST['template']) && is_array($_POST['template']) ? wp_unslash($_POST['template']) : [];
     $existing = $existing_id && ! empty($settings['templates'][$existing_id]) ? $settings['templates'][$existing_id] : [];
     $template = eventosapp_whatsapp_templates_normalize_template($raw_template, $existing);
+    $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
+    $duplicate_local_id = eventosapp_whatsapp_templates_find_local_duplicate(
+        $template['name'] ?? '',
+        $template['language'] ?? '',
+        $template_waba_id,
+        $template['id'] ?? $existing_id
+    );
+    if ( $duplicate_local_id !== '' ) {
+        eventosapp_whatsapp_templates_redirect(false, 'Ya existe otra plantilla local con el mismo nombre técnico, idioma y WABA. Registro en conflicto: ' . $duplicate_local_id . '.');
+    }
+    $identity_notice = sanitize_text_field((string)($template['meta_identity_reset_reason'] ?? ''));
 
     if ( $existing_id && $existing_id !== $template['id'] && isset($settings['templates'][$existing_id]) ) {
         unset($settings['templates'][$existing_id]);
@@ -2639,13 +3635,17 @@ add_action('admin_post_eventosapp_whatsapp_templates_save_template', function() 
     eventosapp_whatsapp_templates_update_settings($settings);
 
     if ( $upload_message !== '' ) {
-        eventosapp_whatsapp_templates_redirect($upload_ok, ($upload_ok ? 'Plantilla local guardada. ' : 'Plantilla local guardada, pero ') . $upload_message, [
+        $base_message = $upload_ok ? 'Plantilla local guardada. ' : 'Plantilla local guardada, pero ';
+        if ( $identity_notice !== '' ) $base_message .= $identity_notice . ' ';
+        eventosapp_whatsapp_templates_redirect($upload_ok, $base_message . $upload_message, [
             'view' => 'edit',
             'template_id' => $template['id'],
-        ]);
+        ], $upload_ok ? 'success' : 'warning');
     }
 
-    eventosapp_whatsapp_templates_redirect(true, 'Plantilla local guardada.', [
+    $saved_message = 'Plantilla local guardada.';
+    if ( $identity_notice !== '' ) $saved_message .= ' ' . $identity_notice;
+    eventosapp_whatsapp_templates_redirect(true, $saved_message, [
         'view' => 'edit',
         'template_id' => $template['id'],
     ]);
@@ -2680,6 +3680,12 @@ add_action('admin_post_eventosapp_whatsapp_templates_duplicate', function() {
     $copy['meta_rejected_reason'] = '';
     $copy['last_api_message'] = '';
     $copy['last_api_response'] = [];
+    $copy['last_meta_result'] = [];
+    $copy['meta_history'] = [];
+    $copy['meta_link_source'] = '';
+    $copy['meta_identity_reset_at'] = '';
+    $copy['meta_identity_reset_reason'] = '';
+    $copy['duplicated_from_local_id'] = $template_id;
     $copy['last_submitted_at'] = '';
     $copy['last_checked_at'] = '';
     $copy['created_at'] = current_time('mysql');
@@ -2732,7 +3738,7 @@ add_action('admin_post_eventosapp_whatsapp_templates_submit', function() {
     }
 
     $result = eventosapp_whatsapp_templates_submit_to_meta($template_id);
-    eventosapp_whatsapp_templates_redirect(! empty($result['ok']), $result['message'] ?? 'Solicitud procesada.');
+    eventosapp_whatsapp_templates_redirect(! empty($result['ok']), $result['message'] ?? 'Solicitud procesada.', [], $result['notice_level'] ?? '');
 });
 
 /**
@@ -2749,7 +3755,7 @@ add_action('admin_post_eventosapp_whatsapp_templates_check', function() {
     }
 
     $result = eventosapp_whatsapp_templates_check_status($template_id);
-    eventosapp_whatsapp_templates_redirect(! empty($result['ok']), $result['message'] ?? 'Consulta procesada.');
+    eventosapp_whatsapp_templates_redirect(! empty($result['ok']), $result['message'] ?? 'Consulta procesada.', [], $result['notice_level'] ?? '');
 });
 
 /**
@@ -2764,7 +3770,7 @@ add_action('admin_post_eventosapp_whatsapp_templates_sync_all', function() {
     }
 
     $result = eventosapp_whatsapp_templates_sync_all();
-    eventosapp_whatsapp_templates_redirect(! empty($result['ok']), $result['message'] ?? 'Sincronización procesada.');
+    eventosapp_whatsapp_templates_redirect(! empty($result['ok']), $result['message'] ?? 'Sincronización procesada.', [], $result['notice_level'] ?? '');
 });
 
 /**
