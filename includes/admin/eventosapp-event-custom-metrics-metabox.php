@@ -70,6 +70,127 @@ if ( ! function_exists('eventosapp_custom_metrics_percentage_options') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_custom_metrics_filter_relation_options') ) {
+    function eventosapp_custom_metrics_filter_relation_options(){
+        return [
+            'all' => 'Cumplir todos los filtros (Y)',
+            'any' => 'Cumplir al menos un filtro (O)',
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_filter_operator_groups') ) {
+    function eventosapp_custom_metrics_filter_operator_groups(){
+        return [
+            'text' => [
+                'equals'       => 'Es igual a',
+                'not_equals'   => 'No es igual a',
+                'contains'     => 'Contiene',
+                'not_contains' => 'No contiene',
+                'starts_with'  => 'Comienza por',
+                'ends_with'    => 'Termina en',
+                'is_empty'     => 'Está vacío',
+                'is_not_empty' => 'No está vacío',
+            ],
+            'options' => [
+                'equals'       => 'Es igual a',
+                'not_equals'   => 'No es igual a',
+                'contains'     => 'Contiene la opción',
+                'not_contains' => 'No contiene la opción',
+                'is_empty'     => 'Está vacío',
+                'is_not_empty' => 'No está vacío',
+            ],
+            'number' => [
+                'equals'           => 'Es igual a',
+                'not_equals'       => 'No es igual a',
+                'greater_than'     => 'Es mayor que',
+                'greater_or_equal' => 'Es mayor o igual que',
+                'less_than'        => 'Es menor que',
+                'less_or_equal'    => 'Es menor o igual que',
+                'is_empty'         => 'Está vacío',
+                'is_not_empty'     => 'No está vacío',
+            ],
+            'date' => [
+                'equals'           => 'Es la fecha',
+                'not_equals'       => 'No es la fecha',
+                'before'           => 'Es anterior a',
+                'on_or_before'     => 'Es igual o anterior a',
+                'after'            => 'Es posterior a',
+                'on_or_after'      => 'Es igual o posterior a',
+                'is_empty'         => 'Está vacío',
+                'is_not_empty'     => 'No está vacío',
+            ],
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_filter_operators_flat') ) {
+    function eventosapp_custom_metrics_filter_operators_flat(){
+        $operators = [];
+        foreach ( eventosapp_custom_metrics_filter_operator_groups() as $group ) {
+            foreach ( array_keys($group) as $operator ) $operators[$operator] = true;
+        }
+        return array_keys($operators);
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_prepare_filter_options') ) {
+    function eventosapp_custom_metrics_prepare_filter_options($options, $labels_as_values = false){
+        if ( ! is_array($options) ) return [];
+
+        $out = [];
+        $used = [];
+        foreach ( $options as $key => $item ) {
+            if ( is_array($item) ) {
+                $value = isset($item['value']) && is_scalar($item['value']) ? (string) $item['value'] : '';
+                $label = isset($item['label']) && is_scalar($item['label']) ? (string) $item['label'] : $value;
+            } elseif ( is_scalar($item) ) {
+                $label = trim(wp_strip_all_tags((string) $item));
+                $value = is_int($key) || $labels_as_values ? $label : (string) $key;
+            } else {
+                continue;
+            }
+
+            $value = sanitize_text_field($value);
+            $label = sanitize_text_field($label);
+            if ( $label === '' ) $label = $value;
+            if ( $value === '' || isset($used[$value]) ) continue;
+
+            $out[] = ['value' => $value, 'label' => $label];
+            $used[$value] = true;
+        }
+
+        return $out;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_event_locality_filter_options') ) {
+    function eventosapp_custom_metrics_get_event_locality_filter_options($event_id){
+        $raw = get_post_meta((int) $event_id, '_eventosapp_localidades', true);
+        if ( ! is_array($raw) || empty($raw) ) $raw = ['General', 'VIP', 'Platino'];
+
+        $labels = [];
+        foreach ( $raw as $item ) {
+            $label = '';
+            if ( is_scalar($item) ) {
+                $label = (string) $item;
+            } elseif ( is_array($item) ) {
+                foreach ( ['label', 'nombre', 'name', 'title', 'value', 'localidad'] as $candidate ) {
+                    if ( isset($item[$candidate]) && is_scalar($item[$candidate]) ) {
+                        $label = (string) $item[$candidate];
+                        break;
+                    }
+                }
+            }
+            $label = sanitize_text_field(trim($label));
+            if ( $label !== '' ) $labels[] = $label;
+        }
+
+        return eventosapp_custom_metrics_prepare_filter_options(array_values(array_unique($labels)));
+    }
+}
+
 if ( ! function_exists('eventosapp_custom_metrics_default_settings') ) {
     function eventosapp_custom_metrics_default_settings(){
         return [
@@ -100,6 +221,8 @@ if ( ! function_exists('eventosapp_custom_metrics_default_slot') ) {
             'table_include_totals' => true,
             'show_legend'          => true,
             'show_data_labels'     => false,
+            'filter_relation'      => 'all',
+            'filters'              => [],
             'table_fields'         => ['nombre', 'apellido', 'email', 'localidad', 'checked_in_any'],
         ];
     }
@@ -214,29 +337,61 @@ if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
         static $cache = [];
         if ( isset($cache[$event_id]) ) return $cache[$event_id];
 
+        $countries = function_exists('eventosapp_get_countries') ? eventosapp_get_countries() : [];
+        $country_options = eventosapp_custom_metrics_prepare_filter_options(is_array($countries) ? $countries : []);
+        $locality_options = $event_id > 0 ? eventosapp_custom_metrics_get_event_locality_filter_options($event_id) : [];
+
+        $ticket_modalities = function_exists('eventosapp_ticket_modalidad_options')
+            ? eventosapp_ticket_modalidad_options()
+            : ['presencial' => 'Presencial', 'virtual' => 'Virtual'];
+        if ( $event_id > 0 && function_exists('eventosapp_ticket_allowed_modalidades_for_event') ) {
+            $allowed_modalities = eventosapp_ticket_allowed_modalidades_for_event($event_id);
+            $ticket_modalities = array_intersect_key($ticket_modalities, array_fill_keys((array) $allowed_modalities, true));
+        }
+        $modality_options = eventosapp_custom_metrics_prepare_filter_options($ticket_modalities, true);
+
+        $payment_options = eventosapp_custom_metrics_prepare_filter_options([
+            'no_pagado' => 'No Pagado',
+            'pagado'    => 'Pagado',
+        ]);
+
+        $attendance_statuses = function_exists('eventosapp_attendance_confirmation_status_options')
+            ? eventosapp_attendance_confirmation_status_options()
+            : ['si'=>'Sí','no'=>'No','no_responde'=>'No responde','sin_consulta'=>'Sin consulta'];
+        $attendance_status_options = eventosapp_custom_metrics_prepare_filter_options($attendance_statuses, true);
+
+        $attendance_channels = function_exists('eventosapp_attendance_confirmation_channel_options')
+            ? eventosapp_attendance_confirmation_channel_options()
+            : ['email'=>'Correo electrónico','whatsapp'=>'WhatsApp'];
+        $attendance_channel_options = eventosapp_custom_metrics_prepare_filter_options($attendance_channels, true);
+
+        $yes_no_options = eventosapp_custom_metrics_prepare_filter_options(['Sí', 'No']);
+
         $fields = [
             [ 'key'=>'ticket_public_id', 'label'=>'Ticket Public ID', 'type'=>'text', 'source'=>'system', 'meta_key'=>'eventosapp_ticketID' ],
             [ 'key'=>'ticket_post_id', 'label'=>'Ticket Post ID', 'type'=>'number', 'source'=>'computed' ],
+            [ 'key'=>'ticket_user_id', 'label'=>'Usuario WordPress ID', 'type'=>'number', 'source'=>'system', 'meta_key'=>'_eventosapp_ticket_user_id' ],
+            [ 'key'=>'ticket_preprinted_id', 'label'=>'QR preimpreso ID', 'type'=>'number', 'source'=>'system', 'meta_key'=>'eventosapp_ticket_preprintedID' ],
             [ 'key'=>'secuencia', 'label'=>'Secuencia interna', 'type'=>'number', 'source'=>'system', 'meta_key'=>'_eventosapp_ticket_seq' ],
             [ 'key'=>'nombre', 'label'=>'Nombre', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_nombre' ],
             [ 'key'=>'apellido', 'label'=>'Apellido', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_apellido' ],
-            [ 'key'=>'cc', 'label'=>'CC', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_cc' ],
+            [ 'key'=>'cc', 'label'=>'Identificación / Pasaporte', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_cc' ],
             [ 'key'=>'email', 'label'=>'Email', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_email' ],
             [ 'key'=>'telefono', 'label'=>'Teléfono', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_tel' ],
             [ 'key'=>'empresa', 'label'=>'Empresa', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_empresa' ],
             [ 'key'=>'nit', 'label'=>'NIT', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_nit' ],
             [ 'key'=>'cargo', 'label'=>'Cargo', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_cargo' ],
             [ 'key'=>'ciudad', 'label'=>'Ciudad', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_ciudad' ],
-            [ 'key'=>'pais', 'label'=>'País', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_pais' ],
-            [ 'key'=>'localidad', 'label'=>'Localidad', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_localidad' ],
-            [ 'key'=>'modalidad', 'label'=>'Modalidad', 'type'=>'text', 'source'=>'computed' ],
-            [ 'key'=>'estado_pago', 'label'=>'Estado de pago', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_estado_pago' ],
-            [ 'key'=>'attendance_confirmation_status', 'label'=>'Confirmación de asistencia', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_status' ],
-            [ 'key'=>'attendance_confirmation_sent_channels', 'label'=>'Canales consultados para confirmación', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_sent_channels' ],
-            [ 'key'=>'attendance_confirmation_response_channels', 'label'=>'Canales de respuesta de confirmación', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_response_channels' ],
-            [ 'key'=>'attendance_confirmation_last_response_channel', 'label'=>'Último canal de respuesta', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_last_response_channel' ],
+            [ 'key'=>'pais', 'label'=>'País', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_pais', 'filter_options'=>$country_options ],
+            [ 'key'=>'localidad', 'label'=>'Localidad', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_asistente_localidad', 'filter_options'=>$locality_options ],
+            [ 'key'=>'modalidad', 'label'=>'Modalidad', 'type'=>'text', 'source'=>'computed', 'filter_options'=>$modality_options ],
+            [ 'key'=>'estado_pago', 'label'=>'Estado de pago', 'type'=>'text', 'source'=>'system', 'meta_key'=>'_eventosapp_estado_pago', 'filter_options'=>$payment_options ],
+            [ 'key'=>'attendance_confirmation_status', 'label'=>'Confirmación de asistencia', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_status', 'filter_options'=>$attendance_status_options ],
+            [ 'key'=>'attendance_confirmation_sent_channels', 'label'=>'Canales consultados para confirmación', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_sent_channels', 'filter_options'=>$attendance_channel_options, 'filter_multiple'=>true ],
+            [ 'key'=>'attendance_confirmation_response_channels', 'label'=>'Canales de respuesta de confirmación', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_response_channels', 'filter_options'=>$attendance_channel_options, 'filter_multiple'=>true ],
+            [ 'key'=>'attendance_confirmation_last_response_channel', 'label'=>'Último canal de respuesta', 'type'=>'text', 'source'=>'computed', 'meta_key'=>'_eventosapp_attendance_confirmation_last_response_channel', 'filter_options'=>$attendance_channel_options ],
             [ 'key'=>'attendance_confirmation_last_response_at', 'label'=>'Fecha de última respuesta de confirmación', 'type'=>'date', 'source'=>'system', 'meta_key'=>'_eventosapp_attendance_confirmation_last_response_at' ],
-            [ 'key'=>'checked_in_any', 'label'=>'Checked-In (algún día)', 'type'=>'text', 'source'=>'computed' ],
+            [ 'key'=>'checked_in_any', 'label'=>'Checked-In (algún día)', 'type'=>'text', 'source'=>'computed', 'filter_options'=>$yes_no_options ],
             [ 'key'=>'medio_checkin', 'label'=>'Medio de check-in', 'type'=>'text', 'source'=>'computed' ],
             [ 'key'=>'acompanantes_sin_qr', 'label'=>'Acompañantes sin QR', 'type'=>'number', 'source'=>'system', 'meta_key'=>'_eventosapp_ticket_acompanantes_sin_qr' ],
             [ 'key'=>'fecha_creacion', 'label'=>'Fecha creación', 'type'=>'date', 'source'=>'computed' ],
@@ -256,13 +411,18 @@ if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
                     if ( $extra_key === '' ) continue;
 
                     $extra_type = isset($extra['type']) ? (string) $extra['type'] : 'text';
+                    $extra_options = $extra_type === 'select'
+                        ? eventosapp_custom_metrics_prepare_filter_options(isset($extra['options']) ? $extra['options'] : [])
+                        : [];
+
                     $fields[] = [
-                        'key'       => 'extra_' . $extra_key,
-                        'label'     => 'Extra: ' . ( isset($extra['label']) ? sanitize_text_field($extra['label']) : $extra_key ),
-                        'type'      => $extra_type === 'number' ? 'number' : 'text',
-                        'source'    => 'extra',
-                        'extra_key' => $extra_key,
-                        'meta_key'  => '_eventosapp_extra_' . $extra_key,
+                        'key'            => 'extra_' . $extra_key,
+                        'label'          => 'Extra: ' . ( isset($extra['label']) ? sanitize_text_field($extra['label']) : $extra_key ),
+                        'type'           => $extra_type === 'number' ? 'number' : 'text',
+                        'source'         => 'extra',
+                        'extra_key'      => $extra_key,
+                        'meta_key'       => '_eventosapp_extra_' . $extra_key,
+                        'filter_options' => $extra_options,
                     ];
                 }
             }
@@ -277,6 +437,10 @@ if ( ! function_exists('eventosapp_custom_metrics_get_available_fields') ) {
             $field['key']   = $key;
             $field['label'] = isset($field['label']) ? sanitize_text_field($field['label']) : $key;
             $field['type']  = isset($field['type']) && in_array($field['type'], ['text','number','date'], true) ? $field['type'] : 'text';
+            $field['filter_options'] = isset($field['filter_options'])
+                ? eventosapp_custom_metrics_prepare_filter_options($field['filter_options'])
+                : [];
+            $field['filter_multiple'] = ! empty($field['filter_multiple']);
             $out[] = $field;
             $used[$key] = true;
         }
@@ -298,6 +462,41 @@ if ( ! function_exists('eventosapp_custom_metrics_get_field_map') ) {
         }
         $cache[$event_id] = $map;
         return $map;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_filter_operator_requires_value') ) {
+    function eventosapp_custom_metrics_filter_operator_requires_value($operator){
+        return ! in_array(sanitize_key((string) $operator), ['is_empty', 'is_not_empty'], true);
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_sanitize_filter') ) {
+    function eventosapp_custom_metrics_sanitize_filter($filter){
+        if ( ! is_array($filter) ) return null;
+
+        $field = eventosapp_custom_metrics_normalize_field_key(isset($filter['field']) ? (string) $filter['field'] : '');
+        if ( $field === '' ) return null;
+
+        $operator = sanitize_key(isset($filter['operator']) ? (string) $filter['operator'] : 'contains');
+        if ( ! in_array($operator, eventosapp_custom_metrics_filter_operators_flat(), true) ) {
+            $operator = 'contains';
+        }
+
+        $value = '';
+        if ( isset($filter['value']) && is_scalar($filter['value']) ) {
+            $value = sanitize_text_field((string) $filter['value']);
+        }
+
+        if ( eventosapp_custom_metrics_filter_operator_requires_value($operator) && $value === '' ) {
+            return null;
+        }
+
+        return [
+            'field'    => $field,
+            'operator' => $operator,
+            'value'    => $value,
+        ];
     }
 }
 
@@ -332,6 +531,15 @@ if ( ! function_exists('eventosapp_custom_metrics_sanitize_slot') ) {
         $out['table_include_totals'] = ! empty($slot['table_include_totals']);
         $out['show_legend']          = ! empty($slot['show_legend']);
         $out['show_data_labels']     = ! empty($slot['show_data_labels']);
+        $filter_relations            = array_keys(eventosapp_custom_metrics_filter_relation_options());
+        $out['filter_relation']      = in_array(isset($slot['filter_relation']) ? $slot['filter_relation'] : '', $filter_relations, true) ? $slot['filter_relation'] : 'all';
+        $out['filters']              = [];
+        if ( isset($slot['filters']) && is_array($slot['filters']) ) {
+            foreach ( array_slice(array_values($slot['filters']), 0, 30) as $filter ) {
+                $filter = eventosapp_custom_metrics_sanitize_filter($filter);
+                if ( $filter ) $out['filters'][] = $filter;
+            }
+        }
         $out['table_fields']         = [];
 
         if ( isset($slot['table_fields']) && is_array($slot['table_fields']) ) {
@@ -420,6 +628,12 @@ if ( ! function_exists('eventosapp_custom_metrics_get_required_field_keys_from_l
                 $key = eventosapp_custom_metrics_normalize_field_key((string) $key);
                 if ( $key !== '' ) $required[$key] = true;
             };
+
+            if ( ! empty($slot['filters']) && is_array($slot['filters']) ) {
+                foreach ( $slot['filters'] as $filter ) {
+                    if ( is_array($filter) ) $add_key(isset($filter['field']) ? $filter['field'] : '');
+                }
+            }
 
             if ( $chart_type === 'table' ) {
                 $add_key(isset($slot['row_field']) ? $slot['row_field'] : '');
@@ -1032,6 +1246,136 @@ if ( ! function_exists('eventosapp_custom_metrics_get_ticket_records') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_custom_metrics_normalize_filter_text') ) {
+    function eventosapp_custom_metrics_normalize_filter_text($value, $field_key = ''){
+        $value = eventosapp_custom_metrics_normalize_display_value($value);
+        if ( function_exists('remove_accents') ) $value = remove_accents($value);
+        $value = function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
+        $value = preg_replace('/\s+/u', ' ', trim($value));
+
+        $field_key = eventosapp_custom_metrics_normalize_field_key($field_key);
+        if ( in_array($field_key, ['ticket_public_id', 'ticket_preprinted_id', 'cc', 'telefono', 'nit'], true) ) {
+            $value = preg_replace('/[^a-z0-9]/i', '', $value);
+        }
+
+        return (string) $value;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_filter_value_is_empty') ) {
+    function eventosapp_custom_metrics_filter_value_is_empty($value){
+        return eventosapp_custom_metrics_normalize_display_value($value) === '';
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_normalize_filter_date') ) {
+    function eventosapp_custom_metrics_normalize_filter_date($value){
+        $value = eventosapp_custom_metrics_normalize_display_value($value);
+        if ( $value === '' ) return '';
+        if ( preg_match('/^(\d{4}-\d{2}-\d{2})/', $value, $match) ) return $match[1];
+        $timestamp = strtotime($value);
+        return $timestamp ? date('Y-m-d', $timestamp) : '';
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_record_matches_filter') ) {
+    function eventosapp_custom_metrics_record_matches_filter($record, $filter, $field_map){
+        if ( ! is_array($record) || ! is_array($filter) ) return false;
+
+        $field_key = eventosapp_custom_metrics_normalize_field_key(isset($filter['field']) ? $filter['field'] : '');
+        $operator  = sanitize_key(isset($filter['operator']) ? $filter['operator'] : 'contains');
+        $expected  = isset($filter['value']) && is_scalar($filter['value']) ? (string) $filter['value'] : '';
+
+        if ( $field_key === '' || ! isset($field_map[$field_key]) ) return false;
+        $actual = array_key_exists($field_key, $record) ? $record[$field_key] : '';
+        $is_empty = eventosapp_custom_metrics_filter_value_is_empty($actual);
+
+        if ( $operator === 'is_empty' ) return $is_empty;
+        if ( $operator === 'is_not_empty' ) return ! $is_empty;
+        if ( $is_empty ) return $operator === 'not_equals' || $operator === 'not_contains';
+
+        $field_type = isset($field_map[$field_key]['type']) ? (string) $field_map[$field_key]['type'] : 'text';
+
+        if ( $field_type === 'number' ) {
+            $actual_number   = eventosapp_custom_metrics_normalize_numeric_value($actual);
+            $expected_number = eventosapp_custom_metrics_normalize_numeric_value($expected);
+            if ( $actual_number === null || $expected_number === null ) return false;
+
+            if ( $operator === 'equals' ) return abs($actual_number - $expected_number) < 0.0000001;
+            if ( $operator === 'not_equals' ) return abs($actual_number - $expected_number) >= 0.0000001;
+            if ( $operator === 'greater_than' ) return $actual_number > $expected_number;
+            if ( $operator === 'greater_or_equal' ) return $actual_number >= $expected_number;
+            if ( $operator === 'less_than' ) return $actual_number < $expected_number;
+            if ( $operator === 'less_or_equal' ) return $actual_number <= $expected_number;
+            return false;
+        }
+
+        if ( $field_type === 'date' ) {
+            $actual_date   = eventosapp_custom_metrics_normalize_filter_date($actual);
+            $expected_date = eventosapp_custom_metrics_normalize_filter_date($expected);
+            if ( $actual_date === '' || $expected_date === '' ) return false;
+
+            if ( $operator === 'equals' ) return $actual_date === $expected_date;
+            if ( $operator === 'not_equals' ) return $actual_date !== $expected_date;
+            if ( $operator === 'before' ) return $actual_date < $expected_date;
+            if ( $operator === 'on_or_before' ) return $actual_date <= $expected_date;
+            if ( $operator === 'after' ) return $actual_date > $expected_date;
+            if ( $operator === 'on_or_after' ) return $actual_date >= $expected_date;
+            return false;
+        }
+
+        $actual_text   = eventosapp_custom_metrics_normalize_filter_text($actual, $field_key);
+        $expected_text = eventosapp_custom_metrics_normalize_filter_text($expected, $field_key);
+
+        if ( $operator === 'equals' ) return $actual_text === $expected_text;
+        if ( $operator === 'not_equals' ) return $actual_text !== $expected_text;
+        if ( $operator === 'contains' ) return $expected_text !== '' && strpos($actual_text, $expected_text) !== false;
+        if ( $operator === 'not_contains' ) return $expected_text === '' || strpos($actual_text, $expected_text) === false;
+        if ( $operator === 'starts_with' ) return $expected_text !== '' && strpos($actual_text, $expected_text) === 0;
+        if ( $operator === 'ends_with' ) {
+            if ( $expected_text === '' ) return false;
+            return substr($actual_text, -strlen($expected_text)) === $expected_text;
+        }
+
+        return false;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_get_slot_filters') ) {
+    function eventosapp_custom_metrics_get_slot_filters($slot){
+        $filters = [];
+        if ( ! is_array($slot) || empty($slot['filters']) || ! is_array($slot['filters']) ) return $filters;
+        foreach ( $slot['filters'] as $filter ) {
+            $filter = eventosapp_custom_metrics_sanitize_filter($filter);
+            if ( $filter ) $filters[] = $filter;
+        }
+        return $filters;
+    }
+}
+
+if ( ! function_exists('eventosapp_custom_metrics_apply_slot_filters') ) {
+    function eventosapp_custom_metrics_apply_slot_filters($records, $slot, $field_map){
+        $records = is_array($records) ? $records : [];
+        $filters = eventosapp_custom_metrics_get_slot_filters($slot);
+        if ( empty($filters) ) return $records;
+
+        $relation = isset($slot['filter_relation']) && $slot['filter_relation'] === 'any' ? 'any' : 'all';
+        $filtered = [];
+
+        foreach ( $records as $record ) {
+            $matches = 0;
+            foreach ( $filters as $filter ) {
+                if ( eventosapp_custom_metrics_record_matches_filter($record, $filter, $field_map) ) $matches++;
+            }
+
+            $include = $relation === 'any' ? $matches > 0 : $matches === count($filters);
+            if ( $include ) $filtered[] = $record;
+        }
+
+        return $filtered;
+    }
+}
+
 if ( ! function_exists('eventosapp_custom_metrics_calculate_record_value') ) {
     function eventosapp_custom_metrics_calculate_record_value($record, $value_key, $aggregation){
         if ( $aggregation === 'count' ) return 1;
@@ -1410,8 +1754,17 @@ if ( ! function_exists('eventosapp_custom_metrics_get_payload') ) {
                 $slot_index++;
                 if ( empty($slot['enabled']) ) continue;
                 if ( $records === null ) $records = eventosapp_custom_metrics_get_ticket_records($event_id, $required_field_keys);
-                $payload = eventosapp_custom_metrics_build_slot_payload($event_id, $slot, $records, $field_map, $slot_index);
+
+                $slot_filters = eventosapp_custom_metrics_get_slot_filters($slot);
+                $slot_records = eventosapp_custom_metrics_apply_slot_filters($records, $slot, $field_map);
+                $payload = eventosapp_custom_metrics_build_slot_payload($event_id, $slot, $slot_records, $field_map, $slot_index);
                 if ( ! empty($payload) ) {
+                    $payload['total_count'] = count($records);
+                    $payload['filtered_count'] = count($slot_records);
+                    $payload['active_filters'] = count($slot_filters);
+                    if ( empty($slot_records) && ! empty($slot_filters) ) {
+                        $payload['message'] = 'No hay tickets que cumplan los filtros configurados para esta métrica.';
+                    }
                     $row_slots[] = $payload;
                     $has_metrics = true;
                 }
@@ -1461,6 +1814,8 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
         $sort_options = eventosapp_custom_metrics_sort_options();
         $formats = eventosapp_custom_metrics_value_format_options();
         $percentage_options = eventosapp_custom_metrics_percentage_options();
+        $filter_relations = eventosapp_custom_metrics_filter_relation_options();
+        $filter_operator_groups = eventosapp_custom_metrics_filter_operator_groups();
         ?>
         <style>
             .evapp-cmetrics-wrap{border:1px solid #dcdcde;border-radius:12px;background:#fff;padding:14px;margin-top:6px}
@@ -1479,18 +1834,32 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
             .evapp-cmetrics-field label{font-weight:600;color:#374151}
             .evapp-cmetrics-field input[type="text"],
             .evapp-cmetrics-field input[type="number"],
+            .evapp-cmetrics-field input[type="date"],
             .evapp-cmetrics-field input[type="color"],
             .evapp-cmetrics-field select{width:100%;max-width:100%}
             .evapp-cmetrics-checks{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px}
             .evapp-cmetrics-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
             .evapp-cmetrics-note{font-size:12px;color:#646970;margin-top:4px;line-height:1.35}
             .evapp-cmetrics-type-note{grid-column:1/-1;padding:8px 10px;background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;color:#1e3a8a;font-size:12px;line-height:1.45}
-            @media(max-width:900px){.evapp-cmetrics-slots,.evapp-cmetrics-grid{grid-template-columns:1fr}}
+            .evapp-cmetrics-filters-box{margin-top:14px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;padding:10px}
+            .evapp-cmetrics-filters-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+            .evapp-cmetrics-filters-title{font-weight:800;color:#1f2937}
+            .evapp-cmetrics-filter-relation{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+            .evapp-cmetrics-filter-relation label{font-weight:600;color:#374151}
+            .evapp-cmetrics-filter-relation select{min-width:230px}
+            .evapp-cmetrics-filter-list{display:grid;gap:8px}
+            .evapp-cmetrics-filter-row{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(135px,1fr) minmax(150px,1.2fr) auto;gap:8px;align-items:end;padding:9px;border:1px solid #e2e8f0;border-radius:9px;background:#fff}
+            .evapp-cmetrics-filter-row .evapp-cmetrics-field{min-width:0}
+            .evapp-cmetrics-filter-remove{align-self:end;white-space:nowrap}
+            .evapp-cmetrics-filter-empty{padding:9px 10px;border:1px dashed #cbd5e1;border-radius:8px;color:#64748b;background:#fff;font-size:12px}
+            .evapp-cmetrics-filter-value.is-hidden{display:none}
+            @media(max-width:1100px){.evapp-cmetrics-filter-row{grid-template-columns:1fr 1fr}.evapp-cmetrics-filter-remove{justify-self:start}}
+            @media(max-width:900px){.evapp-cmetrics-slots,.evapp-cmetrics-grid,.evapp-cmetrics-filter-row{grid-template-columns:1fr}}
         </style>
 
         <div class="evapp-cmetrics-wrap" id="evappCustomMetricsBuilder">
             <p class="evapp-cmetrics-help">
-                Configura aquí las métricas adicionales para este evento. Cada fila puede tener uno o dos bloques. Los campos disponibles incluyen los datos base del ticket y los campos adicionales definidos para este evento.
+                Configura aquí las métricas adicionales para este evento. Cada bloque puede aplicar varios filtros antes de calcular la tabla, tarjeta o gráfico. Los campos parametrizados cargan sus opciones reales; los demás permiten escribir el valor que deseas buscar.
             </p>
             <input type="hidden" id="evapp_custom_metrics_json" name="evapp_custom_metrics_json" value="<?php echo esc_attr(wp_json_encode($layout)); ?>">
 
@@ -1527,10 +1896,16 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
             const sortOptions = <?php echo wp_json_encode($sort_options); ?>;
             const valueFormats = <?php echo wp_json_encode($formats); ?>;
             const percentageOptions = <?php echo wp_json_encode($percentage_options); ?>;
+            const filterRelations = <?php echo wp_json_encode($filter_relations); ?>;
+            const filterOperatorGroups = <?php echo wp_json_encode($filter_operator_groups); ?>;
             let state = <?php echo wp_json_encode($layout); ?>;
 
             function defaultSettings(){
                 return { show_header:true, header_text:'Métricas personalizadas', header_color:'#eaf1ff' };
+            }
+
+            function defaultFilter(){
+                return { field:'', operator:'contains', value:'' };
             }
 
             function defaultSlot(){
@@ -1552,47 +1927,16 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                     table_include_totals:true,
                     show_legend:true,
                     show_data_labels:false,
+                    filter_relation:'all',
+                    filters:[],
                     table_fields:['nombre','apellido','email','localidad','checked_in_any']
                 };
-            }
-
-            function normalizeState(){
-                if (!state || typeof state !== 'object') state = {};
-                state.settings = Object.assign(defaultSettings(), state.settings || {});
-                if (!Array.isArray(state.rows)) state.rows = [];
-                if (!state.rows.length) state.rows.push({slots:[defaultSlot(), defaultSlot()]});
-                state.rows = state.rows.map(function(row){
-                    let slots = row && Array.isArray(row.slots) ? row.slots : [];
-                    if (!slots[0]) slots[0] = defaultSlot();
-                    if (!slots[1]) slots[1] = defaultSlot();
-                    slots[0].row_field = normalizeFieldKey(slots[0].row_field || slots[0].label_field || 'localidad');
-                    slots[1].row_field = normalizeFieldKey(slots[1].row_field || slots[1].label_field || 'localidad');
-                    slots[0].column_field = normalizeFieldKey(slots[0].column_field || 'checked_in_any');
-                    slots[1].column_field = normalizeFieldKey(slots[1].column_field || 'checked_in_any');
-                    slots[0].label_field = normalizeFieldKey(slots[0].label_field || slots[0].row_field || 'localidad');
-                    slots[1].label_field = normalizeFieldKey(slots[1].label_field || slots[1].row_field || 'localidad');
-                    slots[0].series_field = normalizeFieldKey(slots[0].series_field || '');
-                    slots[1].series_field = normalizeFieldKey(slots[1].series_field || '');
-                    slots[0].value_field = normalizeFieldKey(slots[0].value_field || '');
-                    slots[1].value_field = normalizeFieldKey(slots[1].value_field || '');
-                    if (Array.isArray(slots[0].table_fields)) slots[0].table_fields = slots[0].table_fields.map(normalizeFieldKey).filter(Boolean);
-                    if (Array.isArray(slots[1].table_fields)) slots[1].table_fields = slots[1].table_fields.map(normalizeFieldKey).filter(Boolean);
-                    return {slots:[Object.assign(defaultSlot(), slots[0]), Object.assign(defaultSlot(), slots[1])]};
-                });
             }
 
             function esc(s){
                 return String(s == null ? '' : s)
                     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
                     .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
-            }
-
-            function optionsFromMap(map, selected){
-                let html = '';
-                Object.keys(map).forEach(function(key){
-                    html += '<option value="'+esc(key)+'" '+(String(selected)===String(key)?'selected':'')+'>'+esc(map[key])+'</option>';
-                });
-                return html;
             }
 
             function normalizeFieldKey(key){
@@ -1603,15 +1947,34 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                     'ticket_modalidad':'modalidad',
                     'modalidad_ticket':'modalidad',
                     'modalidad_del_ticket':'modalidad',
-                    'tipo_modalidad':'modalidad'
+                    'tipo_modalidad':'modalidad',
+                    '_eventosapp_attendance_confirmation_status':'attendance_confirmation_status',
+                    'confirmation_status':'attendance_confirmation_status',
+                    'confirmacion_asistencia':'attendance_confirmation_status',
+                    'estado_confirmacion_asistencia':'attendance_confirmation_status',
+                    '_eventosapp_attendance_confirmation_sent_channels':'attendance_confirmation_sent_channels',
+                    '_eventosapp_attendance_confirmation_response_channels':'attendance_confirmation_response_channels',
+                    '_eventosapp_attendance_confirmation_last_response_channel':'attendance_confirmation_last_response_channel',
+                    '_eventosapp_attendance_confirmation_last_response_at':'attendance_confirmation_last_response_at'
                 };
                 return aliases[key] || key;
             }
 
-            function hasFieldKey(key){
+            function fieldByKey(key){
                 key = normalizeFieldKey(key);
-                if (!key) return false;
-                return fields.some(function(f){ return String(f.key) === String(key); });
+                return fields.find(function(field){ return String(field.key) === String(key); }) || null;
+            }
+
+            function hasFieldKey(key){
+                return !!fieldByKey(key);
+            }
+
+            function optionsFromMap(map, selected){
+                let html = '';
+                Object.keys(map || {}).forEach(function(key){
+                    html += '<option value="'+esc(key)+'" '+(String(selected)===String(key)?'selected':'')+'>'+esc(map[key])+'</option>';
+                });
+                return html;
             }
 
             function fieldOptions(selected, emptyLabel){
@@ -1620,10 +1983,80 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                 if (selected && !hasFieldKey(selected)) {
                     html += '<option value="'+esc(selected)+'" selected>Campo no disponible: '+esc(selected)+'</option>';
                 }
-                fields.forEach(function(f){
-                    html += '<option value="'+esc(f.key)+'" '+(String(selected)===String(f.key)?'selected':'')+'>'+esc(f.label)+'</option>';
+                fields.forEach(function(field){
+                    html += '<option value="'+esc(field.key)+'" '+(String(selected)===String(field.key)?'selected':'')+'>'+esc(field.label)+'</option>';
                 });
                 return html;
+            }
+
+            function fieldFilterOptions(field){
+                return field && Array.isArray(field.filter_options) ? field.filter_options : [];
+            }
+
+            function filterOperatorGroup(field){
+                if (!field) return 'text';
+                if (field.type === 'number') return 'number';
+                if (field.type === 'date') return 'date';
+                if (fieldFilterOptions(field).length) return 'options';
+                return 'text';
+            }
+
+            function defaultOperatorForField(field){
+                if (!field) return 'contains';
+                if (field.type === 'number' || field.type === 'date') return 'equals';
+                if (fieldFilterOptions(field).length) return field.filter_multiple ? 'contains' : 'equals';
+                return 'contains';
+            }
+
+            function operatorNeedsValue(operator){
+                return ['is_empty','is_not_empty'].indexOf(String(operator || '')) === -1;
+            }
+
+            function operatorOptionsForField(field, selected){
+                const group = filterOperatorGroup(field);
+                const operators = filterOperatorGroups[group] || filterOperatorGroups.text || {};
+                if (!Object.prototype.hasOwnProperty.call(operators, selected)) {
+                    selected = defaultOperatorForField(field);
+                }
+                return optionsFromMap(operators, selected);
+            }
+
+            function normalizeFilter(filter){
+                filter = Object.assign(defaultFilter(), filter && typeof filter === 'object' ? filter : {});
+                filter.field = normalizeFieldKey(filter.field || '');
+                const field = fieldByKey(filter.field);
+                const operators = filterOperatorGroups[filterOperatorGroup(field)] || filterOperatorGroups.text || {};
+                filter.operator = String(filter.operator || defaultOperatorForField(field));
+                if (!Object.prototype.hasOwnProperty.call(operators, filter.operator)) {
+                    filter.operator = defaultOperatorForField(field);
+                }
+                filter.value = filter.value == null ? '' : String(filter.value);
+                if (!operatorNeedsValue(filter.operator)) filter.value = '';
+                return filter;
+            }
+
+            function normalizeSlot(slot){
+                slot = Object.assign(defaultSlot(), slot && typeof slot === 'object' ? slot : {});
+                slot.row_field = normalizeFieldKey(slot.row_field || slot.label_field || 'localidad');
+                slot.column_field = normalizeFieldKey(slot.column_field || 'checked_in_any');
+                slot.label_field = normalizeFieldKey(slot.label_field || slot.row_field || 'localidad');
+                slot.series_field = normalizeFieldKey(slot.series_field || '');
+                slot.value_field = normalizeFieldKey(slot.value_field || '');
+                slot.filter_relation = slot.filter_relation === 'any' ? 'any' : 'all';
+                slot.filters = Array.isArray(slot.filters) ? slot.filters.map(normalizeFilter).slice(0, 30) : [];
+                if (Array.isArray(slot.table_fields)) slot.table_fields = slot.table_fields.map(normalizeFieldKey).filter(Boolean);
+                return slot;
+            }
+
+            function normalizeState(){
+                if (!state || typeof state !== 'object') state = {};
+                state.settings = Object.assign(defaultSettings(), state.settings || {});
+                if (!Array.isArray(state.rows)) state.rows = [];
+                if (!state.rows.length) state.rows.push({slots:[defaultSlot(), defaultSlot()]});
+                state.rows = state.rows.map(function(row){
+                    let slots = row && Array.isArray(row.slots) ? row.slots : [];
+                    return {slots:[normalizeSlot(slots[0]), normalizeSlot(slots[1])]};
+                });
             }
 
             function syncHeaderControls(){
@@ -1636,23 +2069,67 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                 $('#evapp_custom_metrics_json').val(JSON.stringify(state));
             }
 
-            function render(){
-                normalizeState();
-                syncHeaderControls();
-                const $rows = $('#evapp-cmetrics-rows').empty();
-                state.rows.forEach(function(row, rIndex){
-                    let rowHtml = '<div class="evapp-cmetrics-row" data-row="'+rIndex+'">'
-                        + '<div class="evapp-cmetrics-row-head">'
-                        + '<div class="evapp-cmetrics-row-title">Fila '+(rIndex+1)+'</div>'
-                        + '<button type="button" class="button evapp-cmetrics-remove-row">Eliminar fila</button>'
-                        + '</div>'
-                        + '<div class="evapp-cmetrics-slots">';
-                    row.slots.forEach(function(slot, sIndex){ rowHtml += renderSlot(rIndex, sIndex, slot); });
-                    rowHtml += '</div></div>';
-                    $rows.append(rowHtml);
-                });
-                syncHidden();
-                refreshSlotVisibility();
+            function renderFilterValueControl(filter, field, filterIndex){
+                if (!operatorNeedsValue(filter.operator)) {
+                    return '<div class="evapp-cmetrics-field evapp-cmetrics-filter-value is-hidden"></div>';
+                }
+
+                const options = fieldFilterOptions(field);
+                let control = '';
+                if (options.length) {
+                    let values = options.map(function(option){ return String(option.value); });
+                    let html = '<option value="">Selecciona una opción</option>';
+                    if (filter.value && values.indexOf(String(filter.value)) === -1) {
+                        html += '<option value="'+esc(filter.value)+'" selected>Valor no disponible: '+esc(filter.value)+'</option>';
+                    }
+                    options.forEach(function(option){
+                        html += '<option value="'+esc(option.value)+'" '+(String(filter.value)===String(option.value)?'selected':'')+'>'+esc(option.label)+'</option>';
+                    });
+                    control = '<select class="evapp-cmetrics-filter-control" data-filter-prop="value" data-filter-index="'+filterIndex+'">'+html+'</select>';
+                } else {
+                    let type = 'text';
+                    let extra = ' placeholder="Escribe el valor"';
+                    if (field && field.type === 'number') {
+                        type = 'number';
+                        extra = ' step="any" placeholder="Escribe el número"';
+                    } else if (field && field.type === 'date') {
+                        type = 'date';
+                        extra = '';
+                    }
+                    control = '<input type="'+type+'"'+extra+' class="evapp-cmetrics-filter-control" data-filter-prop="value" data-filter-index="'+filterIndex+'" value="'+esc(filter.value)+'">';
+                }
+
+                return '<div class="evapp-cmetrics-field evapp-cmetrics-filter-value"><label>Valor</label>'+control+'</div>';
+            }
+
+            function renderFilterRow(filter, filterIndex){
+                const field = fieldByKey(filter.field);
+                return '<div class="evapp-cmetrics-filter-row" data-filter="'+filterIndex+'">'
+                    + '<div class="evapp-cmetrics-field"><label>Campo</label><select class="evapp-cmetrics-filter-control" data-filter-prop="field" data-filter-index="'+filterIndex+'">'+fieldOptions(filter.field, 'Selecciona campo')+'</select></div>'
+                    + '<div class="evapp-cmetrics-field"><label>Condición</label><select class="evapp-cmetrics-filter-control" data-filter-prop="operator" data-filter-index="'+filterIndex+'">'+operatorOptionsForField(field, filter.operator)+'</select></div>'
+                    + renderFilterValueControl(filter, field, filterIndex)
+                    + '<button type="button" class="button evapp-cmetrics-filter-remove" data-filter-index="'+filterIndex+'">Eliminar filtro</button>'
+                    + '</div>';
+            }
+
+            function renderFiltersBox(slot){
+                let filtersHtml = '';
+                if (!slot.filters.length) {
+                    filtersHtml = '<div class="evapp-cmetrics-filter-empty">Sin filtros: esta métrica usará todos los tickets del evento.</div>';
+                } else {
+                    slot.filters.forEach(function(filter, filterIndex){
+                        filtersHtml += renderFilterRow(filter, filterIndex);
+                    });
+                }
+
+                return '<div class="evapp-cmetrics-filters-box">'
+                    + '<div class="evapp-cmetrics-filters-head">'
+                    + '<div><div class="evapp-cmetrics-filters-title">Filtros de datos</div><div class="evapp-cmetrics-note">Los filtros se aplican antes del conteo, suma, promedio o agrupación.</div></div>'
+                    + '<button type="button" class="button evapp-cmetrics-filter-add">Agregar filtro</button>'
+                    + '</div>'
+                    + '<div class="evapp-cmetrics-filter-relation"><label>Combinar filtros</label><select class="evapp-cmetrics-filter-relation-control">'+optionsFromMap(filterRelations, slot.filter_relation)+'</select></div>'
+                    + '<div class="evapp-cmetrics-filter-list">'+filtersHtml+'</div>'
+                    + '</div>';
             }
 
             function renderSlot(rIndex, sIndex, slot){
@@ -1684,6 +2161,7 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                     + '<div class="evapp-cmetrics-field evapp-cmetrics-field-percentage"><label>Porcentajes</label><select class="evapp-cmetrics-control" data-prop="percentage_mode">'+optionsFromMap(percentageOptions, slot.percentage_mode)+'</select></div>'
                     + '<div class="evapp-cmetrics-field evapp-cmetrics-field-sort"><label>Orden</label><select class="evapp-cmetrics-control" data-prop="sort_by">'+optionsFromMap(sortOptions, slot.sort_by)+'</select></div>'
                     + '</div>'
+                    + renderFiltersBox(slot)
                     + '</div>';
             }
 
@@ -1714,11 +2192,39 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
                 });
             }
 
-            $(document).on('change input', '.evapp-cmetrics-control', function(){
-                const $control = $(this);
+            function render(){
+                normalizeState();
+                syncHeaderControls();
+                const $rows = $('#evapp-cmetrics-rows').empty();
+                state.rows.forEach(function(row, rowIndex){
+                    let rowHtml = '<div class="evapp-cmetrics-row" data-row="'+rowIndex+'">'
+                        + '<div class="evapp-cmetrics-row-head">'
+                        + '<div class="evapp-cmetrics-row-title">Fila '+(rowIndex+1)+'</div>'
+                        + '<button type="button" class="button evapp-cmetrics-remove-row">Eliminar fila</button>'
+                        + '</div>'
+                        + '<div class="evapp-cmetrics-slots">';
+                    row.slots.forEach(function(slot, slotIndex){ rowHtml += renderSlot(rowIndex, slotIndex, slot); });
+                    rowHtml += '</div></div>';
+                    $rows.append(rowHtml);
+                });
+                syncHidden();
+                refreshSlotVisibility();
+            }
+
+            function slotFromControl($control){
                 const $slot = $control.closest('.evapp-cmetrics-slot');
                 const rowIndex = parseInt($slot.attr('data-row'), 10);
                 const slotIndex = parseInt($slot.attr('data-slot'), 10);
+                return {
+                    rowIndex:rowIndex,
+                    slotIndex:slotIndex,
+                    slot:state.rows[rowIndex].slots[slotIndex]
+                };
+            }
+
+            $(document).on('change input', '.evapp-cmetrics-control', function(){
+                const $control = $(this);
+                const context = slotFromControl($control);
                 const prop = $control.attr('data-prop');
                 let value;
 
@@ -1727,10 +2233,61 @@ if ( ! function_exists('eventosapp_custom_metrics_render_metabox') ) {
 
                 if (prop === 'span' || prop === 'limit') value = parseInt(value || 0, 10);
                 if (['row_field','column_field','label_field','series_field','value_field'].indexOf(prop) !== -1) value = normalizeFieldKey(value);
-                if (prop === 'row_field') state.rows[rowIndex].slots[slotIndex].label_field = value;
-                state.rows[rowIndex].slots[slotIndex][prop] = value;
+                if (prop === 'row_field') context.slot.label_field = value;
+                context.slot[prop] = value;
                 syncHidden();
                 refreshSlotVisibility();
+            });
+
+            $(document).on('click', '.evapp-cmetrics-filter-add', function(e){
+                e.preventDefault();
+                const context = slotFromControl($(this));
+                context.slot.filters.push(defaultFilter());
+                render();
+            });
+
+            $(document).on('click', '.evapp-cmetrics-filter-remove', function(e){
+                e.preventDefault();
+                const context = slotFromControl($(this));
+                const filterIndex = parseInt($(this).attr('data-filter-index'), 10);
+                context.slot.filters.splice(filterIndex, 1);
+                render();
+            });
+
+            $(document).on('change', '.evapp-cmetrics-filter-relation-control', function(){
+                const context = slotFromControl($(this));
+                context.slot.filter_relation = $(this).val() === 'any' ? 'any' : 'all';
+                syncHidden();
+            });
+
+            $(document).on('change', '.evapp-cmetrics-filter-control[data-filter-prop="field"]', function(){
+                const context = slotFromControl($(this));
+                const filterIndex = parseInt($(this).attr('data-filter-index'), 10);
+                const fieldKey = normalizeFieldKey($(this).val());
+                const field = fieldByKey(fieldKey);
+                context.slot.filters[filterIndex] = {
+                    field:fieldKey,
+                    operator:defaultOperatorForField(field),
+                    value:''
+                };
+                render();
+            });
+
+            $(document).on('change', '.evapp-cmetrics-filter-control[data-filter-prop="operator"]', function(){
+                const context = slotFromControl($(this));
+                const filterIndex = parseInt($(this).attr('data-filter-index'), 10);
+                context.slot.filters[filterIndex].operator = $(this).val();
+                if (!operatorNeedsValue(context.slot.filters[filterIndex].operator)) {
+                    context.slot.filters[filterIndex].value = '';
+                }
+                render();
+            });
+
+            $(document).on('input change', '.evapp-cmetrics-filter-control[data-filter-prop="value"]', function(){
+                const context = slotFromControl($(this));
+                const filterIndex = parseInt($(this).attr('data-filter-index'), 10);
+                context.slot.filters[filterIndex].value = $(this).val();
+                syncHidden();
             });
 
             $('#evapp-cmetrics-show-header').on('change', function(){
