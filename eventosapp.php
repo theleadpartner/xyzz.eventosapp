@@ -1158,6 +1158,12 @@ eventosapp_require_first_existing_file([
     'includes/api/eventosapp-kiosk-api.php',
     'eventosapp-kiosk-api.php',
 ]);
+
+// Diagnóstico administrativo de carga, rutas REST y comunicación con la app Android.
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-kiosk-diagnostics.php',
+    'eventosapp-kiosk-diagnostics.php',
+]);
 eventosapp_require_first_existing_file([
     'includes/frontend/eventosapp-dashboard-elementor.php',
     'eventosapp-dashboard-elementor.php',
