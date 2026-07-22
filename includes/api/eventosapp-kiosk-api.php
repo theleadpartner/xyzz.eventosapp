@@ -15,6 +15,18 @@ if ( ! defined( 'EVENTOSAPP_KIOSK_API_NAMESPACE' ) ) {
     define( 'EVENTOSAPP_KIOSK_API_NAMESPACE', 'eventosapp-kiosk/v1' );
 }
 
+if ( ! defined( 'EVENTOSAPP_KIOSK_API_VERSION' ) ) {
+    define( 'EVENTOSAPP_KIOSK_API_VERSION', '1.1.0' );
+}
+
+if ( ! defined( 'EVENTOSAPP_KIOSK_API_LOADED' ) ) {
+    define( 'EVENTOSAPP_KIOSK_API_LOADED', true );
+}
+
+if ( ! defined( 'EVENTOSAPP_KIOSK_API_FILE' ) ) {
+    define( 'EVENTOSAPP_KIOSK_API_FILE', __FILE__ );
+}
+
 if ( ! function_exists( 'eventosapp_kiosk_api_token_meta_key' ) ) {
     function eventosapp_kiosk_api_token_meta_key() {
         return '_eventosapp_kiosk_api_tokens';
@@ -820,7 +832,95 @@ if ( ! function_exists( 'eventosapp_kiosk_api_badge' ) ) {
     }
 }
 
+if ( ! function_exists( 'eventosapp_kiosk_api_route_urls' ) ) {
+    /**
+     * Devuelve las dos formas válidas de consumir una ruta REST de WordPress.
+     * La variante rest_route funciona incluso cuando los enlaces permanentes
+     * o las reglas /wp-json/ no están disponibles en el servidor.
+     */
+    function eventosapp_kiosk_api_route_urls( $route = '/health' ) {
+        $route = '/' . ltrim( (string) $route, '/' );
+        $rest_path = EVENTOSAPP_KIOSK_API_NAMESPACE . $route;
+
+        return [
+            'pretty' => rest_url( $rest_path ),
+            'query'  => add_query_arg(
+                'rest_route',
+                '/' . $rest_path,
+                trailingslashit( home_url( '/' ) )
+            ),
+        ];
+    }
+}
+
+if ( ! function_exists( 'eventosapp_kiosk_api_registered_route_status' ) ) {
+    function eventosapp_kiosk_api_registered_route_status() {
+        $required = [
+            '/auth/login'                 => 'POST',
+            '/auth/logout'                => 'POST',
+            '/events'                     => 'GET',
+            '/events/(?P<id>\d+)'       => 'GET',
+            '/events/(?P<id>\d+)/search'=> 'POST',
+            '/tickets/(?P<id>\d+)'      => 'GET',
+            '/tickets/(?P<id>\d+)/print'=> 'POST',
+            '/badge/(?P<id>\d+)'        => 'GET',
+            '/health'                     => 'GET',
+        ];
+
+        $routes = rest_get_server()->get_routes();
+        $status = [];
+        foreach ( $required as $suffix => $method ) {
+            $full = '/' . EVENTOSAPP_KIOSK_API_NAMESPACE . $suffix;
+            $status[] = [
+                'route'      => $full,
+                'method'     => $method,
+                'registered' => isset( $routes[ $full ] ),
+            ];
+        }
+
+        return $status;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_kiosk_api_health' ) ) {
+    /**
+     * Endpoint público sin credenciales para confirmar que WordPress cargó el
+     * archivo y registró las rutas. No expone tokens, usuarios ni datos de eventos.
+     */
+    function eventosapp_kiosk_api_health( WP_REST_Request $request = null ) {
+        $dependencies = [
+            'role_permissions' => function_exists( 'eventosapp_role_can' ),
+            'ticket_search'    => function_exists( 'eventosapp_self_checkin_find_tickets_by_auth_field' )
+                || function_exists( 'eventosapp_self_checkin_find_tickets_by_identifier' ),
+            'ticket_payload'   => function_exists( 'eventosapp_self_checkin_ticket_payload' ),
+            'checkin'          => function_exists( 'eventosapp_register_ticket_checkin' )
+                || function_exists( 'eventosapp_self_checkin_mark_ticket' ),
+            'badge'            => function_exists( 'eventosapp_get_badge_html_from_event' ),
+        ];
+        $healthy = ! in_array( false, $dependencies, true );
+
+        return rest_ensure_response( [
+            'ok'            => $healthy,
+            'service'       => 'EventosApp Kiosko Android API',
+            'version'       => EVENTOSAPP_KIOSK_API_VERSION,
+            'namespace'     => EVENTOSAPP_KIOSK_API_NAMESPACE,
+            'loaded'        => true,
+            'site_url'      => home_url( '/' ),
+            'server_time'   => current_time( 'mysql' ),
+            'server_time_gmt'=> current_time( 'mysql', true ),
+            'urls'          => eventosapp_kiosk_api_route_urls( '/health' ),
+            'dependencies'  => $dependencies,
+        ] );
+    }
+}
+
 add_action( 'rest_api_init', static function () {
+    register_rest_route( EVENTOSAPP_KIOSK_API_NAMESPACE, '/health', [
+        'methods'             => WP_REST_Server::READABLE,
+        'callback'            => 'eventosapp_kiosk_api_health',
+        'permission_callback' => '__return_true',
+    ] );
+
     register_rest_route( EVENTOSAPP_KIOSK_API_NAMESPACE, '/auth/login', [
         'methods'             => WP_REST_Server::CREATABLE,
         'callback'            => 'eventosapp_kiosk_api_login',
