@@ -1842,6 +1842,9 @@ if ( ! function_exists('eventosapp_get_admin_menu_groups') ) {
                 ['label' => 'Generación Masiva de QR'],
                 ['label' => 'Actualización por Lote'],
             ],
+            'Aplicación Android' => [
+                ['slug' => 'eventosapp_kiosk_android'],
+            ],
             'Configuración y herramientas' => [
                 ['label' => 'Configuración'],
                 ['label' => 'Integraciones'],
@@ -1917,9 +1920,10 @@ function eventosapp_reorganize_admin_submenu() {
         $remaining[$slug] = $item;
     }
 
-    $ordered      = [];
-    $group_starts = [];
-    $groups       = eventosapp_get_admin_menu_groups();
+    $ordered            = [];
+    $group_starts       = [];
+    $default_open_groups = [];
+    $groups             = eventosapp_get_admin_menu_groups();
 
     foreach ($groups as $group_label => $wanted_items) {
         $group = [];
@@ -1946,6 +1950,12 @@ function eventosapp_reorganize_admin_submenu() {
             $first_slug = isset($group[0][2]) ? (string) $group[0][2] : '';
             if ($first_slug !== '') {
                 $group_starts[$first_slug] = (string) $group_label;
+
+                // La pantalla Android debe permanecer visible al instalar esta actualización.
+                // Después el usuario puede colapsarla manualmente y se respetará su preferencia.
+                if ($first_slug === 'eventosapp_kiosk_android') {
+                    $default_open_groups[$first_slug] = true;
+                }
             }
 
             foreach ($group as $item) {
@@ -1954,12 +1964,25 @@ function eventosapp_reorganize_admin_submenu() {
         }
     }
 
-    foreach ($remaining as $item) {
-        $ordered[] = $item;
+    if (!empty($remaining)) {
+        $remaining_items = array_values($remaining);
+        $first_remaining_slug = isset($remaining_items[0][2]) ? (string) $remaining_items[0][2] : '';
+
+        // Los módulos que todavía no estén declarados en la estructura no deben heredarse
+        // accidentalmente como hijos del último grupo configurado.
+        if ($first_remaining_slug !== '') {
+            $group_starts[$first_remaining_slug] = 'Otros módulos';
+            $default_open_groups[$first_remaining_slug] = true;
+        }
+
+        foreach ($remaining_items as $item) {
+            $ordered[] = $item;
+        }
     }
 
     $submenu['eventosapp_dashboard'] = $ordered;
     $GLOBALS['eventosapp_admin_menu_group_starts'] = $group_starts;
+    $GLOBALS['eventosapp_admin_menu_default_open_groups'] = $default_open_groups;
 }
 
 /**
@@ -2032,6 +2055,9 @@ add_action('admin_footer', function () {
     $group_starts = isset($GLOBALS['eventosapp_admin_menu_group_starts']) && is_array($GLOBALS['eventosapp_admin_menu_group_starts'])
         ? $GLOBALS['eventosapp_admin_menu_group_starts']
         : [];
+    $default_open_groups = isset($GLOBALS['eventosapp_admin_menu_default_open_groups']) && is_array($GLOBALS['eventosapp_admin_menu_default_open_groups'])
+        ? $GLOBALS['eventosapp_admin_menu_default_open_groups']
+        : [];
 
     if (empty($group_starts)) {
         return;
@@ -2040,6 +2066,7 @@ add_action('admin_footer', function () {
     <script>
     (function(){
       var groupStarts = <?php echo wp_json_encode($group_starts); ?>;
+      var defaultOpenGroups = <?php echo wp_json_encode($default_open_groups); ?>;
       var submenu = document.querySelector('#adminmenu li.toplevel_page_eventosapp_dashboard ul.wp-submenu');
       var storageKey = 'eventosapp_admin_menu_collapsed_groups_v2';
       if (!submenu || !groupStarts) { return; }
@@ -2164,7 +2191,8 @@ add_action('admin_footer', function () {
 
       orderedGroups.forEach(function(group){
         var hasStoredValue = Object.prototype.hasOwnProperty.call(collapsedState, group.slug);
-        var shouldCollapse = hasStoredValue ? !!collapsedState[group.slug] : !group.hasCurrent;
+        var opensByDefault = !!(defaultOpenGroups && defaultOpenGroups[group.slug]);
+        var shouldCollapse = hasStoredValue ? !!collapsedState[group.slug] : (!group.hasCurrent && !opensByDefault);
         setGroupCollapsed(group, shouldCollapse, false);
 
         var toggle = group.separator.querySelector('.evapp-admin-menu-section-toggle');
