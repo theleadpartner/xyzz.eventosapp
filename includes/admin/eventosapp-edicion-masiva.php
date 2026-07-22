@@ -106,6 +106,7 @@ function evapp_edit_field_catalog($event_id){
         'ciudad'      => 'Ciudad',
         'pais'        => 'País',
         'localidad'   => 'Localidad',
+        'modalidad'   => 'Modalidad del asistente (Presencial / Virtual)',
     ];
 
     // Extras configurados para el evento
@@ -135,6 +136,7 @@ function evapp_edit_field_to_meta($field_key){
         case 'ciudad':      return ['type'=>'meta','key'=>'_eventosapp_asistente_ciudad'];
         case 'pais':        return ['type'=>'meta','key'=>'_eventosapp_asistente_pais'];
         case 'localidad':   return ['type'=>'meta','key'=>'_eventosapp_asistente_localidad'];
+        case 'modalidad':   return ['type'=>'meta','key'=>'_eventosapp_ticket_modalidad'];
         default:
             if (strpos($field_key, 'extra__') === 0) {
                 $ek = substr($field_key, 7);
@@ -142,6 +144,66 @@ function evapp_edit_field_to_meta($field_key){
             }
             return null;
     }
+}
+
+
+/**
+ * Normaliza un valor antes de compararlo o guardarlo.
+ * Para modalidad valida tanto el vocabulario como la compatibilidad con el evento.
+ */
+function evapp_edit_prepare_field_value($field_key, $raw_value, $event_id, $ticket_id = 0){
+    $raw_value = is_scalar($raw_value) ? trim((string)$raw_value) : '';
+    $result = [
+        'ok'    => true,
+        'value' => $raw_value,
+        'error' => '',
+    ];
+
+    if ($field_key === 'email') {
+        $result['value'] = sanitize_email($raw_value);
+        return $result;
+    }
+
+    if ($field_key === 'seq') {
+        $result['value'] = (string) intval($raw_value);
+        return $result;
+    }
+
+    if ($field_key !== 'modalidad') {
+        return $result;
+    }
+
+    $candidate = function_exists('eventosapp_normalize_ticket_modalidad')
+        ? eventosapp_normalize_ticket_modalidad($raw_value)
+        : sanitize_key($raw_value);
+
+    if (!in_array($candidate, ['presencial', 'virtual'], true)) {
+        $result['ok'] = false;
+        $result['value'] = '';
+        $result['error'] = 'Modalidad inválida. Usa exactamente Presencial o Virtual.';
+        return $result;
+    }
+
+    $allowed = function_exists('eventosapp_ticket_allowed_modalidades_for_event')
+        ? eventosapp_ticket_allowed_modalidades_for_event($event_id)
+        : ['presencial', 'virtual'];
+
+    if (!in_array($candidate, $allowed, true)) {
+        $event_label = function_exists('eventosapp_get_event_modalidad_label')
+            ? eventosapp_get_event_modalidad_label($event_id)
+            : 'la modalidad configurada';
+        $result['ok'] = false;
+        $result['value'] = '';
+        $result['error'] = 'La modalidad ' . ucfirst($candidate) . ' no está permitida porque el evento es ' . $event_label . '.';
+        return $result;
+    }
+
+    $current = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_ticket_modalidad', true) : '';
+    $result['value'] = function_exists('eventosapp_resolve_ticket_modalidad')
+        ? eventosapp_resolve_ticket_modalidad($event_id, $candidate, $current)
+        : $candidate;
+
+    return $result;
 }
 
 // Construir argumentos WP_Query según criterios y lógica AND/OR
@@ -165,9 +227,10 @@ function evapp_edit_build_query_args($event_id, $criteria_map, $row, $logic = 'A
         $val = isset($row[$csv_index]) ? trim((string)$row[$csv_index]) : '';
         if ($val === '') continue;
 
-        // Normalizaciones simples
-        if ($field_key === 'email') $val = sanitize_email($val);
-        if ($field_key === 'seq') $val = (string) intval($val);
+        // Normalizaciones simples, incluida la modalidad del ticket.
+        $prepared = evapp_edit_prepare_field_value($field_key, $val, $event_id, 0);
+        if (!$prepared['ok']) continue;
+        $val = $prepared['value'];
 
         $group[] = [
             'key'     => $spec['key'],
@@ -377,6 +440,10 @@ function evapp_edit_step_2($event_id){
     }
     echo '</tbody></table>';
 
+    echo '<div style="max-width:900px;margin:0 0 18px;padding:10px 12px;background:#eef6ff;border-left:4px solid #2271b1">';
+    echo '<strong>Modalidad del asistente:</strong> en el CSV usa <code>Presencial</code> o <code>Virtual</code>. El sistema validará que la opción esté permitida por la modalidad configurada en el evento y sincronizará inmediatamente QR, PDF, Wallet, ICS o landing según corresponda.';
+    echo '</div>';
+
     echo '<p style="margin-top:20px">';
     echo '<label><strong>Lógica de búsqueda:</strong></label><br>';
     echo '<label><input type="radio" name="search_logic" value="AND" checked> AND (deben coincidir TODOS los criterios)</label><br>';
@@ -456,9 +523,14 @@ function evapp_edit_step_3($event_id){
                 if (!$fk) continue;
                 $spec = evapp_edit_field_to_meta($fk);
                 if (!$spec) continue;
-                $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
-                if ($fk === 'email') $new = sanitize_email($new);
+                $raw_new = isset($row[$i]) ? trim((string)$row[$i]) : '';
+                $prepared = evapp_edit_prepare_field_value($fk, $raw_new, $event_id, $pid);
                 $cur = get_post_meta($pid, $spec['key'], true);
+                if (!$prepared['ok']) {
+                    $diffs[] = [$cat[$fk]??$fk, $cur, 'ERROR: '.$prepared['error']];
+                    continue;
+                }
+                $new = $prepared['value'];
                 if ($new !== $cur) {
                     $diffs[] = [$cat[$fk]??$fk, $cur, $new];
                 }
@@ -472,9 +544,14 @@ function evapp_edit_step_3($event_id){
                     if (!$fk) continue;
                     $spec = evapp_edit_field_to_meta($fk);
                     if (!$spec) continue;
-                    $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
-                    if ($fk === 'email') $new = sanitize_email($new);
+                    $raw_new = isset($row[$i]) ? trim((string)$row[$i]) : '';
+                    $prepared = evapp_edit_prepare_field_value($fk, $raw_new, $event_id, $pid);
                     $cur = get_post_meta($pid, $spec['key'], true);
+                    if (!$prepared['ok']) {
+                        $diffs[] = [$ticket_label . ' - ' . ($cat[$fk]??$fk), $cur, 'ERROR: '.$prepared['error']];
+                        continue;
+                    }
+                    $new = $prepared['value'];
                     if ($new !== $cur) {
                         $diffs[] = [$ticket_label . ' - ' . ($cat[$fk]??$fk), $cur, $new];
                     }
@@ -576,6 +653,9 @@ add_action('admin_post_eventosapp_edit_upload_csv', function(){
         'error_count'       => 0,
         'variant_recalculated_count' => 0,
         'variant_changed_count'      => 0,
+        'modalidad_changed_count'    => 0,
+        'modalidad_synced_count'     => 0,
+        'modalidad_error_count'      => 0,
     ];
     update_option( evapp_edit_state_key($event_id, $hash), $state, false );
 
@@ -678,6 +758,18 @@ add_action('admin_init', function(){
         echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Errores</div>';
         echo '<div style="font-size:28px;font-weight:700;color:#c62828" id="ev_err">'.intval($state['error_count']).'</div>';
         echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Modalidades cambiadas</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#7c3aed" id="ev_mod_changed">'.intval($state['modalidad_changed_count'] ?? 0).'</div>';
+        echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Anexos sincronizados</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#0a8043" id="ev_mod_synced">'.intval($state['modalidad_synced_count'] ?? 0).'</div>';
+        echo '</div>';
+        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:15px;text-align:center">';
+        echo '<div style="font-size:11px;color:#666;text-transform:uppercase;margin-bottom:5px">Errores de modalidad</div>';
+        echo '<div style="font-size:28px;font-weight:700;color:#c62828" id="ev_mod_errors">'.intval($state['modalidad_error_count'] ?? 0).'</div>';
+        echo '</div>';
         echo '</div>';
 
         echo '<div id="ev_log" style="background:#0b1020;color:#eaf1ff;padding:12px;border-radius:8px;min-height:200px;max-height:400px;overflow:auto;font-family:\'Courier New\',monospace;font-size:12px;line-height:1.6"></div>';
@@ -700,6 +792,9 @@ add_action('admin_init', function(){
   const nm  = document.getElementById("ev_nom");
   const mm  = document.getElementById("ev_mul");
   const er  = document.getElementById("ev_err");
+  const mc  = document.getElementById("ev_mod_changed");
+  const ms  = document.getElementById("ev_mod_synced");
+  const me  = document.getElementById("ev_mod_errors");
   
   let busy = false;
   let isDone = false;
@@ -746,6 +841,9 @@ add_action('admin_init', function(){
       nm.textContent = j.data.no_match_count;
       mm.textContent = j.data.multi_match_count;
       er.textContent = j.data.error_count;
+      mc.textContent = j.data.modalidad_changed_count;
+      ms.textContent = j.data.modalidad_synced_count;
+      me.textContent = j.data.modalidad_error_count;
       
       // Actualizar barra de progreso
       updateProgress(j.data.offset);
@@ -756,7 +854,7 @@ add_action('admin_init', function(){
       if (j.data.done){
         isDone = true;
         add("✅ ¡Actualización completada exitosamente!", false);
-        add("📊 Resumen final: " + j.data.updated_count + " actualizadas, " + j.data.unchanged_count + " sin cambios, " + j.data.no_match_count + " sin coincidencia, " + j.data.multi_match_count + " múltiples, " + j.data.error_count + " errores", false);
+        add("📊 Resumen final: " + j.data.updated_count + " actualizadas, " + j.data.unchanged_count + " sin cambios, " + j.data.no_match_count + " sin coincidencia, " + j.data.multi_match_count + " múltiples, " + j.data.error_count + " errores, " + j.data.modalidad_changed_count + " modalidades cambiadas y " + j.data.modalidad_synced_count + " anexos sincronizados", false);
         setStatus("Proceso finalizado", true);
         setTimeout(() => setStatus("", false), 5000);
       } else {
@@ -798,8 +896,6 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
     $state = get_option( evapp_edit_state_key($event_id, $hash) );
     if (!$state) wp_send_json_error('Estado no encontrado', 404);
 
-    // NUEVO: Procesar chunks de 50 filas a la vez para mantener estabilidad
-    $CHUNK = 50;
     $offset  = intval($state['offset']);
     $updated = intval($state['updated_count']);
     $same    = intval($state['unchanged_count']);
@@ -808,11 +904,18 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
     $errs    = intval($state['error_count']);
     $variant_recalculated = intval($state['variant_recalculated_count'] ?? 0);
     $variant_changed      = intval($state['variant_changed_count'] ?? 0);
+    $modalidad_changed    = intval($state['modalidad_changed_count'] ?? 0);
+    $modalidad_synced     = intval($state['modalidad_synced_count'] ?? 0);
+    $modalidad_errors     = intval($state['modalidad_error_count'] ?? 0);
 
     $mapS = $state['map_search'];
     $mapU = $state['map_update'];
     $pols = $state['policies'];
     $logic = $state['search_logic'] ?? 'AND';
+
+    // Generar QR/PDF/Wallet puede ser pesado. Cuando se mapea modalidad se usan lotes pequeños
+    // para evitar timeouts sin afectar la velocidad de las ediciones normales.
+    $CHUNK = in_array('modalidad', array_values($mapU), true) ? 5 : 50;
 
     $fh = fopen($state['file'],'r');
     if (!$fh) wp_send_json_error('No se pudo abrir el archivo', 500);
@@ -852,6 +955,7 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
             foreach ($ids as $pid) {
                 $pid = (int)$pid;
                 $changes = 0;
+                $modalidad_transition = null;
 
                 // 2) Aplicar actualizaciones
                 foreach ($mapU as $i=>$field_key){
@@ -859,8 +963,15 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
                     $spec = evapp_edit_field_to_meta($field_key);
                     if (!$spec) continue;
 
-                    $new = isset($row[$i]) ? trim((string)$row[$i]) : '';
-                    if ($field_key === 'email') $new = sanitize_email($new);
+                    $raw_new = isset($row[$i]) ? trim((string)$row[$i]) : '';
+                    $prepared = evapp_edit_prepare_field_value($field_key, $raw_new, $event_id, $pid);
+                    if (!$prepared['ok']) {
+                        $errs++;
+                        if ($field_key === 'modalidad') $modalidad_errors++;
+                        $log_msgs[] = 'L'.$line.' ticket '.$pid.': ⚠️ '.$prepared['error'];
+                        continue;
+                    }
+                    $new = $prepared['value'];
 
                     // Normaliza extras si aplica
                     if (strpos($field_key,'extra__')===0 && function_exists('eventosapp_normalize_extra_value')) {
@@ -883,6 +994,13 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
 
                     if ($should) {
                         update_post_meta($pid, $spec['key'], $new);
+                        if ($field_key === 'modalidad') {
+                            $modalidad_transition = [
+                                'before' => (string)$cur,
+                                'after'  => (string)$new,
+                            ];
+                            $modalidad_changed++;
+                        }
                         $changes++;
                     }
                 }
@@ -910,6 +1028,27 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
                         $variant_recalculated++;
                         if (!empty($variant_prepare['changed'])) {
                             $variant_changed++;
+                        }
+                    }
+
+                    if ($modalidad_transition) {
+                        if (function_exists('eventosapp_sync_ticket_modalidad_assets')) {
+                            $sync_result = eventosapp_sync_ticket_modalidad_assets($pid, $event_id, 'bulk_edit');
+                            if (!empty($sync_result['ok'])) {
+                                $modalidad_synced++;
+                                $log_msgs[] = 'L'.$line.' ticket '.$pid.': modalidad '.$modalidad_transition['before'].' → '.$modalidad_transition['after'].' y anexos sincronizados';
+                            } else {
+                                $modalidad_errors++;
+                                $errs++;
+                                $sync_errors = !empty($sync_result['errors']) && is_array($sync_result['errors'])
+                                    ? implode('; ', $sync_result['errors'])
+                                    : 'No se pudieron sincronizar los anexos.';
+                                $log_msgs[] = 'L'.$line.' ticket '.$pid.': ❌ modalidad actualizada, pero hubo errores de anexos: '.$sync_errors;
+                            }
+                        } else {
+                            $modalidad_errors++;
+                            $errs++;
+                            $log_msgs[] = 'L'.$line.' ticket '.$pid.': ❌ no está disponible el sincronizador de anexos de modalidad';
                         }
                     }
 
@@ -958,10 +1097,13 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
     $state['error_count']       = $errs;
     $state['variant_recalculated_count'] = $variant_recalculated;
     $state['variant_changed_count']      = $variant_changed;
+    $state['modalidad_changed_count']    = $modalidad_changed;
+    $state['modalidad_synced_count']     = $modalidad_synced;
+    $state['modalidad_error_count']      = $modalidad_errors;
     update_option( evapp_edit_state_key($event_id, $hash), $state, false );
 
     // Construir mensaje del log
-    $msg = '📝 Chunk '.$offset.'/'.$state['total_rows'].' - Procesadas: '.$processed.' | Actualizadas: '.$updated.' | Sin cambios: '.$same.' | Sin match: '.$nomatch.' | Múltiples: '.$multi.' | Errores: '.$errs.' | Variantes recalculadas: '.$variant_recalculated.' | Variantes cambiadas: '.$variant_changed;
+    $msg = '📝 Chunk '.$offset.'/'.$state['total_rows'].' - Procesadas: '.$processed.' | Actualizadas: '.$updated.' | Sin cambios: '.$same.' | Sin match: '.$nomatch.' | Múltiples: '.$multi.' | Errores: '.$errs.' | Variantes recalculadas: '.$variant_recalculated.' | Variantes cambiadas: '.$variant_changed.' | Modalidades cambiadas: '.$modalidad_changed.' | Anexos sincronizados: '.$modalidad_synced.' | Errores modalidad: '.$modalidad_errors;
     
     if ($log_msgs) {
         $msg .= ' | ' . implode(' | ', array_slice($log_msgs, 0, 5));
@@ -976,6 +1118,9 @@ add_action('wp_ajax_eventosapp_edit_process', function(){
         'error_count'       => $errs,
         'variant_recalculated_count' => $variant_recalculated,
         'variant_changed_count'      => $variant_changed,
+        'modalidad_changed_count'    => $modalidad_changed,
+        'modalidad_synced_count'     => $modalidad_synced,
+        'modalidad_error_count'      => $modalidad_errors,
         'msg'               => $msg,
         'done'              => $done ? 1 : 0,
     ]);
