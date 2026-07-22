@@ -1078,11 +1078,102 @@ if ( ! function_exists('eventosapp_ajax_virtual_access_redirect') ) {
 add_action('wp_ajax_eventosapp_virtual_access', 'eventosapp_ajax_virtual_access_redirect');
 add_action('wp_ajax_nopriv_eventosapp_virtual_access', 'eventosapp_ajax_virtual_access_redirect');
 
+if ( ! function_exists('eventosapp_delete_local_upload_file_from_url') ) {
+    /**
+     * Elimina únicamente archivos locales que estén dentro de wp-content/uploads.
+     * Nunca intenta borrar URLs externas ni rutas fuera del directorio de cargas.
+     */
+    function eventosapp_delete_local_upload_file_from_url( $url ) {
+        if ( ! is_string( $url ) || trim( $url ) === '' ) {
+            return false;
+        }
+
+        $upload  = wp_upload_dir();
+        $baseurl = isset( $upload['baseurl'] ) ? untrailingslashit( (string) $upload['baseurl'] ) : '';
+        $basedir = isset( $upload['basedir'] ) ? wp_normalize_path( untrailingslashit( (string) $upload['basedir'] ) ) : '';
+        $clean   = strtok( trim( $url ), '?' );
+
+        if ( ! $baseurl || ! $basedir || strpos( $clean, $baseurl ) !== 0 ) {
+            return false;
+        }
+
+        $relative = ltrim( substr( $clean, strlen( $baseurl ) ), '/' );
+        $path     = wp_normalize_path( trailingslashit( $basedir ) . $relative );
+
+        if ( strpos( $path, trailingslashit( $basedir ) ) !== 0 || ! is_file( $path ) ) {
+            return false;
+        }
+
+        return @unlink( $path );
+    }
+}
+
 if ( ! function_exists('eventosapp_ticket_clear_presential_assets') ) {
+    /**
+     * Limpia de forma completa los anexos exclusivos de tickets presenciales.
+     * Conserva el ICS porque también es requerido por los tickets virtuales.
+     */
     function eventosapp_ticket_clear_presential_assets( $ticket_id ) {
         $ticket_id = absint( $ticket_id );
-        if ( ! $ticket_id ) {
-            return;
+        $result = [
+            'ticket_id'     => $ticket_id,
+            'deleted_files' => 0,
+            'deleted_meta'  => 0,
+            'errors'        => [],
+        ];
+
+        if ( ! $ticket_id || get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
+            $result['errors'][] = 'Ticket inválido para limpiar anexos presenciales.';
+            return $result;
+        }
+
+        // Guardar URLs antes de eliminar metadatos para poder limpiar archivos físicos locales.
+        $asset_urls = [
+            get_post_meta( $ticket_id, '_eventosapp_ticket_pdf_url', true ),
+            get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple', true ),
+            get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple_url', true ),
+            get_post_meta( $ticket_id, '_eventosapp_ticket_pkpass_url', true ),
+        ];
+
+        foreach ( array_unique( array_filter( $asset_urls ) ) as $asset_url ) {
+            if ( eventosapp_delete_local_upload_file_from_url( $asset_url ) ) {
+                $result['deleted_files']++;
+            }
+        }
+
+        // El QR Manager conoce las rutas físicas de cada PNG y puede eliminarlas sin dejar archivos huérfanos.
+        try {
+            if ( class_exists('EventosApp_QR_Manager') && method_exists('EventosApp_QR_Manager', 'get_instance') ) {
+                $qr_manager = EventosApp_QR_Manager::get_instance();
+                if ( $qr_manager && method_exists( $qr_manager, 'delete_all_qr_codes_public' ) ) {
+                    $qr_manager->delete_all_qr_codes_public( $ticket_id );
+                }
+            } else {
+                $qr_codes = get_post_meta( $ticket_id, '_eventosapp_qr_codes', true );
+                if ( is_array( $qr_codes ) ) {
+                    foreach ( $qr_codes as $qr_data ) {
+                        if ( is_array( $qr_data ) && ! empty( $qr_data['path'] ) ) {
+                            $path   = wp_normalize_path( (string) $qr_data['path'] );
+                            $upload = wp_upload_dir();
+                            $base   = wp_normalize_path( trailingslashit( (string) $upload['basedir'] ) );
+                            if ( strpos( $path, $base ) === 0 && is_file( $path ) && @unlink( $path ) ) {
+                                $result['deleted_files']++;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudieron limpiar todos los QR: ' . $e->getMessage();
+        }
+
+        // Elimina o invalida el objeto remoto de Google Wallet usando el flujo ya existente.
+        try {
+            if ( function_exists('eventosapp_eliminar_enlace_wallet_android') ) {
+                eventosapp_eliminar_enlace_wallet_android( $ticket_id );
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudo limpiar Google Wallet: ' . $e->getMessage();
         }
 
         $meta_keys = [
@@ -1095,11 +1186,208 @@ if ( ! function_exists('eventosapp_ticket_clear_presential_assets') ) {
             '_eventosapp_ticket_wallet_apple_url',
             '_eventosapp_ticket_pkpass_url',
             '_eventosapp_qr_codes',
+            '_eventosapp_qr_email',
+            '_eventosapp_qr_google_wallet',
+            '_eventosapp_qr_apple_wallet',
+            '_eventosapp_qr_pdf',
+            '_eventosapp_qr_whatsapp',
+            '_eventosapp_qr_badge',
+            'eventosapp_ticket_preprintedID',
         ];
 
         foreach ( $meta_keys as $meta_key ) {
-            delete_post_meta( $ticket_id, $meta_key );
+            if ( metadata_exists( 'post', $ticket_id, $meta_key ) ) {
+                delete_post_meta( $ticket_id, $meta_key );
+                $result['deleted_meta']++;
+            }
         }
+
+        return $result;
+    }
+}
+
+if ( ! function_exists('eventosapp_sync_ticket_modalidad_assets') ) {
+    /**
+     * Sincroniza inmediatamente los anexos requeridos por la modalidad efectiva del ticket.
+     * Se usa en flujos que actualizan metadatos directamente y no disparan save_post,
+     * como la herramienta de edición masiva.
+     */
+    function eventosapp_sync_ticket_modalidad_assets( $ticket_id, $event_id = 0, $context = 'manual' ) {
+        $ticket_id = absint( $ticket_id );
+        $event_id  = absint( $event_id );
+        $context   = sanitize_key( (string) $context ) ?: 'manual';
+
+        $result = [
+            'ok'         => false,
+            'ticket_id'  => $ticket_id,
+            'event_id'   => $event_id,
+            'modalidad'  => '',
+            'qr'         => [],
+            'pdf'        => false,
+            'ics'        => false,
+            'wallet_android' => false,
+            'wallet_apple'   => false,
+            'errors'     => [],
+        ];
+
+        if ( ! $ticket_id || get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
+            $result['errors'][] = 'Ticket inválido.';
+            return $result;
+        }
+
+        if ( ! $event_id ) {
+            $event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+            $result['event_id'] = $event_id;
+        }
+        if ( ! $event_id || get_post_type( $event_id ) !== 'eventosapp_event' ) {
+            $result['errors'][] = 'El ticket no tiene un evento válido asociado.';
+            return $result;
+        }
+
+        $stored = get_post_meta( $ticket_id, '_eventosapp_ticket_modalidad', true );
+        $modalidad = function_exists('eventosapp_resolve_ticket_modalidad')
+            ? eventosapp_resolve_ticket_modalidad( $event_id, $stored, $stored )
+            : ( in_array( $stored, [ 'presencial', 'virtual' ], true ) ? $stored : 'presencial' );
+
+        update_post_meta( $ticket_id, '_eventosapp_ticket_modalidad', $modalidad );
+        $result['modalidad'] = $modalidad;
+
+        if ( $modalidad === 'virtual' ) {
+            $cleanup = eventosapp_ticket_clear_presential_assets( $ticket_id );
+            if ( ! empty( $cleanup['errors'] ) ) {
+                $result['errors'] = array_merge( $result['errors'], $cleanup['errors'] );
+            }
+
+            try {
+                if ( function_exists('eventosapp_ticket_generar_ics') ) {
+                    eventosapp_ticket_generar_ics( $ticket_id );
+                    $result['ics'] = (bool) get_post_meta( $ticket_id, '_eventosapp_ticket_ics_url', true );
+                }
+            } catch ( Throwable $e ) {
+                $result['errors'][] = 'No se pudo generar el ICS virtual: ' . $e->getMessage();
+            }
+
+            $result['ok'] = empty( $result['errors'] );
+            update_post_meta( $ticket_id, '_eventosapp_ticket_modalidad_assets_sync', [
+                'at'         => current_time('mysql'),
+                'context'    => $context,
+                'modalidad'  => $modalidad,
+                'ok'         => $result['ok'] ? 1 : 0,
+                'errors'     => $result['errors'],
+            ] );
+            return $result;
+        }
+
+        // La variante debe estar aplicada antes de crear Wallets o anexos dependientes del diseño.
+        try {
+            if ( function_exists('eventosapp_ticket_variants_apply_to_ticket') ) {
+                eventosapp_ticket_variants_apply_to_ticket( $ticket_id, $event_id, true );
+            }
+            if ( function_exists('eventosapp_ticket_variants_sync_google_wallet_classes_for_event') ) {
+                eventosapp_ticket_variants_sync_google_wallet_classes_for_event( $event_id, 'modalidad_' . $context );
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudo preparar la variante del ticket: ' . $e->getMessage();
+        }
+
+        // QR: crear únicamente los faltantes. Al volver desde virtual se crearán todos porque fueron limpiados.
+        try {
+            if ( class_exists('EventosApp_QR_Manager') && method_exists('EventosApp_QR_Manager', 'get_instance') ) {
+                $qr_manager = EventosApp_QR_Manager::get_instance();
+                if ( $qr_manager && method_exists( $qr_manager, 'generate_missing_qr_codes' ) ) {
+                    $result['qr'] = $qr_manager->generate_missing_qr_codes( $ticket_id );
+                    if ( ! empty( $result['qr']['failed'] ) ) {
+                        $result['errors'][] = 'Falló la generación de ' . absint( $result['qr']['failed'] ) . ' código(s) QR.';
+                    }
+                }
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudieron generar los QR: ' . $e->getMessage();
+        }
+
+        // Google Wallet según la configuración del evento.
+        $wallet_android_on = get_post_meta( $event_id, '_eventosapp_ticket_wallet_android', true );
+        try {
+            if ( $wallet_android_on === '1' || $wallet_android_on === 1 || $wallet_android_on === true ) {
+                if ( function_exists('eventosapp_generar_enlace_wallet_android') ) {
+                    eventosapp_generar_enlace_wallet_android( $ticket_id, false );
+                }
+                $result['wallet_android'] = (bool) get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_android_url', true );
+                if ( ! $result['wallet_android'] ) {
+                    $result['errors'][] = 'Google Wallet está activo para el evento, pero no se generó su enlace.';
+                }
+            } else {
+                if ( function_exists('eventosapp_eliminar_enlace_wallet_android') ) {
+                    eventosapp_eliminar_enlace_wallet_android( $ticket_id );
+                }
+                delete_post_meta( $ticket_id, '_eventosapp_ticket_wallet_android' );
+                delete_post_meta( $ticket_id, '_eventosapp_ticket_wallet_android_url' );
+                delete_post_meta( $ticket_id, '_eventosapp_wallet_google_object_id' );
+                delete_post_meta( $ticket_id, '_eventosapp_wallet_google_class_id_effective' );
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudo sincronizar Google Wallet: ' . $e->getMessage();
+        }
+
+        // Apple Wallet según la configuración del evento.
+        $wallet_apple_on = get_post_meta( $event_id, '_eventosapp_ticket_wallet_apple', true );
+        try {
+            if ( $wallet_apple_on === '1' || $wallet_apple_on === 1 || $wallet_apple_on === true ) {
+                if ( function_exists('eventosapp_apple_generate_pass') ) {
+                    eventosapp_apple_generate_pass( $ticket_id );
+                } elseif ( function_exists('eventosapp_generar_enlace_wallet_apple') ) {
+                    eventosapp_generar_enlace_wallet_apple( $ticket_id );
+                }
+                $result['wallet_apple'] = (bool) (
+                    get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple', true )
+                    ?: get_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple_url', true )
+                    ?: get_post_meta( $ticket_id, '_eventosapp_ticket_pkpass_url', true )
+                );
+                if ( ! $result['wallet_apple'] ) {
+                    $result['errors'][] = 'Apple Wallet está activo para el evento, pero no se generó el pase.';
+                }
+            } else {
+                delete_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple' );
+                delete_post_meta( $ticket_id, '_eventosapp_ticket_wallet_apple_url' );
+                delete_post_meta( $ticket_id, '_eventosapp_ticket_pkpass_url' );
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudo sincronizar Apple Wallet: ' . $e->getMessage();
+        }
+
+        // El PDF depende de que el QR de PDF ya exista.
+        try {
+            if ( function_exists('eventosapp_ticket_generar_pdf') ) {
+                eventosapp_ticket_generar_pdf( $ticket_id );
+            }
+            $pdf_enabled = get_post_meta( $event_id, '_eventosapp_ticket_pdf', true ) === '1';
+            $result['pdf'] = (bool) get_post_meta( $ticket_id, '_eventosapp_ticket_pdf_url', true );
+            if ( $pdf_enabled && ! $result['pdf'] ) {
+                $result['errors'][] = 'El PDF está activo para el evento, pero no se generó.';
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudo generar el PDF: ' . $e->getMessage();
+        }
+
+        try {
+            if ( function_exists('eventosapp_ticket_generar_ics') ) {
+                eventosapp_ticket_generar_ics( $ticket_id );
+                $result['ics'] = (bool) get_post_meta( $ticket_id, '_eventosapp_ticket_ics_url', true );
+            }
+        } catch ( Throwable $e ) {
+            $result['errors'][] = 'No se pudo generar el ICS: ' . $e->getMessage();
+        }
+
+        $result['ok'] = empty( $result['errors'] );
+        update_post_meta( $ticket_id, '_eventosapp_ticket_modalidad_assets_sync', [
+            'at'         => current_time('mysql'),
+            'context'    => $context,
+            'modalidad'  => $modalidad,
+            'ok'         => $result['ok'] ? 1 : 0,
+            'errors'     => $result['errors'],
+        ] );
+
+        return $result;
     }
 }
 
