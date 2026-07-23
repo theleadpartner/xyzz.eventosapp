@@ -13,7 +13,7 @@
 if ( ! defined('ABSPATH') ) exit;
 
 if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_VERSION') ) {
-    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_VERSION', '2026.07.19.3');
+    define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_VERSION', '2026.07.23.1');
 }
 if ( ! defined('EVENTOSAPP_ATTENDANCE_CONFIRMATION_SEGMENT_PREFIX') ) {
     define('EVENTOSAPP_ATTENDANCE_CONFIRMATION_SEGMENT_PREFIX', 'evapp_attendance_segment_');
@@ -100,6 +100,50 @@ function eventosapp_attendance_confirmation_sanitize_status($status, $fallback =
     return array_key_exists($status, eventosapp_attendance_confirmation_status_options()) ? $status : $fallback;
 }
 
+/**
+ * Normaliza uno o varios estados de confirmación.
+ *
+ * Acepta el valor escalar histórico, arreglos enviados por los nuevos
+ * checkboxes y cadenas separadas por coma, espacio o "|". Mantener esta
+ * compatibilidad evita romper programaciones y segmentos creados antes de
+ * habilitar la selección múltiple.
+ */
+function eventosapp_attendance_confirmation_sanitize_statuses($statuses) {
+    if ( is_string($statuses) ) {
+        $decoded = json_decode($statuses, true);
+        if ( is_array($decoded) ) {
+            $statuses = $decoded;
+        } else {
+            $statuses = preg_split('/[\s,|]+/', $statuses);
+        }
+    } elseif ( is_scalar($statuses) ) {
+        $statuses = [$statuses];
+    }
+
+    $statuses = is_array($statuses) ? $statuses : [];
+    $allowed = array_keys(eventosapp_attendance_confirmation_status_options());
+    $clean = [];
+
+    foreach ( $statuses as $status ) {
+        if ( is_array($status) || is_object($status) ) continue;
+        $status = sanitize_key((string)$status);
+        if ( in_array($status, $allowed, true) && ! in_array($status, $clean, true) ) {
+            $clean[] = $status;
+        }
+    }
+
+    return $clean;
+}
+
+/**
+ * Conserva el formato escalar utilizado históricamente por los filtros.
+ * Cuando hay varios valores se serializan con "|", formato que el
+ * normalizador anterior puede volver a interpretar sin ambigüedad.
+ */
+function eventosapp_attendance_confirmation_serialize_statuses($statuses) {
+    return implode('|', eventosapp_attendance_confirmation_sanitize_statuses($statuses));
+}
+
 function eventosapp_attendance_confirmation_sanitize_channels($channels) {
     if ( is_string($channels) ) {
         $channels = preg_split('/[\s,|]+/', $channels);
@@ -162,7 +206,10 @@ function eventosapp_attendance_confirmation_field_definitions() {
     ];
 }
 
-function eventosapp_attendance_confirmation_status_meta_query($status) {
+/**
+ * Construye la cláusula individual de un estado de confirmación.
+ */
+function eventosapp_attendance_confirmation_single_status_meta_query($status) {
     $status = eventosapp_attendance_confirmation_sanitize_status($status, '');
     if ( $status === '' ) return null;
 
@@ -186,6 +233,30 @@ function eventosapp_attendance_confirmation_status_meta_query($status) {
         'value'   => $status,
         'compare' => '=',
     ];
+}
+
+/**
+ * Construye el meta_query para uno o varios estados.
+ *
+ * Los estados seleccionados se relacionan mediante OR: un ticket entra en la
+ * segmentación si coincide con cualquiera de ellos. "Sin consulta" mantiene
+ * además la compatibilidad con tickets antiguos que todavía no tienen la
+ * metakey creada.
+ */
+function eventosapp_attendance_confirmation_status_meta_query($status) {
+    $statuses = eventosapp_attendance_confirmation_sanitize_statuses($status);
+    if ( empty($statuses) ) return null;
+
+    $clauses = [];
+    foreach ( $statuses as $single_status ) {
+        $clause = eventosapp_attendance_confirmation_single_status_meta_query($single_status);
+        if ( is_array($clause) ) $clauses[] = $clause;
+    }
+
+    if ( empty($clauses) ) return null;
+    if ( count($clauses) === 1 ) return reset($clauses);
+
+    return array_merge(['relation' => 'OR'], $clauses);
 }
 
 function eventosapp_attendance_confirmation_get_channels($ticket_id, $type = 'sent') {
@@ -1174,7 +1245,7 @@ function eventosapp_attendance_confirmation_sanitize_filters($filters) {
     $filters = is_array($filters) ? $filters : [];
     $clean = [];
     $scalar_keys = [
-        'evento_id','localidad','modalidad','confirmation_status','email_status','whatsapp_status',
+        'evento_id','localidad','modalidad','email_status','whatsapp_status',
         'delivery_status','created_from','created_to','event_date','creation_channel','search',
     ];
     foreach ( $scalar_keys as $key ) {
@@ -1183,6 +1254,14 @@ function eventosapp_attendance_confirmation_sanitize_filters($filters) {
             if ( $value !== '' ) $clean[$key] = $value;
         }
     }
+
+    if ( array_key_exists('confirmation_status', $filters) ) {
+        $confirmation_statuses = eventosapp_attendance_confirmation_serialize_statuses($filters['confirmation_status']);
+        if ( $confirmation_statuses !== '' ) {
+            $clean['confirmation_status'] = $confirmation_statuses;
+        }
+    }
+
     if ( ! empty($filters['extra_fields']) && is_array($filters['extra_fields']) ) {
         $clean['extra_fields'] = [];
         foreach ( $filters['extra_fields'] as $key => $value ) {
@@ -1194,6 +1273,234 @@ function eventosapp_attendance_confirmation_sanitize_filters($filters) {
     }
     return $clean;
 }
+
+/**
+ * Identifica las pantallas administrativas donde existe el filtro de estado.
+ */
+function eventosapp_attendance_confirmation_is_status_filter_admin_screen() {
+    if ( ! is_admin() ) return false;
+
+    $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+    $page = isset($_GET['page']) ? sanitize_key(wp_unslash($_GET['page'])) : '';
+
+    if ( $page === 'eventosapp_attendance_confirmation_bulk' ) return true;
+
+    return $screen
+        && $screen->post_type === 'eventosapp_event'
+        && in_array($screen->base, ['post', 'post-new'], true);
+}
+
+/**
+ * Estilos del selector múltiple de estados.
+ */
+add_action('admin_head', function() {
+    if ( ! eventosapp_attendance_confirmation_is_status_filter_admin_screen() ) return;
+    ?>
+    <style>
+    .evapp-attendance-status-multiselect{
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+        padding:10px;
+        border:1px solid #8c8f94;
+        border-radius:4px;
+        background:#fff;
+        min-height:42px;
+        box-sizing:border-box;
+    }
+    .evapp-attendance-status-option{
+        display:inline-flex!important;
+        align-items:center;
+        gap:6px;
+        margin:0!important;
+        padding:7px 10px;
+        border:1px solid #dcdcde;
+        border-radius:999px;
+        background:#f6f7f7;
+        color:#1d2327!important;
+        font-weight:500!important;
+        line-height:1.2;
+        cursor:pointer;
+        user-select:none;
+    }
+    .evapp-attendance-status-option:hover{
+        border-color:#72aee6;
+        background:#f0f6fc;
+    }
+    .evapp-attendance-status-option.is-selected{
+        border-color:#2271b1;
+        background:#e7f3ff;
+        color:#0a4b78!important;
+    }
+    .evapp-attendance-status-option input{
+        margin:0!important;
+    }
+    .evapp-attendance-status-multiselect-help{
+        width:100%;
+        margin:2px 0 0;
+        color:#646970;
+        font-size:12px;
+        line-height:1.4;
+    }
+    </style>
+    <?php
+});
+
+/**
+ * Convierte el select original del módulo administrativo en un grupo de
+ * checkboxes. Se aplica también a los filtros cargados por AJAX y al metabox de
+ * programación, sin modificar el archivo administrativo existente.
+ */
+add_action('admin_footer', function() {
+    if ( ! eventosapp_attendance_confirmation_is_status_filter_admin_screen() ) return;
+
+    $saved_schedule_statuses = [];
+    $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+    if ( $screen && $screen->post_type === 'eventosapp_event' && $screen->base === 'post' ) {
+        $post_id = isset($_GET['post']) ? absint($_GET['post']) : 0;
+        if ( $post_id ) {
+            $schedule = get_post_meta($post_id, '_eventosapp_attendance_confirmation_schedule', true);
+            $schedule = is_array($schedule) ? $schedule : [];
+            $schedule_filters = is_array($schedule['filters'] ?? null) ? $schedule['filters'] : [];
+            $saved_schedule_statuses = eventosapp_attendance_confirmation_sanitize_statuses($schedule_filters['confirmation_status'] ?? []);
+        }
+    }
+    ?>
+    <script>
+    (function(){
+        'use strict';
+
+        const savedByName = {
+            'evapp_attendance_schedule[filters][confirmation_status]': <?php echo wp_json_encode(array_values($saved_schedule_statuses)); ?>
+        };
+
+        function uniqueValues(values){
+            return Array.from(new Set((values || []).filter(Boolean).map(String)));
+        }
+
+        function enhanceStatusSelect(select){
+            if (!select || select.dataset.evappStatusMultipleReady === '1') return;
+
+            const originalName = select.getAttribute('name') || '';
+            if (!originalName || originalName.indexOf('[confirmation_status]') === -1) return;
+
+            select.dataset.evappStatusMultipleReady = '1';
+
+            const options = Array.from(select.options || []).filter(function(option){
+                return String(option.value || '') !== '';
+            });
+            if (!options.length) return;
+
+            const optionSelectedValues = options.filter(function(option){
+                return option.selected;
+            }).map(function(option){
+                return String(option.value);
+            });
+            const initialValues = uniqueValues(
+                Object.prototype.hasOwnProperty.call(savedByName, originalName)
+                    ? savedByName[originalName]
+                    : optionSelectedValues
+            );
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'evapp-attendance-status-multiselect';
+            wrapper.setAttribute('role', 'group');
+            wrapper.setAttribute('aria-label', 'Estados de confirmación');
+
+            const allLabel = document.createElement('label');
+            allLabel.className = 'evapp-attendance-status-option';
+            const allInput = document.createElement('input');
+            allInput.type = 'checkbox';
+            allInput.className = 'evapp-attendance-status-all';
+            allInput.checked = initialValues.length === 0;
+            allLabel.appendChild(allInput);
+            allLabel.appendChild(document.createTextNode('Todos'));
+            wrapper.appendChild(allLabel);
+
+            const statusInputs = [];
+            options.forEach(function(option){
+                const label = document.createElement('label');
+                label.className = 'evapp-attendance-status-option';
+
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.name = originalName + '[]';
+                input.value = String(option.value);
+                input.checked = initialValues.indexOf(input.value) !== -1;
+
+                label.appendChild(input);
+                label.appendChild(document.createTextNode(String(option.textContent || option.value).trim()));
+                wrapper.appendChild(label);
+                statusInputs.push(input);
+            });
+
+            const help = document.createElement('p');
+            help.className = 'evapp-attendance-status-multiselect-help';
+            help.textContent = 'Puedes seleccionar uno o varios estados. “Todos” no aplica filtro por estado.';
+            wrapper.appendChild(help);
+
+            function syncVisualState(){
+                allLabel.classList.toggle('is-selected', allInput.checked);
+                statusInputs.forEach(function(input){
+                    const label = input.closest('.evapp-attendance-status-option');
+                    if (label) label.classList.toggle('is-selected', input.checked);
+                });
+            }
+
+            allInput.addEventListener('change', function(){
+                if (allInput.checked) {
+                    statusInputs.forEach(function(input){ input.checked = false; });
+                } else if (!statusInputs.some(function(input){ return input.checked; })) {
+                    allInput.checked = true;
+                }
+                syncVisualState();
+            });
+
+            statusInputs.forEach(function(input){
+                input.addEventListener('change', function(){
+                    const anyChecked = statusInputs.some(function(item){ return item.checked; });
+                    allInput.checked = !anyChecked;
+                    syncVisualState();
+                });
+            });
+
+            syncVisualState();
+            select.parentNode.insertBefore(wrapper, select);
+            select.remove();
+        }
+
+        function enhanceWithin(root){
+            if (!root || typeof root.querySelectorAll !== 'function') return;
+            if (root.matches && root.matches('select[name*="[confirmation_status]"]')) {
+                enhanceStatusSelect(root);
+            }
+            root.querySelectorAll('select[name*="[confirmation_status]"]').forEach(enhanceStatusSelect);
+        }
+
+        function start(){
+            enhanceWithin(document);
+            if (!document.body || typeof MutationObserver === 'undefined') return;
+
+            const observer = new MutationObserver(function(mutations){
+                mutations.forEach(function(mutation){
+                    mutation.addedNodes.forEach(function(node){
+                        if (node && node.nodeType === 1) enhanceWithin(node);
+                    });
+                });
+            });
+            observer.observe(document.body, {childList:true, subtree:true});
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', start, {once:true});
+        } else {
+            start();
+        }
+    })();
+    </script>
+    <?php
+});
+
 
 function eventosapp_attendance_confirmation_build_query_args($filters, $posts_per_page = -1) {
     $filters = eventosapp_attendance_confirmation_sanitize_filters($filters);
