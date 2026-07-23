@@ -139,7 +139,7 @@ if ( ! function_exists('eventosapp_virtual_landing_access_is_enabled') ) {
 
         return [
             'enabled' => false,
-            'message' => 'El acceso virtual se habilitará el ' . $label . '.',
+            'message' => 'El botón de acceso virtual se habilitará el ' . $label . '.',
             'label'   => $label,
         ];
     }
@@ -413,9 +413,10 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
                 .evapp-vl-ticket-row strong{color:var(--evapp-vl-text);}
                 .evapp-vl-ticket-row span{color:var(--evapp-vl-muted);text-align:right;}
                 .evapp-vl-badge{display:inline-flex;align-items:center;border-radius:999px;background:var(--evapp-vl-badge-bg);color:var(--evapp-vl-badge-text);font-weight:800;font-size:13px;padding:7px 12px;margin:0 0 14px;}
-                .evapp-vl-button{display:flex;align-items:center;justify-content:center;width:100%;min-height:54px;border-radius:16px;background:var(--evapp-vl-button-bg);color:var(--evapp-vl-button-text)!important;font-weight:900;text-decoration:none!important;font-size:17px;margin-top:18px;box-shadow:0 14px 28px rgba(37,99,235,.22);transition:transform .18s ease,opacity .18s ease;}
+                .evapp-vl-button{display:flex;align-items:center;justify-content:center;width:100%;min-height:54px;border:0;border-radius:16px;padding:0 18px;background:var(--evapp-vl-button-bg);color:var(--evapp-vl-button-text)!important;font-family:inherit;font-weight:900;text-decoration:none!important;font-size:17px;line-height:1.25;text-align:center;margin-top:18px;box-shadow:0 14px 28px rgba(37,99,235,.22);cursor:pointer;transition:transform .18s ease,opacity .18s ease;}
                 .evapp-vl-button:hover{transform:translateY(-1px);opacity:.95;}
-                .evapp-vl-button.is-disabled{opacity:.55;pointer-events:none;box-shadow:none;}
+                .evapp-vl-button.is-disabled{opacity:.55;pointer-events:none;box-shadow:none;transform:none;}
+                .evapp-vl-button:disabled{opacity:.55;box-shadow:none;cursor:not-allowed;transform:none;}
                 .evapp-vl-status{border-radius:16px;background:var(--evapp-vl-badge-bg);color:var(--evapp-vl-badge-text);padding:12px 14px;font-weight:700;font-size:14px;margin-top:14px;}
                 .evapp-vl-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:16px;padding:12px 14px;font-weight:700;font-size:14px;margin-top:14px;}
                 @media(max-width:900px){.evapp-vl-content{grid-template-columns:1fr}.evapp-vl-details{grid-template-columns:1fr}.evapp-virtual-landing{padding:18px 10px}.evapp-vl-card{padding:18px}.evapp-vl-hero-generated{min-height:170px;padding:24px}}
@@ -476,7 +477,18 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
                             <?php if ( ! $platform_url ): ?>
                                 <div class="evapp-vl-warning">El enlace de la sesión virtual todavía no está configurado.</div>
                             <?php elseif ( empty($access_state['enabled']) ): ?>
-                                <div class="evapp-vl-warning"><?php echo esc_html($access_state['message']); ?></div>
+                                <button
+                                    type="button"
+                                    class="<?php echo esc_attr($button_classes); ?>"
+                                    disabled
+                                    aria-disabled="true"
+                                    aria-describedby="evappVirtualAccessWarning-<?php echo esc_attr($event_id . '-' . $ticket_id); ?>"
+                                >
+                                    <?php echo esc_html($button_label); ?>
+                                </button>
+                                <div class="evapp-vl-warning" id="evappVirtualAccessWarning-<?php echo esc_attr($event_id . '-' . $ticket_id); ?>">
+                                    <?php echo esc_html($access_state['message']); ?>
+                                </div>
                             <?php else: ?>
                                 <a id="evappVirtualEnterButton-<?php echo esc_attr($event_id . '-' . $ticket_id); ?>" class="<?php echo esc_attr($button_classes); ?>" href="<?php echo esc_url($platform_url); ?>" data-ajax-url="<?php echo esc_url($ajax_url); ?>" data-target-url="<?php echo esc_url($platform_url); ?>">
                                     <?php echo esc_html($button_label); ?>
