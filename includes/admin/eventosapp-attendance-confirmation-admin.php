@@ -184,6 +184,12 @@ function eventosapp_attendance_confirmation_render_bulk_styles() {
     .evapp-attendance-field:last-child{margin-bottom:0}
     .evapp-attendance-field label{display:block;font-weight:600;margin-bottom:6px;color:#1d2327}
     .evapp-attendance-field input[type=text],.evapp-attendance-field input[type=date],.evapp-attendance-field input[type=time],.evapp-attendance-field input[type=search],.evapp-attendance-field select,.evapp-attendance-field textarea{width:100%;max-width:none}
+    .evapp-attendance-status-multiselect{display:flex;flex-wrap:wrap;gap:8px;padding:10px;border:1px solid #8c8f94;border-radius:4px;background:#fff;min-height:42px;box-sizing:border-box}
+    .evapp-attendance-status-option{display:inline-flex!important;align-items:center;gap:6px;margin:0!important;padding:7px 10px;border:1px solid #dcdcde;border-radius:999px;background:#f6f7f7;color:#1d2327!important;font-weight:500!important;line-height:1.2;cursor:pointer;user-select:none}
+    .evapp-attendance-status-option:hover{border-color:#72aee6;background:#f0f6fc}
+    .evapp-attendance-status-option.is-selected{border-color:#2271b1;background:#e7f3ff;color:#0a4b78!important}
+    .evapp-attendance-status-option input{margin:0!important}
+    .evapp-attendance-status-multiselect-help{width:100%;margin:2px 0 0;color:#646970;font-size:12px;line-height:1.4}
     .evapp-attendance-inline{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
     .evapp-attendance-help{color:#646970;font-size:12px;line-height:1.45;margin:5px 0 0}
     .evapp-attendance-channel-switches{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
@@ -213,6 +219,34 @@ function eventosapp_attendance_confirmation_render_bulk_styles() {
     @media(max-width:1000px){.evapp-attendance-grid,.evapp-attendance-channel-grid{grid-template-columns:1fr}.evapp-attendance-summary-grid{grid-template-columns:1fr 1fr}}
     @media(max-width:782px){.evapp-attendance-page-head{display:block}.evapp-attendance-page-actions{justify-content:flex-start;margin-top:14px}.evapp-attendance-steps{grid-template-columns:1fr}.evapp-attendance-summary-grid{grid-template-columns:1fr}}
     </style>
+    <script>
+    jQuery(function($){
+        $(document)
+            .off('change.evappAttendanceStatusAll', '.evapp-attendance-status-all')
+            .on('change.evappAttendanceStatusAll', '.evapp-attendance-status-all', function(){
+                const $group = $(this).closest('.evapp-attendance-status-multiselect');
+                if (this.checked) {
+                    $group.find('.evapp-attendance-status-value').prop('checked', false);
+                } else if (!$group.find('.evapp-attendance-status-value:checked').length) {
+                    this.checked = true;
+                }
+                $group.find('.evapp-attendance-status-option').each(function(){
+                    $(this).toggleClass('is-selected', $(this).find('input').prop('checked'));
+                });
+            });
+
+        $(document)
+            .off('change.evappAttendanceStatusValue', '.evapp-attendance-status-value')
+            .on('change.evappAttendanceStatusValue', '.evapp-attendance-status-value', function(){
+                const $group = $(this).closest('.evapp-attendance-status-multiselect');
+                const hasSelectedStatus = $group.find('.evapp-attendance-status-value:checked').length > 0;
+                $group.find('.evapp-attendance-status-all').prop('checked', !hasSelectedStatus);
+                $group.find('.evapp-attendance-status-option').each(function(){
+                    $(this).toggleClass('is-selected', $(this).find('input').prop('checked'));
+                });
+            });
+    });
+    </script>
     <?php
 }
 
@@ -220,6 +254,9 @@ function eventosapp_attendance_confirmation_render_filter_fields($prefix = 'filt
     $values = is_array($values) ? $values : [];
     $localidades = eventosapp_attendance_confirmation_admin_localidades($event_id);
     $status_options = eventosapp_attendance_confirmation_status_options();
+    $selected_statuses = function_exists('eventosapp_attendance_confirmation_sanitize_statuses')
+        ? eventosapp_attendance_confirmation_sanitize_statuses($values['confirmation_status'] ?? [])
+        : array_values(array_filter((array)($values['confirmation_status'] ?? [])));
     $creation_channels = function_exists('eventosapp_creation_channel_labels') ? eventosapp_creation_channel_labels() : [
         'public'=>'Inscripción Usuario','manual'=>'Manual','webhook'=>'Integración','import'=>'Importación',
     ];
@@ -240,10 +277,26 @@ function eventosapp_attendance_confirmation_render_filter_fields($prefix = 'filt
         </div>
         <div class="evapp-attendance-field">
             <label>Estado de confirmación</label>
-            <select name="<?php echo esc_attr($prefix); ?>[confirmation_status]">
-                <option value="">Todos</option>
-                <?php foreach ($status_options as $key=>$label): ?><option value="<?php echo esc_attr($key); ?>" <?php selected($values['confirmation_status'] ?? '', $key); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?>
-            </select>
+            <div class="evapp-attendance-status-multiselect" role="group" aria-label="Estados de confirmación">
+                <label class="evapp-attendance-status-option <?php echo empty($selected_statuses) ? 'is-selected' : ''; ?>">
+                    <input type="checkbox" class="evapp-attendance-status-all" <?php checked(empty($selected_statuses)); ?>>
+                    Todos
+                </label>
+                <?php foreach ($status_options as $key=>$label): ?>
+                    <?php $is_selected = in_array($key, $selected_statuses, true); ?>
+                    <label class="evapp-attendance-status-option <?php echo $is_selected ? 'is-selected' : ''; ?>">
+                        <input
+                            type="checkbox"
+                            class="evapp-attendance-status-value"
+                            name="<?php echo esc_attr($prefix); ?>[confirmation_status][]"
+                            value="<?php echo esc_attr($key); ?>"
+                            <?php checked($is_selected); ?>
+                        >
+                        <?php echo esc_html($label); ?>
+                    </label>
+                <?php endforeach; ?>
+                <p class="evapp-attendance-status-multiselect-help">Puedes seleccionar uno o varios estados. “Todos” no aplica filtro por estado.</p>
+            </div>
         </div>
         <div class="evapp-attendance-field">
             <label>Consulta por correo</label>
@@ -380,7 +433,7 @@ function eventosapp_attendance_confirmation_render_bulk_form() {
     eventosapp_attendance_confirmation_render_bulk_styles();
     $events = eventosapp_attendance_confirmation_admin_events();
     ?>
-    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="evapp-attendance-segment-form">
         <input type="hidden" name="action" value="eventosapp_attendance_confirmation_create_segment">
         <?php wp_nonce_field('eventosapp_attendance_confirmation_create_segment','evapp_attendance_nonce'); ?>
         <div class="evapp-attendance-card">
@@ -400,6 +453,14 @@ function eventosapp_attendance_confirmation_render_bulk_form() {
             $.post(ajaxurl,{action:'eventosapp_attendance_confirmation_filter_fields',event_id:id,nonce:'<?php echo esc_js(wp_create_nonce('eventosapp_attendance_confirmation_filter_fields')); ?>'},function(r){
                 target.html(r.success?r.data.html:'<p class="notice notice-error">'+(r.data&&r.data.message?r.data.message:'No se pudieron cargar los filtros.')+'</p>');
             });
+        });
+
+        $('#evapp-attendance-segment-form').on('submit', function(){
+            const $button = $(this).find('button[type=submit], input[type=submit]').first();
+            if ($button.prop('disabled')) return false;
+            $button.prop('disabled', true);
+            if ($button.is('input')) $button.val('Creando segmentación…');
+            else $button.text('Creando segmentación…');
         });
     });
     </script>
