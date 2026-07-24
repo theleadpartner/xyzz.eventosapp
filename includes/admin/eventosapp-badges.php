@@ -1418,6 +1418,7 @@ function eventosapp_render_badge_metabox($post) {
         $border_width = 0;
     }
     $border_width = (int) $border_width;
+    $android_print_preview = (string) get_post_meta($post->ID, 'eventosapp_badge_android_print_preview', true) === '1';
 
     $preview_ticket_key = get_post_meta($post->ID, 'eventosapp_badge_ticket_key', true) ?: '';
     $options            = eventosapp_get_all_available_fields($post->ID);
@@ -1504,6 +1505,19 @@ function eventosapp_render_badge_metabox($post) {
                 <?php endforeach; ?>
               </select>
               <span class="evapp-badge-help"><?php _e('Las medidas y márgenes se crean o editan en la nueva página Biblioteca de Escarapelas.', 'eventosapp'); ?></span>
+            </div>
+
+            <div class="evapp-badge-field">
+              <label for="eventosapp_badge_android_print_preview">
+                <input type="checkbox"
+                       name="eventosapp_badge_android_print_preview"
+                       id="eventosapp_badge_android_print_preview"
+                       value="1" <?php checked($android_print_preview); ?>>
+                <?php _e('Mostrar vista previa en la app Android antes de imprimir', 'eventosapp'); ?>
+              </label>
+              <span class="evapp-badge-help">
+                <?php _e('Cuando está activa, la app muestra la interpretación final de la escarapela y exige confirmación antes de enviar datos por Bluetooth. Al desactivarla, la impresión continúa directamente como hasta ahora.', 'eventosapp'); ?>
+              </span>
             </div>
 
             <div class="evapp-paper-row">
@@ -1812,6 +1826,12 @@ add_action('save_post_eventosapp_event', function($post_id){
         update_post_meta($post_id, 'eventosapp_badge_paper_template', $paper_template);
     }
 
+    update_post_meta(
+        $post_id,
+        'eventosapp_badge_android_print_preview',
+        !empty($_POST['eventosapp_badge_android_print_preview']) ? '1' : '0'
+    );
+
     if (isset($_POST['eventosapp_badge_design'])) {
         $d = sanitize_key($_POST['eventosapp_badge_design']);
         if (in_array($d, ['manillas','escarapelas','escarapelas_split','escarapelas_split_4'], true)) {
@@ -1962,6 +1982,7 @@ function eventosapp_get_badge_settings($evento_id) {
         'qr_size'             => max(1, (int) $get('eventosapp_badge_qr_size', 72)),
         'border_width'        => max(0, (int) $get('eventosapp_badge_border_width', 0)),
         'text_align'          => $text_align,
+        'android_print_preview' => (string) $get('eventosapp_badge_android_print_preview', '0') === '1',
     ];
 }
 
@@ -2048,6 +2069,8 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="eventosapp-print-preview" content="<?php echo !empty($cfg['android_print_preview']) ? '1' : '0'; ?>">
+<meta name="eventosapp-badge-render-contract" content="2">
 <title>Escarapela</title>
 <style>
   @page {
@@ -2126,7 +2149,9 @@ function eventosapp_get_badge_html_from_event($evento_id, $ticket_id = 0, $auto_
      data-paper-margin-mm="<?php echo esc_attr($paper_margin_mm); ?>"
      data-paper-orientation="<?php echo esc_attr($paper_orientation); ?>"
      data-paper-page-orientation="<?php echo esc_attr($paper_page_orientation); ?>"
-     data-content-rotation="<?php echo esc_attr($paper_content_rotation); ?>">
+     data-content-rotation="<?php echo esc_attr($paper_content_rotation); ?>"
+     data-android-print-preview="<?php echo !empty($cfg['android_print_preview']) ? '1' : '0'; ?>"
+     data-render-contract-version="2">
   <div class="badge-print-safe">
     <div class="badge" data-event-id="<?php echo esc_attr($evento_id); ?>" data-ticket-id="<?php echo esc_attr($ticket_id); ?>">
 <?php
