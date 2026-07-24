@@ -1,0 +1,46 @@
+name: Apply Android badge preview backend option
+
+on:
+  push:
+    branches:
+      - feature/android-badge-print-preview
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-lint:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/android-badge-print-preview
+          fetch-depth: 0
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+
+      - name: Apply backend changes
+        run: python3 .github/scripts/apply_android_badge_preview.py
+
+      - name: Validate PHP syntax
+        run: php -l includes/admin/eventosapp-badges.php
+
+      - name: Commit validated sources
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+          else
+            git commit -m "Add per-event Android badge print preview option"
+            git push origin HEAD:feature/android-badge-print-preview
+          fi
