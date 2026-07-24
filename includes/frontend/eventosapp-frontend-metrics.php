@@ -2595,8 +2595,9 @@ add_action('wp_ajax_eventosapp_export_tickets', function(){
         'Ticket Public ID','Ticket Post ID','Evento ID','Evento',
         'Secuencia Interna',
         'Nombre','Apellido','CC','Email','Teléfono','Empresa','NIT','Cargo','Localidad','Modalidad del Ticket',
-        'Confirmación de asistencia','Canales consultados para confirmación','Canales de respuesta de confirmación',
-        'Último canal de respuesta','Fecha de última respuesta','Conflicto de respuestas',
+        'Estado de confirmación de asistencia','Medio enviado para confirmación','Medio en que respondió',
+        'Fecha del primer envío de confirmación','Fecha del último envío de confirmación',
+        'Último medio de respuesta','Fecha de última respuesta','Conflicto de respuestas',
         'Checked-In (algún día)', 'Checked-In presencial (algún día)', 'Checked-In virtual (algún día)'
     ];
     if (!empty($extra_fields)) {
@@ -2661,6 +2662,110 @@ $headers[] = 'Fecha creación';
         return ($na <= $nb) ? $a : $b;
     };
 
+    // Normaliza canales de confirmación incluso si el motor especializado no
+    // terminó de cargar o el ticket conserva un formato histórico.
+    $format_attendance_channels = function($value){
+        if (is_string($value)) {
+            $value = maybe_unserialize($value);
+        }
+        if (is_string($value)) {
+            $value = preg_split('/[\s,|]+/', $value);
+        }
+        if (!is_array($value)) {
+            $value = [];
+        }
+
+        $labels = [
+            'email'    => 'Correo electrónico',
+            'whatsapp' => 'WhatsApp',
+        ];
+        $out = [];
+        foreach ($value as $channel) {
+            if (is_array($channel) || is_object($channel)) continue;
+            $channel = sanitize_key((string)$channel);
+            if ($channel === '') continue;
+            $label = $labels[$channel] ?? ucwords(str_replace('_', ' ', $channel));
+            if (!in_array($label, $out, true)) {
+                $out[] = $label;
+            }
+        }
+        return implode(', ', $out);
+    };
+
+    // Mantiene las fechas MySQL guardadas por WordPress sin desplazarlas de
+    // zona horaria. Otros formatos válidos se convierten a la zona del sitio.
+    $format_attendance_datetime = function($value){
+        if (is_array($value) || is_object($value)) return '';
+        $value = trim(sanitize_text_field((string)$value));
+        if ($value === '') return '';
+        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $value)) {
+            return $value;
+        }
+        $timestamp = strtotime($value);
+        return $timestamp ? wp_date('Y-m-d H:i:s', $timestamp, wp_timezone()) : $value;
+    };
+
+    // Resuelve primer y último envío desde las metas canónicas. Para tickets
+    // antiguos, recupera fechas desde el historial y las metas por canal.
+    $resolve_attendance_sent_dates = function($ticket_id) use ($format_attendance_datetime){
+        $first = get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_first_sent_at', true);
+        $last  = get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_last_sent_at', true);
+
+        $candidates = [];
+        foreach ([
+            $first,
+            $last,
+            get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_email_sent_at', true),
+            get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_whatsapp_sent_at', true),
+        ] as $candidate) {
+            if (is_scalar($candidate) && trim((string)$candidate) !== '') {
+                $candidate = trim((string)$candidate);
+                $timestamp = strtotime($candidate);
+                if ($timestamp) $candidates[$timestamp . '|' . $candidate] = $candidate;
+            }
+        }
+
+        $history = get_post_meta($ticket_id, '_eventosapp_attendance_confirmation_history', true);
+        if (is_string($history)) $history = maybe_unserialize($history);
+        if (is_array($history)) {
+            foreach ($history as $entry) {
+                if (!is_array($entry) || sanitize_key((string)($entry['type'] ?? '')) !== 'send') continue;
+                $candidate = trim((string)($entry['at'] ?? ''));
+                $timestamp = $candidate !== '' ? strtotime($candidate) : false;
+                if ($timestamp) $candidates[$timestamp . '|' . $candidate] = $candidate;
+            }
+        }
+
+        if ((!is_scalar($first) || trim((string)$first) === '') && !empty($candidates)) {
+            $ordered = [];
+            foreach ($candidates as $candidate) {
+                $timestamp = strtotime($candidate);
+                if ($timestamp) $ordered[$timestamp] = $candidate;
+            }
+            if (!empty($ordered)) {
+                ksort($ordered, SORT_NUMERIC);
+                $first = reset($ordered);
+            }
+        }
+
+        if ((!is_scalar($last) || trim((string)$last) === '') && !empty($candidates)) {
+            $ordered = [];
+            foreach ($candidates as $candidate) {
+                $timestamp = strtotime($candidate);
+                if ($timestamp) $ordered[$timestamp] = $candidate;
+            }
+            if (!empty($ordered)) {
+                ksort($ordered, SORT_NUMERIC);
+                $last = end($ordered);
+            }
+        }
+
+        return [
+            'first' => $format_attendance_datetime($first),
+            'last'  => $format_attendance_datetime($last),
+        ];
+    };
+
     foreach ($ids as $tid) {
         $row = [];
         $pub_id   = get_post_meta($tid, 'eventosapp_ticketID', true);
@@ -2698,13 +2803,36 @@ $headers[] = 'Fecha creación';
         $attendance_sent_channels = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value')
             ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_sent_channels', true)
             : '';
+        if (!is_scalar($attendance_sent_channels) || trim((string)$attendance_sent_channels) === '') {
+            $attendance_sent_channels = $format_attendance_channels(
+                get_post_meta($tid, '_eventosapp_attendance_confirmation_sent_channels', true)
+            );
+        }
+
         $attendance_response_channels = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value')
             ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_response_channels', true)
             : '';
+        if (!is_scalar($attendance_response_channels) || trim((string)$attendance_response_channels) === '') {
+            $attendance_response_channels = $format_attendance_channels(
+                get_post_meta($tid, '_eventosapp_attendance_confirmation_response_channels', true)
+            );
+        }
+
+        $attendance_sent_dates = $resolve_attendance_sent_dates($tid);
+        $attendance_first_sent_at = $attendance_sent_dates['first'];
+        $attendance_last_sent_at  = $attendance_sent_dates['last'];
+
         $attendance_last_response_channel = function_exists('eventosapp_attendance_confirmation_get_ticket_field_value')
             ? eventosapp_attendance_confirmation_get_ticket_field_value($tid, 'attendance_confirmation_last_response_channel', true)
-            : sanitize_text_field((string)get_post_meta($tid, '_eventosapp_attendance_confirmation_last_response_channel', true));
-        $attendance_last_response_at = sanitize_text_field((string)get_post_meta($tid, '_eventosapp_attendance_confirmation_last_response_at', true));
+            : '';
+        if (!is_scalar($attendance_last_response_channel) || trim((string)$attendance_last_response_channel) === '') {
+            $attendance_last_response_channel = $format_attendance_channels([
+                get_post_meta($tid, '_eventosapp_attendance_confirmation_last_response_channel', true),
+            ]);
+        }
+        $attendance_last_response_at = $format_attendance_datetime(
+            get_post_meta($tid, '_eventosapp_attendance_confirmation_last_response_at', true)
+        );
         $attendance_conflict = get_post_meta($tid, '_eventosapp_attendance_confirmation_conflict', true) === '1' ? 'SI' : 'NO';
 
         $status_arr = get_post_meta($tid, '_eventosapp_checkin_status', true);
@@ -2810,6 +2938,8 @@ $headers[] = 'Fecha creación';
         $row[] = (string)$attendance_status_label;
         $row[] = (string)$attendance_sent_channels;
         $row[] = (string)$attendance_response_channels;
+        $row[] = (string)$attendance_first_sent_at;
+        $row[] = (string)$attendance_last_sent_at;
         $row[] = (string)$attendance_last_response_channel;
         $row[] = (string)$attendance_last_response_at;
         $row[] = (string)$attendance_conflict;
