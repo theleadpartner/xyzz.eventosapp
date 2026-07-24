@@ -3805,6 +3805,34 @@ function eventosapp_whatsapp_flows_bulk_checkin_status_options() {
     ];
 }
 
+function eventosapp_whatsapp_flows_bulk_flow_sent_filter_options() {
+    return [
+        'include_sent' => 'Incluir solo tickets con envío aceptado de este Flow',
+        'exclude_sent' => 'Excluir tickets con envío aceptado (solo no enviados)',
+    ];
+}
+
+function eventosapp_whatsapp_flows_bulk_flow_received_filter_options() {
+    return [
+        'include_received' => 'Incluir solo tickets que ya recibieron este Flow',
+        'exclude_received' => 'Excluir tickets que ya recibieron este Flow',
+    ];
+}
+
+function eventosapp_whatsapp_flows_bulk_flow_response_filter_options() {
+    return [
+        'include_responded' => 'Incluir solo tickets que ya respondieron este Flow',
+        'exclude_responded' => 'Excluir tickets que ya respondieron este Flow',
+    ];
+}
+
+function eventosapp_whatsapp_flows_bulk_checkin_filter_options() {
+    return [
+        'include_checked_in' => 'Incluir solo asistentes con check-in',
+        'exclude_checked_in' => 'Excluir asistentes con check-in (solo sin check-in)',
+    ];
+}
+
 function eventosapp_whatsapp_flows_bulk_get_ticket_modalidad_key($ticket_id, $event_id = 0) {
     $ticket_id = absint($ticket_id);
     $event_id = absint($event_id);
@@ -4361,9 +4389,132 @@ function eventosapp_whatsapp_flows_bulk_existing_ticket_ids($flow_post_id, $even
     return array_values(array_unique($found));
 }
 
+
+function eventosapp_whatsapp_flows_bulk_get_flow_ticket_states($flow_post_id, $event_id, $ticket_ids = []) {
+    global $wpdb;
+
+    eventosapp_whatsapp_flows_maybe_install_tables();
+
+    $flow_post_id = absint($flow_post_id);
+    $event_id = absint($event_id);
+    $ticket_ids = array_values(array_unique(array_filter(array_map('absint', is_array($ticket_ids) ? $ticket_ids : []))));
+
+    $states = [];
+    foreach ( $ticket_ids as $ticket_id ) {
+        $states[$ticket_id] = [
+            'sent'            => false,
+            'received'        => false,
+            'responded'       => false,
+            'latest_send_id'  => 0,
+            'latest_status'   => '',
+            'latest_delivery' => '',
+        ];
+    }
+
+    if ( ! $flow_post_id || ! $event_id || empty($ticket_ids) ) {
+        return $states;
+    }
+
+    $sends_table = eventosapp_whatsapp_flows_sends_table_name();
+    $responses_table = eventosapp_whatsapp_flows_responses_table_name();
+    $accepted_statuses = [
+        'sent_request',
+        'webhook_sent',
+        'webhook_delivered',
+        'webhook_read',
+        'sent',
+        'delivered',
+        'read',
+        'response_received',
+    ];
+    $received_statuses = [
+        'webhook_delivered',
+        'webhook_read',
+        'delivered',
+        'read',
+        'response_received',
+    ];
+
+    foreach ( array_chunk($ticket_ids, 500) as $chunk ) {
+        $placeholders = implode(',', array_fill(0, count($chunk), '%d'));
+        $params = array_merge([$flow_post_id, $event_id], $chunk);
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, ticket_id, status, delivery_status, response_received, wa_message_id, responded_at
+             FROM {$sends_table}
+             WHERE flow_post_id = %d
+               AND event_id = %d
+               AND ticket_id IN ({$placeholders})
+             ORDER BY id ASC",
+            $params
+        ), ARRAY_A);
+
+        foreach ( (array) $rows as $row ) {
+            $ticket_id = absint($row['ticket_id'] ?? 0);
+            if ( ! $ticket_id || ! isset($states[$ticket_id]) ) {
+                continue;
+            }
+
+            $status = sanitize_key((string)($row['status'] ?? ''));
+            $delivery_status = sanitize_key((string)($row['delivery_status'] ?? ''));
+            $message_id = trim((string)($row['wa_message_id'] ?? ''));
+            $is_failed = strpos($status, 'failed') === 0;
+
+            if ( ! $is_failed && ($message_id !== '' || in_array($status, $accepted_statuses, true)) ) {
+                $states[$ticket_id]['sent'] = true;
+            }
+
+            if ( in_array($delivery_status, ['delivered', 'read'], true) || in_array($status, $received_statuses, true) ) {
+                $states[$ticket_id]['received'] = true;
+                $states[$ticket_id]['sent'] = true;
+            }
+
+            if ( ! empty($row['response_received']) || ! empty($row['responded_at']) || $status === 'response_received' ) {
+                $states[$ticket_id]['responded'] = true;
+                $states[$ticket_id]['received'] = true;
+                $states[$ticket_id]['sent'] = true;
+            }
+
+            $send_id = absint($row['id'] ?? 0);
+            if ( $send_id >= absint($states[$ticket_id]['latest_send_id']) ) {
+                $states[$ticket_id]['latest_send_id'] = $send_id;
+                $states[$ticket_id]['latest_status'] = $status;
+                $states[$ticket_id]['latest_delivery'] = $delivery_status;
+            }
+        }
+
+        $response_placeholders = implode(',', array_fill(0, count($chunk), '%d'));
+        $response_params = array_merge([$flow_post_id, $event_id, $event_id], $chunk, $chunk);
+        $response_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT r.ticket_id AS response_ticket_id, s.ticket_id AS send_ticket_id
+             FROM {$responses_table} r
+             LEFT JOIN {$sends_table} s ON s.id = r.send_id
+             WHERE r.flow_post_id = %d
+               AND (r.event_id = %d OR s.event_id = %d)
+               AND (r.ticket_id IN ({$response_placeholders}) OR s.ticket_id IN ({$response_placeholders}))",
+            $response_params
+        ), ARRAY_A);
+
+        foreach ( (array) $response_rows as $response_row ) {
+            $ticket_id = absint($response_row['response_ticket_id'] ?? 0);
+            if ( ! $ticket_id ) {
+                $ticket_id = absint($response_row['send_ticket_id'] ?? 0);
+            }
+            if ( ! $ticket_id || ! isset($states[$ticket_id]) ) {
+                continue;
+            }
+            $states[$ticket_id]['responded'] = true;
+            $states[$ticket_id]['received'] = true;
+            $states[$ticket_id]['sent'] = true;
+        }
+    }
+
+    return $states;
+}
+
 function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
     $filters = is_array($filters) ? $filters : [];
     $event_id = absint($filters['evento_id'] ?? 0);
+    $flow_post_id = absint($filters['flow_id'] ?? 0);
     $event_date = ! empty($filters['event_date']) ? eventosapp_whatsapp_flows_bulk_normalize_ymd($filters['event_date']) : '';
     $event_days = $event_id ? eventosapp_whatsapp_flows_bulk_get_event_valid_days($event_id) : [];
 
@@ -4389,12 +4540,38 @@ function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
         }
     }
 
-    $checkin_status_filter = '';
-    if ( ! empty($filters['checkin_status']) ) {
-        $checkin_status_filter = sanitize_key((string) $filters['checkin_status']);
-        if ( ! in_array($checkin_status_filter, ['checked_in', 'not_checked_in'], true) ) {
-            $checkin_status_filter = '';
+    $checkin_filter = sanitize_key((string)($filters['checkin_filter'] ?? ''));
+    if ( ! in_array($checkin_filter, ['include_checked_in', 'exclude_checked_in'], true) ) {
+        $legacy_checkin_filter = sanitize_key((string)($filters['checkin_status'] ?? ''));
+        if ( $legacy_checkin_filter === 'checked_in' ) {
+            $checkin_filter = 'include_checked_in';
+        } elseif ( $legacy_checkin_filter === 'not_checked_in' ) {
+            $checkin_filter = 'exclude_checked_in';
+        } else {
+            $checkin_filter = '';
         }
+    }
+
+    $flow_sent_filter = sanitize_key((string)($filters['flow_sent_filter'] ?? ''));
+    if ( ! in_array($flow_sent_filter, ['include_sent', 'exclude_sent'], true) ) {
+        $legacy_flow_filter = sanitize_key((string)($filters['flow_send_status'] ?? ''));
+        if ( $legacy_flow_filter === 'recibido' ) {
+            $flow_sent_filter = 'include_sent';
+        } elseif ( $legacy_flow_filter === 'no_recibido' ) {
+            $flow_sent_filter = 'exclude_sent';
+        } else {
+            $flow_sent_filter = '';
+        }
+    }
+
+    $flow_received_filter = sanitize_key((string)($filters['flow_received_filter'] ?? ''));
+    if ( ! in_array($flow_received_filter, ['include_received', 'exclude_received'], true) ) {
+        $flow_received_filter = '';
+    }
+
+    $flow_response_filter = sanitize_key((string)($filters['flow_response_filter'] ?? ''));
+    if ( ! in_array($flow_response_filter, ['include_responded', 'exclude_responded'], true) ) {
+        $flow_response_filter = '';
     }
 
     $args = [
@@ -4515,7 +4692,7 @@ function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
         $meta_keys[] = '_eventosapp_whatsapp_first_sent_at';
         $meta_keys[] = '_eventosapp_whatsapp_last_sent_at';
     }
-    if ( $checkin_status_filter !== '' ) {
+    if ( $checkin_filter !== '' ) {
         $meta_keys[] = '_eventosapp_checkin_status';
         $meta_keys[] = '_eventosapp_virtual_checkin_status';
     }
@@ -4570,13 +4747,13 @@ function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
                 }
             }
 
-            if ( $checkin_status_filter !== '' ) {
+            if ( $checkin_filter !== '' ) {
                 $ticket_event_days = $ticket_event_id ? eventosapp_whatsapp_flows_bulk_get_event_valid_days($ticket_event_id) : [];
                 $has_checkin = eventosapp_whatsapp_flows_bulk_ticket_has_any_checkin_from_meta($tid, $meta_map, $ticket_event_days, $event_date);
-                if ( $checkin_status_filter === 'checked_in' && ! $has_checkin ) {
+                if ( $checkin_filter === 'include_checked_in' && ! $has_checkin ) {
                     continue;
                 }
-                if ( $checkin_status_filter === 'not_checked_in' && $has_checkin ) {
+                if ( $checkin_filter === 'exclude_checked_in' && $has_checkin ) {
                     continue;
                 }
             }
@@ -4589,25 +4766,52 @@ function eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters) {
         $page++;
     } while ( $count_page >= $args['posts_per_page'] && $page <= $max_pages_guard );
 
-    $flow_send_status = sanitize_key((string)($filters['flow_send_status'] ?? ''));
-    $flow_post_id = absint($filters['flow_id'] ?? 0);
-    if ( $flow_post_id && $event_id && in_array($flow_send_status, ['no_recibido', 'recibido'], true) ) {
-        $existing = eventosapp_whatsapp_flows_bulk_existing_ticket_ids($flow_post_id, $event_id, $ticket_ids);
-        if ( ! empty($existing) ) {
-            $existing_map = array_fill_keys(array_map('strval', $existing), true);
-            $ticket_ids = array_values(array_filter($ticket_ids, function($tid) use ($flow_send_status, $existing_map) {
-                $has_existing = isset($existing_map[(string) absint($tid)]);
-                return $flow_send_status === 'recibido' ? $has_existing : ! $has_existing;
-            }));
-        } elseif ( $flow_send_status === 'recibido' ) {
+    $requires_flow_state = $flow_sent_filter !== '' || $flow_received_filter !== '' || $flow_response_filter !== '';
+    if ( $requires_flow_state ) {
+        if ( ! $flow_post_id || ! $event_id || empty($ticket_ids) ) {
             $ticket_ids = [];
+        } else {
+            $flow_states = eventosapp_whatsapp_flows_bulk_get_flow_ticket_states($flow_post_id, $event_id, $ticket_ids);
+            $ticket_ids = array_values(array_filter($ticket_ids, function($ticket_id) use ($flow_states, $flow_sent_filter, $flow_received_filter, $flow_response_filter) {
+                $ticket_id = absint($ticket_id);
+                $state = $flow_states[$ticket_id] ?? [
+                    'sent'      => false,
+                    'received'  => false,
+                    'responded' => false,
+                ];
+
+                $sent = ! empty($state['sent']);
+                $received = ! empty($state['received']);
+                $responded = ! empty($state['responded']);
+
+                if ( $flow_sent_filter === 'include_sent' && ! $sent ) {
+                    return false;
+                }
+                if ( $flow_sent_filter === 'exclude_sent' && $sent ) {
+                    return false;
+                }
+                if ( $flow_received_filter === 'include_received' && ! $received ) {
+                    return false;
+                }
+                if ( $flow_received_filter === 'exclude_received' && $received ) {
+                    return false;
+                }
+                if ( $flow_response_filter === 'include_responded' && ! $responded ) {
+                    return false;
+                }
+                if ( $flow_response_filter === 'exclude_responded' && $responded ) {
+                    return false;
+                }
+
+                return true;
+            }));
         }
     }
 
     return array_values(array_unique(array_map('absint', $ticket_ids)));
 }
 
-function eventosapp_whatsapp_flows_bulk_preview_ticket_row($ticket_id, $flow_post_id, $event_id) {
+function eventosapp_whatsapp_flows_bulk_preview_ticket_row($ticket_id, $flow_post_id, $event_id, $flow_state = []) {
     $ticket_id = absint($ticket_id);
     $event_id = absint($event_id ?: get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
     $first = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
@@ -4624,7 +4828,13 @@ function eventosapp_whatsapp_flows_bulk_preview_ticket_row($ticket_id, $flow_pos
     $delivery_status = get_post_meta($ticket_id, '_eventosapp_whatsapp_delivery_status', true);
     $status_label = function_exists('eventosapp_whatsapp_status_label') ? eventosapp_whatsapp_status_label($last_status) : ($last_status ?: 'Sin estado');
     $delivery_label = $delivery_status && function_exists('eventosapp_whatsapp_status_label') ? eventosapp_whatsapp_status_label($delivery_status) : $delivery_status;
-    $existing = eventosapp_whatsapp_flows_bulk_existing_ticket_ids($flow_post_id, $event_id, [$ticket_id]);
+    if ( ! is_array($flow_state) || empty($flow_state) ) {
+        $flow_states = eventosapp_whatsapp_flows_bulk_get_flow_ticket_states($flow_post_id, $event_id, [$ticket_id]);
+        $flow_state = $flow_states[$ticket_id] ?? [];
+    }
+    $flow_sent = ! empty($flow_state['sent']);
+    $flow_received = ! empty($flow_state['received']);
+    $flow_responded = ! empty($flow_state['responded']);
     $labels = eventosapp_whatsapp_flows_bulk_modalidad_labels();
     $mode = eventosapp_whatsapp_flows_bulk_get_ticket_modalidad_key($ticket_id, $event_id);
     $preview_meta_map = [
@@ -4643,8 +4853,18 @@ function eventosapp_whatsapp_flows_bulk_preview_ticket_row($ticket_id, $flow_pos
         'localidad'      => sanitize_text_field((string) get_post_meta($ticket_id, '_eventosapp_asistente_localidad', true)),
         'modalidad'      => $labels[$mode] ?? ucfirst($mode),
         'checkin_status' => $has_checkin ? 'Chequeado' : 'No chequeado',
-        'status'         => trim($status_label . ($delivery_label ? ' / ' . $delivery_label : '')),
-        'flow_status'    => ! empty($existing) ? 'Ya recibió este Flow' : 'No ha recibido este Flow',
+        'status'               => trim($status_label . ($delivery_label ? ' / ' . $delivery_label : '')),
+        'flow_sent_status'     => $flow_sent ? 'Enviado' : 'No enviado',
+        'flow_received_status' => $flow_received ? 'Recibido' : 'No recibido',
+        'flow_response_status' => $flow_responded ? 'Respondió' : 'No respondió',
+        'flow_sent'            => $flow_sent,
+        'flow_received'        => $flow_received,
+        'flow_responded'       => $flow_responded,
+        'flow_status'          => implode(' · ', [
+            $flow_sent ? 'Enviado' : 'No enviado',
+            $flow_received ? 'Recibido' : 'No recibido',
+            $flow_responded ? 'Respondió' : 'No respondió',
+        ]),
     ];
 }
 
@@ -4713,8 +4933,17 @@ add_action('admin_post_eventosapp_whatsapp_flow_create_segment', function() {
 
     $filters['evento_id'] = $event_id;
     $filters['flow_id'] = $flow_post_id;
-    if ( empty($filters['flow_send_status']) ) {
-        $filters['flow_send_status'] = 'no_recibido';
+    if ( empty($filters['flow_sent_filter']) && empty($filters['flow_send_status']) ) {
+        $filters['flow_sent_filter'] = 'exclude_sent';
+    }
+
+    // Evita combinaciones imposibles: quien respondió necesariamente recibió el Flow,
+    // y quien lo recibió necesariamente tuvo un envío aceptado previamente.
+    if ( ($filters['flow_response_filter'] ?? '') === 'include_responded' ) {
+        $filters['flow_received_filter'] = 'include_received';
+        $filters['flow_sent_filter'] = 'include_sent';
+    } elseif ( ($filters['flow_received_filter'] ?? '') === 'include_received' ) {
+        $filters['flow_sent_filter'] = 'include_sent';
     }
 
     $ticket_ids = eventosapp_whatsapp_flows_bulk_get_filtered_tickets($filters);
@@ -5683,6 +5912,10 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
     $delivery_options = eventosapp_whatsapp_flows_bulk_delivery_options();
     $modalidad_labels = eventosapp_whatsapp_flows_bulk_modalidad_labels();
     $checkin_status_options = eventosapp_whatsapp_flows_bulk_checkin_status_options();
+    $flow_sent_filter_options = eventosapp_whatsapp_flows_bulk_flow_sent_filter_options();
+    $flow_received_filter_options = eventosapp_whatsapp_flows_bulk_flow_received_filter_options();
+    $flow_response_filter_options = eventosapp_whatsapp_flows_bulk_flow_response_filter_options();
+    $checkin_filter_options = eventosapp_whatsapp_flows_bulk_checkin_filter_options();
     $selected_flow_id = absint($_GET['flow_id'] ?? 0);
     $selected_template_id = sanitize_key((string)($_GET['flow_template_id'] ?? ''));
 
@@ -5792,13 +6025,36 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
             </div>
             <div class="evapp-flow-filter-row">
                 <div class="evapp-flow-filter-field">
-                    <label for="flow_send_status">Estado frente a este Flow</label>
-                    <select name="filters[flow_send_status]" id="flow_send_status">
-                        <option value="no_recibido" selected>No han recibido este Flow para este evento</option>
-                        <option value="todos">Todos los tickets filtrados</option>
-                        <option value="recibido">Solo tickets que ya recibieron este Flow</option>
+                    <label for="flow_sent_filter">¿Se le envió este Flow?</label>
+                    <select name="filters[flow_sent_filter]" id="flow_sent_filter">
+                        <option value="">-- Incluir todos --</option>
+                        <?php foreach ( $flow_sent_filter_options as $value => $label ) : ?>
+                            <option value="<?php echo esc_attr($value); ?>" <?php selected($value, 'exclude_sent'); ?>><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
                     </select>
-                    <small>Reemplaza el antiguo checkbox de omitir duplicados y permite auditar o reenviar segmentos específicos.</small>
+                    <small>“Enviado” significa que Meta aceptó al menos una solicitud de este Flow para el ticket. Por seguridad, el valor predeterminado excluye duplicados.</small>
+                </div>
+                <div class="evapp-flow-filter-field">
+                    <label for="flow_received_filter">¿Recibió este Flow?</label>
+                    <select name="filters[flow_received_filter]" id="flow_received_filter">
+                        <option value="">-- Incluir todos --</option>
+                        <?php foreach ( $flow_received_filter_options as $value => $label ) : ?>
+                            <option value="<?php echo esc_attr($value); ?>"><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>Se considera recibido cuando el webhook de WhatsApp reporta entrega o lectura. Una respuesta también confirma que fue recibido.</small>
+                </div>
+            </div>
+            <div class="evapp-flow-filter-row">
+                <div class="evapp-flow-filter-field">
+                    <label for="flow_response_filter">¿Respondió este Flow?</label>
+                    <select name="filters[flow_response_filter]" id="flow_response_filter">
+                        <option value="">-- Incluir todos --</option>
+                        <?php foreach ( $flow_response_filter_options as $value => $label ) : ?>
+                            <option value="<?php echo esc_attr($value); ?>"><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>Consulta tanto la marca del envío como la tabla de respuestas para no perder respuestas válidas.</small>
                 </div>
                 <div class="evapp-flow-filter-field">
                     <label for="respect_rules">Reglas del evento</label>
@@ -5809,7 +6065,7 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
         </div>
 
         <div class="evapp-flow-filter-section">
-            <h3>📲 Estado WhatsApp y fechas de envío</h3>
+            <h3>📲 Estado general de WhatsApp y fechas de envío</h3>
             <div class="evapp-flow-filter-row">
                 <div class="evapp-flow-filter-field">
                     <label for="whatsapp_status">Estado de solicitud WhatsApp</label>
@@ -5819,7 +6075,7 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
                             <option value="<?php echo esc_attr($value); ?>"><?php echo esc_html($label); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <small>Filtra por el último estado local/API guardado en el ticket.</small>
+                    <small>Filtra por el último estado local/API general guardado en el ticket, aunque corresponda a otro mensaje o plantilla distinta del Flow seleccionado.</small>
                 </div>
                 <div class="evapp-flow-filter-field">
                     <label for="delivery_status">Estado recibido por webhook</label>
@@ -5829,7 +6085,7 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
                             <option value="<?php echo esc_attr($value); ?>"><?php echo esc_html($label); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <small>Filtra por entrega, lectura o fallo reportado por WhatsApp.</small>
+                    <small>Filtra por el último webhook general guardado en el ticket. Para el Flow seleccionado usa el filtro “¿Recibió este Flow?” de la sección anterior.</small>
                 </div>
             </div>
             <div class="evapp-flow-filter-row">
@@ -5868,14 +6124,14 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
             </div>
             <div class="evapp-flow-filter-row">
                 <div class="evapp-flow-filter-field">
-                    <label for="checkin_status">Estado de check-in</label>
-                    <select name="filters[checkin_status]" id="checkin_status">
-                        <option value="">-- Todos --</option>
-                        <?php foreach ( $checkin_status_options as $value => $label ) : ?>
+                    <label for="checkin_filter">Estado de check-in</label>
+                    <select name="filters[checkin_filter]" id="checkin_filter">
+                        <option value="">-- Incluir todos --</option>
+                        <?php foreach ( $checkin_filter_options as $value => $label ) : ?>
                             <option value="<?php echo esc_attr($value); ?>"><?php echo esc_html($label); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <small>Cuenta como chequeado si tiene check-in presencial o virtual en las fechas del evento.</small>
+                    <small>Permite incluir o excluir asistentes con check-in presencial o virtual en las fechas válidas del evento.</small>
                 </div>
                 <div class="evapp-flow-filter-field">
                     <label for="event_date">Fecha específica del evento</label>
@@ -6076,7 +6332,19 @@ function eventosapp_whatsapp_flows_render_campaign_step1() {
         $('#evento_id').on('change', function(){ updateEventSummary(); updateTemplateFiltering(); loadExtraFields(); });
         $('#flow_post_id').on('change', function(){ updateFlowSummary(); updateTemplateFiltering(); });
         $('#flow_template_id').on('change', updateTemplateSummary);
+        function normalizeFlowStateFilters(){
+            var responseFilter = String($('#flow_response_filter').val() || '');
+            var receivedFilter = String($('#flow_received_filter').val() || '');
+            if (responseFilter === 'include_responded') {
+                $('#flow_received_filter').val('include_received');
+                $('#flow_sent_filter').val('include_sent');
+            } else if (receivedFilter === 'include_received') {
+                $('#flow_sent_filter').val('include_sent');
+            }
+        }
+        $('#flow_received_filter, #flow_response_filter').on('change', normalizeFlowStateFilters);
         $('#evappFlowBulkForm').on('submit', function(e){
+            normalizeFlowStateFilters();
             if (!$('#evento_id').val()) { e.preventDefault(); alert('Primero debes seleccionar el evento.'); return false; }
             var $selected = $('#flow_post_id option:selected');
             if (!$('#flow_post_id').val()) { e.preventDefault(); alert('Primero debes seleccionar el Flow.'); return false; }
@@ -6103,10 +6371,14 @@ function eventosapp_whatsapp_flows_render_campaign_filter_tags($segment) {
     $delivery_options = eventosapp_whatsapp_flows_bulk_delivery_options();
     $modalidad_labels = eventosapp_whatsapp_flows_bulk_modalidad_labels();
     $checkin_status_options = eventosapp_whatsapp_flows_bulk_checkin_status_options();
+    $flow_sent_filter_options = eventosapp_whatsapp_flows_bulk_flow_sent_filter_options();
+    $flow_received_filter_options = eventosapp_whatsapp_flows_bulk_flow_received_filter_options();
+    $flow_response_filter_options = eventosapp_whatsapp_flows_bulk_flow_response_filter_options();
+    $checkin_filter_options = eventosapp_whatsapp_flows_bulk_checkin_filter_options();
     $flow_status_labels = [
-        'no_recibido' => 'No han recibido este Flow',
+        'no_recibido' => 'Excluir tickets con envío aceptado (compatibilidad)',
         'todos'       => 'Todos',
-        'recibido'    => 'Ya recibieron este Flow',
+        'recibido'    => 'Incluir tickets con envío aceptado (compatibilidad)',
     ];
 
     echo '<div class="evapp-flow-tagline">';
@@ -6117,17 +6389,21 @@ function eventosapp_whatsapp_flows_render_campaign_filter_tags($segment) {
     echo '<span class="evapp-flow-filter-tag"><strong>Reglas:</strong> ' . (! empty($segment['respect_rules']) ? 'Se respetan' : 'Se ignoran') . '</span>';
 
     $filter_labels = [
-        'flow_send_status' => 'Estado frente al Flow',
-        'whatsapp_status'  => 'Estado WhatsApp',
-        'delivery_status'  => 'Webhook',
-        'localidad'        => 'Localidad',
-        'modalidad'        => 'Modalidad',
-        'checkin_status'   => 'Check-in',
-        'event_date'       => 'Fecha evento',
-        'last_sent_from'   => 'Último envío desde',
-        'last_sent_to'     => 'Último envío hasta',
-        'created_from'     => 'Creado desde',
-        'created_to'       => 'Creado hasta',
+        'flow_sent_filter'     => 'Envío del Flow',
+        'flow_received_filter' => 'Recepción del Flow',
+        'flow_response_filter' => 'Respuesta del Flow',
+        'flow_send_status'     => 'Estado frente al Flow',
+        'whatsapp_status'      => 'Estado WhatsApp general',
+        'delivery_status'      => 'Webhook general',
+        'localidad'            => 'Localidad',
+        'modalidad'            => 'Modalidad',
+        'checkin_filter'       => 'Check-in',
+        'checkin_status'       => 'Check-in',
+        'event_date'           => 'Fecha evento',
+        'last_sent_from'       => 'Último envío desde',
+        'last_sent_to'         => 'Último envío hasta',
+        'created_from'         => 'Creado desde',
+        'created_to'           => 'Creado hasta',
     ];
     foreach ( $filter_labels as $key => $label ) {
         if ( empty($filters[$key]) ) {
@@ -6140,8 +6416,16 @@ function eventosapp_whatsapp_flows_render_campaign_filter_tags($segment) {
             $value = $delivery_options[$value] ?? $value;
         } elseif ( $key === 'modalidad' ) {
             $value = $modalidad_labels[$value] ?? $value;
+        } elseif ( $key === 'flow_sent_filter' ) {
+            $value = $flow_sent_filter_options[$value] ?? $value;
+        } elseif ( $key === 'flow_received_filter' ) {
+            $value = $flow_received_filter_options[$value] ?? $value;
+        } elseif ( $key === 'flow_response_filter' ) {
+            $value = $flow_response_filter_options[$value] ?? $value;
         } elseif ( $key === 'flow_send_status' ) {
             $value = $flow_status_labels[$value] ?? $value;
+        } elseif ( $key === 'checkin_filter' ) {
+            $value = $checkin_filter_options[$value] ?? $value;
         } elseif ( $key === 'checkin_status' ) {
             $value = $checkin_status_options[$value] ?? $value;
         }
@@ -6176,6 +6460,11 @@ function eventosapp_whatsapp_flows_render_campaign_step2($segment_id) {
     $total = count($ticket_ids);
     $flow_post_id = absint($segment['flow_post_id'] ?? 0);
     $event_id = absint($segment['event_id'] ?? 0);
+    $preview_ticket_ids = array_slice($ticket_ids, 0, 150);
+    if ( ! empty($preview_ticket_ids) ) {
+        update_meta_cache('post', $preview_ticket_ids);
+    }
+    $preview_flow_states = eventosapp_whatsapp_flows_bulk_get_flow_ticket_states($flow_post_id, $event_id, $preview_ticket_ids);
     ?>
     <div class="evapp-card">
         <h2>Vista previa del segmento</h2>
@@ -6200,12 +6489,12 @@ function eventosapp_whatsapp_flows_render_campaign_step2($segment_id) {
                         <th>Localidad / modalidad</th>
                         <th>Check-in</th>
                         <th>Último estado WhatsApp</th>
-                        <th>Estado Flow</th>
+                        <th>Estado del Flow seleccionado</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ( array_slice($ticket_ids, 0, 150) as $tid ) : ?>
-                        <?php $row = eventosapp_whatsapp_flows_bulk_preview_ticket_row($tid, $flow_post_id, $event_id); ?>
+                    <?php foreach ( $preview_ticket_ids as $tid ) : ?>
+                        <?php $row = eventosapp_whatsapp_flows_bulk_preview_ticket_row($tid, $flow_post_id, $event_id, $preview_flow_states[$tid] ?? []); ?>
                         <tr>
                             <td><strong><?php echo esc_html($row['ticket_code']); ?></strong><br><small>ID <?php echo esc_html($tid); ?></small></td>
                             <td><?php echo esc_html($row['name']); ?><br><small><?php echo esc_html($row['email']); ?></small></td>
@@ -6213,7 +6502,11 @@ function eventosapp_whatsapp_flows_render_campaign_step2($segment_id) {
                             <td><?php echo esc_html($row['localidad'] ?: 'Sin localidad'); ?><br><small><?php echo esc_html($row['modalidad']); ?></small></td>
                             <td><span class="evapp-pill <?php echo $row['checkin_status'] === 'Chequeado' ? 'green' : 'gray'; ?>"><?php echo esc_html($row['checkin_status']); ?></span></td>
                             <td><?php echo esc_html($row['status'] ?: 'Sin estado'); ?></td>
-                            <td><span class="evapp-pill <?php echo $row['flow_status'] === 'Ya recibió este Flow' ? 'green' : 'gray'; ?>"><?php echo esc_html($row['flow_status']); ?></span></td>
+                            <td>
+                                <span class="evapp-pill <?php echo ! empty($row['flow_sent']) ? 'green' : 'gray'; ?>"><?php echo esc_html($row['flow_sent_status']); ?></span><br>
+                                <span class="evapp-pill <?php echo ! empty($row['flow_received']) ? 'green' : 'gray'; ?>" style="margin-top:4px;"><?php echo esc_html($row['flow_received_status']); ?></span><br>
+                                <span class="evapp-pill <?php echo ! empty($row['flow_responded']) ? 'green' : 'gray'; ?>" style="margin-top:4px;"><?php echo esc_html($row['flow_response_status']); ?></span>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
