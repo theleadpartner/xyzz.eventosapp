@@ -56,8 +56,227 @@ function evapp_current_user_key(){
     return 'u'.($u && $u->ID ? $u->ID : 0);
 }
 
+/**
+ * Convierte valores de php.ini como 256M o 1G a bytes.
+ */
+function evapp_import_parse_ini_bytes($value){
+    $value = trim((string) $value);
+    if ($value === '' || $value === '-1') return 0;
+
+    $unit = strtolower(substr($value, -1));
+    $bytes = (float) $value;
+    if ($unit === 'g') $bytes *= 1024 * 1024 * 1024;
+    elseif ($unit === 'm') $bytes *= 1024 * 1024;
+    elseif ($unit === 'k') $bytes *= 1024;
+
+    return (int) $bytes;
+}
+
+/**
+ * Foto liviana de recursos del proceso PHP actual.
+ * No ejecuta consultas adicionales y funciona aunque sys_getloadavg/getrusage no estén disponibles.
+ */
+function evapp_import_resource_snapshot(){
+    $load = function_exists('sys_getloadavg') ? @sys_getloadavg() : false;
+    if (!is_array($load)) $load = [];
+
+    $cpu_ms = null;
+    if (function_exists('getrusage')) {
+        $usage = @getrusage();
+        if (is_array($usage)) {
+            $cpu_ms =
+                ((float) ($usage['ru_utime.tv_sec'] ?? 0) * 1000) +
+                ((float) ($usage['ru_utime.tv_usec'] ?? 0) / 1000) +
+                ((float) ($usage['ru_stime.tv_sec'] ?? 0) * 1000) +
+                ((float) ($usage['ru_stime.tv_usec'] ?? 0) / 1000);
+        }
+    }
+
+    $memory_limit = evapp_import_parse_ini_bytes(ini_get('memory_limit'));
+    $memory_usage = memory_get_usage(true);
+    $memory_peak  = memory_get_peak_usage(true);
+
+    return [
+        'memory_usage'        => (int) $memory_usage,
+        'memory_peak'         => (int) $memory_peak,
+        'memory_limit'        => (int) $memory_limit,
+        'memory_percent'      => $memory_limit > 0 ? round(($memory_usage / $memory_limit) * 100, 2) : 0,
+        'memory_peak_percent' => $memory_limit > 0 ? round(($memory_peak / $memory_limit) * 100, 2) : 0,
+        'load_1'         => isset($load[0]) ? round((float) $load[0], 2) : null,
+        'load_5'         => isset($load[1]) ? round((float) $load[1], 2) : null,
+        'load_15'        => isset($load[2]) ? round((float) $load[2], 2) : null,
+        'cpu_ms_total'   => $cpu_ms,
+    ];
+}
+
+/**
+ * Tiempo máximo que una petición AJAX del importador puede trabajar antes de entregar el control.
+ * Se deja margen al max_execution_time y se limita a 20 segundos para evitar timeouts del proxy/PHP.
+ */
+function evapp_import_time_budget_ms(){
+    $max_execution = (int) ini_get('max_execution_time');
+    $budget = 20000;
+
+    if ($max_execution > 0) {
+        $budget = min($budget, max(5000, ($max_execution - 5) * 1000));
+    }
+
+    return (int) apply_filters('eventosapp_import_time_budget_ms', $budget);
+}
+
+/**
+ * Determina cuántas filas intentar en la siguiente petición.
+ * El valor configurado es el techo; el promedio real por ticket evita solicitudes demasiado largas.
+ */
+function evapp_import_effective_batch_size($state, $time_budget_ms){
+    $configured = max(1, min(50, (int) ($state['batch_size'] ?? 20)));
+    $average_ms = (float) ($state['performance']['avg_ms_per_row'] ?? 0);
+    $effective = $configured;
+
+    if ($average_ms > 0) {
+        $target = (int) floor(($time_budget_ms * 0.75) / max(1, $average_ms));
+        $effective = max(1, min($configured, $target));
+    }
+
+    $last_memory = (float) ($state['performance']['last_batch']['memory_percent'] ?? 0);
+    if ($last_memory >= 75) {
+        $effective = max(1, (int) floor($effective * 0.6));
+    }
+
+    return $effective;
+}
+
+/**
+ * Lock por importación para impedir que dos pestañas procesen el mismo offset al mismo tiempo.
+ */
+function evapp_import_lock_key($event_id, $hash){
+    return 'evapp_import_lock_'.md5((int) $event_id.'|'.(string) $hash.'|'.evapp_current_user_key());
+}
+function evapp_import_acquire_lock($event_id, $hash, $ttl = 90){
+    $key = evapp_import_lock_key($event_id, $hash);
+    $token = wp_generate_uuid4();
+    $payload = ['token'=>$token, 'expires'=>time() + max(30, (int) $ttl)];
+
+    if (add_option($key, $payload, '', 'no')) {
+        return $token;
+    }
+
+    $existing = get_option($key);
+    if (!is_array($existing) || (int) ($existing['expires'] ?? 0) < time()) {
+        delete_option($key);
+        if (add_option($key, $payload, '', 'no')) {
+            return $token;
+        }
+    }
+
+    return '';
+}
+function evapp_import_release_lock($event_id, $hash, $token){
+    if (!$token) return;
+    $key = evapp_import_lock_key($event_id, $hash);
+    $existing = get_option($key);
+    if (is_array($existing) && hash_equals((string) ($existing['token'] ?? ''), (string) $token)) {
+        delete_option($key);
+    }
+}
+
+/**
+ * Crea y fusiona logs sin escribir la option completa por cada fila.
+ */
+function evapp_import_log_entry($message){
+    return [
+        'time'    => current_time('H:i:s'),
+        'message' => wp_strip_all_tags((string) $message),
+    ];
+}
+function evapp_import_merge_runtime_logs($state, $new_logs){
+    $current = is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [];
+    foreach ((array) $new_logs as $entry) {
+        if (is_array($entry) && isset($entry['message'])) {
+            $current[] = $entry;
+        }
+    }
+    $state['runtime_log'] = array_slice($current, -300);
+    return $state;
+}
+
+/**
+ * Cachea datos del evento que antes se consultaban de nuevo para cada ticket del lote.
+ */
+function evapp_import_event_runtime_config($event_id){
+    static $cache = [];
+    $event_id = (int) $event_id;
+
+    if (!isset($cache[$event_id])) {
+        $schema = function_exists('eventosapp_get_event_extra_fields') ? eventosapp_get_event_extra_fields($event_id) : [];
+        $extras_by_key = [];
+        foreach ((array) $schema as $field) {
+            if (!empty($field['key'])) $extras_by_key[$field['key']] = $field;
+        }
+
+        $sessions = get_post_meta($event_id, '_eventosapp_sesiones_internas', true);
+        if (!is_array($sessions)) $sessions = [];
+
+        $cache[$event_id] = [
+            'extras_by_key' => $extras_by_key,
+            'days'          => function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($event_id) : [],
+            'sessions'      => $sessions,
+        ];
+    }
+
+    return $cache[$event_id];
+}
+
+function evapp_import_save_extra_fields($ticket_id, $event_id, $extras){
+    if (empty($extras) || !is_array($extras)) return;
+
+    $config = evapp_import_event_runtime_config($event_id);
+    foreach ($extras as $key => $value) {
+        if (!isset($config['extras_by_key'][$key])) continue;
+        $field = $config['extras_by_key'][$key];
+        $normalized = function_exists('eventosapp_normalize_extra_value')
+            ? eventosapp_normalize_extra_value($field, $value)
+            : sanitize_text_field($value);
+        update_post_meta($ticket_id, '_eventosapp_extra_'.$key, $normalized);
+    }
+}
+
+/**
+ * Respuesta uniforme para estado, controles y procesamiento.
+ */
+function evapp_import_public_state($state, $extra = []){
+    $state = is_array($state) ? $state : [];
+    $performance = is_array($state['performance'] ?? null) ? $state['performance'] : [];
+    $last_batch = is_array($performance['last_batch'] ?? null) ? $performance['last_batch'] : [];
+    $total_rows = (int) ($state['total_rows'] ?? 0);
+    $offset = (int) ($state['offset'] ?? 0);
+    $avg_ms = (float) ($performance['avg_ms_per_row'] ?? 0);
+    $remaining = max(0, $total_rows - $offset);
+
+    $base = [
+        'status'           => $state['status'] ?? 'ready',
+        'offset'           => $offset,
+        'total_rows'       => $total_rows,
+        'created_count'    => (int) ($state['created_count'] ?? 0),
+        'updated_existing' => (int) ($state['updated_existing'] ?? 0),
+        'skipped_dup'      => (int) ($state['skipped_dup'] ?? 0),
+        'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
+        'done'             => !empty($state['done']) ? 1 : 0,
+        'configured_batch' => (int) ($state['batch_size'] ?? 20),
+        'effective_batch'  => (int) ($last_batch['effective_batch'] ?? ($state['batch_size'] ?? 20)),
+        'performance'      => $performance,
+        'resources'        => $last_batch,
+        'eta_seconds'      => $avg_ms > 0 ? (int) ceil(($remaining * $avg_ms) / 1000) : 0,
+    ];
+
+    return array_merge($base, is_array($extra) ? $extra : []);
+}
+
 // === NUEVO: obtener/crear el usuario importador1 ===
 function evapp_get_or_create_importer_user(){
+    static $cached_user_id = null;
+    if ($cached_user_id !== null) return $cached_user_id;
+
     $login = 'importador1';
     $email = 'importador1@eventosapp.com';
 
@@ -65,7 +284,8 @@ function evapp_get_or_create_importer_user(){
     $u = get_user_by('email', $email);
     if (!$u) { $u = get_user_by('login', $login); }
     if ($u && isset($u->ID)) {
-        return (int) $u->ID;
+        $cached_user_id = (int) $u->ID;
+        return $cached_user_id;
     }
 
     // Crear sin notificar por correo
@@ -81,9 +301,11 @@ function evapp_get_or_create_importer_user(){
 
     if (is_wp_error($user_id)) {
         // Fallback: si falla, regresamos el usuario actual para no romper el flujo
-        return (int) get_current_user_id();
+        $cached_user_id = (int) get_current_user_id();
+        return $cached_user_id;
     }
-    return (int) $user_id;
+    $cached_user_id = (int) $user_id;
+    return $cached_user_id;
 }
 
 
@@ -394,8 +616,17 @@ function evapp_import_generate_assets_now($ticket_id, $event_id){
 
     if (!$is_virtual_ticket && class_exists('EventosApp_QR_Manager')) {
         $qr = EventosApp_QR_Manager::get_instance();
-        if ($qr && method_exists($qr, 'regenerate_all_qr_codes_forced')) {
-            $qr->regenerate_all_qr_codes_forced($ticket_id, true);
+        if ($qr && method_exists($qr, 'generate_missing_qr_codes')) {
+            // Los QR dependen del TicketID y del medio, no del nombre/email del asistente.
+            // Conservar los archivos válidos evita borrar y recrear seis PNG por cada actualización.
+            $qr->generate_missing_qr_codes($ticket_id);
+        } elseif ($qr && method_exists($qr, 'generate_all_qr_codes')) {
+            $qr->generate_all_qr_codes($ticket_id);
+        } elseif ($qr && method_exists($qr, 'regenerate_all_qr_codes_forced')) {
+            $existing_qrs = get_post_meta($ticket_id, '_eventosapp_qr_codes', true);
+            if (empty($existing_qrs)) {
+                $qr->regenerate_all_qr_codes_forced($ticket_id, true);
+            }
         }
     }
 
@@ -729,7 +960,8 @@ add_action('admin_init', function(){
         echo '<input type="hidden" name="hash" value="'.esc_attr($hash).'">';
         echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
         echo '<p><b>Procesamiento:</b> el sistema creará cada ticket con sus archivos en el mismo lote (QR, PDF, ICS y Wallet solo cuando la modalidad del ticket lo permita), sin programar correos desde este importador.</p>';
-        echo '<p><label>Tamaño del lote: <input type="number" name="batch_size" value="5" min="1" max="20" style="width:70px"></label> <span style="color:#666">Recomendado: 5</span></p>';
+        echo '<p><label>Lote objetivo: <input type="number" name="batch_size" value="20" min="1" max="50" style="width:80px"></label> <span style="color:#666">Recomendado: 20. El sistema puede cerrar antes el lote si alcanza el límite seguro de tiempo o memoria.</span></p>';
+        echo '<p style="background:#f6f7f7;border-left:4px solid #2271b1;padding:9px 11px"><b>Control adaptativo:</b> se medirán tiempo por ticket, memoria PHP, CPU del proceso, consultas SQL y carga promedio del servidor. Con esos datos se ajustará automáticamente el tamaño efectivo de la siguiente petición sin superar el lote objetivo.</p>';
         echo '<p><button class="button button-primary">Empezar importación</button></p>';
         echo '</form>';
 
@@ -768,8 +1000,8 @@ add_action('wp_ajax_eventosapp_import_confirm', function(){
     }
     fclose($fh);
 
-    $batch_size = intval($_POST['batch_size'] ?? 5);
-    $batch_size = max(1, min(20, $batch_size));
+    $batch_size = intval($_POST['batch_size'] ?? 20);
+    $batch_size = max(1, min(50, $batch_size));
 
     $state['total_rows']     = $total_rows;
     $state['batch_size']     = $batch_size;
@@ -782,6 +1014,13 @@ add_action('wp_ajax_eventosapp_import_confirm', function(){
     $state['finished_at']    = '';
     $state['last_error']     = '';
     $state['admin_notified'] = 0;
+    $state['performance']    = [
+        'batches'          => 0,
+        'total_runtime_ms' => 0,
+        'avg_ms_per_row'   => 0,
+        'last_batch'       => [],
+    ];
+    $state['started_at_ts'] = 0;
 
     update_option(evapp_import_state_key($event_id, $hash), $state, false);
     evapp_import_append_log($event_id, $hash, 'Importación preparada. Lote configurado en '.$batch_size.' registro(s).');
@@ -813,8 +1052,8 @@ add_action('admin_init', function(){
         echo '<div style="border:1px solid #ccc; background:#fff; padding:1rem; margin-top:1rem; border-radius:4px;">';
         echo '<h3>Paso 4: Importar</h3>';
         echo '<p>Procesaremos el CSV por lotes controlados. Cada lote crea el ticket completo con sus archivos inmediatamente.</p>';
-        echo '<p><strong>Total de filas:</strong> '.intval($state['total_rows'] ?? 0).' | <strong>Lote:</strong> '.intval($state['batch_size'] ?? 5).' registro(s)</p>';
-        echo '<p style="background:#e7f5ff;padding:8px;border-left:4px solid #2271b1;"><strong>Importante:</strong> este flujo ya no programa correos de tickets. Solo crea/actualiza tickets y genera sus anexos en el mismo lote.</p>';
+        echo '<p><strong>Total de filas:</strong> '.intval($state['total_rows'] ?? 0).' | <strong>Lote objetivo:</strong> '.intval($state['batch_size'] ?? 20).' registro(s)</p>';
+        echo '<p style="background:#e7f5ff;padding:8px;border-left:4px solid #2271b1;"><strong>Importante:</strong> este flujo no programa correos. Crea/actualiza tickets y genera los anexos requeridos dentro de lotes adaptativos protegidos por tiempo, memoria y lock de concurrencia.</p>';
 
         echo '<p style="display:flex; gap:8px; flex-wrap:wrap; margin:0 0 14px 0;">';
         echo '<button id="evapp_start_import" class="button button-primary button-large">Iniciar / Reanudar</button>';
@@ -822,8 +1061,15 @@ add_action('admin_init', function(){
         echo '<button id="evapp_cancel_import" class="button button-link-delete">Cancelar proceso</button>';
         echo '</p>';
 
+        echo '<style>';
+        echo '.evapp-import-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;margin:14px 0}';
+        echo '.evapp-import-metric{background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:10px 12px}';
+        echo '.evapp-import-metric small{display:block;color:#646970;margin-bottom:4px}';
+        echo '.evapp-import-metric strong{font-size:16px;color:#1d2327}';
+        echo '</style>';
+
         echo '<div style="margin-top:1rem; padding:1rem; border:1px solid #ccc; background:#f9f9f9; border-radius:4px;">';
-        echo '<div style="margin-bottom:0.5rem;"><strong>Progreso:</strong> <span id="evapp_status_badge" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#eef2ff;color:#4338ca;">'.esc_html($state['status'] ?? 'ready').'</span></div>';
+        echo '<div style="margin-bottom:0.5rem;"><strong>Progreso:</strong> <span id="evapp_status_badge" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#eef2ff;color:#4338ca;">'.esc_html($state['status'] ?? 'ready').'</span> <span id="evapp_resource_level" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#ecfdf5;color:#166534;margin-left:5px;">Recursos: esperando datos</span></div>';
         echo '<div style="margin-bottom:1rem;">';
         echo '<div style="background:#e0e0e0; height:24px; border-radius:4px; overflow:hidden; position:relative;">';
         echo '<div id="evapp_progress_bar" style="background:#2271b1; height:100%; width:0%; transition:width 0.3s;"></div>';
@@ -831,6 +1077,18 @@ add_action('admin_init', function(){
         echo '<span id="evapp_progress_text">0%</span>';
         echo '</div></div></div>';
         echo '<p><strong>Offset:</strong> <span id="evapp_offset">0</span> | <strong>Creados:</strong> <span id="evapp_created">0</span> | <strong>Actualizados:</strong> <span id="evapp_updated">0</span> | <strong>Duplicados omitidos:</strong> <span id="evapp_skipped">0</span></p>';
+
+        echo '<div class="evapp-import-metrics">';
+        echo '<div class="evapp-import-metric"><small>Lote efectivo</small><strong id="evapp_effective_batch">—</strong></div>';
+        echo '<div class="evapp-import-metric"><small>Velocidad</small><strong id="evapp_rate">—</strong></div>';
+        echo '<div class="evapp-import-metric"><small>Tiempo último lote</small><strong id="evapp_batch_time">—</strong></div>';
+        echo '<div class="evapp-import-metric"><small>Tiempo estimado</small><strong id="evapp_eta">—</strong></div>';
+        echo '<div class="evapp-import-metric"><small>Memoria PHP</small><strong id="evapp_memory">—</strong></div>';
+        echo '<div class="evapp-import-metric"><small>CPU del proceso</small><strong id="evapp_cpu">—</strong></div>';
+        echo '<div class="evapp-import-metric"><small>Consultas SQL</small><strong id="evapp_queries">—</strong></div>';
+        echo '<div class="evapp-import-metric"><small>Carga servidor 1/5/15 min</small><strong id="evapp_load">—</strong></div>';
+        echo '</div>';
+
         echo '<div id="evapp_log" style="max-height:320px; overflow-y:auto; font-family:monospace; font-size:13px; background:#fff; padding:8px; border:1px solid #ccc; border-radius:4px;"></div>';
         echo '</div>';
         ?>
@@ -856,6 +1114,15 @@ add_action('admin_init', function(){
           const updatedEl = document.getElementById('evapp_updated');
           const skippedEl = document.getElementById('evapp_skipped');
           const badgeEl   = document.getElementById('evapp_status_badge');
+          const resourceLevelEl = document.getElementById('evapp_resource_level');
+          const effectiveBatchEl = document.getElementById('evapp_effective_batch');
+          const rateEl = document.getElementById('evapp_rate');
+          const batchTimeEl = document.getElementById('evapp_batch_time');
+          const etaEl = document.getElementById('evapp_eta');
+          const memoryEl = document.getElementById('evapp_memory');
+          const cpuEl = document.getElementById('evapp_cpu');
+          const queriesEl = document.getElementById('evapp_queries');
+          const loadEl = document.getElementById('evapp_load');
 
           let busy = false;
           let autoRun = false;
@@ -866,12 +1133,60 @@ add_action('admin_init', function(){
             logBox.scrollTop = logBox.scrollHeight;
           }
 
+          function formatBytes(bytes){
+            bytes = Number(bytes || 0);
+            if (!bytes) return '0 MB';
+            const units = ['B','KB','MB','GB'];
+            let index = 0;
+            while (bytes >= 1024 && index < units.length - 1) {
+              bytes = bytes / 1024;
+              index++;
+            }
+            return bytes.toFixed(index === 0 ? 0 : 1) + ' ' + units[index];
+          }
+
+          function formatDuration(seconds){
+            seconds = Math.max(0, parseInt(seconds || 0, 10));
+            if (!seconds) return 'Calculando…';
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            if (hours > 0) return hours + 'h ' + minutes + 'm';
+            if (minutes > 0) return minutes + 'm ' + secs + 's';
+            return secs + 's';
+          }
+
+          function renderResourceLevel(resources){
+            if (!resources || Object.keys(resources).length === 0) {
+              resourceLevelEl.textContent = 'Recursos: esperando datos';
+              resourceLevelEl.style.background = '#eef2ff';
+              resourceLevelEl.style.color = '#4338ca';
+              return;
+            }
+            const level = resources.resource_level || 'normal';
+            const labels = {
+              normal: 'Recursos: normales',
+              warning: 'Recursos: moderados',
+              high: 'Recursos: altos'
+            };
+            const palette = {
+              normal: ['#ecfdf5','#166534'],
+              warning: ['#fff7ed','#9a3412'],
+              high: ['#fee2e2','#991b1b']
+            };
+            const selected = palette[level] || palette.normal;
+            resourceLevelEl.textContent = labels[level] || labels.normal;
+            resourceLevelEl.style.background = selected[0];
+            resourceLevelEl.style.color = selected[1];
+          }
+
           function render(data){
             const offset  = parseInt(data.offset || 0, 10);
             const created = parseInt(data.created_count || 0, 10);
             const updated = parseInt(data.updated_existing || 0, 10);
             const skipped = parseInt(data.skipped_dup || 0, 10);
             const percent = totalRows > 0 ? Math.min(100, Math.round((offset / totalRows) * 100)) : 0;
+            const resources = data.resources || {};
 
             offsetEl.textContent  = offset;
             createdEl.textContent = created;
@@ -880,6 +1195,31 @@ add_action('admin_init', function(){
             txt.textContent       = percent + '%';
             bar.style.width       = percent + '%';
             badgeEl.textContent   = data.status || 'ready';
+
+            effectiveBatchEl.textContent = (resources.processed_rows || 0) + ' / ' + (data.effective_batch || data.configured_batch || '—');
+            rateEl.textContent = resources.rows_per_second ? Number(resources.rows_per_second).toFixed(2) + ' tickets/s' : '—';
+            batchTimeEl.textContent = resources.elapsed_ms ? (Number(resources.elapsed_ms) / 1000).toFixed(2) + ' s' : '—';
+            etaEl.textContent = formatDuration(data.eta_seconds || 0);
+
+            if (resources.memory_usage !== undefined) {
+              const memoryPercent = Number(resources.memory_percent || 0).toFixed(1);
+              const peakPercent = Number(resources.memory_peak_percent || 0).toFixed(1);
+              const memoryLimitLabel = Number(resources.memory_limit || 0) > 0 ? formatBytes(resources.memory_limit) : 'sin límite';
+              memoryEl.textContent = 'Actual ' + formatBytes(resources.memory_usage) + ' · pico ' + formatBytes(resources.memory_peak) + ' / ' + memoryLimitLabel + ' (' + memoryPercent + '% / ' + peakPercent + '%)';
+            } else {
+              memoryEl.textContent = '—';
+            }
+
+            cpuEl.textContent = resources.cpu_ms !== null && resources.cpu_ms !== undefined
+              ? Number(resources.cpu_ms).toFixed(0) + ' ms'
+              : 'No disponible';
+            queriesEl.textContent = resources.db_queries !== undefined ? String(resources.db_queries) : '—';
+
+            const loadParts = [resources.load_1, resources.load_5, resources.load_15].filter(function(value){
+              return value !== null && value !== undefined;
+            });
+            loadEl.textContent = loadParts.length ? loadParts.join(' / ') : 'No disponible';
+            renderResourceLevel(resources);
 
             if (Array.isArray(data.runtime_log)) {
               logBox.innerHTML = '';
@@ -890,7 +1230,7 @@ add_action('admin_init', function(){
 
             if (data.status === 'done') {
               bar.style.background = '#00a32a';
-            } else if (data.status === 'cancelled') {
+            } else if (data.status === 'cancelled' || data.status === 'error') {
               bar.style.background = '#d63638';
             } else if (data.status === 'stopped') {
               bar.style.background = '#dba617';
@@ -936,10 +1276,12 @@ add_action('admin_init', function(){
             if (busy) return;
             busy = true;
             btnStart.disabled = true;
+            let nextDelay = 75;
 
             try {
               const data = await request('eventosapp_import_process');
               render(data);
+              if (data.busy) nextDelay = 750;
 
               if (data.done || data.status === 'done' || data.status === 'cancelled' || data.status === 'stopped') {
                 autoRun = false;
@@ -953,7 +1295,7 @@ add_action('admin_init', function(){
               busy = false;
               btnStart.disabled = false;
               if (autoRun) {
-                window.setTimeout(tick, 250);
+                window.setTimeout(tick, nextDelay);
               }
             }
           }
@@ -992,7 +1334,7 @@ add_action('admin_init', function(){
             }
           });
 
-          window.setInterval(refreshStatus, 3000);
+          window.setInterval(refreshStatus, 2500);
           refreshStatus();
         })();
         </script>
@@ -1017,15 +1359,7 @@ add_action('wp_ajax_eventosapp_import_status', function(){
         wp_send_json_error('Estado no encontrado', 404);
     }
 
-    wp_send_json_success([
-        'status'           => $state['status'] ?? 'ready',
-        'offset'           => intval($state['offset'] ?? 0),
-        'created_count'    => intval($state['created_count'] ?? 0),
-        'updated_existing' => intval($state['updated_existing'] ?? 0),
-        'skipped_dup'      => intval($state['skipped_dup'] ?? 0),
-        'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
-        'done'             => !empty($state['done']) ? 1 : 0,
-    ]);
+    wp_send_json_success(evapp_import_public_state($state));
 });
 
 add_action('wp_ajax_eventosapp_import_resume', function(){
@@ -1051,18 +1385,13 @@ add_action('wp_ajax_eventosapp_import_resume', function(){
     if (empty($state['started_at'])) {
         $state['started_at'] = current_time('mysql');
     }
+    if (empty($state['started_at_ts'])) {
+        $state['started_at_ts'] = time();
+    }
+    $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Proceso reanudado.')]);
     update_option($key, $state, false);
-    evapp_import_append_log($event_id, $hash, 'Proceso reanudado.');
 
-    wp_send_json_success([
-        'status'           => $state['status'],
-        'offset'           => intval($state['offset'] ?? 0),
-        'created_count'    => intval($state['created_count'] ?? 0),
-        'updated_existing' => intval($state['updated_existing'] ?? 0),
-        'skipped_dup'      => intval($state['skipped_dup'] ?? 0),
-        'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
-        'done'             => !empty($state['done']) ? 1 : 0,
-    ]);
+    wp_send_json_success(evapp_import_public_state($state));
 });
 
 add_action('wp_ajax_eventosapp_import_stop', function(){
@@ -1084,18 +1413,10 @@ add_action('wp_ajax_eventosapp_import_stop', function(){
 
     $state['status']  = 'stopped';
     $state['stopped'] = 1;
+    $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Proceso detenido por el usuario.')]);
     update_option($key, $state, false);
-    evapp_import_append_log($event_id, $hash, 'Proceso detenido por el usuario.');
 
-    wp_send_json_success([
-        'status'           => $state['status'],
-        'offset'           => intval($state['offset'] ?? 0),
-        'created_count'    => intval($state['created_count'] ?? 0),
-        'updated_existing' => intval($state['updated_existing'] ?? 0),
-        'skipped_dup'      => intval($state['skipped_dup'] ?? 0),
-        'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
-        'done'             => !empty($state['done']) ? 1 : 0,
-    ]);
+    wp_send_json_success(evapp_import_public_state($state));
 });
 
 add_action('wp_ajax_eventosapp_import_cancel', function(){
@@ -1118,24 +1439,20 @@ add_action('wp_ajax_eventosapp_import_cancel', function(){
     $state['status']    = 'cancelled';
     $state['cancelled'] = 1;
     $state['stopped']   = 1;
+    $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Proceso cancelado por el usuario. El progreso queda registrado para evitar duplicados.')]);
     update_option($key, $state, false);
-    evapp_import_append_log($event_id, $hash, 'Proceso cancelado por el usuario. El progreso queda registrado para evitar duplicados.');
 
-    wp_send_json_success([
-        'status'           => $state['status'],
-        'offset'           => intval($state['offset'] ?? 0),
-        'created_count'    => intval($state['created_count'] ?? 0),
-        'updated_existing' => intval($state['updated_existing'] ?? 0),
-        'skipped_dup'      => intval($state['skipped_dup'] ?? 0),
-        'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
-        'done'             => !empty($state['done']) ? 1 : 0,
-    ]);
+    wp_send_json_success(evapp_import_public_state($state));
 });
 //
-// === Procesar un lote (OPTIMIZADO: 10 tickets con throttling) ===
+// === Procesar un lote adaptativo con medición de recursos ===
 //
 add_action('wp_ajax_eventosapp_import_process', function(){
-    $start_time = microtime(true);
+    global $wpdb;
+
+    $start_time      = microtime(true);
+    $start_resources = evapp_import_resource_snapshot();
+    $start_queries   = function_exists('get_num_queries') ? get_num_queries() : 0;
 
     if (!current_user_can('manage_options')) {
         wp_send_json_error('No autorizado', 403);
@@ -1155,40 +1472,39 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         wp_send_json_error('Estado no encontrado', 404);
     }
 
+    $lock_token = evapp_import_acquire_lock($event_id, $hash, 120);
+    if (!$lock_token) {
+        wp_send_json_success(evapp_import_public_state($state, [
+            'busy' => 1,
+            'msg'  => 'Otro lote de esta misma importación sigue en ejecución.',
+        ]));
+    }
+
+    register_shutdown_function(function() use ($event_id, $hash, $lock_token){
+        evapp_import_release_lock($event_id, $hash, $lock_token);
+    });
+
     if (!empty($state['cancelled'])) {
         $state['status'] = 'cancelled';
         update_option($key, $state, false);
-        wp_send_json_success([
-            'status'           => $state['status'],
-            'offset'           => intval($state['offset'] ?? 0),
-            'created_count'    => intval($state['created_count'] ?? 0),
-            'updated_existing' => intval($state['updated_existing'] ?? 0),
-            'skipped_dup'      => intval($state['skipped_dup'] ?? 0),
-            'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
-            'msg'              => 'Proceso cancelado.',
-            'done'             => 1,
-        ]);
+        wp_send_json_success(evapp_import_public_state($state, [
+            'msg' => 'Proceso cancelado.',
+        ]));
     }
 
     if (!empty($state['stopped']) && ($state['status'] ?? '') !== 'running') {
         $state['status'] = 'stopped';
         update_option($key, $state, false);
-        wp_send_json_success([
-            'status'           => $state['status'],
-            'offset'           => intval($state['offset'] ?? 0),
-            'created_count'    => intval($state['created_count'] ?? 0),
-            'updated_existing' => intval($state['updated_existing'] ?? 0),
-            'skipped_dup'      => intval($state['skipped_dup'] ?? 0),
-            'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
-            'msg'              => 'Proceso detenido.',
-            'done'             => 0,
-        ]);
+        wp_send_json_success(evapp_import_public_state($state, [
+            'msg' => 'Proceso detenido.',
+        ]));
     }
 
     $state['status'] = 'running';
     update_option($key, $state, false);
 
-    $chunk    = max(1, min(20, intval($state['batch_size'] ?? 5)));
+    $time_budget_ms = evapp_import_time_budget_ms();
+    $effective_chunk = evapp_import_effective_batch_size($state, $time_budget_ms);
     $offset   = intval($state['offset'] ?? 0);
     $created  = intval($state['created_count'] ?? 0);
     $updated  = intval($state['updated_existing'] ?? 0);
@@ -1196,11 +1512,11 @@ add_action('wp_ajax_eventosapp_import_process', function(){
 
     $map = $state['map'] ?? [];
     $rev = [];
-    foreach ($map as $i => $k) {
-        if ($k) $rev[intval($i)] = $k;
+    foreach ($map as $i => $mapped_key) {
+        if ($mapped_key) $rev[intval($i)] = $mapped_key;
     }
 
-    if (!file_exists($state['file'])) {
+    if (empty($state['file']) || !file_exists($state['file'])) {
         $state['status']     = 'error';
         $state['last_error'] = 'El archivo CSV no existe.';
         update_option($key, $state, false);
@@ -1215,9 +1531,10 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         wp_send_json_error('No se pudo abrir el archivo', 500);
     }
 
+    // Cabecera + salto hasta el offset persistido.
     fgetcsv($fh);
     $line = 1;
-    while ($line < $offset + 1 && ($row = fgetcsv($fh)) !== false) {
+    while ($line < $offset + 1 && fgetcsv($fh) !== false) {
         $line++;
     }
 
@@ -1225,8 +1542,49 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $created_now   = 0;
     $updated_now   = 0;
     $skipped_now   = 0;
+    $batch_logs    = [];
+    $new_created_ids = [];
+    $stop_reason   = 'batch_limit';
+    $reached_eof   = false;
 
-    while ($processed_now < $chunk && ($row = fgetcsv($fh)) !== false) {
+    while ($processed_now < $effective_chunk) {
+        // Se permite siempre al menos una fila. Después se aplican los guardas adaptativos.
+        if ($processed_now > 0) {
+            $elapsed_now_ms = (microtime(true) - $start_time) * 1000;
+            if ($elapsed_now_ms >= $time_budget_ms) {
+                $stop_reason = 'time_budget';
+                break;
+            }
+
+            $current_resources = evapp_import_resource_snapshot();
+            $memory_current_percent = (float) ($current_resources['memory_percent'] ?? 0);
+            $memory_peak_percent = (float) ($current_resources['memory_peak_percent'] ?? 0);
+            if (!empty($current_resources['memory_limit']) && ($memory_current_percent >= 82 || $memory_peak_percent >= 90)) {
+                $stop_reason = 'memory_guard';
+                break;
+            }
+
+            // Revisa órdenes de detener/cancelar sin escribir la base de datos por cada fila.
+            if (($processed_now % 5) === 0) {
+                $control_state = get_option($key);
+                if (is_array($control_state) && !empty($control_state['cancelled'])) {
+                    $stop_reason = 'user_cancel';
+                    break;
+                }
+                if (is_array($control_state) && !empty($control_state['stopped'])) {
+                    $stop_reason = 'user_stop';
+                    break;
+                }
+            }
+        }
+
+        $row = fgetcsv($fh);
+        if ($row === false) {
+            $reached_eof = true;
+            $stop_reason = 'completed';
+            break;
+        }
+
         $line++;
         $processed_now++;
 
@@ -1245,52 +1603,55 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         if (!$nombre || !$apellido || (!$email && !$cc) || !$localidad) {
             $offset++;
             $skipped_now++;
-            evapp_import_append_log($event_id, $hash, 'L'.$line.': fila omitida por datos mínimos incompletos.');
+            $batch_logs[] = evapp_import_log_entry('L'.$line.': fila omitida por datos mínimos incompletos.');
             continue;
         }
 
-        $ext    = $data['external_id'] ?? '';
-        $finger = $ext
-            ? 'ext:'.sanitize_text_field($ext)
+        $external_id = $data['external_id'] ?? '';
+        $finger = $external_id
+            ? 'ext:'.sanitize_text_field($external_id)
             : 'fp:'.md5(strtolower($email.'|'.$cc.'|'.$nombre.'|'.$apellido.'|'.$event_id));
 
-        $dup_by_finger = get_posts([
-            'post_type'      => 'eventosapp_ticket',
-            'meta_key'       => '_eventosapp_import_fingerprint',
-            'meta_value'     => $finger,
-            'fields'         => 'ids',
-            'posts_per_page' => 1,
-            'post_status'    => 'any',
-            'no_found_rows'  => true,
-        ]);
+        // Consulta directa y indexable: evita crear un WP_Query completo por cada fila.
+        $duplicate_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT pm.post_id
+               FROM {$wpdb->postmeta} pm
+               INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+              WHERE pm.meta_key = '_eventosapp_import_fingerprint'
+                AND pm.meta_value = %s
+                AND p.post_type = 'eventosapp_ticket'
+                AND p.post_status NOT IN ('trash','auto-draft')
+              LIMIT 1",
+            $finger
+        ));
 
-        if ($dup_by_finger) {
+        if ($duplicate_id) {
             $offset++;
             $skipped_now++;
             $skipped++;
-            evapp_import_append_log($event_id, $hash, 'L'.$line.': fingerprint duplicado, fila omitida.');
+            $batch_logs[] = evapp_import_log_entry('L'.$line.': fingerprint duplicado, fila omitida.');
             continue;
         }
 
         $payload = [
-            'first_name' => $nombre,
-            'last_name'  => $apellido,
-            'email'      => $email,
-            'tel'        => $data['telefono'] ?? '',
-            'empresa'    => $data['empresa'] ?? '',
-            'nit'        => $data['nit'] ?? '',
-            'cargo'      => $data['cargo'] ?? '',
-            'cc'         => $cc,
-            'ciudad'     => $data['ciudad'] ?? '',
-            'pais'       => $data['pais'] ?? 'Colombia',
-            'localidad'  => $localidad,
-            'modalidad'  => $modalidad,
-            'extras'     => [],
-            'fingerprint'=> $finger,
+            'first_name'  => $nombre,
+            'last_name'   => $apellido,
+            'email'       => $email,
+            'tel'         => $data['telefono'] ?? '',
+            'empresa'     => $data['empresa'] ?? '',
+            'nit'         => $data['nit'] ?? '',
+            'cargo'       => $data['cargo'] ?? '',
+            'cc'          => $cc,
+            'ciudad'      => $data['ciudad'] ?? '',
+            'pais'        => $data['pais'] ?? 'Colombia',
+            'localidad'   => $localidad,
+            'modalidad'   => $modalidad,
+            'extras'      => [],
+            'fingerprint' => $finger,
         ];
-        foreach ($data as $k => $v) {
-            if (strpos($k, 'extra__') === 0) {
-                $payload['extras'][substr($k, 7)] = $v;
+        foreach ($data as $data_key => $data_value) {
+            if (strpos($data_key, 'extra__') === 0) {
+                $payload['extras'][substr($data_key, 7)] = $data_value;
             }
         }
 
@@ -1300,56 +1661,41 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         }
 
         if ($existing_ticket_id) {
-            $pid = (int) $existing_ticket_id;
+            $ticket_id = (int) $existing_ticket_id;
 
-            update_post_meta($pid, '_eventosapp_asistente_nombre', sanitize_text_field($payload['first_name']));
-            update_post_meta($pid, '_eventosapp_asistente_apellido', sanitize_text_field($payload['last_name']));
-            update_post_meta($pid, '_eventosapp_asistente_email', sanitize_email($payload['email']));
-            update_post_meta($pid, '_eventosapp_asistente_tel', sanitize_text_field($payload['tel']));
-            update_post_meta($pid, '_eventosapp_asistente_empresa', sanitize_text_field($payload['empresa']));
-            update_post_meta($pid, '_eventosapp_asistente_nit', sanitize_text_field($payload['nit']));
-            update_post_meta($pid, '_eventosapp_asistente_cargo', sanitize_text_field($payload['cargo']));
-            update_post_meta($pid, '_eventosapp_asistente_ciudad', sanitize_text_field($payload['ciudad']));
-            update_post_meta($pid, '_eventosapp_asistente_pais', sanitize_text_field($payload['pais']));
-            update_post_meta($pid, '_eventosapp_asistente_localidad', sanitize_text_field($payload['localidad']));
-            update_post_meta($pid, '_eventosapp_ticket_evento_id', (int) $event_id);
+            update_post_meta($ticket_id, '_eventosapp_asistente_nombre', sanitize_text_field($payload['first_name']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_apellido', sanitize_text_field($payload['last_name']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_email', sanitize_email($payload['email']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_tel', sanitize_text_field($payload['tel']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_empresa', sanitize_text_field($payload['empresa']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_nit', sanitize_text_field($payload['nit']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_cargo', sanitize_text_field($payload['cargo']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_ciudad', sanitize_text_field($payload['ciudad']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_pais', sanitize_text_field($payload['pais']));
+            update_post_meta($ticket_id, '_eventosapp_asistente_localidad', sanitize_text_field($payload['localidad']));
+            update_post_meta($ticket_id, '_eventosapp_ticket_evento_id', (int) $event_id);
 
             if (function_exists('eventosapp_ticket_sync_modalidad')) {
-                eventosapp_ticket_sync_modalidad($pid, $payload['modalidad'] ?? '');
+                eventosapp_ticket_sync_modalidad($ticket_id, $payload['modalidad'] ?? '');
             } else {
-                update_post_meta($pid, '_eventosapp_ticket_modalidad', sanitize_key($payload['modalidad'] ?? 'presencial'));
+                update_post_meta($ticket_id, '_eventosapp_ticket_modalidad', sanitize_key($payload['modalidad'] ?? 'presencial'));
             }
 
-            if (!empty($payload['extras']) && function_exists('eventosapp_get_event_extra_fields')) {
-                $schema = eventosapp_get_event_extra_fields($event_id);
-                $bykey  = [];
-                foreach ($schema as $f) {
-                    $bykey[$f['key']] = $f;
-                }
-                foreach ($payload['extras'] as $ek => $ev) {
-                    if (isset($bykey[$ek])) {
-                        $val = function_exists('eventosapp_normalize_extra_value')
-                            ? eventosapp_normalize_extra_value($bykey[$ek], $ev)
-                            : sanitize_text_field($ev);
-                        update_post_meta($pid, '_eventosapp_extra_'.$ek, $val);
-                    }
-                }
-            }
-
-            update_post_meta($pid, '_eventosapp_import_fingerprint', $finger);
+            evapp_import_save_extra_fields($ticket_id, $event_id, $payload['extras']);
+            update_post_meta($ticket_id, '_eventosapp_import_fingerprint', $finger);
 
             if (function_exists('eventosapp_ticket_build_search_blob')) {
-                eventosapp_ticket_build_search_blob($pid);
+                eventosapp_ticket_build_search_blob($ticket_id);
             }
             if (function_exists('evapp_process_vincular_asistente')) {
-                evapp_process_vincular_asistente($pid);
+                evapp_process_vincular_asistente($ticket_id);
             }
 
-            evapp_import_generate_assets_now($pid, $event_id);
+            evapp_import_generate_assets_now($ticket_id, $event_id);
 
             $updated_now++;
             $updated++;
-            evapp_import_append_log($event_id, $hash, 'L'.$line.': ticket '.$pid.' actualizado y anexos regenerados.');
+            $batch_logs[] = evapp_import_log_entry('L'.$line.': ticket '.$ticket_id.' actualizado; QR válidos conservados y anexos sincronizados.');
         } else {
             $new_id = eventosapp_create_ticket_programmatically($event_id, $payload, 'import', false);
 
@@ -1357,75 +1703,159 @@ add_action('wp_ajax_eventosapp_import_process', function(){
                 $created_now++;
                 $created++;
                 update_post_meta($new_id, '_eventosapp_import_fingerprint', $finger);
-                $state['created_ids'][] = $new_id;
+                $new_created_ids[] = (int) $new_id;
 
                 if (function_exists('evapp_process_vincular_asistente')) {
                     evapp_process_vincular_asistente($new_id);
                 }
 
-                evapp_import_append_log($event_id, $hash, 'L'.$line.': ticket '.$new_id.' creado con anexos inmediatos.');
+                $batch_logs[] = evapp_import_log_entry('L'.$line.': ticket '.$new_id.' creado con anexos inmediatos.');
+            } else {
+                $batch_logs[] = evapp_import_log_entry('L'.$line.': no se pudo crear el ticket. Revisa el log de PHP.');
             }
         }
 
         $offset++;
-        usleep(150000);
     }
 
-    $done = feof($fh);
     fclose($fh);
 
-    $elapsed = round((microtime(true) - $start_time) * 1000);
+    $total_rows = (int) ($state['total_rows'] ?? 0);
+    $done = $reached_eof || ($total_rows > 0 && $offset >= $total_rows);
+    $elapsed_ms = round((microtime(true) - $start_time) * 1000, 2);
+    $end_resources = evapp_import_resource_snapshot();
+    $end_queries = function_exists('get_num_queries') ? get_num_queries() : $start_queries;
 
-    $state = get_option($key);
-    if (!is_array($state)) {
-        $state = [];
+    $cpu_ms = null;
+    if ($start_resources['cpu_ms_total'] !== null && $end_resources['cpu_ms_total'] !== null) {
+        $cpu_ms = max(0, round($end_resources['cpu_ms_total'] - $start_resources['cpu_ms_total'], 2));
     }
+
+    $rows_per_second = $processed_now > 0 && $elapsed_ms > 0
+        ? round($processed_now / ($elapsed_ms / 1000), 3)
+        : 0;
+    $batch_avg_ms = $processed_now > 0 ? round($elapsed_ms / $processed_now, 2) : 0;
+
+    $resource_level = 'normal';
+    $memory_pressure = max(
+        (float) ($end_resources['memory_percent'] ?? 0),
+        (float) ($end_resources['memory_peak_percent'] ?? 0)
+    );
+    if ($stop_reason === 'memory_guard' || $memory_pressure >= 85) {
+        $resource_level = 'high';
+    } elseif ($memory_pressure >= 70 || $elapsed_ms >= ($time_budget_ms * 0.9)) {
+        $resource_level = 'warning';
+    }
+
+    $batch_metrics = [
+        'processed_rows'   => $processed_now,
+        'configured_batch' => (int) ($state['batch_size'] ?? 20),
+        'effective_batch'  => $effective_chunk,
+        'elapsed_ms'       => $elapsed_ms,
+        'avg_ms_per_row'   => $batch_avg_ms,
+        'rows_per_second'  => $rows_per_second,
+        'cpu_ms'           => $cpu_ms,
+        'db_queries'       => max(0, $end_queries - $start_queries),
+        'memory_start'     => (int) $start_resources['memory_usage'],
+        'memory_usage'     => (int) $end_resources['memory_usage'],
+        'memory_peak'      => (int) $end_resources['memory_peak'],
+        'memory_delta'     => (int) $end_resources['memory_usage'] - (int) $start_resources['memory_usage'],
+        'memory_limit'     => (int) $end_resources['memory_limit'],
+        'memory_percent'      => (float) $end_resources['memory_percent'],
+        'memory_peak_percent' => (float) ($end_resources['memory_peak_percent'] ?? 0),
+        'load_1'              => $end_resources['load_1'],
+        'load_5'           => $end_resources['load_5'],
+        'load_15'          => $end_resources['load_15'],
+        'time_budget_ms'   => $time_budget_ms,
+        'stop_reason'      => $stop_reason,
+        'resource_level'   => $resource_level,
+    ];
+
+    // Recupera el estado más reciente para respetar una orden de detener/cancelar enviada durante el lote.
+    $latest_state = get_option($key);
+    if (is_array($latest_state)) {
+        $state = $latest_state;
+    }
+
     $state['offset']           = $offset;
     $state['created_count']    = $created;
     $state['updated_existing'] = $updated;
     $state['skipped_dup']      = $skipped;
     $state['done']             = $done ? 1 : 0;
-    $state['status']           = $done ? 'done' : ((!empty($state['stopped']) || !empty($state['cancelled'])) ? ($state['cancelled'] ? 'cancelled' : 'stopped') : 'running');
-    if ($done) {
-        $state['finished_at'] = current_time('mysql');
+
+    if (!isset($state['created_ids']) || !is_array($state['created_ids'])) {
+        $state['created_ids'] = [];
     }
+    if ($new_created_ids) {
+        $state['created_ids'] = array_values(array_unique(array_merge($state['created_ids'], $new_created_ids)));
+    }
+
+    $performance = is_array($state['performance'] ?? null) ? $state['performance'] : [];
+    $performance['batches'] = (int) ($performance['batches'] ?? 0) + 1;
+    $performance['total_runtime_ms'] = (float) ($performance['total_runtime_ms'] ?? 0) + $elapsed_ms;
+    $performance['total_processed_rows'] = (int) ($performance['total_processed_rows'] ?? 0) + $processed_now;
+    $performance['avg_ms_per_row'] = $performance['total_processed_rows'] > 0
+        ? round($performance['total_runtime_ms'] / $performance['total_processed_rows'], 2)
+        : 0;
+    $performance['last_batch'] = $batch_metrics;
+    $state['performance'] = $performance;
+
+    if ($done) {
+        $state['status'] = 'done';
+        $state['finished_at'] = current_time('mysql');
+    } elseif (!empty($state['cancelled'])) {
+        $state['status'] = 'cancelled';
+    } elseif (!empty($state['stopped'])) {
+        $state['status'] = 'stopped';
+    } else {
+        $state['status'] = 'running';
+    }
+
+    $reason_labels = [
+        'batch_limit' => 'límite del lote',
+        'time_budget' => 'límite seguro de tiempo',
+        'memory_guard'=> 'protección de memoria',
+        'user_stop'   => 'detención solicitada',
+        'user_cancel' => 'cancelación solicitada',
+        'completed'   => 'fin del archivo',
+    ];
+    $reason_label = $reason_labels[$stop_reason] ?? $stop_reason;
+    $summary_message = 'Lote procesado en '.number_format_i18n($elapsed_ms / 1000, 2).' s: '.$processed_now.' fila(s) | +'.$created_now.' nuevas | ↺'.$updated_now.' actualizadas | ✗'.$skipped_now.' omitidas | '.number_format_i18n($rows_per_second, 2).' ticket(s)/s | cierre por '.$reason_label.'.';
+    $batch_logs[] = evapp_import_log_entry($summary_message);
 
     if ($done && empty($state['admin_notified'])) {
         $site_name       = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
         $admin_email     = get_option('admin_email');
-        $ev_title        = get_the_title($event_id);
+        $event_title     = get_the_title($event_id);
         $filename        = $state['filename'] ?? '';
         $total_processed = (int) $state['offset'];
 
         if ($admin_email) {
-            $subject = sprintf('[%s] Importación finalizada — %s [%d]', $site_name, $ev_title, $event_id);
+            $subject = sprintf('[%s] Importación finalizada — %s [%d]', $site_name, $event_title, $event_id);
             $body = "Se completó una importación de tickets.\n\n".
                     "Sitio: {$site_name}\n".
-                    "Evento: {$ev_title} [{$event_id}]\n".
+                    "Evento: {$event_title} [{$event_id}]\n".
                     "Archivo: {$filename}\n".
                     "Filas procesadas: {$total_processed}\n".
                     "Tickets creados: ".(int) $state['created_count']."\n".
                     "Tickets actualizados: ".(int) $state['updated_existing']."\n".
                     "Duplicados omitidos: ".(int) $state['skipped_dup']."\n".
-                    "Los anexos se generaron dentro del mismo lote, no en segundo plano.\n";
+                    "Promedio medido: ".number_format_i18n((float) $performance['avg_ms_per_row'], 2)." ms por fila.\n".
+                    "Los anexos se generaron dentro del mismo lote adaptativo.\n";
             wp_mail($admin_email, $subject, $body, ['Content-Type: text/plain; charset=UTF-8']);
         }
         $state['admin_notified'] = 1;
-        evapp_import_append_log($event_id, $hash, 'Importación finalizada. Correo de resumen enviado al administrador.');
+        $batch_logs[] = evapp_import_log_entry('Importación finalizada. Correo de resumen enviado al administrador.');
     }
 
+    $state = evapp_import_merge_runtime_logs($state, $batch_logs);
     update_option($key, $state, false);
+    evapp_import_release_lock($event_id, $hash, $lock_token);
 
-    wp_send_json_success([
-        'status'           => $state['status'],
-        'offset'           => $offset,
-        'created_count'    => $created,
-        'updated_existing' => $updated,
-        'skipped_dup'      => $skipped,
-        'runtime_log'      => is_array($state['runtime_log'] ?? null) ? $state['runtime_log'] : [],
-        'msg'              => 'Lote procesado en '.$elapsed.'ms: '.$processed_now.' fila(s) | +'.$created_now.' nuevas | ↺'.$updated_now.' actualizadas | ✗'.$skipped_now.' omitidas.',
-        'done'             => $done ? 1 : 0,
-    ]);
+    wp_send_json_success(evapp_import_public_state($state, [
+        'msg'  => $summary_message,
+        'busy' => 0,
+    ]));
 });
 //
 // === Helper: crear ticket programáticamente (IMPORTACIÓN POR LOTES) ===
@@ -1480,21 +1910,7 @@ function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'man
         eventosapp_ticket_init_email_status($post_id);
     }
 
-    if (!empty($p['extras']) && is_array($p['extras']) && function_exists('eventosapp_get_event_extra_fields')) {
-        $schema = eventosapp_get_event_extra_fields($event_id);
-        $bykey = [];
-        foreach ($schema as $f) {
-            $bykey[$f['key']] = $f;
-        }
-        foreach ($p['extras'] as $k => $v) {
-            if (isset($bykey[$k])) {
-                $val = function_exists('eventosapp_normalize_extra_value')
-                    ? eventosapp_normalize_extra_value($bykey[$k], $v)
-                    : sanitize_text_field($v);
-                update_post_meta($post_id, '_eventosapp_extra_'.$k, $val);
-            }
-        }
-    }
+    evapp_import_save_extra_fields($post_id, $event_id, $p['extras'] ?? []);
 
     $ticketID = eventosapp_generate_unique_ticket_id();
     update_post_meta($post_id, 'eventosapp_ticketID', $ticketID);
@@ -1502,22 +1918,20 @@ function eventosapp_create_ticket_programmatically($event_id, $p, $source = 'man
     update_post_meta($post_id, '_eventosapp_ticket_seq', (int) $seq);
     wp_update_post(['ID' => $post_id, 'post_title' => $ticketID]);
 
-    $days = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($event_id) : [];
+    $event_config = evapp_import_event_runtime_config($event_id);
     $status_arr = [];
-    foreach ($days as $d) {
-        $status_arr[$d] = 'not_checked_in';
+    foreach ($event_config['days'] as $day) {
+        $status_arr[$day] = 'not_checked_in';
     }
     update_post_meta($post_id, '_eventosapp_checkin_status', $status_arr);
     update_post_meta($post_id, '_eventosapp_checkin_log', []);
 
-    $localidad_ticket = get_post_meta($post_id, '_eventosapp_asistente_localidad', true);
-    $sesiones = get_post_meta($event_id, '_eventosapp_sesiones_internas', true);
-    if (!is_array($sesiones)) $sesiones = [];
+    $localidad_ticket = sanitize_text_field($p['localidad'] ?? '');
     $accesos = [];
-    foreach ($sesiones as $ses) {
-        if (isset($ses['nombre'], $ses['localidades']) && is_array($ses['localidades'])) {
-            if ($localidad_ticket && in_array($localidad_ticket, $ses['localidades'], true)) {
-                $accesos[] = $ses['nombre'];
+    foreach ($event_config['sessions'] as $session) {
+        if (isset($session['nombre'], $session['localidades']) && is_array($session['localidades'])) {
+            if ($localidad_ticket && in_array($localidad_ticket, $session['localidades'], true)) {
+                $accesos[] = $session['nombre'];
             }
         }
     }
