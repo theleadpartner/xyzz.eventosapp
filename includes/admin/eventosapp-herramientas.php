@@ -3,7 +3,8 @@ if (!defined('ABSPATH')) exit;
 
 /**
  * Herramientas por evento: Importador CSV de tickets (asistente 4 pasos) + envío masivo opcional.
- * OPTIMIZADO para evitar timeouts en servidores con recursos limitados
+ * OPTIMIZADO para evitar timeouts en servidores con recursos limitados.
+ * Continuidad resiliente: reintentos automáticos ante cortes AJAX, 502/504 o respuestas incompletas.
  *
  * URL: /wp-admin/admin.php?page=eventosapp_tools&event_id=ID
  */
@@ -246,6 +247,7 @@ function evapp_import_save_extra_fields($ticket_id, $event_id, $extras){
  */
 function evapp_import_public_state($state, $extra = []){
     $state = is_array($state) ? $state : [];
+    $status = (string) ($state['status'] ?? 'ready');
     $performance = is_array($state['performance'] ?? null) ? $state['performance'] : [];
     $last_batch = is_array($performance['last_batch'] ?? null) ? $performance['last_batch'] : [];
     $total_rows = (int) ($state['total_rows'] ?? 0);
@@ -254,7 +256,9 @@ function evapp_import_public_state($state, $extra = []){
     $remaining = max(0, $total_rows - $offset);
 
     $base = [
-        'status'           => $state['status'] ?? 'ready',
+        'status'           => $status,
+        'terminal'         => in_array($status, ['done', 'cancelled', 'stopped', 'error'], true) ? 1 : 0,
+        'should_continue'  => ($status === 'running' && empty($state['done'])) ? 1 : 0,
         'offset'           => $offset,
         'total_rows'       => $total_rows,
         'created_count'    => (int) ($state['created_count'] ?? 0),
@@ -1069,7 +1073,7 @@ add_action('admin_init', function(){
         echo '</style>';
 
         echo '<div style="margin-top:1rem; padding:1rem; border:1px solid #ccc; background:#f9f9f9; border-radius:4px;">';
-        echo '<div style="margin-bottom:0.5rem;"><strong>Progreso:</strong> <span id="evapp_status_badge" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#eef2ff;color:#4338ca;">'.esc_html($state['status'] ?? 'ready').'</span> <span id="evapp_resource_level" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#ecfdf5;color:#166534;margin-left:5px;">Recursos: esperando datos</span></div>';
+        echo '<div style="margin-bottom:0.5rem;"><strong>Progreso:</strong> <span id="evapp_status_badge" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#eef2ff;color:#4338ca;">'.esc_html($state['status'] ?? 'ready').'</span> <span id="evapp_resource_level" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#ecfdf5;color:#166534;margin-left:5px;">Recursos: esperando datos</span> <span id="evapp_connection_state" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#f6f7f7;color:#50575e;margin-left:5px;">Continuidad: lista</span></div>';
         echo '<div style="margin-bottom:1rem;">';
         echo '<div style="background:#e0e0e0; height:24px; border-radius:4px; overflow:hidden; position:relative;">';
         echo '<div id="evapp_progress_bar" style="background:#2271b1; height:100%; width:0%; transition:width 0.3s;"></div>';
@@ -1115,6 +1119,7 @@ add_action('admin_init', function(){
           const skippedEl = document.getElementById('evapp_skipped');
           const badgeEl   = document.getElementById('evapp_status_badge');
           const resourceLevelEl = document.getElementById('evapp_resource_level');
+          const connectionStateEl = document.getElementById('evapp_connection_state');
           const effectiveBatchEl = document.getElementById('evapp_effective_batch');
           const rateEl = document.getElementById('evapp_rate');
           const batchTimeEl = document.getElementById('evapp_batch_time');
@@ -1125,12 +1130,24 @@ add_action('admin_init', function(){
           const loadEl = document.getElementById('evapp_load');
 
           let busy = false;
+          let statusBusy = false;
           let autoRun = false;
+          let manualStopRequested = false;
+          let consecutiveErrors = 0;
+          let nextTickTimer = null;
+          let lastStatusErrorAt = 0;
 
           function addLog(line){
             if (!line) return;
             logBox.innerHTML += line + '<br>';
             logBox.scrollTop = logBox.scrollHeight;
+          }
+
+          function addThrottledStatusError(message){
+            const now = Date.now();
+            if ((now - lastStatusErrorAt) < 15000) return;
+            lastStatusErrorAt = now;
+            addLog('[' + new Date().toLocaleTimeString() + '] ' + message);
           }
 
           function formatBytes(bytes){
@@ -1156,6 +1173,19 @@ add_action('admin_init', function(){
             return secs + 's';
           }
 
+          function setConnectionState(level, text){
+            const palette = {
+              normal: ['#ecfdf5','#166534'],
+              warning: ['#fff7ed','#9a3412'],
+              error: ['#fee2e2','#991b1b'],
+              idle: ['#f6f7f7','#50575e']
+            };
+            const selected = palette[level] || palette.idle;
+            connectionStateEl.textContent = text;
+            connectionStateEl.style.background = selected[0];
+            connectionStateEl.style.color = selected[1];
+          }
+
           function renderResourceLevel(resources){
             if (!resources || Object.keys(resources).length === 0) {
               resourceLevelEl.textContent = 'Recursos: esperando datos';
@@ -1178,6 +1208,12 @@ add_action('admin_init', function(){
             resourceLevelEl.textContent = labels[level] || labels.normal;
             resourceLevelEl.style.background = selected[0];
             resourceLevelEl.style.color = selected[1];
+          }
+
+          function isTerminalState(data){
+            if (!data) return false;
+            if (parseInt(data.terminal || 0, 10) === 1) return true;
+            return !!data.done || ['done','cancelled','stopped','error'].indexOf(data.status) !== -1;
           }
 
           function render(data){
@@ -1230,13 +1266,45 @@ add_action('admin_init', function(){
 
             if (data.status === 'done') {
               bar.style.background = '#00a32a';
+              setConnectionState('normal', 'Continuidad: completada');
             } else if (data.status === 'cancelled' || data.status === 'error') {
               bar.style.background = '#d63638';
+              setConnectionState('error', data.status === 'cancelled' ? 'Continuidad: cancelada' : 'Continuidad: requiere revisión');
             } else if (data.status === 'stopped') {
               bar.style.background = '#dba617';
+              setConnectionState('warning', 'Continuidad: detenida manualmente');
             } else {
               bar.style.background = '#2271b1';
+              if (autoRun) setConnectionState('normal', 'Continuidad: automática activa');
             }
+          }
+
+          function clearNextTick(){
+            if (nextTickTimer) {
+              window.clearTimeout(nextTickTimer);
+              nextTickTimer = null;
+            }
+          }
+
+          function scheduleNext(delay){
+            if (!autoRun || manualStopRequested || isNaN(delay)) return;
+            clearNextTick();
+            nextTickTimer = window.setTimeout(function(){
+              nextTickTimer = null;
+              tick();
+            }, Math.max(50, parseInt(delay || 0, 10)));
+          }
+
+          function retryDelay(attempt){
+            const exponent = Math.min(Math.max(attempt - 1, 0), 5);
+            return Math.min(15000, 750 * Math.pow(2, exponent));
+          }
+
+          function normalizeErrorMessage(json, response){
+            if (json && typeof json.data === 'string' && json.data) return json.data;
+            if (json && json.data && json.data.message) return json.data.message;
+            if (json && json.message) return json.message;
+            return 'HTTP ' + response.status + ': ' + response.statusText;
           }
 
           async function request(action){
@@ -1246,34 +1314,78 @@ add_action('admin_init', function(){
             fd.append('hash', hash);
             fd.append('_wpnonce', nonce);
 
-            const response = await fetch(ajaxurl, {
-              method: 'POST',
-              body: fd,
-              credentials: 'same-origin'
-            });
-
-            if (!response.ok) {
-              throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+            let response;
+            try {
+              response = await fetch(ajaxurl, {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+                cache: 'no-store'
+              });
+            } catch (networkError) {
+              networkError.retryable = true;
+              networkError.httpStatus = 0;
+              throw networkError;
             }
 
-            const json = await response.json();
-            if (!json.success) {
-              throw new Error(json.data || 'Error desconocido');
+            const rawBody = await response.text();
+            let json = null;
+            try {
+              json = rawBody ? JSON.parse(rawBody) : null;
+            } catch (parseError) {
+              const invalidResponse = new Error('El servidor devolvió una respuesta incompleta o no válida.');
+              invalidResponse.httpStatus = response.status;
+              invalidResponse.retryable = response.status === 0 || response.status >= 500 || response.ok;
+              throw invalidResponse;
             }
-            return json.data;
+
+            if (!response.ok || !json || !json.success) {
+              const requestError = new Error(normalizeErrorMessage(json, response));
+              requestError.httpStatus = response.status;
+              requestError.retryable = response.status === 0 || response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+              throw requestError;
+            }
+
+            return json.data || {};
           }
 
-          async function refreshStatus(){
+          async function refreshStatus(allowAutoResume){
+            if (statusBusy) return null;
+            statusBusy = true;
+
             try {
               const data = await request('eventosapp_import_status');
               render(data);
+
+              if (isTerminalState(data)) {
+                autoRun = false;
+                clearNextTick();
+              } else if (allowAutoResume !== false && parseInt(data.should_continue || 0, 10) === 1 && !manualStopRequested) {
+                if (!autoRun) {
+                  autoRun = true;
+                  setConnectionState('normal', 'Continuidad: recuperada automáticamente');
+                }
+                if (!busy && !nextTickTimer) scheduleNext(100);
+              }
+
+              return data;
             } catch (e) {
-              addLog('[' + new Date().toLocaleTimeString() + '] ERROR consultando estado: ' + e.message);
+              addThrottledStatusError('No se pudo consultar el estado; se volverá a intentar: ' + e.message);
+              return null;
+            } finally {
+              statusBusy = false;
             }
           }
 
           async function tick(){
-            if (busy) return;
+            if (busy || !autoRun || manualStopRequested) return;
+
+            if (navigator.onLine === false) {
+              setConnectionState('warning', 'Continuidad: sin conexión, reintentando');
+              scheduleNext(2000);
+              return;
+            }
+
             busy = true;
             btnStart.disabled = true;
             let nextDelay = 75;
@@ -1281,43 +1393,94 @@ add_action('admin_init', function(){
             try {
               const data = await request('eventosapp_import_process');
               render(data);
-              if (data.busy) nextDelay = 750;
 
-              if (data.done || data.status === 'done' || data.status === 'cancelled' || data.status === 'stopped') {
+              if (data.busy) {
+                nextDelay = 750;
+                setConnectionState('warning', 'Continuidad: esperando lote activo');
+              } else {
+                consecutiveErrors = 0;
+                setConnectionState('normal', 'Continuidad: automática activa');
+              }
+
+              if (isTerminalState(data)) {
                 autoRun = false;
+                clearNextTick();
               }
             } catch (e) {
-              autoRun = false;
-              addLog('[' + new Date().toLocaleTimeString() + '] ERROR: ' + e.message);
-              badgeEl.textContent = 'error';
-              bar.style.background = '#d63638';
+              consecutiveErrors++;
+
+              if (e.retryable !== false && !manualStopRequested) {
+                nextDelay = retryDelay(consecutiveErrors);
+                autoRun = true;
+                setConnectionState('warning', 'Continuidad: reintento ' + consecutiveErrors + ' en ' + Math.ceil(nextDelay / 1000) + ' s');
+                addLog('[' + new Date().toLocaleTimeString() + '] Aviso transitorio: ' + e.message + '. El proceso seguirá automáticamente.');
+                await refreshStatus(false);
+              } else {
+                autoRun = false;
+                clearNextTick();
+                addLog('[' + new Date().toLocaleTimeString() + '] ERROR no recuperable: ' + e.message);
+                badgeEl.textContent = 'error';
+                bar.style.background = '#d63638';
+                setConnectionState('error', 'Continuidad: requiere revisión');
+              }
             } finally {
               busy = false;
               btnStart.disabled = false;
-              if (autoRun) {
-                window.setTimeout(tick, nextDelay);
+              if (autoRun && !manualStopRequested) scheduleNext(nextDelay);
+            }
+          }
+
+          async function startOrResume(){
+            manualStopRequested = false;
+            autoRun = true;
+            consecutiveErrors = 0;
+            clearNextTick();
+            setConnectionState('normal', 'Continuidad: iniciando');
+
+            try {
+              const resumed = await request('eventosapp_import_resume');
+              render(resumed);
+              scheduleNext(50);
+            } catch (e) {
+              if (e.retryable !== false) {
+                const delay = retryDelay(1);
+                setConnectionState('warning', 'Continuidad: reintentando inicio');
+                addLog('[' + new Date().toLocaleTimeString() + '] No se confirmó el inicio: ' + e.message + '. Se verificará y reintentará automáticamente.');
+                const currentState = await refreshStatus(false);
+
+                if (currentState && parseInt(currentState.should_continue || 0, 10) === 1) {
+                  autoRun = true;
+                  scheduleNext(delay);
+                } else if (!manualStopRequested) {
+                  clearNextTick();
+                  nextTickTimer = window.setTimeout(function(){
+                    nextTickTimer = null;
+                    if (!manualStopRequested) startOrResume();
+                  }, delay);
+                }
+              } else {
+                autoRun = false;
+                setConnectionState('error', 'Continuidad: no pudo iniciar');
+                addLog('[' + new Date().toLocaleTimeString() + '] ERROR al iniciar/reanudar: ' + e.message);
               }
             }
           }
 
-          btnStart.addEventListener('click', async function(){
-            try {
-              autoRun = true;
-              await request('eventosapp_import_resume');
-              await refreshStatus();
-              tick();
-            } catch (e) {
-              addLog('[' + new Date().toLocaleTimeString() + '] ERROR al iniciar/reanudar: ' + e.message);
-            }
+          btnStart.addEventListener('click', function(){
+            startOrResume();
           });
 
           btnStop.addEventListener('click', async function(){
+            manualStopRequested = true;
+            autoRun = false;
+            clearNextTick();
+
             try {
-              autoRun = false;
               const data = await request('eventosapp_import_stop');
               render(data);
             } catch (e) {
               addLog('[' + new Date().toLocaleTimeString() + '] ERROR al detener: ' + e.message);
+              setConnectionState('error', 'Continuidad: no se confirmó la detención');
             }
           });
 
@@ -1325,17 +1488,48 @@ add_action('admin_init', function(){
             if (!window.confirm('Esto cancelará la ejecución actual. Los tickets ya creados se conservan y el proceso podrá reanudarse sin duplicar.')) {
               return;
             }
+
+            manualStopRequested = true;
+            autoRun = false;
+            clearNextTick();
+
             try {
-              autoRun = false;
               const data = await request('eventosapp_import_cancel');
               render(data);
             } catch (e) {
               addLog('[' + new Date().toLocaleTimeString() + '] ERROR al cancelar: ' + e.message);
+              setConnectionState('error', 'Continuidad: no se confirmó la cancelación');
             }
           });
 
-          window.setInterval(refreshStatus, 2500);
-          refreshStatus();
+          window.addEventListener('offline', function(){
+            if (autoRun && !manualStopRequested) {
+              setConnectionState('warning', 'Continuidad: esperando conexión');
+            }
+          });
+
+          window.addEventListener('online', function(){
+            if (autoRun && !manualStopRequested) {
+              consecutiveErrors = 0;
+              setConnectionState('normal', 'Continuidad: conexión recuperada');
+              scheduleNext(100);
+            }
+          });
+
+          document.addEventListener('visibilitychange', function(){
+            if (!document.hidden) {
+              refreshStatus(true);
+              if (autoRun && !manualStopRequested) scheduleNext(100);
+            }
+          });
+
+          window.setInterval(function(){
+            refreshStatus(true);
+          }, 2500);
+
+          // Si la página se recargó mientras el estado persistido seguía en running,
+          // refreshStatus reactivará automáticamente el siguiente lote.
+          refreshStatus(true);
         })();
         </script>
         <?php
@@ -1821,6 +2015,9 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     ];
     $reason_label = $reason_labels[$stop_reason] ?? $stop_reason;
     $summary_message = 'Lote procesado en '.number_format_i18n($elapsed_ms / 1000, 2).' s: '.$processed_now.' fila(s) | +'.$created_now.' nuevas | ↺'.$updated_now.' actualizadas | ✗'.$skipped_now.' omitidas | '.number_format_i18n($rows_per_second, 2).' ticket(s)/s | cierre por '.$reason_label.'.';
+    if (!$done && in_array($stop_reason, ['batch_limit', 'time_budget', 'memory_guard'], true)) {
+        $summary_message .= ' La importación continúa automáticamente con el siguiente lote.';
+    }
     $batch_logs[] = evapp_import_log_entry($summary_message);
 
     if ($done && empty($state['admin_notified'])) {
