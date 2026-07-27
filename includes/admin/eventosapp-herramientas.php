@@ -356,6 +356,115 @@ function evapp_import_background_resolve_state_key($event_id, $hash, $task_id = 
     }
     return evapp_import_state_key($event_id, $hash);
 }
+
+/**
+ * Canal de control independiente del estado pesado de la importación.
+ * Evita que un worker que termina un lote con una copia antigua pueda sobrescribir
+ * una orden de pausar o cancelar enviada desde otra petición.
+ */
+function evapp_import_control_option_key($state_key){
+    return 'evapp_import_control_'.md5((string) $state_key);
+}
+function evapp_import_control_get($state_key, $fresh = false){
+    $option_key = evapp_import_control_option_key($state_key);
+
+    if ($fresh) {
+        global $wpdb;
+        $raw = $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+            $option_key
+        ));
+        if ($raw === null) return [];
+        $control = maybe_unserialize($raw);
+    } else {
+        $control = get_option($option_key, []);
+    }
+
+    return is_array($control) ? $control : [];
+}
+function evapp_import_control_set($state_key, $command, $task_id = ''){
+    $allowed = ['browser','background','pause','cancel'];
+    $command = sanitize_key((string) $command);
+    if (!in_array($command, $allowed, true)) $command = 'browser';
+
+    $current = evapp_import_control_get($state_key, true);
+    $control = [
+        'command'      => $command,
+        'task_id'      => sanitize_text_field((string) $task_id),
+        'requested_at' => time(),
+        'requested_by' => (int) get_current_user_id(),
+        'revision'     => (int) ($current['revision'] ?? 0) + 1,
+    ];
+    update_option(evapp_import_control_option_key($state_key), $control, false);
+    return $control;
+}
+function evapp_import_control_command($state_key, $fresh = true){
+    $control = evapp_import_control_get($state_key, $fresh);
+    return sanitize_key((string) ($control['command'] ?? ''));
+}
+function evapp_import_control_reconcile_state($state_key, &$state, $persist = true){
+    if (!is_array($state)) return '';
+
+    $control = evapp_import_control_get($state_key, true);
+    $command = sanitize_key((string) ($control['command'] ?? ''));
+    $revision = (int) ($control['revision'] ?? 0);
+    $applied_revision = (int) ($state['control_revision_applied'] ?? 0);
+    $changed = false;
+    $logs = [];
+
+    if ($command === 'cancel') {
+        if (($state['status'] ?? '') !== 'cancelled' || empty($state['cancelled']) || empty($state['stopped'])) {
+            $changed = true;
+        }
+        $state['status'] = 'cancelled';
+        $state['cancelled'] = 1;
+        $state['stopped'] = 1;
+        $state['done'] = 0;
+        $state['updated_at'] = time();
+        $state['finished_at_ts'] = (int) ($state['finished_at_ts'] ?? time());
+        $state['background_token'] = '';
+        if ($revision > $applied_revision) {
+            $logs[] = evapp_import_log_entry('Cancelación confirmada por el canal de control persistente. No se ejecutarán más lotes.');
+        }
+    } elseif ($command === 'pause') {
+        if (($state['status'] ?? '') !== 'stopped' || empty($state['stopped'])) {
+            $changed = true;
+        }
+        $state['status'] = 'stopped';
+        $state['stopped'] = 1;
+        $state['done'] = 0;
+        $state['updated_at'] = time();
+        if ($revision > $applied_revision) {
+            $logs[] = evapp_import_log_entry('Pausa confirmada por el canal de control persistente.');
+        }
+    }
+
+    if ($revision > $applied_revision) {
+        $state['control_revision_applied'] = $revision;
+        $changed = true;
+    }
+    if ($logs) {
+        $state = evapp_import_merge_runtime_logs($state, $logs);
+    }
+
+    if ($persist && $changed) {
+        update_option($state_key, $state, false);
+        evapp_import_background_touch($state_key, $state);
+        if ($command === 'cancel' || $command === 'pause') {
+            evapp_import_background_unschedule($state['background_task_id'] ?? '');
+        }
+    }
+
+    return $command;
+}
+function evapp_import_background_control_allows_run($state){
+    if (!is_array($state) || empty($state['background_task_id'])) return false;
+    $entry = evapp_import_background_get_entry((string) $state['background_task_id']);
+    if (!is_array($entry) || empty($entry['state_key'])) return false;
+    $command = evapp_import_control_command((string) $entry['state_key'], true);
+    return $command === '' || $command === 'background';
+}
+
 function evapp_import_background_cleanup_registry(){
     $registry = evapp_import_background_registry();
     $changed = false;
@@ -455,6 +564,7 @@ function evapp_import_background_unschedule($task_id){
 }
 function evapp_import_background_schedule($state, $delay = 60){
     if (!is_array($state) || empty($state['background_task_id']) || ($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return false;
+    if (!evapp_import_background_control_allows_run($state)) return false;
     $task_id = (string) $state['background_task_id'];
     $args = [$task_id];
     if (!wp_next_scheduled('eventosapp_import_background_cron', $args)) {
@@ -466,6 +576,7 @@ function evapp_import_background_schedule($state, $delay = 60){
 function evapp_import_background_dispatch($state){
     if (!is_array($state) || empty($state['background_task_id']) || empty($state['background_token'])) return false;
     if (($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return false;
+    if (!evapp_import_background_control_allows_run($state)) return false;
 
     evapp_import_background_schedule($state, 60);
     $response = wp_remote_post(admin_url('admin-ajax.php'), [
@@ -484,7 +595,9 @@ add_action('eventosapp_import_background_cron', function($task_id){
     $entry = evapp_import_background_get_entry($task_id);
     if (!is_array($entry) || empty($entry['state_key'])) return;
     $state = get_option($entry['state_key']);
-    if (!is_array($state) || ($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return;
+    if (!is_array($state)) return;
+    evapp_import_control_reconcile_state($entry['state_key'], $state, true);
+    if (($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return;
     evapp_import_background_dispatch($state);
 }, 10, 1);
 
@@ -1336,7 +1449,10 @@ add_action('wp_ajax_eventosapp_import_confirm', function(){
     $state['updated_at'] = time();
     if (!empty($state['background_task_id'])) evapp_import_background_unschedule($state['background_task_id']);
 
-    update_option(evapp_import_state_key($event_id, $hash), $state, false);
+    $state_key = evapp_import_state_key($event_id, $hash);
+    $control = evapp_import_control_set($state_key, 'browser', $state['background_task_id'] ?? '');
+    $state['control_revision_applied'] = (int) ($control['revision'] ?? 0);
+    update_option($state_key, $state, false);
     evapp_import_append_log($event_id, $hash, 'Importación preparada. Lote configurado en '.$batch_size.' registro(s).');
 
     $url4 = add_query_arg([
@@ -1554,6 +1670,10 @@ add_action('admin_init', function(){
             btnBackground.disabled = backgroundRunning;
             btnStop.style.display = ['running'].indexOf(data.status) !== -1 ? '' : 'none';
             btnCancel.style.display = ['done','cancelled'].indexOf(data.status) !== -1 ? 'none' : '';
+            if (['done','cancelled'].indexOf(data.status) === -1) {
+              btnCancel.disabled = false;
+              btnCancel.textContent = 'Cancelar proceso';
+            }
 
             offsetEl.textContent  = offset;
             createdEl.textContent = created;
@@ -1841,18 +1961,26 @@ add_action('admin_init', function(){
           });
 
           btnCancel.addEventListener('click', async function(){
-            if (!window.confirm('Esto cancelará la ejecución actual. Los tickets ya creados se conservan y el proceso podrá reanudarse sin duplicar.')) {
+            if (!window.confirm('Esto cancelará definitivamente la ejecución actual. Los tickets ya creados se conservan.')) {
               return;
             }
 
             manualStopRequested = true;
             autoRun = false;
             clearNextTick();
+            btnCancel.disabled = true;
+            const previousCancelText = btnCancel.textContent;
+            btnCancel.textContent = 'Cancelando…';
+            setConnectionState('warning', 'Continuidad: registrando cancelación');
 
             try {
               const data = await request('eventosapp_import_cancel');
               render(data);
+              setConnectionState('error', 'Continuidad: cancelada');
+              addLog('[' + new Date().toLocaleTimeString() + '] Cancelación confirmada. El servidor no ejecutará más lotes.');
             } catch (e) {
+              btnCancel.disabled = false;
+              btnCancel.textContent = previousCancelText;
               addLog('[' + new Date().toLocaleTimeString() + '] ERROR al cancelar: ' + e.message);
               setConnectionState('error', 'Continuidad: no se confirmó la cancelación');
             }
@@ -1910,6 +2038,8 @@ add_action('wp_ajax_eventosapp_import_status', function(){
         wp_send_json_error('Estado no encontrado', 404);
     }
 
+    evapp_import_control_reconcile_state($key, $state, true);
+
     if (($state['execution_mode'] ?? '') === 'background' && ($state['status'] ?? '') === 'running') {
         evapp_import_background_schedule($state, 60);
     }
@@ -1935,6 +2065,8 @@ add_action('wp_ajax_eventosapp_import_resume', function(){
     }
 
     if (!empty($state['background_task_id'])) evapp_import_background_unschedule($state['background_task_id']);
+    $control = evapp_import_control_set($key, 'browser', $state['background_task_id'] ?? $task_id);
+    $state['control_revision_applied'] = (int) ($control['revision'] ?? 0);
     $state['execution_mode'] = 'browser';
     $state['status']    = 'running';
     $state['stopped']   = 0;
@@ -1970,6 +2102,8 @@ add_action('wp_ajax_eventosapp_import_stop', function(){
         wp_send_json_error('Estado no encontrado', 404);
     }
 
+    $control = evapp_import_control_set($key, 'pause', $state['background_task_id'] ?? $task_id);
+    $state['control_revision_applied'] = (int) ($control['revision'] ?? 0);
     $state['status']  = 'stopped';
     $state['stopped'] = 1;
     $state['updated_at'] = time();
@@ -1999,11 +2133,17 @@ add_action('wp_ajax_eventosapp_import_cancel', function(){
         wp_send_json_error('Estado no encontrado', 404);
     }
 
+    // La orden se guarda primero en una opción independiente. Así permanece vigente
+    // aunque un worker activo termine su lote con una copia anterior del estado.
+    $control = evapp_import_control_set($key, 'cancel', $state['background_task_id'] ?? $task_id);
+    $state['control_revision_applied'] = (int) ($control['revision'] ?? 0);
     $state['status']    = 'cancelled';
     $state['cancelled'] = 1;
     $state['stopped']   = 1;
+    $state['done']      = 0;
     $state['updated_at'] = time();
     $state['finished_at_ts'] = time();
+    $state['background_token'] = '';
     if (!empty($state['background_task_id'])) evapp_import_background_unschedule($state['background_task_id']);
     $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Proceso cancelado por el usuario. El progreso queda registrado para evitar duplicados.')]);
     update_option($key, $state, false);
@@ -2052,6 +2192,8 @@ add_action('wp_ajax_eventosapp_import_background', function(){
     $state['notified_milestones'] = array_values(array_unique($already));
 
     $new_task_id = evapp_import_background_register($key, $state);
+    $control = evapp_import_control_set($key, 'background', $new_task_id);
+    $state['control_revision_applied'] = (int) ($control['revision'] ?? 0);
     $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Importación enviada a segundo plano. Se notificará a '.$recipient.' al 20%, 40%, 60%, 80%, 100% o si ocurre un error.')]);
     update_option($key, $state, false);
     evapp_import_background_schedule($state, 60);
@@ -2070,7 +2212,10 @@ function evapp_import_background_worker_handler(){
     $entry = evapp_import_background_get_entry($task_id);
     if (!is_array($entry) || empty($entry['state_key'])) wp_send_json_error('Tarea no encontrada', 404);
     $state = get_option($entry['state_key']);
-    if (!is_array($state) || empty($state['background_token']) || !hash_equals((string) $state['background_token'], $token)) wp_send_json_error('Token inválido', 403);
+    if (!is_array($state)) wp_send_json_error('Estado no encontrado', 404);
+    // Validar el secreto antes de devolver cualquier dato de la tarea.
+    if (empty($state['background_token']) || !hash_equals((string) $state['background_token'], $token)) wp_send_json_error('Token inválido', 403);
+    evapp_import_control_reconcile_state($entry['state_key'], $state, true);
     if (($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') wp_send_json_success(evapp_import_public_state($state));
 
     $owner_user_id = (int) ($state['owner_user_id'] ?? $entry['owner_user_id'] ?? 0);
@@ -2127,6 +2272,14 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $state = get_option($key);
     if (!is_array($state)) {
         wp_send_json_error('Estado no encontrado', 404);
+    }
+
+    $control_command = evapp_import_control_reconcile_state($key, $state, true);
+    if ($control_command === 'cancel' || !empty($state['cancelled'])) {
+        wp_send_json_success(evapp_import_public_state($state, ['msg'=>'Proceso cancelado.']));
+    }
+    if ($control_command === 'pause' || (!empty($state['stopped']) && ($state['status'] ?? '') !== 'running')) {
+        wp_send_json_success(evapp_import_public_state($state, ['msg'=>'Proceso detenido.']));
     }
 
     $lock_token = evapp_import_acquire_lock($event_id, $hash, 120, $key);
@@ -2207,6 +2360,18 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $reached_eof   = false;
 
     while ($processed_now < $effective_chunk) {
+        // La orden de control vive fuera del estado pesado y se consulta directamente en BD.
+        // De esta forma cancelar o pausar no puede perderse por una escritura tardía del worker.
+        $control_command = evapp_import_control_command($key, true);
+        if ($control_command === 'cancel') {
+            $stop_reason = 'user_cancel';
+            break;
+        }
+        if ($control_command === 'pause') {
+            $stop_reason = 'user_stop';
+            break;
+        }
+
         // Se permite siempre al menos una fila. Después se aplican los guardas adaptativos.
         if ($processed_now > 0) {
             $elapsed_now_ms = (microtime(true) - $start_time) * 1000;
@@ -2223,18 +2388,6 @@ add_action('wp_ajax_eventosapp_import_process', function(){
                 break;
             }
 
-            // Revisa órdenes de detener/cancelar sin escribir la base de datos por cada fila.
-            if (($processed_now % 5) === 0) {
-                $control_state = get_option($key);
-                if (is_array($control_state) && !empty($control_state['cancelled'])) {
-                    $stop_reason = 'user_cancel';
-                    break;
-                }
-                if (is_array($control_state) && !empty($control_state['stopped'])) {
-                    $stop_reason = 'user_stop';
-                    break;
-                }
-            }
         }
 
         $row = fgetcsv($fh);
@@ -2430,17 +2583,21 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         'resource_level'   => $resource_level,
     ];
 
-    // Recupera el estado más reciente para respetar una orden de detener/cancelar enviada durante el lote.
+    // Recupera el estado más reciente y, después, la orden independiente de control.
     $latest_state = get_option($key);
     if (is_array($latest_state)) {
         $state = $latest_state;
     }
+    $control_command = evapp_import_control_reconcile_state($key, $state, false);
+    $cancel_requested = ($control_command === 'cancel') || !empty($state['cancelled']) || $stop_reason === 'user_cancel';
+    $pause_requested  = ($control_command === 'pause') || (!empty($state['stopped']) && !$cancel_requested) || $stop_reason === 'user_stop';
+    $final_done = $done && !$cancel_requested && !$pause_requested;
 
     $state['offset']           = $offset;
     $state['created_count']    = $created;
     $state['updated_existing'] = $updated;
     $state['skipped_dup']      = $skipped;
-    $state['done']             = $done ? 1 : 0;
+    $state['done']             = $final_done ? 1 : 0;
     $state['updated_at']       = time();
 
     if (!isset($state['created_ids']) || !is_array($state['created_ids'])) {
@@ -2460,14 +2617,21 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $performance['last_batch'] = $batch_metrics;
     $state['performance'] = $performance;
 
-    if ($done) {
+    // Cancelar y pausar tienen prioridad sobre terminar el archivo. Esto impide que
+    // una orden emitida al final del lote se convierta accidentalmente en "done".
+    if ($cancel_requested) {
+        $state['status'] = 'cancelled';
+        $state['cancelled'] = 1;
+        $state['stopped'] = 1;
+        $state['background_token'] = '';
+        $state['finished_at_ts'] = (int) ($state['finished_at_ts'] ?? time());
+    } elseif ($pause_requested) {
+        $state['status'] = 'stopped';
+        $state['stopped'] = 1;
+    } elseif ($final_done) {
         $state['status'] = 'done';
         $state['finished_at'] = current_time('mysql');
         $state['finished_at_ts'] = time();
-    } elseif (!empty($state['cancelled'])) {
-        $state['status'] = 'cancelled';
-    } elseif (!empty($state['stopped'])) {
-        $state['status'] = 'stopped';
     } else {
         $state['status'] = 'running';
     }
@@ -2482,17 +2646,17 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     ];
     $reason_label = $reason_labels[$stop_reason] ?? $stop_reason;
     $summary_message = 'Lote procesado en '.number_format_i18n($elapsed_ms / 1000, 2).' s: '.$processed_now.' fila(s) | +'.$created_now.' nuevas | ↺'.$updated_now.' actualizadas | ✗'.$skipped_now.' omitidas | '.number_format_i18n($rows_per_second, 2).' ticket(s)/s | cierre por '.$reason_label.'.';
-    if (!$done && in_array($stop_reason, ['batch_limit', 'time_budget', 'memory_guard'], true)) {
+    if (($state['status'] ?? '') === 'running' && in_array($stop_reason, ['batch_limit', 'time_budget', 'memory_guard'], true)) {
         $summary_message .= ' La importación continúa automáticamente con el siguiente lote.';
     }
     $batch_logs[] = evapp_import_log_entry($summary_message);
 
-    if (($state['execution_mode'] ?? '') === 'background') {
+    if (($state['execution_mode'] ?? '') === 'background' && in_array(($state['status'] ?? ''), ['running','done'], true)) {
         $batch_logs = array_merge($batch_logs, evapp_import_background_apply_notifications($state));
-        if ($done) $state['admin_notified'] = 1;
+        if ($final_done) $state['admin_notified'] = 1;
     }
 
-    if ($done && empty($state['admin_notified']) && ($state['execution_mode'] ?? 'browser') !== 'background') {
+    if ($final_done && empty($state['admin_notified']) && ($state['execution_mode'] ?? 'browser') !== 'background') {
         $site_name       = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
         $admin_email     = get_option('admin_email');
         $event_title     = get_the_title($event_id);
@@ -2520,6 +2684,13 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $state = evapp_import_merge_runtime_logs($state, $batch_logs);
     update_option($key, $state, false);
     evapp_import_background_touch($key, $state);
+
+    // Segunda comprobación justo después de guardar: si la orden llegó en la ventana
+    // final de persistencia, se reaplica antes de liberar el lock o despachar otro worker.
+    evapp_import_control_reconcile_state($key, $state, true);
+    $confirmed_state = get_option($key);
+    if (is_array($confirmed_state)) $state = $confirmed_state;
+
     evapp_import_release_lock($event_id, $hash, $lock_token, $key);
 
     if (($state['execution_mode'] ?? '') === 'background') {
