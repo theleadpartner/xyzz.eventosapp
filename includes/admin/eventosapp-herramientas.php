@@ -5,6 +5,7 @@ if (!defined('ABSPATH')) exit;
  * Herramientas por evento: Importador CSV de tickets (asistente 4 pasos) + envío masivo opcional.
  * OPTIMIZADO para evitar timeouts en servidores con recursos limitados.
  * Continuidad resiliente: reintentos automáticos ante cortes AJAX, 502/504 o respuestas incompletas.
+ * Segundo plano opcional: worker firmado + WP-Cron, panel global de tareas y correos por hitos.
  *
  * URL: /wp-admin/admin.php?page=eventosapp_tools&event_id=ID
  */
@@ -150,11 +151,12 @@ function evapp_import_effective_batch_size($state, $time_budget_ms){
 /**
  * Lock por importación para impedir que dos pestañas procesen el mismo offset al mismo tiempo.
  */
-function evapp_import_lock_key($event_id, $hash){
-    return 'evapp_import_lock_'.md5((int) $event_id.'|'.(string) $hash.'|'.evapp_current_user_key());
+function evapp_import_lock_key($event_id, $hash, $scope = ''){
+    $scope = $scope !== '' ? (string) $scope : evapp_current_user_key();
+    return 'evapp_import_lock_'.md5((int) $event_id.'|'.(string) $hash.'|'.$scope);
 }
-function evapp_import_acquire_lock($event_id, $hash, $ttl = 90){
-    $key = evapp_import_lock_key($event_id, $hash);
+function evapp_import_acquire_lock($event_id, $hash, $ttl = 90, $scope = ''){
+    $key = evapp_import_lock_key($event_id, $hash, $scope);
     $token = wp_generate_uuid4();
     $payload = ['token'=>$token, 'expires'=>time() + max(30, (int) $ttl)];
 
@@ -172,9 +174,9 @@ function evapp_import_acquire_lock($event_id, $hash, $ttl = 90){
 
     return '';
 }
-function evapp_import_release_lock($event_id, $hash, $token){
+function evapp_import_release_lock($event_id, $hash, $token, $scope = ''){
     if (!$token) return;
-    $key = evapp_import_lock_key($event_id, $hash);
+    $key = evapp_import_lock_key($event_id, $hash, $scope);
     $existing = get_option($key);
     if (is_array($existing) && hash_equals((string) ($existing['token'] ?? ''), (string) $token)) {
         delete_option($key);
@@ -271,9 +273,302 @@ function evapp_import_public_state($state, $extra = []){
         'performance'      => $performance,
         'resources'        => $last_batch,
         'eta_seconds'      => $avg_ms > 0 ? (int) ceil(($remaining * $avg_ms) / 1000) : 0,
+        'execution_mode'   => (string) ($state['execution_mode'] ?? 'browser'),
+        'background_active'=> (($state['execution_mode'] ?? 'browser') === 'background' && $status === 'running') ? 1 : 0,
+        'task_id'          => (string) ($state['background_task_id'] ?? ''),
+        'notification_email' => sanitize_email($state['notification_email'] ?? ''),
+        'last_error'       => (string) ($state['last_error'] ?? ''),
+        'updated_at'       => (int) ($state['updated_at'] ?? 0),
     ];
 
     return array_merge($base, is_array($extra) ? $extra : []);
+}
+
+/**
+ * Registro global de importaciones enviadas a segundo plano.
+ * Guarda únicamente referencias al estado real para no duplicar datos pesados en wp_options.
+ */
+function evapp_import_background_registry_key(){
+    return 'evapp_import_background_registry_v1';
+}
+function evapp_import_background_registry(){
+    $registry = get_option(evapp_import_background_registry_key(), []);
+    return is_array($registry) ? $registry : [];
+}
+function evapp_import_background_save_registry($registry){
+    update_option(evapp_import_background_registry_key(), is_array($registry) ? $registry : [], false);
+}
+function evapp_import_background_get_entry($task_id){
+    $task_id = sanitize_text_field((string) $task_id);
+    if ($task_id === '') return null;
+    $registry = evapp_import_background_registry();
+    return isset($registry[$task_id]) && is_array($registry[$task_id]) ? $registry[$task_id] : null;
+}
+function evapp_import_background_register($state_key, &$state){
+    $registry = evapp_import_background_registry();
+    $task_id = sanitize_text_field($state['background_task_id'] ?? '');
+    if ($task_id === '') {
+        $task_id = 'evimp_'.str_replace('-', '', wp_generate_uuid4());
+    }
+
+    $owner_user_id = (int) ($state['owner_user_id'] ?? get_current_user_id());
+    $state['background_task_id'] = $task_id;
+    $state['owner_user_id'] = $owner_user_id;
+    $state['execution_mode'] = 'background';
+    $state['updated_at'] = time();
+
+    $registry[$task_id] = [
+        'task_id'       => $task_id,
+        'state_key'     => (string) $state_key,
+        'event_id'      => (int) ($state['event_id'] ?? 0),
+        'hash'          => (string) ($state['file_hash'] ?? ''),
+        'owner_user_id' => $owner_user_id,
+        'created_at'    => (int) ($registry[$task_id]['created_at'] ?? time()),
+        'updated_at'    => time(),
+    ];
+    evapp_import_background_save_registry($registry);
+    return $task_id;
+}
+function evapp_import_background_touch($state_key, $state){
+    if (!is_array($state) || empty($state['background_task_id'])) return;
+    $registry = evapp_import_background_registry();
+    $task_id = (string) $state['background_task_id'];
+    if (!isset($registry[$task_id]) || !is_array($registry[$task_id])) {
+        evapp_import_background_register($state_key, $state);
+        return;
+    }
+    $registry[$task_id]['updated_at'] = time();
+    $registry[$task_id]['event_id'] = (int) ($state['event_id'] ?? $registry[$task_id]['event_id'] ?? 0);
+    $registry[$task_id]['hash'] = (string) ($state['file_hash'] ?? $registry[$task_id]['hash'] ?? '');
+    evapp_import_background_save_registry($registry);
+}
+function evapp_import_background_resolve_state_key($event_id, $hash, $task_id = ''){
+    $task_id = sanitize_text_field((string) $task_id);
+    if ($task_id !== '') {
+        $entry = evapp_import_background_get_entry($task_id);
+        if (is_array($entry) && !empty($entry['state_key'])) {
+            $entry_event = (int) ($entry['event_id'] ?? 0);
+            $entry_hash  = (string) ($entry['hash'] ?? '');
+            if ((!$event_id || $entry_event === (int) $event_id) && (!$hash || hash_equals($entry_hash, (string) $hash))) {
+                return (string) $entry['state_key'];
+            }
+        }
+    }
+    return evapp_import_state_key($event_id, $hash);
+}
+function evapp_import_background_cleanup_registry(){
+    $registry = evapp_import_background_registry();
+    $changed = false;
+    $cutoff = time() - (7 * DAY_IN_SECONDS);
+    foreach ($registry as $task_id => $entry) {
+        $state_key = is_array($entry) ? (string) ($entry['state_key'] ?? '') : '';
+        $state = $state_key ? get_option($state_key) : null;
+        if (!is_array($state)) {
+            unset($registry[$task_id]);
+            $changed = true;
+            continue;
+        }
+        $status = (string) ($state['status'] ?? 'ready');
+        $finished = (int) ($state['finished_at_ts'] ?? $state['updated_at'] ?? $entry['updated_at'] ?? 0);
+        if (in_array($status, ['done','cancelled'], true) && $finished > 0 && $finished < $cutoff) {
+            unset($registry[$task_id]);
+            $changed = true;
+        }
+    }
+    if ($changed) evapp_import_background_save_registry($registry);
+    return $registry;
+}
+function evapp_import_background_tasks(){
+    $registry = evapp_import_background_cleanup_registry();
+    $tasks = [];
+    foreach ($registry as $task_id => $entry) {
+        if (!is_array($entry) || empty($entry['state_key'])) continue;
+        $state = get_option($entry['state_key']);
+        if (!is_array($state)) continue;
+        if (($state['execution_mode'] ?? 'browser') !== 'background') continue;
+        $state['_state_key'] = (string) $entry['state_key'];
+        $state['background_task_id'] = (string) $task_id;
+        $tasks[] = $state;
+    }
+    usort($tasks, function($a, $b){
+        return (int) ($b['updated_at'] ?? $b['started_at_ts'] ?? 0) <=> (int) ($a['updated_at'] ?? $a['started_at_ts'] ?? 0);
+    });
+    return $tasks;
+}
+function evapp_import_background_progress_url($state){
+    return add_query_arg([
+        'page'     => 'eventosapp_tools',
+        'event_id' => (int) ($state['event_id'] ?? 0),
+        'step'     => 4,
+        'hash'     => (string) ($state['file_hash'] ?? ''),
+        'task_id'  => (string) ($state['background_task_id'] ?? ''),
+    ], admin_url('admin.php'));
+}
+function evapp_import_render_background_tasks_panel(){
+    if (!current_user_can('manage_options')) return;
+    $tasks = evapp_import_background_tasks();
+
+    echo '<div class="card" style="max-width:none;padding:0;margin:14px 0 18px;overflow:hidden">';
+    echo '<div style="padding:14px 16px;background:#f6f7f7;border-bottom:1px solid #dcdcde;display:flex;justify-content:space-between;align-items:center;gap:10px">';
+    echo '<div><strong style="font-size:15px">Tareas de importación en segundo plano</strong><div style="color:#646970;margin-top:3px">Consulta procesos activos, pausados, con error o finalizados recientemente.</div></div>';
+    echo '<span style="background:#2271b1;color:#fff;border-radius:999px;padding:3px 9px;font-weight:600">'.count($tasks).'</span>';
+    echo '</div>';
+
+    if (!$tasks) {
+        echo '<p style="padding:14px 16px;margin:0;color:#646970">No hay importaciones registradas en segundo plano.</p></div>';
+        return;
+    }
+
+    echo '<div style="padding:8px 14px 14px">';
+    foreach ($tasks as $state) {
+        $status = (string) ($state['status'] ?? 'ready');
+        $status_labels = ['running'=>'Procesando','stopped'=>'Pausada','error'=>'Error','done'=>'Completada','cancelled'=>'Cancelada','ready'=>'Preparada'];
+        $status_label = $status_labels[$status] ?? ucfirst($status);
+        $total = max(0, (int) ($state['total_rows'] ?? 0));
+        $offset = max(0, (int) ($state['offset'] ?? 0));
+        $percent = $total > 0 ? min(100, (int) floor(($offset / $total) * 100)) : 0;
+        $event_id = (int) ($state['event_id'] ?? 0);
+        $event_title = get_the_title($event_id) ?: 'Evento sin título';
+        $filename = (string) ($state['filename'] ?? 'CSV');
+        $open_url = evapp_import_background_progress_url($state);
+        $open = in_array($status, ['running','stopped','error'], true) ? ' open' : '';
+
+        echo '<details'.$open.' style="border:1px solid #dcdcde;border-radius:8px;margin-top:10px;background:#fff">';
+        echo '<summary style="cursor:pointer;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">';
+        echo '<span><strong>'.esc_html($event_title).' ['.$event_id.']</strong><br><small style="color:#646970">'.esc_html($filename).'</small></span>';
+        echo '<span style="text-align:right"><strong>'.$percent.'%</strong><br><small>'.esc_html($status_label).'</small></span>';
+        echo '</summary>';
+        echo '<div style="padding:0 14px 14px;border-top:1px solid #f0f0f1">';
+        echo '<div style="height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin:12px 0"><div style="height:100%;width:'.$percent.'%;background:#2271b1"></div></div>';
+        echo '<p style="margin:6px 0;color:#50575e">Procesadas: <b>'.$offset.'</b> de <b>'.$total.'</b> · Creadas: <b>'.(int) ($state['created_count'] ?? 0).'</b> · Actualizadas: <b>'.(int) ($state['updated_existing'] ?? 0).'</b> · Omitidas: <b>'.(int) ($state['skipped_dup'] ?? 0).'</b></p>';
+        if (!empty($state['last_error'])) echo '<p style="color:#b32d2e"><b>Último error:</b> '.esc_html($state['last_error']).'</p>';
+        echo '<p style="margin:10px 0 0"><a class="button button-primary" href="'.esc_url($open_url).'">Abrir progreso y controles</a></p>';
+        echo '</div></details>';
+    }
+    echo '</div></div>';
+}
+
+function evapp_import_background_unschedule($task_id){
+    $task_id = sanitize_text_field((string) $task_id);
+    if ($task_id === '') return;
+    wp_clear_scheduled_hook('eventosapp_import_background_cron', [$task_id]);
+}
+function evapp_import_background_schedule($state, $delay = 60){
+    if (!is_array($state) || empty($state['background_task_id']) || ($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return false;
+    $task_id = (string) $state['background_task_id'];
+    $args = [$task_id];
+    if (!wp_next_scheduled('eventosapp_import_background_cron', $args)) {
+        wp_schedule_single_event(time() + max(2, (int) $delay), 'eventosapp_import_background_cron', $args);
+    }
+    if (function_exists('spawn_cron')) @spawn_cron(time());
+    return true;
+}
+function evapp_import_background_dispatch($state){
+    if (!is_array($state) || empty($state['background_task_id']) || empty($state['background_token'])) return false;
+    if (($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return false;
+
+    evapp_import_background_schedule($state, 60);
+    $response = wp_remote_post(admin_url('admin-ajax.php'), [
+        'timeout'   => 0.01,
+        'blocking'  => false,
+        'sslverify' => apply_filters('https_local_ssl_verify', false),
+        'body'      => [
+            'action'  => 'eventosapp_import_background_worker',
+            'task_id' => (string) $state['background_task_id'],
+            'token'   => (string) $state['background_token'],
+        ],
+    ]);
+    return !is_wp_error($response);
+}
+add_action('eventosapp_import_background_cron', function($task_id){
+    $entry = evapp_import_background_get_entry($task_id);
+    if (!is_array($entry) || empty($entry['state_key'])) return;
+    $state = get_option($entry['state_key']);
+    if (!is_array($state) || ($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return;
+    evapp_import_background_dispatch($state);
+}, 10, 1);
+
+function evapp_import_background_notification_recipient($state){
+    $email = sanitize_email($state['notification_email'] ?? '');
+    if ($email) return $email;
+    $owner = !empty($state['owner_user_id']) ? get_userdata((int) $state['owner_user_id']) : null;
+    if ($owner && is_email($owner->user_email)) return sanitize_email($owner->user_email);
+    return sanitize_email(get_option('admin_email'));
+}
+function evapp_import_background_send_email($state, $kind, $value = 0, $message = ''){
+    $to = evapp_import_background_notification_recipient($state);
+    if (!$to) return false;
+    $site_name = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+    $event_id = (int) ($state['event_id'] ?? 0);
+    $event_title = get_the_title($event_id) ?: 'Evento';
+    $total = (int) ($state['total_rows'] ?? 0);
+    $offset = (int) ($state['offset'] ?? 0);
+    $url = evapp_import_background_progress_url($state);
+
+    if ($kind === 'error') {
+        $subject = sprintf('[%s] Error en importación — %s [%d]', $site_name, $event_title, $event_id);
+        $headline = 'La importación en segundo plano se detuvo por un error.';
+    } else {
+        $subject = sprintf('[%s] Importación %d%% — %s [%d]', $site_name, (int) $value, $event_title, $event_id);
+        $headline = ((int) $value >= 100) ? 'La importación en segundo plano finalizó.' : 'La importación en segundo plano alcanzó el '.(int) $value.'%.';
+    }
+
+    $body = $headline."\n\n".
+        "Evento: {$event_title} [{$event_id}]\n".
+        "Archivo: ".($state['filename'] ?? '')."\n".
+        "Filas procesadas: {$offset} de {$total}\n".
+        "Tickets creados: ".(int) ($state['created_count'] ?? 0)."\n".
+        "Tickets actualizados: ".(int) ($state['updated_existing'] ?? 0)."\n".
+        "Duplicados/filas omitidas: ".(int) ($state['skipped_dup'] ?? 0)."\n";
+    if ($message !== '') $body .= "Detalle: {$message}\n";
+    $body .= "\nRevisar progreso y controles:\n{$url}\n";
+    return wp_mail($to, $subject, $body, ['Content-Type: text/plain; charset=UTF-8']);
+}
+function evapp_import_background_apply_notifications(&$state, $error_message = ''){
+    if (!is_array($state) || ($state['execution_mode'] ?? '') !== 'background') return [];
+    $logs = [];
+    if (!isset($state['notified_milestones']) || !is_array($state['notified_milestones'])) $state['notified_milestones'] = [];
+
+    if ($error_message !== '') {
+        if (empty($state['error_notification_sent'])) {
+            $sent = evapp_import_background_send_email($state, 'error', 0, $error_message);
+            if ($sent) {
+                $state['error_notification_sent'] = 1;
+                $logs[] = evapp_import_log_entry('Notificación de error enviada a '.evapp_import_background_notification_recipient($state).'.');
+            } else {
+                $logs[] = evapp_import_log_entry('No se pudo confirmar el envío del correo de error; se volverá a intentar.');
+            }
+        }
+        return $logs;
+    }
+
+    $total = (int) ($state['total_rows'] ?? 0);
+    $offset = (int) ($state['offset'] ?? 0);
+    $percent = $total > 0 ? min(100, (int) floor(($offset / $total) * 100)) : 0;
+    foreach ([20,40,60,80,100] as $milestone) {
+        if ($percent < $milestone || in_array($milestone, $state['notified_milestones'], true)) continue;
+        $sent = evapp_import_background_send_email($state, 'progress', $milestone);
+        if ($sent) {
+            $state['notified_milestones'][] = $milestone;
+            $logs[] = evapp_import_log_entry('Notificación de progreso '.$milestone.'% enviada a '.evapp_import_background_notification_recipient($state).'.');
+        } else {
+            $logs[] = evapp_import_log_entry('No se pudo confirmar el correo del '.$milestone.'%; se volverá a intentar en el siguiente lote.');
+        }
+    }
+    $state['notified_milestones'] = array_values(array_unique(array_map('intval', $state['notified_milestones'])));
+    return $logs;
+}
+function evapp_import_background_mark_error($state_key, &$state, $message){
+    $state['status'] = 'error';
+    $state['last_error'] = wp_strip_all_tags((string) $message);
+    $state['updated_at'] = time();
+    $state = evapp_import_merge_runtime_logs($state, array_merge(
+        [evapp_import_log_entry('ERROR: '.$state['last_error'])],
+        evapp_import_background_apply_notifications($state, $state['last_error'])
+    ));
+    update_option($state_key, $state, false);
+    evapp_import_background_touch($state_key, $state);
+    evapp_import_background_unschedule($state['background_task_id'] ?? '');
 }
 
 // === NUEVO: obtener/crear el usuario importador1 ===
@@ -456,7 +751,10 @@ function eventosapp_tools_render(){
     // ——— NUEVO: barra con selector de evento ———
     evapp_tools_event_picker_bar($event_id);
 
-    // si todavía no hay evento seleccionado, paramos aquí (solo mostramos la barra)
+    // Panel global: permite volver a cualquier importación que siga o haya quedado en segundo plano.
+    evapp_import_render_background_tasks_panel();
+
+    // si todavía no hay evento seleccionado, paramos aquí (solo mostramos la barra y las tareas)
     if (!$event_id || get_post_type($event_id) !== 'eventosapp_event') {
         echo '<p>Elige un evento para iniciar el asistente de importación.</p>';
         echo '</div>';
@@ -495,7 +793,8 @@ function eventosapp_tools_render(){
         echo '<div style="background:#f6fbff;border:1px solid #bee3f8;padding:10px 12px;border-radius:8px;margin:8px 0 16px">';
         echo '<b>Importación previa detectada:</b> archivo <code>'.esc_html($progress['filename']).'</code> ';
         echo '(hash <code>'.esc_html(substr($progress['file_hash'],0,10)).'…</code>) — filas procesadas: <b>'.$progress['offset'].'</b>.';
-        echo ' Puedes re-subir el <i>mismo</i> archivo para continuar o ir directo al paso 4.';
+        $progress_url = add_query_arg(['page'=>'eventosapp_tools','event_id'=>$event_id,'step'=>4,'hash'=>$progress['file_hash'],'task_id'=>$progress['background_task_id'] ?? ''], admin_url('admin.php'));
+        echo ' <a href="'.esc_url($progress_url).'">Abrir progreso</a> o re-subir el <i>mismo</i> archivo para continuar.';
         echo '</div>';
     }
 
@@ -761,6 +1060,9 @@ if (is_array($existing)) {
     $state['total_rows']    = intval($existing['total_rows'] ?? 0);
     if (isset($existing['queue_email']))  $state['queue_email']  = $existing['queue_email'];
     if (isset($existing['rate_per_min'])) $state['rate_per_min'] = $existing['rate_per_min'];
+    foreach (['status','stopped','cancelled','done','runtime_log','batch_size','performance','updated_existing','skipped_dup','started_at','started_at_ts','finished_at','finished_at_ts','execution_mode','background_task_id','background_token','owner_user_id','notification_email','notified_milestones','error_notification_sent','last_error','updated_at'] as $preserve_key) {
+        if (array_key_exists($preserve_key, $existing)) $state[$preserve_key] = $existing[$preserve_key];
+    }
 }
 
 update_option($key, $state, false);
@@ -1025,6 +1327,14 @@ add_action('wp_ajax_eventosapp_import_confirm', function(){
         'last_batch'       => [],
     ];
     $state['started_at_ts'] = 0;
+    $state['finished_at_ts'] = 0;
+    $state['execution_mode'] = 'browser';
+    $state['owner_user_id'] = get_current_user_id();
+    $state['notification_email'] = '';
+    $state['notified_milestones'] = [];
+    $state['error_notification_sent'] = 0;
+    $state['updated_at'] = time();
+    if (!empty($state['background_task_id'])) evapp_import_background_unschedule($state['background_task_id']);
 
     update_option(evapp_import_state_key($event_id, $hash), $state, false);
     evapp_import_append_log($event_id, $hash, 'Importación preparada. Lote configurado en '.$batch_size.' registro(s).');
@@ -1046,10 +1356,12 @@ add_action('admin_init', function(){
 
     $event_id = intval($_GET['event_id'] ?? 0);
     $hash     = sanitize_text_field($_GET['hash'] ?? '');
-    $state    = $hash ? get_option(evapp_import_state_key($event_id, $hash)) : null;
+    $task_id  = sanitize_text_field($_GET['task_id'] ?? '');
+    $state_key = $hash ? evapp_import_background_resolve_state_key($event_id, $hash, $task_id) : '';
+    $state    = $state_key ? get_option($state_key) : null;
     if (!$state) return;
 
-    add_action('admin_notices', function() use ($state, $event_id, $hash){
+    add_action('admin_notices', function() use ($state, $event_id, $hash, $task_id){
         $nonce    = wp_create_nonce('evapp_tools_'.$event_id);
         $ajax_url = admin_url('admin-ajax.php');
 
@@ -1057,11 +1369,12 @@ add_action('admin_init', function(){
         echo '<h3>Paso 4: Importar</h3>';
         echo '<p>Procesaremos el CSV por lotes controlados. Cada lote crea el ticket completo con sus archivos inmediatamente.</p>';
         echo '<p><strong>Total de filas:</strong> '.intval($state['total_rows'] ?? 0).' | <strong>Lote objetivo:</strong> '.intval($state['batch_size'] ?? 20).' registro(s)</p>';
-        echo '<p style="background:#e7f5ff;padding:8px;border-left:4px solid #2271b1;"><strong>Importante:</strong> este flujo no programa correos. Crea/actualiza tickets y genera los anexos requeridos dentro de lotes adaptativos protegidos por tiempo, memoria y lock de concurrencia.</p>';
+        echo '<p style="background:#e7f5ff;padding:8px;border-left:4px solid #2271b1;"><strong>Importante:</strong> en modo normal la importación depende de esta ventana. Al usar <b>Enviar a segundo plano</b>, el servidor continuará aunque cierres el navegador y enviará avisos al 20%, 40%, 60%, 80%, 100% o si ocurre un error.</p>';
 
         echo '<p style="display:flex; gap:8px; flex-wrap:wrap; margin:0 0 14px 0;">';
-        echo '<button id="evapp_start_import" class="button button-primary button-large">Iniciar / Reanudar</button>';
-        echo '<button id="evapp_stop_import" class="button button-secondary button-large">Detener</button>';
+        echo '<button id="evapp_start_import" class="button button-primary button-large">Iniciar / Reanudar en esta ventana</button>';
+        echo '<button id="evapp_background_import" class="button button-secondary button-large">Enviar a segundo plano</button>';
+        echo '<button id="evapp_stop_import" class="button button-secondary button-large">Pausar</button>';
         echo '<button id="evapp_cancel_import" class="button button-link-delete">Cancelar proceso</button>';
         echo '</p>';
 
@@ -1073,7 +1386,7 @@ add_action('admin_init', function(){
         echo '</style>';
 
         echo '<div style="margin-top:1rem; padding:1rem; border:1px solid #ccc; background:#f9f9f9; border-radius:4px;">';
-        echo '<div style="margin-bottom:0.5rem;"><strong>Progreso:</strong> <span id="evapp_status_badge" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#eef2ff;color:#4338ca;">'.esc_html($state['status'] ?? 'ready').'</span> <span id="evapp_resource_level" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#ecfdf5;color:#166534;margin-left:5px;">Recursos: esperando datos</span> <span id="evapp_connection_state" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#f6f7f7;color:#50575e;margin-left:5px;">Continuidad: lista</span></div>';
+        echo '<div style="margin-bottom:0.5rem;"><strong>Progreso:</strong> <span id="evapp_status_badge" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#eef2ff;color:#4338ca;">'.esc_html($state['status'] ?? 'ready').'</span> <span id="evapp_resource_level" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#ecfdf5;color:#166534;margin-left:5px;">Recursos: esperando datos</span> <span id="evapp_connection_state" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#f6f7f7;color:#50575e;margin-left:5px;">Continuidad: lista</span> <span id="evapp_background_state" style="display:inline-block;padding:2px 8px;border-radius:10px;background:#f6f7f7;color:#50575e;margin-left:5px;">Modo: ventana</span></div>';
         echo '<div style="margin-bottom:1rem;">';
         echo '<div style="background:#e0e0e0; height:24px; border-radius:4px; overflow:hidden; position:relative;">';
         echo '<div id="evapp_progress_bar" style="background:#2271b1; height:100%; width:0%; transition:width 0.3s;"></div>';
@@ -1106,8 +1419,10 @@ add_action('admin_init', function(){
           const nonce     = '<?php echo esc_js($nonce); ?>';
           const eventId   = '<?php echo intval($event_id); ?>';
           const hash      = '<?php echo esc_js($hash); ?>';
+          let taskId      = '<?php echo esc_js($task_id ?: ($state['background_task_id'] ?? '')); ?>';
 
           const btnStart  = document.getElementById('evapp_start_import');
+          const btnBackground = document.getElementById('evapp_background_import');
           const btnStop   = document.getElementById('evapp_stop_import');
           const btnCancel = document.getElementById('evapp_cancel_import');
           const logBox    = document.getElementById('evapp_log');
@@ -1120,6 +1435,7 @@ add_action('admin_init', function(){
           const badgeEl   = document.getElementById('evapp_status_badge');
           const resourceLevelEl = document.getElementById('evapp_resource_level');
           const connectionStateEl = document.getElementById('evapp_connection_state');
+          const backgroundStateEl = document.getElementById('evapp_background_state');
           const effectiveBatchEl = document.getElementById('evapp_effective_batch');
           const rateEl = document.getElementById('evapp_rate');
           const batchTimeEl = document.getElementById('evapp_batch_time');
@@ -1136,6 +1452,7 @@ add_action('admin_init', function(){
           let consecutiveErrors = 0;
           let nextTickTimer = null;
           let lastStatusErrorAt = 0;
+          let executionMode = '<?php echo esc_js($state['execution_mode'] ?? 'browser'); ?>';
 
           function addLog(line){
             if (!line) return;
@@ -1223,6 +1540,20 @@ add_action('admin_init', function(){
             const skipped = parseInt(data.skipped_dup || 0, 10);
             const percent = totalRows > 0 ? Math.min(100, Math.round((offset / totalRows) * 100)) : 0;
             const resources = data.resources || {};
+            executionMode = data.execution_mode || executionMode || 'browser';
+            if (data.task_id) taskId = data.task_id;
+
+            const backgroundRunning = executionMode === 'background' && data.status === 'running';
+            backgroundStateEl.textContent = backgroundRunning ? 'Modo: segundo plano activo' : (executionMode === 'background' ? 'Modo: segundo plano pausado' : 'Modo: ventana');
+            backgroundStateEl.style.background = backgroundRunning ? '#e0f2fe' : '#f6f7f7';
+            backgroundStateEl.style.color = backgroundRunning ? '#075985' : '#50575e';
+
+            btnStart.style.display = backgroundRunning ? 'none' : '';
+            btnBackground.style.display = ['done','cancelled'].indexOf(data.status) !== -1 ? 'none' : '';
+            btnBackground.textContent = executionMode === 'background' && data.status !== 'running' ? 'Continuar en segundo plano' : (backgroundRunning ? 'Segundo plano activo' : 'Enviar a segundo plano');
+            btnBackground.disabled = backgroundRunning;
+            btnStop.style.display = ['running'].indexOf(data.status) !== -1 ? '' : 'none';
+            btnCancel.style.display = ['done','cancelled'].indexOf(data.status) !== -1 ? 'none' : '';
 
             offsetEl.textContent  = offset;
             createdEl.textContent = created;
@@ -1275,7 +1606,8 @@ add_action('admin_init', function(){
               setConnectionState('warning', 'Continuidad: detenida manualmente');
             } else {
               bar.style.background = '#2271b1';
-              if (autoRun) setConnectionState('normal', 'Continuidad: automática activa');
+              if (backgroundRunning) setConnectionState('normal', 'Continuidad: servidor en segundo plano');
+              else if (autoRun) setConnectionState('normal', 'Continuidad: automática activa');
             }
           }
 
@@ -1313,6 +1645,7 @@ add_action('admin_init', function(){
             fd.append('event_id', eventId);
             fd.append('hash', hash);
             fd.append('_wpnonce', nonce);
+            if (taskId) fd.append('task_id', taskId);
 
             let response;
             try {
@@ -1360,6 +1693,10 @@ add_action('admin_init', function(){
               if (isTerminalState(data)) {
                 autoRun = false;
                 clearNextTick();
+              } else if ((data.execution_mode || executionMode) === 'background') {
+                autoRun = false;
+                clearNextTick();
+                setConnectionState('normal', 'Continuidad: servidor en segundo plano');
               } else if (allowAutoResume !== false && parseInt(data.should_continue || 0, 10) === 1 && !manualStopRequested) {
                 if (!autoRun) {
                   autoRun = true;
@@ -1470,6 +1807,25 @@ add_action('admin_init', function(){
             startOrResume();
           });
 
+          btnBackground.addEventListener('click', async function(){
+            manualStopRequested = true;
+            autoRun = false;
+            clearNextTick();
+            btnBackground.disabled = true;
+            setConnectionState('warning', 'Continuidad: enviando al servidor');
+            try {
+              const data = await request('eventosapp_import_background');
+              render(data);
+              setConnectionState('normal', 'Continuidad: servidor en segundo plano');
+              addLog('[' + new Date().toLocaleTimeString() + '] La importación continuará en segundo plano. Puedes cerrar esta página.');
+            } catch (e) {
+              btnBackground.disabled = false;
+              manualStopRequested = false;
+              setConnectionState('error', 'Continuidad: no se pudo activar segundo plano');
+              addLog('[' + new Date().toLocaleTimeString() + '] ERROR al enviar a segundo plano: ' + e.message);
+            }
+          });
+
           btnStop.addEventListener('click', async function(){
             manualStopRequested = true;
             autoRun = false;
@@ -1527,8 +1883,7 @@ add_action('admin_init', function(){
             refreshStatus(true);
           }, 2500);
 
-          // Si la página se recargó mientras el estado persistido seguía en running,
-          // refreshStatus reactivará automáticamente el siguiente lote.
+          // En modo ventana recupera el bucle AJAX. En segundo plano solo observa el worker del servidor.
           refreshStatus(true);
         })();
         </script>
@@ -1542,17 +1897,22 @@ add_action('wp_ajax_eventosapp_import_status', function(){
 
     $event_id = intval($_POST['event_id'] ?? 0);
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
+    $task_id  = sanitize_text_field($_POST['task_id'] ?? '');
     $nonce    = $_POST['_wpnonce'] ?? '';
 
     if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) {
         wp_send_json_error('Solicitud inválida', 400);
     }
 
-    $state = get_option(evapp_import_state_key($event_id, $hash));
+    $key = evapp_import_background_resolve_state_key($event_id, $hash, $task_id);
+    $state = get_option($key);
     if (!is_array($state)) {
         wp_send_json_error('Estado no encontrado', 404);
     }
 
+    if (($state['execution_mode'] ?? '') === 'background' && ($state['status'] ?? '') === 'running') {
+        evapp_import_background_schedule($state, 60);
+    }
     wp_send_json_success(evapp_import_public_state($state));
 });
 
@@ -1561,21 +1921,25 @@ add_action('wp_ajax_eventosapp_import_resume', function(){
 
     $event_id = intval($_POST['event_id'] ?? 0);
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
+    $task_id  = sanitize_text_field($_POST['task_id'] ?? '');
     $nonce    = $_POST['_wpnonce'] ?? '';
 
     if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) {
         wp_send_json_error('Solicitud inválida', 400);
     }
 
-    $key   = evapp_import_state_key($event_id, $hash);
+    $key   = evapp_import_background_resolve_state_key($event_id, $hash, $task_id);
     $state = get_option($key);
     if (!is_array($state)) {
         wp_send_json_error('Estado no encontrado', 404);
     }
 
+    if (!empty($state['background_task_id'])) evapp_import_background_unschedule($state['background_task_id']);
+    $state['execution_mode'] = 'browser';
     $state['status']    = 'running';
     $state['stopped']   = 0;
     $state['cancelled'] = 0;
+    $state['updated_at'] = time();
     if (empty($state['started_at'])) {
         $state['started_at'] = current_time('mysql');
     }
@@ -1593,13 +1957,14 @@ add_action('wp_ajax_eventosapp_import_stop', function(){
 
     $event_id = intval($_POST['event_id'] ?? 0);
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
+    $task_id  = sanitize_text_field($_POST['task_id'] ?? '');
     $nonce    = $_POST['_wpnonce'] ?? '';
 
     if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) {
         wp_send_json_error('Solicitud inválida', 400);
     }
 
-    $key   = evapp_import_state_key($event_id, $hash);
+    $key   = evapp_import_background_resolve_state_key($event_id, $hash, $task_id);
     $state = get_option($key);
     if (!is_array($state)) {
         wp_send_json_error('Estado no encontrado', 404);
@@ -1607,8 +1972,11 @@ add_action('wp_ajax_eventosapp_import_stop', function(){
 
     $state['status']  = 'stopped';
     $state['stopped'] = 1;
+    $state['updated_at'] = time();
+    if (!empty($state['background_task_id'])) evapp_import_background_unschedule($state['background_task_id']);
     $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Proceso detenido por el usuario.')]);
     update_option($key, $state, false);
+    evapp_import_background_touch($key, $state);
 
     wp_send_json_success(evapp_import_public_state($state));
 });
@@ -1618,13 +1986,14 @@ add_action('wp_ajax_eventosapp_import_cancel', function(){
 
     $event_id = intval($_POST['event_id'] ?? 0);
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
+    $task_id  = sanitize_text_field($_POST['task_id'] ?? '');
     $nonce    = $_POST['_wpnonce'] ?? '';
 
     if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) {
         wp_send_json_error('Solicitud inválida', 400);
     }
 
-    $key   = evapp_import_state_key($event_id, $hash);
+    $key   = evapp_import_background_resolve_state_key($event_id, $hash, $task_id);
     $state = get_option($key);
     if (!is_array($state)) {
         wp_send_json_error('Estado no encontrado', 404);
@@ -1633,11 +2002,104 @@ add_action('wp_ajax_eventosapp_import_cancel', function(){
     $state['status']    = 'cancelled';
     $state['cancelled'] = 1;
     $state['stopped']   = 1;
+    $state['updated_at'] = time();
+    $state['finished_at_ts'] = time();
+    if (!empty($state['background_task_id'])) evapp_import_background_unschedule($state['background_task_id']);
     $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Proceso cancelado por el usuario. El progreso queda registrado para evitar duplicados.')]);
     update_option($key, $state, false);
+    evapp_import_background_touch($key, $state);
 
     wp_send_json_success(evapp_import_public_state($state));
 });
+/**
+ * Activa o reanuda el procesamiento persistente del servidor.
+ */
+add_action('wp_ajax_eventosapp_import_background', function(){
+    if (!current_user_can('manage_options')) wp_send_json_error('No autorizado', 403);
+
+    $event_id = intval($_POST['event_id'] ?? 0);
+    $hash     = sanitize_text_field($_POST['hash'] ?? '');
+    $task_id  = sanitize_text_field($_POST['task_id'] ?? '');
+    $nonce    = $_POST['_wpnonce'] ?? '';
+    if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) wp_send_json_error('Solicitud inválida', 400);
+
+    $key = evapp_import_background_resolve_state_key($event_id, $hash, $task_id);
+    $state = get_option($key);
+    if (!is_array($state)) wp_send_json_error('Estado no encontrado', 404);
+    if (!empty($state['done']) || in_array(($state['status'] ?? ''), ['done','cancelled'], true)) wp_send_json_error('La importación ya finalizó o fue cancelada.', 409);
+
+    $user = wp_get_current_user();
+    $recipient = is_email($user->user_email) ? sanitize_email($user->user_email) : sanitize_email(get_option('admin_email'));
+    $state['owner_user_id'] = (int) get_current_user_id();
+    $state['notification_email'] = $recipient;
+    $state['execution_mode'] = 'background';
+    $state['status'] = 'running';
+    $state['stopped'] = 0;
+    $state['cancelled'] = 0;
+    $state['last_error'] = '';
+    $state['error_notification_sent'] = 0;
+    $state['background_token'] = !empty($state['background_token']) ? (string) $state['background_token'] : wp_generate_password(64, false, false);
+    $state['updated_at'] = time();
+    if (empty($state['started_at'])) $state['started_at'] = current_time('mysql');
+    if (empty($state['started_at_ts'])) $state['started_at_ts'] = time();
+
+    // No enviar retroactivamente hitos anteriores a la activación del segundo plano.
+    $total = (int) ($state['total_rows'] ?? 0);
+    $offset = (int) ($state['offset'] ?? 0);
+    $current_percent = $total > 0 ? (int) floor(($offset / $total) * 100) : 0;
+    $already = is_array($state['notified_milestones'] ?? null) ? array_map('intval', $state['notified_milestones']) : [];
+    foreach ([20,40,60,80] as $milestone) if ($current_percent >= $milestone && !in_array($milestone, $already, true)) $already[] = $milestone;
+    $state['notified_milestones'] = array_values(array_unique($already));
+
+    $new_task_id = evapp_import_background_register($key, $state);
+    $state = evapp_import_merge_runtime_logs($state, [evapp_import_log_entry('Importación enviada a segundo plano. Se notificará a '.$recipient.' al 20%, 40%, 60%, 80%, 100% o si ocurre un error.')]);
+    update_option($key, $state, false);
+    evapp_import_background_schedule($state, 60);
+    evapp_import_background_dispatch($state);
+
+    wp_send_json_success(evapp_import_public_state($state, ['task_id'=>$new_task_id]));
+});
+
+/**
+ * Endpoint interno firmado. El worker adopta al propietario para reutilizar permisos y nonces,
+ * pero la autenticación real es el token aleatorio guardado en el estado.
+ */
+function evapp_import_background_worker_handler(){
+    $task_id = sanitize_text_field($_POST['task_id'] ?? '');
+    $token = (string) ($_POST['token'] ?? '');
+    $entry = evapp_import_background_get_entry($task_id);
+    if (!is_array($entry) || empty($entry['state_key'])) wp_send_json_error('Tarea no encontrada', 404);
+    $state = get_option($entry['state_key']);
+    if (!is_array($state) || empty($state['background_token']) || !hash_equals((string) $state['background_token'], $token)) wp_send_json_error('Token inválido', 403);
+    if (($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') wp_send_json_success(evapp_import_public_state($state));
+
+    $owner_user_id = (int) ($state['owner_user_id'] ?? $entry['owner_user_id'] ?? 0);
+    if (!$owner_user_id || !user_can($owner_user_id, 'manage_options')) {
+        evapp_import_background_mark_error($entry['state_key'], $state, 'El usuario propietario del proceso ya no tiene permisos administrativos.');
+        wp_send_json_error('Propietario sin permisos', 403);
+    }
+    wp_set_current_user($owner_user_id);
+
+    register_shutdown_function(function() use ($entry){
+        $last = error_get_last();
+        if (!$last || !in_array((int) ($last['type'] ?? 0), [E_ERROR,E_PARSE,E_CORE_ERROR,E_COMPILE_ERROR,E_USER_ERROR], true)) return;
+        $state = get_option($entry['state_key']);
+        if (!is_array($state) || ($state['execution_mode'] ?? '') !== 'background' || ($state['status'] ?? '') !== 'running') return;
+        $message = 'Error fatal: '.($last['message'] ?? 'desconocido').' en '.basename((string) ($last['file'] ?? '')).':'.(int) ($last['line'] ?? 0);
+        evapp_import_background_mark_error($entry['state_key'], $state, $message);
+    });
+
+    $_POST['event_id'] = (int) ($state['event_id'] ?? 0);
+    $_POST['hash'] = (string) ($state['file_hash'] ?? '');
+    $_POST['task_id'] = $task_id;
+    $_POST['_wpnonce'] = wp_create_nonce('evapp_tools_'.(int) $_POST['event_id']);
+    $_REQUEST = array_merge($_REQUEST, $_POST);
+    do_action('wp_ajax_eventosapp_import_process');
+    wp_send_json_error('El procesador no respondió', 500);
+}
+add_action('wp_ajax_eventosapp_import_background_worker', 'evapp_import_background_worker_handler');
+add_action('wp_ajax_nopriv_eventosapp_import_background_worker', 'evapp_import_background_worker_handler');
+
 //
 // === Procesar un lote adaptativo con medición de recursos ===
 //
@@ -1654,19 +2116,20 @@ add_action('wp_ajax_eventosapp_import_process', function(){
 
     $event_id = intval($_POST['event_id'] ?? 0);
     $hash     = sanitize_text_field($_POST['hash'] ?? '');
+    $task_id  = sanitize_text_field($_POST['task_id'] ?? '');
     $nonce    = $_POST['_wpnonce'] ?? '';
 
     if (!$event_id || !$hash || !wp_verify_nonce($nonce, 'evapp_tools_'.$event_id)) {
         wp_send_json_error('Solicitud inválida', 400);
     }
 
-    $key   = evapp_import_state_key($event_id, $hash);
+    $key   = evapp_import_background_resolve_state_key($event_id, $hash, $task_id);
     $state = get_option($key);
     if (!is_array($state)) {
         wp_send_json_error('Estado no encontrado', 404);
     }
 
-    $lock_token = evapp_import_acquire_lock($event_id, $hash, 120);
+    $lock_token = evapp_import_acquire_lock($event_id, $hash, 120, $key);
     if (!$lock_token) {
         wp_send_json_success(evapp_import_public_state($state, [
             'busy' => 1,
@@ -1674,8 +2137,8 @@ add_action('wp_ajax_eventosapp_import_process', function(){
         ]));
     }
 
-    register_shutdown_function(function() use ($event_id, $hash, $lock_token){
-        evapp_import_release_lock($event_id, $hash, $lock_token);
+    register_shutdown_function(function() use ($event_id, $hash, $lock_token, $key){
+        evapp_import_release_lock($event_id, $hash, $lock_token, $key);
     });
 
     if (!empty($state['cancelled'])) {
@@ -1713,7 +2176,8 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     if (empty($state['file']) || !file_exists($state['file'])) {
         $state['status']     = 'error';
         $state['last_error'] = 'El archivo CSV no existe.';
-        update_option($key, $state, false);
+        if (($state['execution_mode'] ?? '') === 'background') evapp_import_background_mark_error($key, $state, $state['last_error']);
+        else update_option($key, $state, false);
         wp_send_json_error('El archivo CSV no existe', 500);
     }
 
@@ -1721,7 +2185,8 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     if (!$fh) {
         $state['status']     = 'error';
         $state['last_error'] = 'No se pudo abrir el archivo CSV.';
-        update_option($key, $state, false);
+        if (($state['execution_mode'] ?? '') === 'background') evapp_import_background_mark_error($key, $state, $state['last_error']);
+        else update_option($key, $state, false);
         wp_send_json_error('No se pudo abrir el archivo', 500);
     }
 
@@ -1976,6 +2441,7 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     $state['updated_existing'] = $updated;
     $state['skipped_dup']      = $skipped;
     $state['done']             = $done ? 1 : 0;
+    $state['updated_at']       = time();
 
     if (!isset($state['created_ids']) || !is_array($state['created_ids'])) {
         $state['created_ids'] = [];
@@ -1997,6 +2463,7 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     if ($done) {
         $state['status'] = 'done';
         $state['finished_at'] = current_time('mysql');
+        $state['finished_at_ts'] = time();
     } elseif (!empty($state['cancelled'])) {
         $state['status'] = 'cancelled';
     } elseif (!empty($state['stopped'])) {
@@ -2020,7 +2487,12 @@ add_action('wp_ajax_eventosapp_import_process', function(){
     }
     $batch_logs[] = evapp_import_log_entry($summary_message);
 
-    if ($done && empty($state['admin_notified'])) {
+    if (($state['execution_mode'] ?? '') === 'background') {
+        $batch_logs = array_merge($batch_logs, evapp_import_background_apply_notifications($state));
+        if ($done) $state['admin_notified'] = 1;
+    }
+
+    if ($done && empty($state['admin_notified']) && ($state['execution_mode'] ?? 'browser') !== 'background') {
         $site_name       = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
         $admin_email     = get_option('admin_email');
         $event_title     = get_the_title($event_id);
@@ -2047,7 +2519,16 @@ add_action('wp_ajax_eventosapp_import_process', function(){
 
     $state = evapp_import_merge_runtime_logs($state, $batch_logs);
     update_option($key, $state, false);
-    evapp_import_release_lock($event_id, $hash, $lock_token);
+    evapp_import_background_touch($key, $state);
+    evapp_import_release_lock($event_id, $hash, $lock_token, $key);
+
+    if (($state['execution_mode'] ?? '') === 'background') {
+        if (($state['status'] ?? '') === 'running' && empty($state['done'])) {
+            evapp_import_background_dispatch($state);
+        } else {
+            evapp_import_background_unschedule($state['background_task_id'] ?? '');
+        }
+    }
 
     wp_send_json_success(evapp_import_public_state($state, [
         'msg'  => $summary_message,
