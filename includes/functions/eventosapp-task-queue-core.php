@@ -14,7 +14,7 @@
 if ( ! defined('ABSPATH') ) exit;
 
 if ( ! defined('EVENTOSAPP_TASK_QUEUE_VERSION') ) {
-    define('EVENTOSAPP_TASK_QUEUE_VERSION', '2026.07.27.1');
+    define('EVENTOSAPP_TASK_QUEUE_VERSION', '2026.07.27.3');
 }
 if ( ! defined('EVENTOSAPP_TASK_QUEUE_DB_VERSION') ) {
     define('EVENTOSAPP_TASK_QUEUE_DB_VERSION', '2026.07.27.1');
@@ -257,18 +257,424 @@ function eventosapp_task_queue_statuses() {
         'paused'    => 'Pausada',
         'cancelled' => 'Cancelada',
         'completed' => 'Finalizada',
+        'expired'   => 'Programación vencida',
         'failed'    => 'Error',
     ];
 }
 
 function eventosapp_task_queue_terminal_statuses() {
-    return ['cancelled', 'completed', 'failed'];
+    return ['cancelled', 'completed', 'expired', 'failed'];
 }
 
 function eventosapp_task_queue_normalize_status($status, $fallback = 'queued') {
     $status = sanitize_key((string)$status);
     return array_key_exists($status, eventosapp_task_queue_statuses()) ? $status : $fallback;
 }
+
+/**
+ * Zona horaria canónica de un evento.
+ *
+ * La cola nunca interpreta una hora programada con la zona horaria del
+ * servidor. Siempre usa la zona configurada en el evento y solo cae en la
+ * zona horaria de WordPress cuando el evento no tiene una zona válida.
+ */
+function eventosapp_task_queue_event_timezone_object($event_id = 0) {
+    $event_id = absint($event_id);
+
+    if ( $event_id && function_exists('eventosapp_get_event_timezone_object') ) {
+        try {
+            $timezone = eventosapp_get_event_timezone_object($event_id);
+            if ( $timezone instanceof DateTimeZone ) return $timezone;
+        } catch (Throwable $e) {
+            // Se continúa con la lectura directa del metadato.
+        }
+    }
+
+    $timezone_name = $event_id ? sanitize_text_field((string)get_post_meta($event_id, '_eventosapp_zona_horaria', true)) : '';
+    if ( $timezone_name === '' ) $timezone_name = wp_timezone_string();
+
+    try {
+        return new DateTimeZone($timezone_name ?: 'UTC');
+    } catch (Throwable $e) {
+        return wp_timezone();
+    }
+}
+
+function eventosapp_task_queue_event_timezone_name($event_id = 0) {
+    return eventosapp_task_queue_event_timezone_object($event_id)->getName();
+}
+
+/**
+ * Zona horaria asociada a una tarea.
+ *
+ * Las tareas nuevas guardan la zona usada al programarlas dentro del payload.
+ * Para tareas antiguas se resuelve desde el evento, lo que permite corregirlas
+ * sin modificar la estructura de la tabla.
+ */
+function eventosapp_task_queue_task_timezone_object($task) {
+    $task = is_array($task) ? $task : [];
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+    $timezone_name = sanitize_text_field((string)($payload['event_timezone'] ?? $payload['timezone'] ?? ''));
+
+    if ( $timezone_name !== '' ) {
+        try {
+            return new DateTimeZone($timezone_name);
+        } catch (Throwable $e) {
+            // Si la zona histórica dejó de ser válida, se usa la del evento.
+        }
+    }
+
+    return eventosapp_task_queue_event_timezone_object(absint($task['event_id'] ?? 0));
+}
+
+function eventosapp_task_queue_task_timezone_name($task) {
+    return eventosapp_task_queue_task_timezone_object($task)->getName();
+}
+
+/**
+ * Convierte una fecha/hora escrita por el administrador como hora local del
+ * evento a un instante UTC inequívoco.
+ */
+function eventosapp_task_queue_parse_event_local_datetime($event_id, $date, $time) {
+    $event_id = absint($event_id);
+    $date = sanitize_text_field((string)$date);
+    $time = sanitize_text_field((string)$time);
+
+    if ( ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || ! preg_match('/^\d{2}:\d{2}$/', $time) ) {
+        return new WP_Error('eventosapp_task_queue_invalid_datetime', 'La fecha o la hora no tienen un formato válido.');
+    }
+
+    $timezone = eventosapp_task_queue_event_timezone_object($event_id);
+    $local_value = $date . ' ' . $time;
+    $datetime = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $local_value, $timezone);
+    $errors = DateTimeImmutable::getLastErrors();
+
+    if ( ! $datetime instanceof DateTimeImmutable || ($errors !== false && (! empty($errors['warning_count']) || ! empty($errors['error_count']))) ) {
+        return new WP_Error('eventosapp_task_queue_invalid_datetime', 'No se pudo interpretar la fecha y hora en la zona horaria del evento.');
+    }
+
+    if ( $datetime->format('Y-m-d H:i') !== $local_value ) {
+        return new WP_Error('eventosapp_task_queue_invalid_local_time', 'La hora indicada no existe en la zona horaria del evento por un cambio de horario. Selecciona otra hora.');
+    }
+
+    $utc = $datetime->setTimezone(new DateTimeZone('UTC'));
+    return [
+        'timestamp'  => $datetime->getTimestamp(),
+        'timezone'   => $timezone->getName(),
+        'utc_offset' => $datetime->format('P'),
+        'local'      => $datetime->format('Y-m-d H:i:s'),
+        'utc'        => $utc->format('Y-m-d H:i:s'),
+    ];
+}
+
+/**
+ * Devuelve el instante planificado real de una tarea.
+ *
+ * El valor de la columna scheduled_at es UTC. Las integraciones pueden
+ * reconstruir el instante original de tareas antiguas que fueron convertidas
+ * erróneamente en "ahora + 5 segundos" mediante el filtro correspondiente.
+ */
+function eventosapp_task_queue_planned_timestamp($task) {
+    $task = is_array($task) ? $task : [];
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+
+    if ( ! empty($payload['manual_schedule_override']) && ! empty($payload['planned_timestamp']) ) {
+        return max(0, absint($payload['planned_timestamp']));
+    }
+
+    $timestamp = 0;
+    if ( ! empty($task['scheduled_at']) ) {
+        try {
+            $timestamp = (new DateTimeImmutable((string)$task['scheduled_at'], new DateTimeZone('UTC')))->getTimestamp();
+        } catch (Throwable $e) {
+            $timestamp = 0;
+        }
+    }
+
+    $timestamp = apply_filters('eventosapp_task_queue_planned_timestamp', $timestamp, $task);
+    return max(0, absint($timestamp));
+}
+
+function eventosapp_task_queue_format_timestamp_for_task($task, $timestamp = 0, $format = 'd/m/Y H:i:s') {
+    $task = is_array($task) ? $task : [];
+    $timestamp = absint($timestamp ?: eventosapp_task_queue_planned_timestamp($task));
+    if ( ! $timestamp ) return '';
+
+    try {
+        return (new DateTimeImmutable('@' . $timestamp))
+            ->setTimezone(eventosapp_task_queue_task_timezone_object($task))
+            ->format($format);
+    } catch (Throwable $e) {
+        return '';
+    }
+}
+
+/**
+ * Determina si un instante pertenece a un día anterior en la zona horaria del
+ * evento. time() se usa únicamente como instante Unix; nunca como hora local
+ * del servidor.
+ */
+function eventosapp_task_queue_timestamp_is_previous_event_date($timestamp, $event_id = 0, $timezone_name = '') {
+    $timestamp = absint($timestamp);
+    if ( ! $timestamp ) return false;
+
+    try {
+        $timezone = null;
+        if ( $timezone_name !== '' ) $timezone = new DateTimeZone(sanitize_text_field((string)$timezone_name));
+        if ( ! $timezone instanceof DateTimeZone ) $timezone = eventosapp_task_queue_event_timezone_object($event_id);
+
+        $planned_date = (new DateTimeImmutable('@' . $timestamp))->setTimezone($timezone)->format('Y-m-d');
+        $current_date = (new DateTimeImmutable('now', $timezone))->format('Y-m-d');
+        return $planned_date < $current_date;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function eventosapp_task_queue_task_is_previous_event_date($task) {
+    $task = is_array($task) ? $task : [];
+    $timestamp = eventosapp_task_queue_planned_timestamp($task);
+    return $timestamp > 0 && eventosapp_task_queue_timestamp_is_previous_event_date(
+        $timestamp,
+        absint($task['event_id'] ?? 0),
+        eventosapp_task_queue_task_timezone_name($task)
+    );
+}
+
+
+/**
+ * Permite terminar una tarea que sí comenzó durante el mismo día local para el
+ * que estaba programada. Evita cortar a medianoche una campaña legítima, pero
+ * no protege tareas históricas que comenzaron días o meses después.
+ */
+function eventosapp_task_queue_running_started_on_planned_event_date($task, $planned_timestamp = 0) {
+    $task = is_array($task) ? $task : [];
+    if ( ($task['status'] ?? '') !== 'running' || empty($task['started_at']) ) return false;
+
+    $planned_timestamp = absint($planned_timestamp ?: eventosapp_task_queue_planned_timestamp($task));
+    if ( ! $planned_timestamp ) return false;
+
+    try {
+        $timezone = eventosapp_task_queue_task_timezone_object($task);
+        $planned_date = (new DateTimeImmutable('@' . $planned_timestamp))->setTimezone($timezone)->format('Y-m-d');
+        $started_utc = new DateTimeImmutable((string)$task['started_at'], new DateTimeZone('UTC'));
+        $started_date = $started_utc->setTimezone($timezone)->format('Y-m-d');
+        return $planned_date === $started_date;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * Helpers históricos conservados por compatibilidad. Estos wrappers siguen
+ * usando la zona general de WordPress cuando no existe un evento asociado.
+ */
+function eventosapp_task_queue_site_today_start_utc() {
+    try {
+        return (new DateTimeImmutable('today', wp_timezone()))
+            ->setTimezone(new DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s');
+    } catch (Throwable $e) {
+        return gmdate('Y-m-d 00:00:00');
+    }
+}
+
+function eventosapp_task_queue_datetime_is_previous_site_date($datetime) {
+    if ( ! $datetime ) return false;
+    try {
+        $timestamp = (new DateTimeImmutable((string)$datetime, new DateTimeZone('UTC')))->getTimestamp();
+        return eventosapp_task_queue_timestamp_is_previous_event_date($timestamp, 0, wp_timezone()->getName());
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function eventosapp_task_queue_timestamp_is_previous_site_date($timestamp) {
+    return eventosapp_task_queue_timestamp_is_previous_event_date($timestamp, 0, wp_timezone()->getName());
+}
+
+/**
+ * Normaliza la evidencia que permite reconocer que una programación histórica
+ * ya fue ejecutada por la cola o por el sistema heredado que la originó.
+ */
+function eventosapp_task_queue_execution_evidence($task) {
+    $task = is_array($task) ? $task : [];
+    $evidence = [
+        'executed'        => false,
+        'source'          => '',
+        'completed_at'    => '',
+        'total_items'     => 0,
+        'processed_items' => 0,
+        'success_items'   => 0,
+        'error_items'     => 0,
+        'skipped_items'   => 0,
+        'message'         => '',
+    ];
+
+    $total = absint($task['total_items'] ?? 0);
+    $processed = absint($task['processed_items'] ?? 0);
+    if ( $total > 0 && $processed >= $total ) {
+        $evidence = [
+            'executed'        => true,
+            'source'          => 'queue_counters',
+            'completed_at'    => (string)($task['completed_at'] ?? $task['updated_at'] ?? ''),
+            'total_items'     => $total,
+            'processed_items' => $processed,
+            'success_items'   => absint($task['success_items'] ?? 0),
+            'error_items'     => absint($task['error_items'] ?? 0),
+            'skipped_items'   => absint($task['skipped_items'] ?? 0),
+            'message'         => 'La cola ya había procesado todos los elementos.',
+        ];
+    }
+
+    $filtered = apply_filters('eventosapp_task_queue_execution_evidence', $evidence, $task);
+    $filtered = is_array($filtered) ? wp_parse_args($filtered, $evidence) : $evidence;
+    $filtered['executed'] = ! empty($filtered['executed']);
+    foreach (['total_items','processed_items','success_items','error_items','skipped_items'] as $key) {
+        $filtered[$key] = max(0, absint($filtered[$key] ?? 0));
+    }
+    $filtered['source'] = sanitize_key((string)($filtered['source'] ?? ''));
+    $filtered['completed_at'] = eventosapp_task_queue_normalize_datetime($filtered['completed_at'] ?? '');
+    $filtered['message'] = sanitize_text_field((string)($filtered['message'] ?? ''));
+    return $filtered;
+}
+
+/**
+ * Corrige una programación de un día anterior según la zona horaria del evento.
+ * Si existe evidencia de ejecución queda Finalizada; de lo contrario queda
+ * Programación vencida y nunca vuelve a enviarse automáticamente.
+ */
+function eventosapp_task_queue_reconcile_scheduled_task($task_id) {
+    $task = eventosapp_task_queue_get($task_id);
+    if ( ! $task || ($task['task_group'] ?? '') !== 'scheduled' ) return false;
+    if ( in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) return $task['status'];
+
+    $planned_timestamp = eventosapp_task_queue_planned_timestamp($task);
+    if ( ! $planned_timestamp || ! eventosapp_task_queue_task_is_previous_event_date($task) ) return false;
+
+    // Una campaña que empezó correctamente durante el día local programado
+    // puede terminar después de medianoche. Las ejecuciones iniciadas tarde,
+    // en una fecha local distinta, sí se detienen y quedan vencidas.
+    if ( eventosapp_task_queue_running_started_on_planned_event_date($task, $planned_timestamp) ) return false;
+
+    $timezone_name = eventosapp_task_queue_task_timezone_name($task);
+    $planned_local = eventosapp_task_queue_format_timestamp_for_task($task, $planned_timestamp);
+    $evidence = eventosapp_task_queue_execution_evidence($task);
+    $now = current_time('mysql', true);
+
+    if ( ! empty($evidence['executed']) ) {
+        $total = max(absint($task['total_items']), absint($evidence['total_items']));
+        $processed = max(absint($task['processed_items']), absint($evidence['processed_items']));
+        if ( $total > 0 ) $processed = max($processed, $total);
+
+        eventosapp_task_queue_update($task['id'], [
+            'status'          => 'completed',
+            'total_items'     => $total,
+            'processed_items' => $processed,
+            'success_items'   => max(absint($task['success_items']), absint($evidence['success_items'])),
+            'error_items'     => max(absint($task['error_items']), absint($evidence['error_items'])),
+            'skipped_items'   => max(absint($task['skipped_items']), absint($evidence['skipped_items'])),
+            'last_error'      => '',
+            'next_run_at'     => null,
+            'heartbeat_at'    => null,
+            'completed_at'    => $evidence['completed_at'] ?: $now,
+        ]);
+        eventosapp_task_queue_add_log($task['id'], 'success', 'Programación histórica reconocida como ejecutada.', [
+            'queue_scheduled_at_utc' => $task['scheduled_at'],
+            'planned_timestamp'      => $planned_timestamp,
+            'planned_local'          => $planned_local,
+            'event_timezone'         => $timezone_name,
+            'source'                 => $evidence['source'],
+            'message'                => $evidence['message'],
+        ]);
+        do_action('eventosapp_task_queue_reconciled', $task['id'], 'completed', eventosapp_task_queue_get($task['id']), $evidence);
+        return 'completed';
+    }
+
+    $message = 'La fecha programada ya pertenece a un día anterior en la zona horaria del evento y no existe evidencia de ejecución. La tarea fue marcada como programación vencida para impedir un envío tardío.';
+    eventosapp_task_queue_update($task['id'], [
+        'status'       => 'expired',
+        'last_error'   => $message,
+        'next_run_at'  => null,
+        'heartbeat_at' => null,
+        'completed_at' => $now,
+    ]);
+    eventosapp_task_queue_add_log($task['id'], 'warning', $message, [
+        'queue_scheduled_at_utc' => $task['scheduled_at'],
+        'planned_timestamp'      => $planned_timestamp,
+        'planned_local'          => $planned_local,
+        'planned_utc'            => gmdate('Y-m-d H:i:s', $planned_timestamp),
+        'event_timezone'         => $timezone_name,
+    ]);
+    do_action('eventosapp_task_queue_expired', $task['id'], eventosapp_task_queue_get($task['id']));
+    do_action('eventosapp_task_queue_reconciled', $task['id'], 'expired', eventosapp_task_queue_get($task['id']), $evidence);
+    return 'expired';
+}
+
+/**
+ * Reconciliación gradual para instalaciones que ya tenían muchas tareas.
+ *
+ * No filtra únicamente por scheduled_at porque versiones anteriores pudieron
+ * reemplazar ese valor por la hora actual. Cada adaptador reconstruye el
+ * instante planificado real antes de decidir si la tarea está vencida.
+ */
+function eventosapp_task_queue_reconcile_scheduled_tasks($limit = 200) {
+    global $wpdb;
+
+    $limit = min(500, max(1, absint($limit)));
+    $lock_key = 'eventosapp_task_queue_reconcile_lock';
+    if ( get_transient($lock_key) ) return 0;
+    set_transient($lock_key, 1, 30);
+
+    try {
+        $table = eventosapp_task_queue_table('tasks');
+        $terminal = eventosapp_task_queue_terminal_statuses();
+        $placeholders = implode(',', array_fill(0, count($terminal), '%s'));
+        $cursor = absint(get_option('eventosapp_task_queue_reconcile_cursor', 0));
+        $params = array_merge($terminal, [$cursor, $limit]);
+
+        $ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT id FROM {$table}
+             WHERE task_group='scheduled'
+               AND status NOT IN ({$placeholders})
+               AND id > %d
+             ORDER BY id ASC
+             LIMIT %d",
+            $params
+        ));
+
+        if ( empty($ids) && $cursor > 0 ) {
+            $params = array_merge($terminal, [0, $limit]);
+            $ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT id FROM {$table}
+                 WHERE task_group='scheduled'
+                   AND status NOT IN ({$placeholders})
+                   AND id > %d
+                 ORDER BY id ASC
+                 LIMIT %d",
+                $params
+            ));
+        }
+
+        $updated = 0;
+        $last_id = 0;
+        foreach ( (array)$ids as $task_id ) {
+            $last_id = max($last_id, absint($task_id));
+            if ( eventosapp_task_queue_reconcile_scheduled_task(absint($task_id)) ) $updated++;
+        }
+
+        if ( $last_id > 0 && count((array)$ids) >= $limit ) update_option('eventosapp_task_queue_reconcile_cursor', $last_id, false);
+        else delete_option('eventosapp_task_queue_reconcile_cursor');
+
+        return $updated;
+    } finally {
+        delete_transient($lock_key);
+    }
+}
+
+add_action('init', function() {
+    eventosapp_task_queue_reconcile_scheduled_tasks(200);
+}, 45);
 
 /**
  * Fecha principal del evento para filtros.
@@ -342,6 +748,11 @@ function eventosapp_task_queue_create($args) {
     }
     $event_date = is_string($event_date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $event_date) ? $event_date : null;
 
+    $task_group = in_array($args['task_group'], ['massive','scheduled'], true)
+        ? $args['task_group']
+        : sanitize_key((string)($adapter['group'] ?? 'massive'));
+    $payload = is_array($args['payload']) ? $args['payload'] : [];
+
     $scheduled_at = eventosapp_task_queue_normalize_datetime($args['scheduled_at']);
     $next_run_at  = eventosapp_task_queue_normalize_datetime($args['next_run_at']);
     $status = eventosapp_task_queue_normalize_status($args['status']);
@@ -350,6 +761,19 @@ function eventosapp_task_queue_create($args) {
         if ( ! $next_run_at ) $next_run_at = $scheduled_at;
     }
     if ( ! $next_run_at ) $next_run_at = current_time('mysql', true);
+
+    if ( $task_group === 'scheduled' ) {
+        $planned_timestamp = ! empty($payload['planned_timestamp'])
+            ? absint($payload['planned_timestamp'])
+            : ($scheduled_at ? (strtotime($scheduled_at . ' UTC') ?: 0) : 0);
+        $timezone = eventosapp_task_queue_event_timezone_object($event_id);
+        if ( empty($payload['event_timezone']) ) $payload['event_timezone'] = $timezone->getName();
+        if ( $planned_timestamp > 0 && empty($payload['planned_timestamp']) ) $payload['planned_timestamp'] = $planned_timestamp;
+        if ( $planned_timestamp > 0 && empty($payload['scheduled_utc']) ) $payload['scheduled_utc'] = gmdate('Y-m-d H:i:s', $planned_timestamp);
+        if ( $planned_timestamp > 0 && empty($payload['scheduled_local']) ) {
+            $payload['scheduled_local'] = (new DateTimeImmutable('@' . $planned_timestamp))->setTimezone($timezone)->format('Y-m-d H:i:s');
+        }
+    }
 
     $config = eventosapp_task_queue_config();
     $adapter_batch = absint($adapter['batch_size'] ?? $config['default_batch_size']);
@@ -369,7 +793,7 @@ function eventosapp_task_queue_create($args) {
         [
             'uuid'               => $uuid,
             'task_type'          => $task_type,
-            'task_group'         => in_array($args['task_group'], ['massive','scheduled'], true) ? $args['task_group'] : sanitize_key((string)($adapter['group'] ?? 'massive')),
+            'task_group'         => $task_group,
             'channel'            => sanitize_key((string)($args['channel'] ?: ($adapter['channel'] ?? ''))),
             'title'              => $title,
             'status'             => $status,
@@ -387,7 +811,7 @@ function eventosapp_task_queue_create($args) {
             'cursor_value'       => 0,
             'batch_size'         => $batch_size,
             'consecutive_errors' => 0,
-            'payload'            => eventosapp_task_queue_json_encode(is_array($args['payload']) ? $args['payload'] : []),
+            'payload'            => eventosapp_task_queue_json_encode($payload),
             'resource_metrics'   => eventosapp_task_queue_json_encode([]),
             'milestones'         => eventosapp_task_queue_json_encode([]),
             'last_error'         => '',
@@ -404,23 +828,47 @@ function eventosapp_task_queue_create($args) {
 
     $task_id = (int)$wpdb->insert_id;
     eventosapp_task_queue_add_log($task_id, 'info', 'Tarea creada y enviada a la cola.', [
-        'task_type' => $task_type,
-        'status'    => $status,
-        'total'     => (int)$args['total_items'],
+        'task_type'      => $task_type,
+        'status'         => $status,
+        'total'          => (int)$args['total_items'],
+        'event_timezone' => $task_group === 'scheduled' ? ($payload['event_timezone'] ?? '') : '',
+        'scheduled_utc'  => $scheduled_at,
+        'scheduled_local'=> $payload['scheduled_local'] ?? '',
     ]);
+
+    if ( $task_group === 'scheduled' ) eventosapp_task_queue_reconcile_scheduled_task($task_id);
+
     do_action('eventosapp_task_queue_created', $task_id, eventosapp_task_queue_get($task_id));
     eventosapp_task_queue_kick();
     return $task_id;
 }
 
 function eventosapp_task_queue_normalize_datetime($value) {
-    if ( ! $value ) return null;
-    if ( is_numeric($value) ) {
-        return gmdate('Y-m-d H:i:s', (int)$value);
+    if ( $value === null || $value === '' || $value === false ) return null;
+
+    if ( $value instanceof DateTimeInterface ) {
+        return gmdate('Y-m-d H:i:s', $value->getTimestamp());
     }
-    $value = sanitize_text_field((string)$value);
-    $ts = strtotime($value);
-    return $ts ? gmdate('Y-m-d H:i:s', $ts) : null;
+
+    if ( is_numeric($value) ) {
+        $timestamp = (int)$value;
+        return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : null;
+    }
+
+    $value = trim(sanitize_text_field((string)$value));
+    if ( $value === '' ) return null;
+
+    try {
+        /*
+         * El contrato interno de la cola es UTC. Una cadena sin offset se
+         * interpreta explícitamente como UTC, nunca con date.timezone del
+         * servidor PHP.
+         */
+        $datetime = new DateTimeImmutable($value, new DateTimeZone('UTC'));
+        return $datetime->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+    } catch (Throwable $e) {
+        return null;
+    }
 }
 
 /**
@@ -494,6 +942,7 @@ function eventosapp_task_queue_list($args = []) {
     global $wpdb;
     $args = wp_parse_args(is_array($args) ? $args : [], [
         'status'      => '',
+        'status_scope'=> '',
         'event_id'    => 0,
         'client_id'   => 0,
         'event_date'  => '',
@@ -509,7 +958,18 @@ function eventosapp_task_queue_list($args = []) {
 
     $where = ['1=1'];
     $params = [];
-    if ( $args['status'] !== '' ) { $where[] = 'status = %s'; $params[] = eventosapp_task_queue_normalize_status($args['status']); }
+    if ( $args['status'] !== '' ) {
+        $where[] = 'status = %s';
+        $params[] = eventosapp_task_queue_normalize_status($args['status']);
+    } elseif ( $args['status_scope'] === 'open' ) {
+        $terminal = eventosapp_task_queue_terminal_statuses();
+        $where[] = 'status NOT IN (' . implode(',', array_fill(0, count($terminal), '%s')) . ')';
+        $params = array_merge($params, $terminal);
+    } elseif ( $args['status_scope'] === 'terminal' ) {
+        $terminal = eventosapp_task_queue_terminal_statuses();
+        $where[] = 'status IN (' . implode(',', array_fill(0, count($terminal), '%s')) . ')';
+        $params = array_merge($params, $terminal);
+    }
     if ( absint($args['event_id']) ) { $where[] = 'event_id = %d'; $params[] = absint($args['event_id']); }
     if ( absint($args['client_id']) ) { $where[] = 'client_id = %d'; $params[] = absint($args['client_id']); }
     if ( preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$args['event_date']) ) { $where[] = 'event_date = %s'; $params[] = $args['event_date']; }
@@ -630,29 +1090,181 @@ function eventosapp_task_queue_cancel($task_id, $reason = '') {
     return true;
 }
 
-function eventosapp_task_queue_reschedule($task_id, $datetime) {
+function eventosapp_task_queue_reschedule($task_id, $datetime, $context = []) {
     $task = eventosapp_task_queue_get($task_id);
     if ( ! $task || $task['status'] === 'completed' ) return false;
+
     $scheduled = eventosapp_task_queue_normalize_datetime($datetime);
     if ( ! $scheduled ) return false;
+    $timestamp = strtotime($scheduled . ' UTC') ?: 0;
+    if ( $timestamp <= time() ) return false;
+
+    $context = is_array($context) ? $context : [];
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+    $timezone_name = sanitize_text_field((string)($context['timezone'] ?? eventosapp_task_queue_task_timezone_name($task)));
+    try {
+        $timezone = new DateTimeZone($timezone_name ?: eventosapp_task_queue_event_timezone_name(absint($task['event_id'] ?? 0)));
+    } catch (Throwable $e) {
+        $timezone = eventosapp_task_queue_event_timezone_object(absint($task['event_id'] ?? 0));
+        $timezone_name = $timezone->getName();
+    }
+
+    if ( empty($payload['source_planned_timestamp']) ) {
+        $payload['source_planned_timestamp'] = eventosapp_task_queue_planned_timestamp($task);
+    }
+    $payload['manual_schedule_override'] = 1;
+    $payload['planned_timestamp'] = $timestamp;
+    $payload['event_timezone'] = $timezone_name;
+    $payload['scheduled_utc'] = gmdate('Y-m-d H:i:s', $timestamp);
+    $payload['scheduled_local'] = (new DateTimeImmutable('@' . $timestamp))->setTimezone($timezone)->format('Y-m-d H:i:s');
+    $payload['utc_offset'] = (new DateTimeImmutable('@' . $timestamp))->setTimezone($timezone)->format('P');
+
     eventosapp_task_queue_update($task_id, [
-        'status'       => strtotime($scheduled . ' UTC') > time() ? 'scheduled' : 'queued',
+        'status'       => 'scheduled',
         'scheduled_at' => $scheduled,
         'next_run_at'  => $scheduled,
         'completed_at' => null,
         'heartbeat_at' => null,
+        'last_error'   => '',
+        'payload'      => $payload,
     ]);
-    eventosapp_task_queue_add_log($task_id, 'info', 'Tarea reprogramada.', ['scheduled_at'=>$scheduled]);
+    eventosapp_task_queue_add_log($task_id, 'info', 'Tarea reprogramada en la zona horaria del evento.', [
+        'scheduled_local' => $payload['scheduled_local'],
+        'event_timezone'  => $timezone_name,
+        'utc_offset'      => $payload['utc_offset'],
+        'scheduled_utc'   => $scheduled,
+    ]);
     eventosapp_task_queue_kick();
     return true;
 }
 
 function eventosapp_task_queue_delete($task_id) {
     global $wpdb;
+    $task_id = absint($task_id);
     $task = eventosapp_task_queue_get($task_id);
     if ( ! $task || ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) return false;
-    $wpdb->delete(eventosapp_task_queue_table('logs'), ['task_id'=>absint($task_id)], ['%d']);
-    return false !== $wpdb->delete(eventosapp_task_queue_table('tasks'), ['id'=>absint($task_id)], ['%d']);
+
+    // Un worker puede estar terminando el elemento que ya había comenzado antes
+    // de la cancelación o vencimiento. En ese caso se difiere el borrado para
+    // impedir que el proceso escriba sobre un registro eliminado.
+    if ( function_exists('eventosapp_task_queue_has_active_lock') && eventosapp_task_queue_has_active_lock($task_id) ) {
+        return eventosapp_task_queue_schedule_pending_deletion($task_id);
+    }
+
+    $wpdb->delete(eventosapp_task_queue_table('logs'), ['task_id'=>$task_id], ['%d']);
+    return false !== $wpdb->delete(eventosapp_task_queue_table('tasks'), ['id'=>$task_id], ['%d']);
+}
+
+/**
+ * Indica si un worker conserva un lock activo para la tarea.
+ */
+function eventosapp_task_queue_has_active_lock($task_id) {
+    $key = eventosapp_task_queue_lock_key($task_id);
+    $lock = get_option($key);
+    if ( ! is_array($lock) ) return false;
+    if ( absint($lock['expires'] ?? 0) < time() ) {
+        delete_option($key);
+        return false;
+    }
+    return true;
+}
+
+function eventosapp_task_queue_pending_deletions() {
+    $pending = get_option('eventosapp_task_queue_pending_deletions', []);
+    return is_array($pending) ? $pending : [];
+}
+
+function eventosapp_task_queue_schedule_pending_deletion($task_id) {
+    $task_id = absint($task_id);
+    if ( ! $task_id ) return false;
+    $pending = eventosapp_task_queue_pending_deletions();
+    $pending[(string)$task_id] = time();
+    update_option('eventosapp_task_queue_pending_deletions', $pending, false);
+    return true;
+}
+
+/**
+ * Borra tareas cuya eliminación quedó esperando a que terminara el elemento
+ * activo del worker. Nunca elimina una tarea mientras conserve un lock válido.
+ */
+function eventosapp_task_queue_process_pending_deletions($limit = 100) {
+    $limit = min(500, max(1, absint($limit)));
+    $pending = eventosapp_task_queue_pending_deletions();
+    if ( empty($pending) ) return 0;
+
+    $deleted = 0;
+    $processed = 0;
+    foreach ( array_keys($pending) as $task_id ) {
+        if ( $processed >= $limit ) break;
+        $processed++;
+        $task_id = absint($task_id);
+        $task = eventosapp_task_queue_get($task_id);
+
+        if ( ! $task ) {
+            unset($pending[(string)$task_id]);
+            continue;
+        }
+        if ( ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) continue;
+        if ( eventosapp_task_queue_has_active_lock($task_id) ) continue;
+
+        if ( eventosapp_task_queue_delete($task_id) ) {
+            unset($pending[(string)$task_id]);
+            $deleted++;
+        }
+    }
+
+    if ( empty($pending) ) delete_option('eventosapp_task_queue_pending_deletions');
+    else update_option('eventosapp_task_queue_pending_deletions', $pending, false);
+    return $deleted;
+}
+add_action('init', function() { eventosapp_task_queue_process_pending_deletions(100); }, 110);
+
+/**
+ * Cancela y elimina varias tareas de forma segura.
+ *
+ * Las tareas activas se cancelan primero. Si un worker está terminando un
+ * elemento, la eliminación queda diferida hasta que libere su lock; de esta
+ * forma no se corrompe el cursor ni se deja un proceso escribiendo sobre un
+ * registro que ya no existe.
+ */
+function eventosapp_task_queue_delete_many($task_ids) {
+    $task_ids = is_array($task_ids)
+        ? array_values(array_filter(array_unique(array_map('absint', $task_ids))))
+        : [];
+    if ( empty($task_ids) ) return ['deleted'=>0, 'pending'=>0, 'cancelled'=>0, 'skipped'=>0, 'requested'=>0];
+
+    $result = ['deleted'=>0, 'pending'=>0, 'cancelled'=>0, 'skipped'=>0, 'requested'=>count($task_ids)];
+
+    foreach ( $task_ids as $task_id ) {
+        $task = eventosapp_task_queue_get($task_id);
+        if ( ! $task ) {
+            $result['skipped']++;
+            continue;
+        }
+
+        if ( ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+            if ( eventosapp_task_queue_cancel($task_id, 'Cancelada para eliminación masiva desde Cola y Tareas.') ) {
+                $result['cancelled']++;
+            }
+            $task = eventosapp_task_queue_get($task_id);
+        }
+
+        if ( ! $task || ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+            $result['skipped']++;
+            continue;
+        }
+
+        if ( eventosapp_task_queue_has_active_lock($task_id) ) {
+            eventosapp_task_queue_schedule_pending_deletion($task_id);
+            $result['pending']++;
+            continue;
+        }
+
+        if ( eventosapp_task_queue_delete($task_id) ) $result['deleted']++;
+        else $result['skipped']++;
+    }
+
+    return $result;
 }
 
 function eventosapp_task_queue_delete_terminal($status = '') {
@@ -660,14 +1272,14 @@ function eventosapp_task_queue_delete_terminal($status = '') {
     $statuses = $status !== '' ? [eventosapp_task_queue_normalize_status($status)] : eventosapp_task_queue_terminal_statuses();
     $statuses = array_values(array_intersect($statuses, eventosapp_task_queue_terminal_statuses()));
     if ( empty($statuses) ) return 0;
+
     $placeholders = implode(',', array_fill(0, count($statuses), '%s'));
     $tasks = eventosapp_task_queue_table('tasks');
-    $logs = eventosapp_task_queue_table('logs');
     $ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$tasks} WHERE status IN ({$placeholders})", $statuses));
     if ( empty($ids) ) return 0;
-    $id_placeholders = implode(',', array_fill(0, count($ids), '%d'));
-    $wpdb->query($wpdb->prepare("DELETE FROM {$logs} WHERE task_id IN ({$id_placeholders})", array_map('absint', $ids)));
-    return (int)$wpdb->query($wpdb->prepare("DELETE FROM {$tasks} WHERE id IN ({$id_placeholders})", array_map('absint', $ids)));
+
+    $result = eventosapp_task_queue_delete_many(array_map('absint', $ids));
+    return absint($result['deleted'] ?? 0);
 }
 
 /**
@@ -918,6 +1530,9 @@ function eventosapp_task_queue_dispatch($reason = '') {
         $stale
     ));
 
+    // Antes de reservar workers se depuran programaciones de días anteriores.
+    eventosapp_task_queue_reconcile_scheduled_tasks($config['dispatcher_limit'] * 4);
+
     $active = (int)$wpdb->get_var($wpdb->prepare(
         "SELECT COUNT(*) FROM {$table} WHERE status='running' AND heartbeat_at >= %s",
         $stale
@@ -972,6 +1587,13 @@ function eventosapp_task_queue_process_task($task_id) {
     try {
         $task = eventosapp_task_queue_get($task_id);
         if ( ! $task ) return new WP_Error('eventosapp_task_queue_not_found', 'Tarea no encontrada.');
+
+        if ( ($task['task_group'] ?? '') === 'scheduled' ) {
+            eventosapp_task_queue_reconcile_scheduled_task($task_id);
+            $task = eventosapp_task_queue_get($task_id);
+            if ( ! $task ) return new WP_Error('eventosapp_task_queue_not_found', 'Tarea no encontrada.');
+        }
+
         if ( in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) || $task['status'] === 'paused' ) return $task;
         if ( $task['next_run_at'] && strtotime($task['next_run_at'] . ' UTC') > time() ) {
             $remaining = max(1, strtotime($task['next_run_at'] . ' UTC') - time());
@@ -1081,10 +1703,10 @@ function eventosapp_task_queue_process_task($task_id) {
          * el worker nunca sobrescriba una decisión administrativa concurrente.
          */
         $control = eventosapp_task_queue_get($task_id);
-        if ( $control && $control['status'] === 'cancelled' ) {
-            unset($update['last_error']);
+        if ( $control && in_array($control['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+            unset($update['last_error'], $update['status'], $update['completed_at'], $update['next_run_at']);
             eventosapp_task_queue_update($task_id, $update);
-            eventosapp_task_queue_add_log($task_id, 'info', 'El worker terminó el elemento activo y respetó la cancelación.');
+            eventosapp_task_queue_add_log($task_id, 'info', 'El worker terminó el elemento activo y respetó el estado terminal administrativo: ' . $control['status'] . '.');
             return eventosapp_task_queue_get($task_id);
         }
         if ( $control && $control['status'] === 'paused' ) {
@@ -1132,6 +1754,11 @@ function eventosapp_task_queue_process_task($task_id) {
     } catch (Throwable $e) {
         eventosapp_task_queue_add_log($task_id, 'error', 'Excepción del worker: ' . $e->getMessage());
         $task = eventosapp_task_queue_get($task_id);
+
+        if ( $task && (in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) || $task['status'] === 'paused') ) {
+            return new WP_Error('eventosapp_task_queue_exception', $e->getMessage());
+        }
+
         $errors = $task ? $task['consecutive_errors'] + 1 : 1;
         eventosapp_task_queue_update($task_id, [
             'status'             => 'queued',
@@ -1148,6 +1775,7 @@ function eventosapp_task_queue_process_task($task_id) {
         return new WP_Error('eventosapp_task_queue_exception', $e->getMessage());
     } finally {
         eventosapp_task_queue_release_lock($task_id, $token);
+        eventosapp_task_queue_process_pending_deletions(25);
     }
 }
 
@@ -1243,7 +1871,7 @@ function eventosapp_task_queue_cleanup() {
     $task_before = gmdate('Y-m-d H:i:s', time() - ($config['task_retention_days'] * DAY_IN_SECONDS));
     $wpdb->query($wpdb->prepare("DELETE FROM {$logs} WHERE created_at < %s", $log_before));
     $ids = $wpdb->get_col($wpdb->prepare(
-        "SELECT id FROM {$tasks} WHERE status IN ('completed','cancelled','failed') AND updated_at < %s",
+        "SELECT id FROM {$tasks} WHERE status IN ('completed','cancelled','expired','failed') AND updated_at < %s",
         $task_before
     ));
     foreach ( (array)$ids as $id ) eventosapp_task_queue_delete(absint($id));

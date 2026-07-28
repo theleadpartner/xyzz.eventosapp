@@ -45,6 +45,12 @@ function eventosapp_task_queue_activate_due_task($task_id) {
     $task = eventosapp_task_queue_get($task_id);
     if ( ! $task || in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) || $task['status'] === 'paused' ) return false;
 
+    $reconciled = eventosapp_task_queue_reconcile_scheduled_task($task_id);
+    if ( in_array($reconciled, eventosapp_task_queue_terminal_statuses(), true) ) return false;
+
+    $task = eventosapp_task_queue_get($task_id);
+    if ( ! $task || in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) return false;
+
     if ( $task['status'] === 'scheduled' && (!$task['scheduled_at'] || strtotime($task['scheduled_at'] . ' UTC') <= time()) ) {
         eventosapp_task_queue_update($task_id, [
             'status'      => 'queued',
@@ -54,6 +60,227 @@ function eventosapp_task_queue_activate_due_task($task_id) {
     eventosapp_task_queue_kick();
     return true;
 }
+
+/**
+ * Contexto horario normalizado para guardar junto a una programación.
+ */
+function eventosapp_task_queue_schedule_context($event_id, $timestamp) {
+    $event_id = absint($event_id);
+    $timestamp = absint($timestamp);
+    $timezone = eventosapp_task_queue_event_timezone_object($event_id);
+    $local = $timestamp > 0
+        ? (new DateTimeImmutable('@' . $timestamp))->setTimezone($timezone)
+        : null;
+
+    return [
+        'planned_timestamp' => $timestamp,
+        'event_timezone'    => $timezone->getName(),
+        'utc_offset'        => $local ? $local->format('P') : '',
+        'scheduled_local'   => $local ? $local->format('Y-m-d H:i:s') : '',
+        'scheduled_utc'     => $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : '',
+    ];
+}
+
+function eventosapp_task_queue_store_schedule_context($task_id, $event_id, $timestamp) {
+    $task = eventosapp_task_queue_get($task_id);
+    if ( ! $task ) return false;
+
+    $timestamp = absint($timestamp);
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+    if ( ! empty($payload['manual_schedule_override']) ) return true;
+
+    $payload = array_merge($payload, eventosapp_task_queue_schedule_context($event_id, $timestamp));
+    $updates = ['payload'=>$payload];
+
+    /*
+     * Versiones anteriores pudieron guardar scheduled_at como "ahora + 5".
+     * Restauramos la equivalencia UTC real para impedir tanto ejecuciones
+     * anticipadas como envíos tardíos. Una tarea que ya está corriendo conserva
+     * su turno actual, pero su fecha planificada queda corregida para auditoría
+     * y reconciliación.
+     */
+    if ( $timestamp > 0 && ($task['task_group'] ?? '') === 'scheduled' ) {
+        $scheduled_utc = gmdate('Y-m-d H:i:s', $timestamp);
+        $updates['scheduled_at'] = $scheduled_utc;
+
+        if ( ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) && $task['status'] !== 'running' && $task['status'] !== 'paused' ) {
+            $updates['status'] = $timestamp > time() ? 'scheduled' : 'queued';
+            $updates['next_run_at'] = $timestamp > time() ? $scheduled_utc : current_time('mysql', true);
+        }
+    }
+
+    return eventosapp_task_queue_update($task_id, $updates);
+}
+
+/**
+ * Recupera el instante originalmente planificado por cada módulo.
+ *
+ * Esto corrige tareas antiguas cuyo scheduled_at fue reemplazado por la hora
+ * de migración. Una reprogramación manual de la cola siempre tiene prioridad.
+ */
+function eventosapp_task_queue_integrations_planned_timestamp($timestamp, $task) {
+    $task = is_array($task) ? $task : [];
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+
+    if ( ! empty($payload['manual_schedule_override']) && ! empty($payload['planned_timestamp']) ) {
+        return absint($payload['planned_timestamp']);
+    }
+    if ( ! empty($payload['planned_timestamp']) ) return absint($payload['planned_timestamp']);
+
+    $event_id = absint($task['event_id'] ?? ($payload['event_id'] ?? 0));
+    $task_type = sanitize_key((string)($task['task_type'] ?? ''));
+
+    if ( $task_type === 'email_reminder_scheduled' && $event_id && function_exists('eventosapp_event_reminder_send_timestamp') ) {
+        $source_timestamp = absint(eventosapp_event_reminder_send_timestamp($event_id));
+        if ( $source_timestamp ) return $source_timestamp;
+    }
+
+    if ( $task_type === 'whatsapp_reminder_scheduled' && $event_id && function_exists('eventosapp_ticket_reminders_calculate_run_timestamp') ) {
+        $item = is_array($payload['item'] ?? null) ? $payload['item'] : [];
+        if ( empty($item) && function_exists('eventosapp_ticket_reminders_find_item') ) {
+            $item = eventosapp_ticket_reminders_find_item($event_id, sanitize_key((string)($payload['reminder_id'] ?? '')));
+        }
+        if ( ! empty($item) ) {
+            $source_timestamp = absint(eventosapp_ticket_reminders_calculate_run_timestamp($event_id, $item));
+            if ( $source_timestamp ) return $source_timestamp;
+        }
+    }
+
+    if ( $task_type === 'attendance_scheduled' && $event_id ) {
+        $config = get_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', true);
+        $config = is_array($config) ? $config : [];
+        $task_schedule_id = sanitize_key((string)($payload['schedule_id'] ?? ''));
+        $config_schedule_id = sanitize_key((string)($config['schedule_id'] ?? ''));
+        if ( ! empty($config['timestamp']) && ($task_schedule_id === '' || $config_schedule_id === $task_schedule_id) ) {
+            return absint($config['timestamp']);
+        }
+    }
+
+    return absint($timestamp);
+}
+add_filter('eventosapp_task_queue_planned_timestamp', 'eventosapp_task_queue_integrations_planned_timestamp', 10, 2);
+
+/**
+ * Convierte fechas históricas guardadas con current_time('mysql') a UTC sin
+ * depender de la zona horaria configurada en PHP o en el servidor.
+ */
+function eventosapp_task_queue_history_site_datetime_to_utc($value) {
+    $value = sanitize_text_field((string)$value);
+    if ( $value === '' ) return '';
+
+    try {
+        return (new DateTimeImmutable($value, wp_timezone()))
+            ->setTimezone(new DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s');
+    } catch (Throwable $e) {
+        return '';
+    }
+}
+
+/**
+ * Evidencia de ejecución tomada de los módulos históricos. Esto permite que la
+ * cola diferencie una programación realmente ejecutada de una que simplemente
+ * quedó en el pasado sin haberse enviado.
+ */
+function eventosapp_task_queue_integrations_execution_evidence($evidence, $task) {
+    $evidence = is_array($evidence) ? $evidence : [];
+    $task = is_array($task) ? $task : [];
+    if ( ! empty($evidence['executed']) ) return $evidence;
+
+    $event_id = absint($task['event_id'] ?? 0);
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+    if ( ! $event_id ) return $evidence;
+
+    if ( ($task['task_type'] ?? '') === 'email_reminder_scheduled' ) {
+        $stats = get_post_meta($event_id, '_eventosapp_reminder_dispatch_stats', true);
+        $stats = is_array($stats) ? $stats : [];
+        $done_at = (string)get_post_meta($event_id, '_eventosapp_reminder_done', true);
+        $completed_value = (string)($stats['completed_at'] ?? $done_at);
+        $completed_ts = 0;
+        $completed_utc = eventosapp_task_queue_history_site_datetime_to_utc($completed_value);
+        if ( $completed_utc !== '' ) {
+            try {
+                $completed_ts = (new DateTimeImmutable($completed_utc, new DateTimeZone('UTC')))->getTimestamp();
+            } catch (Throwable $e) {
+                $completed_ts = 0;
+            }
+        }
+        $scheduled_ts = eventosapp_task_queue_planned_timestamp($task);
+        $same_queue = ! empty($stats['queue_task_id']) && absint($stats['queue_task_id']) === absint($task['id'] ?? 0);
+        $has_completion = ! empty($stats['completed']) || $completed_ts > 0;
+        $executed = $has_completion && ($same_queue || ($completed_ts > 0 && (!$scheduled_ts || $completed_ts >= ($scheduled_ts - 300))));
+        if ( $executed ) {
+            $success = absint($stats['sent_ok'] ?? 0);
+            $errors = absint($stats['sent_fail'] ?? 0);
+            $skipped = absint($stats['already_sent'] ?? 0) + absint($stats['no_email'] ?? 0) + absint($stats['filtered_out'] ?? 0);
+            $processed = $success + $errors + $skipped;
+            return [
+                'executed'        => true,
+                'source'          => 'email_reminder_history',
+                'completed_at'    => $completed_ts ? gmdate('Y-m-d H:i:s', $completed_ts) : '',
+                'total_items'     => max(absint($stats['queue_size'] ?? 0), $processed),
+                'processed_items' => $processed,
+                'success_items'   => $success,
+                'error_items'     => $errors,
+                'skipped_items'   => $skipped,
+                'message'         => 'El módulo de recordatorios por correo registró la finalización.',
+            ];
+        }
+    }
+
+    if ( ($task['task_type'] ?? '') === 'whatsapp_reminder_scheduled' ) {
+        $reminder_id = sanitize_key((string)($payload['reminder_id'] ?? ''));
+        $signature = (string)($payload['signature'] ?? '');
+        $executed_map = function_exists('eventosapp_ticket_reminders_get_executed_map')
+            ? eventosapp_ticket_reminders_get_executed_map($event_id)
+            : (defined('EVENTOSAPP_TICKET_REMINDERS_META_EXECUTED') ? get_post_meta($event_id, EVENTOSAPP_TICKET_REMINDERS_META_EXECUTED, true) : []);
+        $executed_map = is_array($executed_map) ? $executed_map : [];
+        $row = is_array($executed_map[$reminder_id] ?? null) ? $executed_map[$reminder_id] : [];
+        $same_signature = $row && ($signature === '' || (! empty($row['signature']) && hash_equals((string)$row['signature'], $signature)));
+        if ( $same_signature ) {
+            $summary = is_array($row['summary'] ?? null) ? $row['summary'] : [];
+            $success = absint($summary['sent_total'] ?? $summary['whatsapp_sent'] ?? 0);
+            $errors = absint($summary['error_total'] ?? 0);
+            $skipped = absint($summary['skipped_total'] ?? 0);
+            $processed = $success + $errors + $skipped;
+            return [
+                'executed'        => true,
+                'source'          => 'whatsapp_reminder_history',
+                'completed_at'    => eventosapp_task_queue_history_site_datetime_to_utc($row['date'] ?? ''),
+                'total_items'     => max(absint($summary['total_tickets'] ?? 0), $processed),
+                'processed_items' => $processed,
+                'success_items'   => $success,
+                'error_items'     => $errors,
+                'skipped_items'   => $skipped,
+                'message'         => 'El historial del recordatorio WhatsApp contiene la misma firma de programación.',
+            ];
+        }
+    }
+
+    if ( ($task['task_type'] ?? '') === 'attendance_scheduled' ) {
+        $config = get_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', true);
+        $config = is_array($config) ? $config : [];
+        $schedule_id = sanitize_key((string)($payload['schedule_id'] ?? ''));
+        $same_schedule = $schedule_id === '' || sanitize_key((string)($config['schedule_id'] ?? '')) === $schedule_id;
+        $same_task = ! empty($config['last_queue_task_id']) && absint($config['last_queue_task_id']) === absint($task['id'] ?? 0);
+        if ( $same_schedule && ($same_task || ! empty($config['last_finished_at'])) ) {
+            return [
+                'executed'        => true,
+                'source'          => 'attendance_schedule_history',
+                'completed_at'    => eventosapp_task_queue_history_site_datetime_to_utc($config['last_finished_at'] ?? ''),
+                'total_items'     => absint($task['total_items'] ?? 0),
+                'processed_items' => absint($task['processed_items'] ?? 0),
+                'success_items'   => absint($task['success_items'] ?? 0),
+                'error_items'     => absint($task['error_items'] ?? 0),
+                'skipped_items'   => absint($task['skipped_items'] ?? 0),
+                'message'         => 'La programación de confirmación registra una finalización previa.',
+            ];
+        }
+    }
+
+    return $evidence;
+}
+add_filter('eventosapp_task_queue_execution_evidence', 'eventosapp_task_queue_integrations_execution_evidence', 10, 2);
 
 /**
  * Devuelve un resultado normalizado para cada elemento.
@@ -619,14 +846,28 @@ function eventosapp_task_queue_sync_email_reminder($event_id) {
 
     $signature = md5($event_id . '|' . $timestamp . '|' . wp_json_encode(get_post_meta($event_id, '_eventosapp_reminder_filters', true)));
     $old_signature = get_post_meta($event_id, '_eventosapp_reminder_queue_signature', true);
-    if ( $old_id && hash_equals((string)$old_signature, $signature) ) return;
-    if ( $old_id ) eventosapp_task_queue_cancel($old_id, 'La programación fue reemplazada por una nueva configuración.');
+
+    $old_task = $old_id ? eventosapp_task_queue_get($old_id) : null;
+    if ( $old_task && hash_equals((string)$old_signature, $signature) ) {
+        eventosapp_task_queue_store_schedule_context($old_id, $event_id, $timestamp);
+        eventosapp_task_queue_reconcile_scheduled_task($old_id);
+        return;
+    }
+    if ( $old_task ) eventosapp_task_queue_cancel($old_id, 'La programación fue reemplazada por una nueva configuración.');
+    if ( $old_id && ! $old_task ) delete_post_meta($event_id, '_eventosapp_reminder_queue_task_id');
+
+    // Una fecha de un día anterior no se transforma en envío inmediato.
+    if ( eventosapp_task_queue_timestamp_is_previous_event_date($timestamp, $event_id) ) {
+        update_post_meta($event_id, '_eventosapp_reminder_queue_signature', $signature);
+        delete_post_meta($event_id, '_eventosapp_reminder_queue_task_id');
+        return;
+    }
 
     $task_id = eventosapp_task_queue_create([
         'task_type'=>'email_reminder_scheduled','task_group'=>'scheduled','channel'=>'email',
         'title'=>'Recordatorio por correo · ' . get_the_title($event_id),
         'event_id'=>$event_id,'scheduled_at'=>$timestamp,'next_run_at'=>$timestamp,'status'=>'scheduled',
-        'total_items'=>0,'payload'=>['event_id'=>$event_id,'prepared'=>0,'signature'=>$signature],
+        'total_items'=>0,'payload'=>array_merge(['event_id'=>$event_id,'prepared'=>0,'signature'=>$signature], eventosapp_task_queue_schedule_context($event_id, $timestamp)),
         'notification_email'=>eventosapp_task_queue_current_notification_email(),'created_by'=>get_current_user_id(),
     ]);
     if ( ! is_wp_error($task_id) ) {
@@ -655,18 +896,29 @@ function eventosapp_task_queue_sync_ticket_reminders($event_id) {
             ? eventosapp_ticket_reminders_item_signature($event_id, $item)
             : md5(wp_json_encode($item) . '|' . $run_at);
         $old = is_array($map[$reminder_id] ?? null) ? $map[$reminder_id] : [];
-        if ( ! empty($old['task_id']) && hash_equals((string)($old['signature'] ?? ''), (string)$signature) ) {
+
+        $old_task_id = absint($old['task_id'] ?? 0);
+        $old_task = $old_task_id ? eventosapp_task_queue_get($old_task_id) : null;
+        if ( $old_task && hash_equals((string)($old['signature'] ?? ''), (string)$signature) ) {
+            eventosapp_task_queue_store_schedule_context($old_task_id, $event_id, $run_at);
+            eventosapp_task_queue_reconcile_scheduled_task($old_task_id);
             $next_map[$reminder_id] = $old;
             continue;
         }
-        if ( ! empty($old['task_id']) ) eventosapp_task_queue_cancel(absint($old['task_id']), 'El recordatorio fue reprogramado.');
+        if ( $old_task ) eventosapp_task_queue_cancel($old_task_id, 'El recordatorio fue reprogramado.');
 
-        $schedule_at = max(time() + 5, $run_at);
+        // Las programaciones de días anteriores se conservan en el historial del
+        // módulo, pero no se recrean como una tarea inmediata de la cola.
+        if ( eventosapp_task_queue_timestamp_is_previous_event_date($run_at, $event_id) ) {
+            continue;
+        }
+
+        $schedule_at = $run_at;
         $task_id = eventosapp_task_queue_create([
             'task_type'=>'whatsapp_reminder_scheduled','task_group'=>'scheduled','channel'=>'whatsapp',
             'title'=>'Recordatorio WhatsApp · ' . (($item['name'] ?? '') ?: get_the_title($event_id)),
             'event_id'=>$event_id,'scheduled_at'=>$schedule_at,'next_run_at'=>$schedule_at,'status'=>'scheduled',
-            'payload'=>['event_id'=>$event_id,'reminder_id'=>$reminder_id,'item'=>$item,'prepared'=>0,'signature'=>$signature],
+            'payload'=>array_merge(['event_id'=>$event_id,'reminder_id'=>$reminder_id,'item'=>$item,'prepared'=>0,'signature'=>$signature], eventosapp_task_queue_schedule_context($event_id, $run_at)),
             'total_items'=>0,'notification_email'=>eventosapp_task_queue_current_notification_email(),'created_by'=>get_current_user_id(),
         ]);
         if ( ! is_wp_error($task_id) ) {
@@ -676,7 +928,10 @@ function eventosapp_task_queue_sync_ticket_reminders($event_id) {
 
     foreach ( $map as $reminder_id => $old ) {
         if ( ! isset($next_map[$reminder_id]) && ! empty($old['task_id']) ) {
-            eventosapp_task_queue_cancel(absint($old['task_id']), 'El recordatorio fue eliminado o desactivado.');
+            $task = eventosapp_task_queue_get(absint($old['task_id']));
+            if ( $task && ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+                eventosapp_task_queue_cancel(absint($old['task_id']), 'El recordatorio fue eliminado, desactivado o quedó históricamente vencido.');
+            }
         }
     }
     update_post_meta($event_id, '_eventosapp_ticket_reminders_queue_task_ids', $next_map);
@@ -697,10 +952,29 @@ function eventosapp_task_queue_sync_attendance_schedule($event_id, $config = nul
             return;
         }
 
-        $signature = md5((string)($config['schedule_id'] ?? '') . '|' . absint($config['timestamp']) . '|' . wp_json_encode($config['filters'] ?? []));
+        $timestamp = absint($config['timestamp']);
+        $signature = md5((string)($config['schedule_id'] ?? '') . '|' . $timestamp . '|' . wp_json_encode($config['filters'] ?? []));
         $old_signature = get_post_meta($event_id, '_eventosapp_attendance_confirmation_queue_signature', true);
-        if ( $old_id && hash_equals((string)$old_signature, $signature) ) return;
-        if ( $old_id ) eventosapp_task_queue_cancel($old_id, 'La programación de confirmación fue reemplazada.');
+        $old_task = $old_id ? eventosapp_task_queue_get($old_id) : null;
+        if ( $old_task && hash_equals((string)$old_signature, $signature) ) {
+            eventosapp_task_queue_store_schedule_context($old_id, $event_id, $timestamp);
+            eventosapp_task_queue_reconcile_scheduled_task($old_id);
+            return;
+        }
+        if ( $old_task ) eventosapp_task_queue_cancel($old_id, 'La programación de confirmación fue reemplazada.');
+        if ( $old_id && ! $old_task ) delete_post_meta($event_id, '_eventosapp_attendance_confirmation_queue_task_id');
+
+        if ( eventosapp_task_queue_timestamp_is_previous_event_date($timestamp, $event_id) ) {
+            $config['enabled'] = 0;
+            $config['queue_status'] = 'expired';
+            $config['expired_at'] = current_time('mysql');
+            $config['expired_reason'] = 'La fecha programada pertenece a un día anterior en la zona horaria del evento y no se ejecutará tardíamente.';
+            unset($config['queue_task_id'], $config['queue_task_url']);
+            update_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', $config);
+            update_post_meta($event_id, '_eventosapp_attendance_confirmation_queue_signature', $signature);
+            delete_post_meta($event_id, '_eventosapp_attendance_confirmation_queue_task_id');
+            return;
+        }
 
         $channels = function_exists('eventosapp_attendance_confirmation_sanitize_channels')
             ? eventosapp_attendance_confirmation_sanitize_channels($config['channels'] ?? [])
@@ -711,16 +985,17 @@ function eventosapp_task_queue_sync_attendance_schedule($event_id, $config = nul
             'email_message'=>$config['email_message'] ?? '',
             'whatsapp_template_id'=>$config['whatsapp_template_id'] ?? '',
         ];
+        $schedule_at = $timestamp;
         $task_id = eventosapp_task_queue_create([
             'task_type'=>'attendance_scheduled','task_group'=>'scheduled','channel'=>implode('+', $channels),
             'title'=>'Confirmación programada · ' . get_the_title($event_id),
-            'event_id'=>$event_id,'scheduled_at'=>absint($config['timestamp']),'next_run_at'=>absint($config['timestamp']),'status'=>'scheduled',
+            'event_id'=>$event_id,'scheduled_at'=>$schedule_at,'next_run_at'=>$schedule_at,'status'=>'scheduled',
             'total_items'=>0,
             'payload'=>[
                 'ticket_ids'=>[],'prepared'=>0,'filters'=>$config['filters'] ?? ['evento_id'=>$event_id],
                 'config'=>$send_config,'source'=>'scheduled','source_ref'=>$signature,
                 'schedule_id'=>$config['schedule_id'] ?? '',
-            ],
+            ] + eventosapp_task_queue_schedule_context($event_id, $timestamp),
             'notification_email'=>eventosapp_task_queue_current_notification_email(),'created_by'=>absint($config['created_by'] ?? get_current_user_id()),
         ]);
         if ( ! is_wp_error($task_id) ) {
@@ -728,6 +1003,8 @@ function eventosapp_task_queue_sync_attendance_schedule($event_id, $config = nul
             update_post_meta($event_id, '_eventosapp_attendance_confirmation_queue_signature', $signature);
             $config['queue_task_id'] = $task_id;
             $config['queue_task_url'] = eventosapp_task_queue_task_url($task_id);
+            $config['queue_status'] = 'scheduled';
+            unset($config['expired_at'], $config['expired_reason']);
             update_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', $config);
         }
     } finally {
@@ -845,7 +1122,7 @@ function eventosapp_task_queue_migrate_existing_schedules() {
     global $wpdb;
     if ( ! function_exists('eventosapp_task_queue_create') ) return;
 
-    $version = '2026.07.27.1';
+    $version = '2026.07.27.3';
     $done_version = get_option('eventosapp_task_queue_schedule_migration_version', '');
     $cursor = absint(get_option('eventosapp_task_queue_schedule_migration_cursor', 0));
 
@@ -948,5 +1225,8 @@ function eventosapp_task_queue_migrate_existing_schedules() {
         }
         delete_option($name);
     }
+
+    // Clasifica gradualmente las tareas históricas creadas por la versión anterior.
+    eventosapp_task_queue_reconcile_scheduled_tasks(250);
 }
 add_action('init', 'eventosapp_task_queue_migrate_existing_schedules', 90);
