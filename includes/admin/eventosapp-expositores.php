@@ -108,6 +108,670 @@ add_action( 'init', function () {
         'map_meta_cap'        => true,
     ] );
 } );
+// ============================================================
+// 2A. CREACIÓN MASIVA DE EXPOSITORES
+// ============================================================
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_result_transient_key' ) ) {
+    function eventosapp_bulk_expositores_result_transient_key( $user_id, $token ) {
+        return 'eventosapp_bulk_expo_' . absint( $user_id ) . '_' . sanitize_key( (string) $token );
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_store_result' ) ) {
+    function eventosapp_bulk_expositores_store_result( array $result ) {
+        $token = strtolower( wp_generate_password( 16, false, false ) );
+        $key   = eventosapp_bulk_expositores_result_transient_key( get_current_user_id(), $token );
+
+        set_transient( $key, $result, 10 * MINUTE_IN_SECONDS );
+
+        return $token;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_pull_result' ) ) {
+    function eventosapp_bulk_expositores_pull_result() {
+        if ( empty( $_GET['eventosapp_bulk_expositores_result'] ) ) {
+            return [];
+        }
+
+        $token = sanitize_key( wp_unslash( $_GET['eventosapp_bulk_expositores_result'] ) );
+        if ( $token === '' ) {
+            return [];
+        }
+
+        $key    = eventosapp_bulk_expositores_result_transient_key( get_current_user_id(), $token );
+        $result = get_transient( $key );
+        delete_transient( $key );
+
+        return is_array( $result ) ? $result : [];
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_redirect_with_result' ) ) {
+    function eventosapp_bulk_expositores_redirect_with_result( array $result ) {
+        $token = eventosapp_bulk_expositores_store_result( $result );
+        $url   = add_query_arg(
+            [
+                'page'                                => 'eventosapp_expositores_masivos',
+                'eventosapp_bulk_expositores_result' => $token,
+            ],
+            admin_url( 'admin.php' )
+        );
+
+        wp_safe_redirect( $url . '#eventosapp-bulk-expositores-result' );
+        exit;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_parse_lines' ) ) {
+    function eventosapp_bulk_expositores_parse_lines( $raw_text ) {
+        if ( is_array( $raw_text ) || is_object( $raw_text ) ) {
+            return [];
+        }
+
+        $raw_text = wp_unslash( (string) $raw_text );
+        $raw_text = str_replace( [ "\r\n", "\r" ], "\n", $raw_text );
+        $rows     = [];
+
+        foreach ( explode( "\n", $raw_text ) as $index => $line ) {
+            if ( $index === 0 ) {
+                $line = preg_replace( '/^\xEF\xBB\xBF/', '', $line );
+            }
+
+            $line = trim( (string) $line );
+            if ( $line === '' ) {
+                continue;
+            }
+
+            $rows[] = [
+                'line'  => $index + 1,
+                'value' => $line,
+            ];
+        }
+
+        return $rows;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_normalize_name' ) ) {
+    function eventosapp_bulk_expositores_normalize_name( $name ) {
+        if ( is_array( $name ) || is_object( $name ) ) {
+            return '';
+        }
+
+        $name = html_entity_decode( wp_strip_all_tags( (string) $name ), ENT_QUOTES, get_bloginfo( 'charset' ) );
+        $name = remove_accents( $name );
+        $name = strtolower( trim( preg_replace( '/\s+/u', ' ', $name ) ) );
+
+        return $name;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_base_result' ) ) {
+    function eventosapp_bulk_expositores_base_result( $processed ) {
+        return [
+            'summary' => [
+                'processed' => absint( $processed ),
+                'created'   => 0,
+                'linked'    => 0,
+                'warnings'  => 0,
+                'errors'    => 0,
+            ],
+            'items'   => [],
+        ];
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_add_result_item' ) ) {
+    function eventosapp_bulk_expositores_add_result_item( array &$result, $status, $line, $name, $client_id, $event_id, $message, array $extra = [] ) {
+        $status = sanitize_key( (string) $status );
+        $item   = array_merge(
+            [
+                'status'       => $status,
+                'line'         => absint( $line ),
+                'name'         => sanitize_text_field( (string) $name ),
+                'client_id'    => absint( $client_id ),
+                'event_id'     => absint( $event_id ),
+                'expositor_id' => 0,
+                'message'      => sanitize_text_field( (string) $message ),
+            ],
+            $extra
+        );
+
+        $result['items'][] = $item;
+
+        if ( $status === 'created' ) {
+            $result['summary']['created']++;
+        } elseif ( $status === 'linked' ) {
+            $result['summary']['linked']++;
+        } elseif ( $status === 'warning' ) {
+            $result['summary']['warnings']++;
+        } elseif ( $status === 'error' ) {
+            $result['summary']['errors']++;
+        }
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_get_client_label' ) ) {
+    function eventosapp_bulk_expositores_get_client_label( $client_id ) {
+        $client_id = absint( $client_id );
+        if ( ! $client_id || get_post_type( $client_id ) !== 'eventosapp_cliente' ) {
+            return '';
+        }
+
+        return sanitize_text_field( get_post_meta( $client_id, '_cliente_nombre_empresa', true ) ?: get_the_title( $client_id ) );
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_get_event_label' ) ) {
+    function eventosapp_bulk_expositores_get_event_label( $event_id ) {
+        $event_id = absint( $event_id );
+        return ( $event_id && get_post_type( $event_id ) === 'eventosapp_event' )
+            ? sanitize_text_field( get_the_title( $event_id ) )
+            : '';
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_get_existing_map_for_client' ) ) {
+    function eventosapp_bulk_expositores_get_existing_map_for_client( $client_id ) {
+        $client_id = absint( $client_id );
+        if ( ! $client_id ) {
+            return [];
+        }
+
+        $ids = get_posts( [
+            'post_type'      => 'eventosapp_expositor',
+            'post_status'    => [ 'publish', 'draft', 'private', 'pending', 'future' ],
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'no_found_rows'  => true,
+            'meta_query'     => [
+                [
+                    'key'     => '_expositor_cliente_id',
+                    'value'   => $client_id,
+                    'compare' => '=',
+                    'type'    => 'NUMERIC',
+                ],
+            ],
+        ] );
+
+        $map = [];
+        foreach ( array_map( 'absint', (array) $ids ) as $expositor_id ) {
+            if ( ! $expositor_id ) {
+                continue;
+            }
+
+            $name       = get_post_meta( $expositor_id, '_expositor_nombre_empresa', true ) ?: get_the_title( $expositor_id );
+            $normalized = eventosapp_bulk_expositores_normalize_name( $name );
+            if ( $normalized === '' ) {
+                continue;
+            }
+
+            if ( ! isset( $map[ $normalized ] ) ) {
+                $map[ $normalized ] = [];
+            }
+            $map[ $normalized ][] = $expositor_id;
+        }
+
+        return $map;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_bulk_expositores_attach_to_event' ) ) {
+    function eventosapp_bulk_expositores_attach_to_event( $event_id, $expositor_id ) {
+        $event_id     = absint( $event_id );
+        $expositor_id = absint( $expositor_id );
+
+        if ( ! $event_id || get_post_type( $event_id ) !== 'eventosapp_event' ) {
+            return new WP_Error( 'invalid_event', 'El evento indicado no es válido.' );
+        }
+        if ( ! $expositor_id || get_post_type( $expositor_id ) !== 'eventosapp_expositor' ) {
+            return new WP_Error( 'invalid_expositor', 'El expositor indicado no es válido.' );
+        }
+
+        $assigned = function_exists( 'eventosapp_event_get_expositores' )
+            ? eventosapp_event_get_expositores( $event_id )
+            : (array) get_post_meta( $event_id, '_eventosapp_event_expositores', true );
+        $assigned = array_values( array_unique( array_filter( array_map( 'absint', $assigned ) ) ) );
+
+        $already_linked = in_array( $expositor_id, $assigned, true );
+
+        if ( ! $already_linked ) {
+            $assigned[] = $expositor_id;
+            update_post_meta( $event_id, '_eventosapp_event_expositores', $assigned );
+
+            $verified = (array) get_post_meta( $event_id, '_eventosapp_event_expositores', true );
+            $verified = array_values( array_unique( array_filter( array_map( 'absint', $verified ) ) ) );
+            if ( ! in_array( $expositor_id, $verified, true ) ) {
+                return new WP_Error( 'link_failed', 'WordPress no pudo asociar el expositor al evento.' );
+            }
+        }
+
+        $user_map = get_post_meta( $event_id, '_eventosapp_expositor_user_map', true );
+        if ( ! is_array( $user_map ) ) {
+            $user_map = [];
+        }
+        if ( ! isset( $user_map[ $expositor_id ] ) || ! is_array( $user_map[ $expositor_id ] ) ) {
+            $user_map[ $expositor_id ] = [];
+            update_post_meta( $event_id, '_eventosapp_expositor_user_map', $user_map );
+        }
+
+        return [ 'already_linked' => $already_linked ];
+    }
+}
+
+add_action( 'admin_menu', 'eventosapp_register_bulk_expositores_submenu', 20 );
+if ( ! function_exists( 'eventosapp_register_bulk_expositores_submenu' ) ) {
+    function eventosapp_register_bulk_expositores_submenu() {
+        add_submenu_page(
+            'eventosapp_dashboard',
+            'Creación masiva de expositores',
+            'Expositores masivos',
+            'manage_options',
+            'eventosapp_expositores_masivos',
+            'eventosapp_render_bulk_expositores_page'
+        );
+    }
+}
+
+add_action( 'admin_post_eventosapp_bulk_create_expositores', 'eventosapp_handle_bulk_create_expositores' );
+if ( ! function_exists( 'eventosapp_handle_bulk_create_expositores' ) ) {
+    function eventosapp_handle_bulk_create_expositores() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'No tienes permisos para crear expositores.', '', [ 'response' => 403 ] );
+        }
+
+        check_admin_referer( 'eventosapp_bulk_create_expositores', 'eventosapp_bulk_create_expositores_nonce' );
+
+        $rows   = eventosapp_bulk_expositores_parse_lines( $_POST['eventosapp_bulk_create_expositores_data'] ?? '' );
+        $result = eventosapp_bulk_expositores_base_result( count( $rows ) );
+
+        if ( empty( $rows ) ) {
+            eventosapp_bulk_expositores_add_result_item( $result, 'error', 0, '', 0, 0, 'No se encontraron líneas para procesar.' );
+            eventosapp_bulk_expositores_redirect_with_result( $result );
+        }
+
+        $seen_rows          = [];
+        $existing_by_client = [];
+
+        foreach ( $rows as $row ) {
+            $line_number = absint( $row['line'] );
+            $fields      = str_getcsv( $row['value'], ',', '"', '\\' );
+            $fields      = array_map( static function ( $value ) {
+                return trim( (string) $value );
+            }, $fields );
+
+            if ( count( $fields ) !== 3 ) {
+                eventosapp_bulk_expositores_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $fields[0] ?? '',
+                    $fields[1] ?? 0,
+                    $fields[2] ?? 0,
+                    'La línea debe contener exactamente 3 campos separados por coma.'
+                );
+                continue;
+            }
+
+            [ $name_raw, $client_raw, $event_raw ] = $fields;
+            $name       = sanitize_text_field( $name_raw );
+            $normalized = eventosapp_bulk_expositores_normalize_name( $name );
+
+            if ( $name === '' || $normalized === '' ) {
+                eventosapp_bulk_expositores_add_result_item( $result, 'error', $line_number, $name_raw, 0, 0, 'El nombre comercial del expositor es obligatorio.' );
+                continue;
+            }
+
+            if ( ! ctype_digit( $client_raw ) || absint( $client_raw ) < 1 ) {
+                eventosapp_bulk_expositores_add_result_item( $result, 'error', $line_number, $name, 0, $event_raw, 'El post ID del cliente debe ser un número entero válido.' );
+                continue;
+            }
+            if ( ! ctype_digit( $event_raw ) || absint( $event_raw ) < 1 ) {
+                eventosapp_bulk_expositores_add_result_item( $result, 'error', $line_number, $name, $client_raw, 0, 'El post ID del evento debe ser un número entero válido.' );
+                continue;
+            }
+
+            $client_id = absint( $client_raw );
+            $event_id  = absint( $event_raw );
+
+            if ( get_post_type( $client_id ) !== 'eventosapp_cliente' || in_array( get_post_status( $client_id ), [ 'trash', 'auto-draft' ], true ) ) {
+                eventosapp_bulk_expositores_add_result_item( $result, 'error', $line_number, $name, $client_id, $event_id, 'El post ID del cliente no corresponde a un cliente válido de EventosApp.' );
+                continue;
+            }
+            if ( get_post_type( $event_id ) !== 'eventosapp_event' || in_array( get_post_status( $event_id ), [ 'trash', 'auto-draft' ], true ) ) {
+                eventosapp_bulk_expositores_add_result_item( $result, 'error', $line_number, $name, $client_id, $event_id, 'El post ID del evento no corresponde a un evento válido de EventosApp.' );
+                continue;
+            }
+
+            $event_client_id = function_exists( 'eventosapp_expositor_get_event_cliente_id' )
+                ? eventosapp_expositor_get_event_cliente_id( $event_id )
+                : 0;
+
+            if ( ! $event_client_id ) {
+                eventosapp_bulk_expositores_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $name,
+                    $client_id,
+                    $event_id,
+                    'El evento no tiene activo un Cliente/Organizador válido y no admite expositores asociados.'
+                );
+                continue;
+            }
+            if ( $event_client_id !== $client_id ) {
+                eventosapp_bulk_expositores_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $name,
+                    $client_id,
+                    $event_id,
+                    'El cliente indicado no coincide con el Cliente/Organizador configurado en el evento.'
+                );
+                continue;
+            }
+
+            $row_key = $normalized . '|' . $client_id . '|' . $event_id;
+            if ( isset( $seen_rows[ $row_key ] ) ) {
+                eventosapp_bulk_expositores_add_result_item(
+                    $result,
+                    'warning',
+                    $line_number,
+                    $name,
+                    $client_id,
+                    $event_id,
+                    'Línea duplicada dentro del bloque. Ya apareció en la línea ' . $seen_rows[ $row_key ] . '.'
+                );
+                continue;
+            }
+            $seen_rows[ $row_key ] = $line_number;
+
+            if ( ! isset( $existing_by_client[ $client_id ] ) ) {
+                $existing_by_client[ $client_id ] = eventosapp_bulk_expositores_get_existing_map_for_client( $client_id );
+            }
+
+            $existing_ids = isset( $existing_by_client[ $client_id ][ $normalized ] )
+                ? array_values( array_unique( array_filter( array_map( 'absint', $existing_by_client[ $client_id ][ $normalized ] ) ) ) )
+                : [];
+
+            if ( count( $existing_ids ) > 1 ) {
+                eventosapp_bulk_expositores_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $name,
+                    $client_id,
+                    $event_id,
+                    'Existen varios expositores con este mismo nombre para el cliente. No se procesó la línea para evitar una asociación ambigua.'
+                );
+                continue;
+            }
+
+            if ( count( $existing_ids ) === 1 ) {
+                $expositor_id = absint( $existing_ids[0] );
+                $link_result  = eventosapp_bulk_expositores_attach_to_event( $event_id, $expositor_id );
+
+                if ( is_wp_error( $link_result ) ) {
+                    eventosapp_bulk_expositores_add_result_item(
+                        $result,
+                        'error',
+                        $line_number,
+                        $name,
+                        $client_id,
+                        $event_id,
+                        $link_result->get_error_message(),
+                        [ 'expositor_id' => $expositor_id ]
+                    );
+                    continue;
+                }
+
+                if ( ! empty( $link_result['already_linked'] ) ) {
+                    eventosapp_bulk_expositores_add_result_item(
+                        $result,
+                        'warning',
+                        $line_number,
+                        $name,
+                        $client_id,
+                        $event_id,
+                        'El expositor ya existía para este cliente y ya estaba asociado al evento. No se creó un duplicado.',
+                        [ 'expositor_id' => $expositor_id ]
+                    );
+                } else {
+                    eventosapp_bulk_expositores_add_result_item(
+                        $result,
+                        'linked',
+                        $line_number,
+                        $name,
+                        $client_id,
+                        $event_id,
+                        'El expositor ya existía para este cliente. No se creó un duplicado y se asoció al evento indicado.',
+                        [ 'expositor_id' => $expositor_id ]
+                    );
+                }
+                continue;
+            }
+
+            $expositor_id = wp_insert_post(
+                wp_slash( [
+                    'post_type'   => 'eventosapp_expositor',
+                    'post_status' => 'publish',
+                    'post_title'  => $name,
+                    'post_name'   => sanitize_title( $name ),
+                    'post_author' => get_current_user_id(),
+                ] ),
+                true
+            );
+
+            if ( is_wp_error( $expositor_id ) ) {
+                eventosapp_bulk_expositores_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $name,
+                    $client_id,
+                    $event_id,
+                    implode( ' ', $expositor_id->get_error_messages() )
+                );
+                continue;
+            }
+
+            $expositor_id = absint( $expositor_id );
+            update_post_meta( $expositor_id, '_expositor_nombre_empresa', $name );
+            update_post_meta( $expositor_id, '_expositor_cliente_id', $client_id );
+
+            $link_result = eventosapp_bulk_expositores_attach_to_event( $event_id, $expositor_id );
+            if ( is_wp_error( $link_result ) ) {
+                wp_delete_post( $expositor_id, true );
+                eventosapp_bulk_expositores_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $name,
+                    $client_id,
+                    $event_id,
+                    'No se pudo completar la asociación al evento y el expositor recién creado fue revertido. ' . $link_result->get_error_message()
+                );
+                continue;
+            }
+
+            if ( ! isset( $existing_by_client[ $client_id ][ $normalized ] ) ) {
+                $existing_by_client[ $client_id ][ $normalized ] = [];
+            }
+            $existing_by_client[ $client_id ][ $normalized ][] = $expositor_id;
+
+            $module_enabled = function_exists( 'eventosapp_event_expositores_enabled' )
+                ? eventosapp_event_expositores_enabled( $event_id )
+                : get_post_meta( $event_id, '_eventosapp_expositores_enabled', true ) === '1';
+
+            eventosapp_bulk_expositores_add_result_item(
+                $result,
+                'created',
+                $line_number,
+                $name,
+                $client_id,
+                $event_id,
+                $module_enabled
+                    ? 'Expositor creado y asociado correctamente al evento.'
+                    : 'Expositor creado y asociado correctamente. El módulo de expositores del evento continúa inactivo hasta que se habilite en la edición del evento.',
+                [ 'expositor_id' => $expositor_id ]
+            );
+        }
+
+        eventosapp_bulk_expositores_redirect_with_result( $result );
+    }
+}
+
+if ( ! function_exists( 'eventosapp_render_bulk_expositores_result' ) ) {
+    function eventosapp_render_bulk_expositores_result( array $result ) {
+        if ( empty( $result['summary'] ) || ! is_array( $result['summary'] ) ) {
+            return;
+        }
+
+        $summary = wp_parse_args( $result['summary'], [
+            'processed' => 0,
+            'created'   => 0,
+            'linked'    => 0,
+            'warnings'  => 0,
+            'errors'    => 0,
+        ] );
+        $notice_class = ! empty( $summary['errors'] ) ? 'notice-warning' : 'notice-success';
+        ?>
+        <div id="eventosapp-bulk-expositores-result" class="notice <?php echo esc_attr( $notice_class ); ?> is-dismissible" style="margin:16px 0 20px;">
+            <p>
+                <strong>Creación masiva finalizada.</strong>
+                Procesados: <?php echo absint( $summary['processed'] ); ?> ·
+                Creados: <?php echo absint( $summary['created'] ); ?> ·
+                Existentes asociados: <?php echo absint( $summary['linked'] ); ?> ·
+                Advertencias: <?php echo absint( $summary['warnings'] ); ?> ·
+                Errores: <?php echo absint( $summary['errors'] ); ?>.
+            </p>
+        </div>
+
+        <?php if ( ! empty( $result['items'] ) && is_array( $result['items'] ) ) : ?>
+            <div class="evapp-bulk-expositores-results">
+                <h2>Detalle del proceso</h2>
+                <div class="evapp-bulk-expositores-table-wrap">
+                    <table class="widefat striped">
+                        <thead>
+                            <tr>
+                                <th>Línea</th>
+                                <th>Estado</th>
+                                <th>Expositor</th>
+                                <th>Cliente</th>
+                                <th>Evento</th>
+                                <th>ID expositor</th>
+                                <th>Resultado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( $result['items'] as $item ) : ?>
+                                <?php
+                                $status = sanitize_key( $item['status'] ?? 'error' );
+                                $labels = [
+                                    'created' => 'Creado',
+                                    'linked'  => 'Asociado',
+                                    'warning' => 'Advertencia',
+                                    'error'   => 'Error',
+                                ];
+                                $client_id    = absint( $item['client_id'] ?? 0 );
+                                $event_id     = absint( $item['event_id'] ?? 0 );
+                                $expositor_id = absint( $item['expositor_id'] ?? 0 );
+                                ?>
+                                <tr>
+                                    <td><?php echo ! empty( $item['line'] ) ? absint( $item['line'] ) : '—'; ?></td>
+                                    <td><span class="evapp-bulk-expositor-status evapp-bulk-expositor-status-<?php echo esc_attr( $status ); ?>"><?php echo esc_html( $labels[ $status ] ?? ucfirst( $status ) ); ?></span></td>
+                                    <td><strong><?php echo esc_html( $item['name'] ?? '' ); ?></strong></td>
+                                    <td>
+                                        <?php if ( $client_id ) : ?>
+                                            <strong><?php echo esc_html( eventosapp_bulk_expositores_get_client_label( $client_id ) ?: 'Cliente no disponible' ); ?></strong><br>
+                                            <code><?php echo absint( $client_id ); ?></code>
+                                        <?php else : ?>—<?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ( $event_id ) : ?>
+                                            <strong><?php echo esc_html( eventosapp_bulk_expositores_get_event_label( $event_id ) ?: 'Evento no disponible' ); ?></strong><br>
+                                            <code><?php echo absint( $event_id ); ?></code>
+                                        <?php else : ?>—<?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ( $expositor_id ) : ?>
+                                            <a href="<?php echo esc_url( get_edit_post_link( $expositor_id ) ); ?>"><code><?php echo absint( $expositor_id ); ?></code></a>
+                                        <?php else : ?>—<?php endif; ?>
+                                    </td>
+                                    <td><?php echo esc_html( $item['message'] ?? '' ); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        <?php endif;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_render_bulk_expositores_page' ) ) {
+    function eventosapp_render_bulk_expositores_page() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'No tienes permisos para acceder a esta página.', '', [ 'response' => 403 ] );
+        }
+
+        $result = eventosapp_bulk_expositores_pull_result();
+        ?>
+        <div class="wrap">
+            <h1>Creación masiva de expositores</h1>
+            <p>Crea expositores del CPT <code>eventosapp_expositor</code> y asígnalos al cliente y al evento indicados, usando una línea por expositor.</p>
+
+            <style>
+                .evapp-bulk-expositores-card{max-width:1100px;background:#fff;border:1px solid #c3c4c7;border-radius:10px;padding:22px;margin:18px 0;box-shadow:0 1px 1px rgba(0,0,0,.04)}
+                .evapp-bulk-expositores-card textarea{width:100%;min-height:300px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.55;resize:vertical}
+                .evapp-bulk-expositores-format{padding:12px 14px;background:#f6f7f7;border-left:4px solid #3782c4;margin:14px 0}
+                .evapp-bulk-expositores-format code{word-break:break-word}
+                .evapp-bulk-expositores-info{padding:12px 14px;background:#f0f6fc;border-left:4px solid #2271b1;margin:14px 0;max-width:1072px}
+                .evapp-bulk-expositores-table-wrap{overflow:auto;max-width:1400px;margin-bottom:24px}
+                .evapp-bulk-expositores-results{max-width:1400px;margin:18px 0 24px}
+                .evapp-bulk-expositores-results table{min-width:1100px}
+                .evapp-bulk-expositor-status{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap}
+                .evapp-bulk-expositor-status-created,.evapp-bulk-expositor-status-linked{background:#edfaef;color:#116329}
+                .evapp-bulk-expositor-status-warning{background:#fff8e5;color:#8a4b00}
+                .evapp-bulk-expositor-status-error{background:#fcf0f1;color:#8a2424}
+                @media(max-width:782px){.evapp-bulk-expositores-card{padding:16px}}
+            </style>
+
+            <?php eventosapp_render_bulk_expositores_result( $result ); ?>
+
+            <div class="evapp-bulk-expositores-card">
+                <h2>Agregar expositores</h2>
+                <p>Escribe exactamente tres valores separados por coma. El cliente indicado debe ser el mismo Cliente/Organizador configurado en el evento.</p>
+
+                <div class="evapp-bulk-expositores-format">
+                    <strong>Formato:</strong><br>
+                    <code>Nombre comercial del expositor,postid eventosapp_cliente,postid eventosapp_event</code><br><br>
+                    <strong>Ejemplo:</strong><br>
+                    <code>Masglo,24750,42503</code>
+                </div>
+
+                <div class="evapp-bulk-expositores-info">
+                    <strong>Comportamiento del proceso:</strong> cada expositor nuevo se publica, se vincula al cliente mediante <code>_expositor_cliente_id</code> y se agrega al listado <code>_eventosapp_event_expositores</code> del evento. Si ya existe un expositor con el mismo nombre para ese cliente, no se duplica; se asocia al evento cuando haga falta. La importación no modifica el estado activo/inactivo del módulo de expositores del evento.
+                </div>
+
+                <p class="description">Cuando el nombre comercial contenga una coma, escríbelo entre comillas dobles. Ejemplo: <code>"Marca, S.A.S.",24750,42503</code>.</p>
+
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <input type="hidden" name="action" value="eventosapp_bulk_create_expositores">
+                    <?php wp_nonce_field( 'eventosapp_bulk_create_expositores', 'eventosapp_bulk_create_expositores_nonce' ); ?>
+                    <label for="eventosapp_bulk_create_expositores_data" class="screen-reader-text">Expositores para crear</label>
+                    <textarea id="eventosapp_bulk_create_expositores_data" name="eventosapp_bulk_create_expositores_data" spellcheck="false" placeholder="Masglo,24750,42503" required></textarea>
+                    <?php submit_button( 'Crear y asociar expositores', 'primary', 'submit', false ); ?>
+                </form>
+            </div>
+        </div>
+        <?php
+    }
+}
+
 
 add_action( 'admin_head', function () {
     $screen = get_current_screen();
