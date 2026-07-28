@@ -1834,6 +1834,7 @@ if ( ! function_exists('eventosapp_get_admin_menu_groups') ) {
                 ['slug' => 'edit.php?post_type=eventosapp_preset'],
                 ['slug' => 'edit.php?post_type=eventosapp_venue'],
                 ['slug' => 'edit.php?post_type=eventosapp_expositor'],
+                ['slug' => 'eventosapp_expositores_masivos'],
                 ['slug' => 'edit.php?post_type=eventosapp_asistente'],
                 ['slug' => 'edit.php?post_type=eventosapp_galeria'],
             ],
