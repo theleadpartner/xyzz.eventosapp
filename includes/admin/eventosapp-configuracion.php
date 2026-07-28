@@ -392,9 +392,594 @@ function eventosapp_render_pages_field($args){
     }
 }
 
-function eventosapp_render_configuracion_page(){ ?>
+/**
+ * Gestión masiva de usuarios desde la pantalla de Configuración.
+ *
+ * La creación usa wp_insert_user() directamente, por lo que EventosApp no
+ * invoca wp_new_user_notification() ni envía credenciales por correo.
+ * La eliminación es permanente y se procesa únicamente para administradores.
+ */
+if ( ! function_exists('eventosapp_bulk_users_result_transient_key') ) {
+    function eventosapp_bulk_users_result_transient_key($user_id, $token) {
+        return 'eventosapp_bulk_users_' . absint($user_id) . '_' . sanitize_key((string) $token);
+    }
+}
+
+if ( ! function_exists('eventosapp_bulk_users_store_result') ) {
+    function eventosapp_bulk_users_store_result(array $result) {
+        $user_id = get_current_user_id();
+        $token   = strtolower(wp_generate_password(16, false, false));
+        $key     = eventosapp_bulk_users_result_transient_key($user_id, $token);
+
+        set_transient($key, $result, 10 * MINUTE_IN_SECONDS);
+
+        return $token;
+    }
+}
+
+if ( ! function_exists('eventosapp_bulk_users_pull_result') ) {
+    function eventosapp_bulk_users_pull_result() {
+        if (empty($_GET['eventosapp_bulk_users_result'])) {
+            return [];
+        }
+
+        $token = sanitize_key(wp_unslash($_GET['eventosapp_bulk_users_result']));
+        if ($token === '') {
+            return [];
+        }
+
+        $key    = eventosapp_bulk_users_result_transient_key(get_current_user_id(), $token);
+        $result = get_transient($key);
+        delete_transient($key);
+
+        return is_array($result) ? $result : [];
+    }
+}
+
+if ( ! function_exists('eventosapp_bulk_users_redirect_with_result') ) {
+    function eventosapp_bulk_users_redirect_with_result(array $result) {
+        $token = eventosapp_bulk_users_store_result($result);
+        $url   = add_query_arg(
+            [
+                'page'                         => 'eventosapp_configuracion',
+                'eventosapp_bulk_users_result' => $token,
+            ],
+            admin_url('admin.php')
+        );
+
+        wp_safe_redirect($url . '#eventosapp-bulk-users');
+        exit;
+    }
+}
+
+if ( ! function_exists('eventosapp_bulk_users_parse_lines') ) {
+    function eventosapp_bulk_users_parse_lines($raw_text) {
+        if (is_array($raw_text) || is_object($raw_text)) {
+            return [];
+        }
+
+        $raw_text = wp_unslash((string) $raw_text);
+        $raw_text = str_replace(["\r\n", "\r"], "\n", $raw_text);
+        $rows     = [];
+
+        foreach (explode("\n", $raw_text) as $index => $line) {
+            if ($index === 0) {
+                $line = preg_replace('/^\xEF\xBB\xBF/', '', $line);
+            }
+
+            $line = trim((string) $line);
+            if ($line === '') {
+                continue;
+            }
+
+            $rows[] = [
+                'line'  => $index + 1,
+                'value' => $line,
+            ];
+        }
+
+        return $rows;
+    }
+}
+
+if ( ! function_exists('eventosapp_bulk_users_available_roles') ) {
+    function eventosapp_bulk_users_available_roles() {
+        if (!function_exists('get_editable_roles')) {
+            require_once ABSPATH . 'wp-admin/includes/user.php';
+        }
+
+        $editable_roles = get_editable_roles();
+        return is_array($editable_roles) ? $editable_roles : [];
+    }
+}
+
+if ( ! function_exists('eventosapp_bulk_users_base_result') ) {
+    function eventosapp_bulk_users_base_result($action, $processed) {
+        return [
+            'action'  => sanitize_key((string) $action),
+            'summary' => [
+                'processed' => absint($processed),
+                'created'   => 0,
+                'deleted'   => 0,
+                'warnings'  => 0,
+                'errors'    => 0,
+            ],
+            'items'   => [],
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_bulk_users_add_result_item') ) {
+    function eventosapp_bulk_users_add_result_item(array &$result, $status, $line, $username, $message, array $extra = []) {
+        $status = sanitize_key((string) $status);
+        $item   = array_merge(
+            [
+                'status'   => $status,
+                'line'     => absint($line),
+                'username' => sanitize_user((string) $username, true),
+                'message'  => sanitize_text_field((string) $message),
+            ],
+            $extra
+        );
+
+        $result['items'][] = $item;
+
+        if ($status === 'created') {
+            $result['summary']['created']++;
+        } elseif ($status === 'deleted') {
+            $result['summary']['deleted']++;
+        } elseif ($status === 'warning') {
+            $result['summary']['warnings']++;
+        } elseif ($status === 'error') {
+            $result['summary']['errors']++;
+        }
+    }
+}
+
+add_action('admin_post_eventosapp_bulk_create_users', 'eventosapp_handle_bulk_create_users');
+if ( ! function_exists('eventosapp_handle_bulk_create_users') ) {
+    function eventosapp_handle_bulk_create_users() {
+        if (!current_user_can('manage_options') || !current_user_can('create_users')) {
+            wp_die('No tienes permisos para crear usuarios.', '', ['response' => 403]);
+        }
+
+        check_admin_referer('eventosapp_bulk_create_users', 'eventosapp_bulk_create_users_nonce');
+
+        $rows   = eventosapp_bulk_users_parse_lines($_POST['eventosapp_bulk_create_users_data'] ?? '');
+        $result = eventosapp_bulk_users_base_result('create', count($rows));
+        $roles  = eventosapp_bulk_users_available_roles();
+
+        if (empty($rows)) {
+            eventosapp_bulk_users_add_result_item($result, 'error', 0, '', 'No se encontraron líneas para procesar.');
+            eventosapp_bulk_users_redirect_with_result($result);
+        }
+
+        $seen_usernames = [];
+        $seen_emails    = [];
+
+        foreach ($rows as $row) {
+            $line_number = absint($row['line']);
+            $fields      = str_getcsv($row['value'], ',', '"', '\\');
+            $fields      = array_map(static function($value) {
+                return trim((string) $value);
+            }, $fields);
+
+            if (count($fields) !== 6) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $fields[0] ?? '',
+                    'La línea debe contener exactamente 6 campos separados por coma.'
+                );
+                continue;
+            }
+
+            [$username_raw, $first_name, $last_name, $password, $email_raw, $role_raw] = $fields;
+
+            $username = sanitize_user($username_raw, true);
+            $email    = sanitize_email($email_raw);
+            $role     = sanitize_key($role_raw);
+
+            if ($username_raw === '' || $username === '' || $username !== $username_raw || !validate_username($username)) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $username_raw,
+                    'El nombre de usuario es inválido o contiene caracteres no permitidos.'
+                );
+                continue;
+            }
+
+            if ($password === '') {
+                eventosapp_bulk_users_add_result_item($result, 'error', $line_number, $username, 'La contraseña no puede estar vacía.');
+                continue;
+            }
+
+            if ($email_raw === '' || $email === '' || !is_email($email)) {
+                eventosapp_bulk_users_add_result_item($result, 'error', $line_number, $username, 'El correo electrónico no es válido.');
+                continue;
+            }
+
+            if ($role === '' || !isset($roles[$role])) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $username,
+                    'El perfil indicado no existe o no está disponible para asignación.',
+                    ['email' => $email, 'role' => $role]
+                );
+                continue;
+            }
+
+            $username_key = strtolower($username);
+            $email_key    = strtolower($email);
+
+            if (isset($seen_usernames[$username_key])) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'warning',
+                    $line_number,
+                    $username,
+                    'Usuario duplicado dentro del bloque. Ya apareció en la línea ' . $seen_usernames[$username_key] . '.',
+                    ['email' => $email, 'role' => $role]
+                );
+                continue;
+            }
+            $seen_usernames[$username_key] = $line_number;
+
+            if (isset($seen_emails[$email_key])) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'warning',
+                    $line_number,
+                    $username,
+                    'Correo duplicado dentro del bloque. Ya apareció en la línea ' . $seen_emails[$email_key] . '.',
+                    ['email' => $email, 'role' => $role]
+                );
+                continue;
+            }
+            $seen_emails[$email_key] = $line_number;
+
+            $existing_username_id = username_exists($username);
+            if ($existing_username_id) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'warning',
+                    $line_number,
+                    $username,
+                    'El nombre de usuario ya existe en WordPress.',
+                    ['email' => $email, 'role' => $role, 'user_id' => absint($existing_username_id)]
+                );
+                continue;
+            }
+
+            $existing_email_id = email_exists($email);
+            if ($existing_email_id) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'warning',
+                    $line_number,
+                    $username,
+                    'El correo electrónico ya pertenece a otro usuario.',
+                    ['email' => $email, 'role' => $role, 'user_id' => absint($existing_email_id)]
+                );
+                continue;
+            }
+
+            $display_name = trim($first_name . ' ' . $last_name);
+            $user_id      = wp_insert_user([
+                'user_login'   => $username,
+                'user_pass'    => $password,
+                'user_email'   => $email,
+                'first_name'   => sanitize_text_field($first_name),
+                'last_name'    => sanitize_text_field($last_name),
+                'display_name' => $display_name !== '' ? sanitize_text_field($display_name) : $username,
+                'role'         => $role,
+            ]);
+
+            if (is_wp_error($user_id)) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $username,
+                    implode(' ', $user_id->get_error_messages()),
+                    ['email' => $email, 'role' => $role]
+                );
+                continue;
+            }
+
+            eventosapp_bulk_users_add_result_item(
+                $result,
+                'created',
+                $line_number,
+                $username,
+                'Usuario creado correctamente. No se envió notificación.',
+                [
+                    'email'   => $email,
+                    'role'    => $role,
+                    'user_id' => absint($user_id),
+                ]
+            );
+        }
+
+        eventosapp_bulk_users_redirect_with_result($result);
+    }
+}
+
+add_action('admin_post_eventosapp_bulk_delete_users', 'eventosapp_handle_bulk_delete_users');
+if ( ! function_exists('eventosapp_handle_bulk_delete_users') ) {
+    function eventosapp_handle_bulk_delete_users() {
+        if (!current_user_can('manage_options') || !current_user_can('delete_users')) {
+            wp_die('No tienes permisos para eliminar usuarios.', '', ['response' => 403]);
+        }
+
+        check_admin_referer('eventosapp_bulk_delete_users', 'eventosapp_bulk_delete_users_nonce');
+
+        $rows   = eventosapp_bulk_users_parse_lines($_POST['eventosapp_bulk_delete_users_data'] ?? '');
+        $result = eventosapp_bulk_users_base_result('delete', count($rows));
+
+        if (empty($_POST['eventosapp_bulk_delete_confirm'])) {
+            eventosapp_bulk_users_add_result_item($result, 'error', 0, '', 'Debes confirmar que entiendes que la eliminación es permanente.');
+            eventosapp_bulk_users_redirect_with_result($result);
+        }
+
+        if (empty($rows)) {
+            eventosapp_bulk_users_add_result_item($result, 'error', 0, '', 'No se encontraron usuarios para eliminar.');
+            eventosapp_bulk_users_redirect_with_result($result);
+        }
+
+        if (!function_exists('wp_delete_user')) {
+            require_once ABSPATH . 'wp-admin/includes/user.php';
+        }
+        if (is_multisite()) {
+            eventosapp_bulk_users_add_result_item(
+                $result,
+                'error',
+                0,
+                '',
+                'La eliminación permanente está bloqueada en instalaciones Multisite para evitar borrar contenido de otros sitios de la red.'
+            );
+            eventosapp_bulk_users_redirect_with_result($result);
+        }
+
+        $seen_usernames = [];
+        $current_user_id = get_current_user_id();
+
+        foreach ($rows as $row) {
+            $line_number = absint($row['line']);
+            $username_raw = trim((string) $row['value']);
+            $username     = sanitize_user($username_raw, true);
+
+            if ($username_raw === '' || $username === '' || $username !== $username_raw || !validate_username($username)) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $username_raw,
+                    'El nombre de usuario es inválido o contiene caracteres no permitidos.'
+                );
+                continue;
+            }
+
+            $username_key = strtolower($username);
+            if (isset($seen_usernames[$username_key])) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'warning',
+                    $line_number,
+                    $username,
+                    'Usuario duplicado dentro del bloque. Ya apareció en la línea ' . $seen_usernames[$username_key] . '.'
+                );
+                continue;
+            }
+            $seen_usernames[$username_key] = $line_number;
+
+            $user = get_user_by('login', $username);
+            if (!$user instanceof WP_User) {
+                eventosapp_bulk_users_add_result_item($result, 'warning', $line_number, $username, 'El usuario no existe.');
+                continue;
+            }
+
+            if ((int) $user->ID === (int) $current_user_id) {
+                eventosapp_bulk_users_add_result_item($result, 'warning', $line_number, $username, 'No puedes eliminar tu propio usuario desde este proceso.');
+                continue;
+            }
+
+            $deleted = wp_delete_user($user->ID, $current_user_id);
+
+            if (!$deleted) {
+                eventosapp_bulk_users_add_result_item(
+                    $result,
+                    'error',
+                    $line_number,
+                    $username,
+                    'WordPress no pudo eliminar permanentemente el usuario.',
+                    ['user_id' => absint($user->ID)]
+                );
+                continue;
+            }
+
+            eventosapp_bulk_users_add_result_item(
+                $result,
+                'deleted',
+                $line_number,
+                $username,
+                'Usuario eliminado permanentemente.',
+                ['user_id' => absint($user->ID), 'email' => sanitize_email($user->user_email)]
+            );
+        }
+
+        eventosapp_bulk_users_redirect_with_result($result);
+    }
+}
+
+if ( ! function_exists('eventosapp_render_bulk_users_result') ) {
+    function eventosapp_render_bulk_users_result(array $result) {
+        if (empty($result['summary']) || !is_array($result['summary'])) {
+            return;
+        }
+
+        $summary = wp_parse_args($result['summary'], [
+            'processed' => 0,
+            'created'   => 0,
+            'deleted'   => 0,
+            'warnings'  => 0,
+            'errors'    => 0,
+        ]);
+        $action_label = ($result['action'] ?? '') === 'delete' ? 'Eliminación masiva' : 'Creación masiva';
+        $notice_class = !empty($summary['errors']) ? 'notice-warning' : 'notice-success';
+        ?>
+        <div class="notice <?php echo esc_attr($notice_class); ?> is-dismissible" style="margin:16px 0 20px;">
+            <p>
+                <strong><?php echo esc_html($action_label); ?> finalizada.</strong>
+                Procesados: <?php echo absint($summary['processed']); ?> ·
+                Creados: <?php echo absint($summary['created']); ?> ·
+                Eliminados: <?php echo absint($summary['deleted']); ?> ·
+                Advertencias: <?php echo absint($summary['warnings']); ?> ·
+                Errores: <?php echo absint($summary['errors']); ?>.
+            </p>
+        </div>
+
+        <?php if (!empty($result['items']) && is_array($result['items'])): ?>
+            <div class="evapp-bulk-users-results">
+                <h3>Detalle del proceso</h3>
+                <div class="evapp-bulk-users-table-wrap">
+                    <table class="widefat striped">
+                        <thead>
+                            <tr>
+                                <th>Línea</th>
+                                <th>Estado</th>
+                                <th>Usuario</th>
+                                <th>Correo</th>
+                                <th>Perfil</th>
+                                <th>Resultado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($result['items'] as $item): ?>
+                                <?php
+                                $status = sanitize_key($item['status'] ?? 'error');
+                                $labels = [
+                                    'created' => 'Creado',
+                                    'deleted' => 'Eliminado',
+                                    'warning' => 'Advertencia',
+                                    'error'   => 'Error',
+                                ];
+                                ?>
+                                <tr>
+                                    <td><?php echo !empty($item['line']) ? absint($item['line']) : '—'; ?></td>
+                                    <td><span class="evapp-bulk-status evapp-bulk-status-<?php echo esc_attr($status); ?>"><?php echo esc_html($labels[$status] ?? ucfirst($status)); ?></span></td>
+                                    <td><code><?php echo esc_html($item['username'] ?? ''); ?></code></td>
+                                    <td><?php echo esc_html($item['email'] ?? ''); ?></td>
+                                    <td><code><?php echo esc_html($item['role'] ?? ''); ?></code></td>
+                                    <td><?php echo esc_html($item['message'] ?? ''); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        <?php endif;
+    }
+}
+
+if ( ! function_exists('eventosapp_render_bulk_users_section') ) {
+    function eventosapp_render_bulk_users_section() {
+        $roles = eventosapp_bulk_users_available_roles();
+        ?>
+        <hr id="eventosapp-bulk-users" style="margin:32px 0 24px;">
+        <h2>Gestión masiva de usuarios</h2>
+        <p>Crea o elimina usuarios de WordPress desde bloques de texto. Cada línea se procesa de forma independiente y al terminar se muestra el detalle completo.</p>
+
+        <style>
+            .evapp-bulk-users-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px;max-width:1280px;margin-top:18px}
+            .evapp-bulk-users-card{background:#fff;border:1px solid #c3c4c7;border-radius:8px;padding:20px;box-shadow:0 1px 1px rgba(0,0,0,.04)}
+            .evapp-bulk-users-card h3{margin:0 0 10px;font-size:18px}
+            .evapp-bulk-users-card textarea{width:100%;min-height:230px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.55;resize:vertical}
+            .evapp-bulk-users-format{padding:10px 12px;background:#f6f7f7;border-left:4px solid #3782c4;margin:12px 0}
+            .evapp-bulk-users-format code{word-break:break-all}
+            .evapp-bulk-users-warning{padding:10px 12px;background:#fcf0f1;border-left:4px solid #d63638;color:#691c1c;margin:12px 0}
+            .evapp-bulk-users-role-list{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px}
+            .evapp-bulk-users-role-list code{background:#f0f0f1;border-radius:4px;padding:3px 6px}
+            .evapp-bulk-users-table-wrap{overflow:auto;max-width:1280px;margin-bottom:24px}
+            .evapp-bulk-users-results{max-width:1280px;margin:16px 0 24px}
+            .evapp-bulk-users-results table{min-width:850px}
+            .evapp-bulk-status{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap}
+            .evapp-bulk-status-created,.evapp-bulk-status-deleted{background:#edfaef;color:#116329}
+            .evapp-bulk-status-warning{background:#fff8e5;color:#8a4b00}
+            .evapp-bulk-status-error{background:#fcf0f1;color:#8a2424}
+            @media(max-width:782px){.evapp-bulk-users-grid{grid-template-columns:1fr}.evapp-bulk-users-card{padding:16px}}
+        </style>
+
+        <div class="evapp-bulk-users-grid">
+            <div class="evapp-bulk-users-card">
+                <h3>Crear usuarios masivamente</h3>
+                <p>Agrega un usuario por línea con seis valores separados por coma.</p>
+                <div class="evapp-bulk-users-format">
+                    <strong>Formato:</strong><br>
+                    <code>usuario,primernombre,apellidos,contraseña,correo,perfil</code><br><br>
+                    <strong>Ejemplo:</strong><br>
+                    <code>mariacamilaestit,maria,estit,-123456-,tickets@eventosapp.com,staff</code>
+                </div>
+                <p><strong>Perfiles disponibles:</strong></p>
+                <div class="evapp-bulk-users-role-list">
+                    <?php foreach ($roles as $role_slug => $role_data): ?>
+                        <code><?php echo esc_html($role_slug); ?></code>
+                    <?php endforeach; ?>
+                </div>
+                <p class="description">No se evalúa la fortaleza de la contraseña y EventosApp no envía notificaciones de creación.</p>
+
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                    <input type="hidden" name="action" value="eventosapp_bulk_create_users">
+                    <?php wp_nonce_field('eventosapp_bulk_create_users', 'eventosapp_bulk_create_users_nonce'); ?>
+                    <label for="eventosapp_bulk_create_users_data" class="screen-reader-text">Usuarios para crear</label>
+                    <textarea id="eventosapp_bulk_create_users_data" name="eventosapp_bulk_create_users_data" spellcheck="false" placeholder="mariacamilaestit,maria,estit,-123456-,tickets@eventosapp.com,staff" required></textarea>
+                    <?php submit_button('Crear usuarios', 'primary', 'submit', false); ?>
+                </form>
+            </div>
+
+            <div class="evapp-bulk-users-card">
+                <h3>Eliminar usuarios masivamente</h3>
+                <p>Escribe únicamente el nombre de usuario, uno por cada línea.</p>
+                <div class="evapp-bulk-users-format">
+                    <strong>Ejemplo:</strong><br>
+                    <code>mariacamilaestit</code><br>
+                    <code>juanoperaciones</code>
+                </div>
+                <div class="evapp-bulk-users-warning">
+                    <strong>Eliminación permanente:</strong> se borrará el usuario y sus metadatos. El contenido que tenga asignado se reasignará al administrador que ejecuta el proceso. Esta acción no usa papelera y no se puede deshacer.
+                </div>
+
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" onsubmit="return window.confirm('¿Confirmas la eliminación permanente de todos los usuarios indicados? Esta acción no se puede deshacer.');">
+                    <input type="hidden" name="action" value="eventosapp_bulk_delete_users">
+                    <?php wp_nonce_field('eventosapp_bulk_delete_users', 'eventosapp_bulk_delete_users_nonce'); ?>
+                    <label for="eventosapp_bulk_delete_users_data" class="screen-reader-text">Usuarios para eliminar</label>
+                    <textarea id="eventosapp_bulk_delete_users_data" name="eventosapp_bulk_delete_users_data" spellcheck="false" placeholder="mariacamilaestit&#10;juanoperaciones" required></textarea>
+                    <p>
+                        <label>
+                            <input type="checkbox" name="eventosapp_bulk_delete_confirm" value="1" required>
+                            Entiendo que los usuarios se eliminarán permanentemente.
+                        </label>
+                    </p>
+                    <?php submit_button('Eliminar usuarios permanentemente', 'delete', 'submit', false); ?>
+                </form>
+            </div>
+        </div>
+        <?php
+    }
+}
+
+
+function eventosapp_render_configuracion_page(){
+    $bulk_users_result = eventosapp_bulk_users_pull_result();
+    ?>
 <div class="wrap">
         <h1>Configuración de EventosApp</h1>
+        <?php eventosapp_render_bulk_users_result($bulk_users_result); ?>
         <form method="post" action="options.php">
             <?php
             settings_fields('eventosapp_pages_group');
@@ -425,6 +1010,7 @@ function eventosapp_render_configuracion_page(){ ?>
             <li><code>[eventosapp_expositor_gestion]</code> — Gestión/autorización de expositores por organizador.</li>
             <li><code>[eventosapp_company_checkin_monitor]</code> — Monitor dinámico de empresas y asistentes con check-in.</li>
         </ul>
+        <?php eventosapp_render_bulk_users_section(); ?>
     </div>
 <?php }
 // ==============================
