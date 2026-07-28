@@ -1404,6 +1404,13 @@ if ( ! function_exists('eventosapp_require_first_existing_file') ) {
     }
 }
 
+// Cola central de tareas: se carga antes de los módulos que registran procesos
+// masivos o programados para que todos puedan compartir el mismo coordinador.
+eventosapp_require_first_existing_file([
+    'includes/functions/eventosapp-task-queue-core.php',
+    'eventosapp-task-queue-core.php',
+]);
+
 require_once plugin_dir_path(__FILE__) . 'eventosapp-tickets.php';
 eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-virtual-landing-metabox.php',
@@ -1561,6 +1568,17 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-health-monit
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-webhook-conditionals.php';
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-ticket-variants.php'; // NUEVO: variantes de ticket por reglas
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-networking-search.php';
+
+// Integraciones y administración de la cola central. Se cargan después de los
+// ejecutores existentes para reutilizar sus funciones públicas sin duplicarlas.
+eventosapp_require_first_existing_file([
+    'includes/functions/eventosapp-task-queue-integrations.php',
+    'eventosapp-task-queue-integrations.php',
+]);
+eventosapp_require_first_existing_file([
+    'includes/admin/eventosapp-task-queue-admin.php',
+    'eventosapp-task-queue-admin.php',
+]);
 
 // NUEVO: Sistema de Doble Autenticación
 require_once plugin_dir_path(__FILE__) . 'includes/functions/eventosapp-doble-auth.php';
@@ -1853,6 +1871,9 @@ if ( ! function_exists('eventosapp_get_admin_menu_groups') ) {
                 ['label' => 'Herramientas'],
                 ['label' => 'Edición Masiva'],
                 ['label' => 'Salud y Rendimiento'],
+            ],
+            'Procesamiento y cola' => [
+                ['label' => 'Cola y Tareas'],
             ],
             'Email' => [
                 ['label' => 'Email Ticket Masivo'],
