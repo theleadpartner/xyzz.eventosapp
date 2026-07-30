@@ -14,7 +14,7 @@
 if ( ! defined('ABSPATH') ) exit;
 
 if ( ! defined('EVENTOSAPP_TASK_QUEUE_VERSION') ) {
-    define('EVENTOSAPP_TASK_QUEUE_VERSION', '2026.07.27.3');
+    define('EVENTOSAPP_TASK_QUEUE_VERSION', '2026.07.30.1');
 }
 if ( ! defined('EVENTOSAPP_TASK_QUEUE_DB_VERSION') ) {
     define('EVENTOSAPP_TASK_QUEUE_DB_VERSION', '2026.07.27.1');
@@ -60,6 +60,7 @@ function eventosapp_task_queue_config() {
         'max_consecutive_errors'  => 3,
         'log_retention_days'      => 45,
         'task_retention_days'     => 90,
+        'automatic_terminal_cleanup' => false,
         'default_batch_size'      => 10,
         'max_batch_size'          => 50,
     ];
@@ -80,6 +81,7 @@ function eventosapp_task_queue_config() {
     $config['max_consecutive_errors']  = min(10, max(1, absint($config['max_consecutive_errors'])));
     $config['log_retention_days']      = min(365, max(7, absint($config['log_retention_days'])));
     $config['task_retention_days']     = min(730, max(7, absint($config['task_retention_days'])));
+    $config['automatic_terminal_cleanup'] = ! empty($config['automatic_terminal_cleanup']);
     $config['default_batch_size']      = min(100, max(1, absint($config['default_batch_size'])));
     $config['max_batch_size']          = min(250, max($config['default_batch_size'], absint($config['max_batch_size'])));
 
@@ -259,11 +261,26 @@ function eventosapp_task_queue_statuses() {
         'completed' => 'Finalizada',
         'expired'   => 'Programación vencida',
         'failed'    => 'Error',
+        'archived'  => 'Archivada',
     ];
 }
 
 function eventosapp_task_queue_terminal_statuses() {
+    return ['cancelled', 'completed', 'expired', 'failed', 'archived'];
+}
+
+function eventosapp_task_queue_archiveable_statuses() {
     return ['cancelled', 'completed', 'expired', 'failed'];
+}
+
+function eventosapp_task_queue_archived_from_status($task) {
+    $task = is_array($task) ? $task : [];
+    if ( ($task['status'] ?? '') !== 'archived' ) return '';
+
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+    $archive = is_array($payload['queue_archive'] ?? null) ? $payload['queue_archive'] : [];
+    $from_status = sanitize_key((string)($archive['from_status'] ?? ''));
+    return in_array($from_status, eventosapp_task_queue_archiveable_statuses(), true) ? $from_status : '';
 }
 
 function eventosapp_task_queue_normalize_status($status, $fallback = 'queued') {
@@ -961,6 +978,9 @@ function eventosapp_task_queue_list($args = []) {
     if ( $args['status'] !== '' ) {
         $where[] = 'status = %s';
         $params[] = eventosapp_task_queue_normalize_status($args['status']);
+    } elseif ( $args['status_scope'] === 'unarchived' ) {
+        $where[] = 'status <> %s';
+        $params[] = 'archived';
     } elseif ( $args['status_scope'] === 'open' ) {
         $terminal = eventosapp_task_queue_terminal_statuses();
         $where[] = 'status NOT IN (' . implode(',', array_fill(0, count($terminal), '%s')) . ')';
@@ -1088,6 +1108,54 @@ function eventosapp_task_queue_cancel($task_id, $reason = '') {
     eventosapp_task_queue_send_status_email(eventosapp_task_queue_get($task_id), 'cancelled');
     do_action('eventosapp_task_queue_cancelled', $task_id, eventosapp_task_queue_get($task_id));
     return true;
+}
+
+
+/**
+ * Archiva manualmente un registro terminal sin eliminar sus resultados, logs
+ * ni métricas. La tarea deja de aparecer en la vista operativa predeterminada,
+ * pero continúa disponible mediante el filtro Archivada o Todas las tareas.
+ */
+function eventosapp_task_queue_archive($task_id) {
+    $task_id = absint($task_id);
+    $task = eventosapp_task_queue_get($task_id);
+    if ( ! $task || ! in_array($task['status'], eventosapp_task_queue_archiveable_statuses(), true) ) return false;
+
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+    $payload['queue_archive'] = [
+        'from_status' => $task['status'],
+        'archived_at' => current_time('mysql', true),
+        'archived_by' => get_current_user_id(),
+    ];
+
+    $updated = eventosapp_task_queue_update($task_id, [
+        'status'       => 'archived',
+        'next_run_at'  => null,
+        'heartbeat_at' => null,
+        'payload'      => $payload,
+    ]);
+    if ( ! $updated ) return false;
+
+    eventosapp_task_queue_add_log($task_id, 'info', 'Tarea archivada manualmente.', [
+        'from_status' => $task['status'],
+        'archived_by' => get_current_user_id(),
+    ]);
+    do_action('eventosapp_task_queue_archived', $task_id, eventosapp_task_queue_get($task_id), $task['status']);
+    return true;
+}
+
+function eventosapp_task_queue_archive_many($task_ids) {
+    $task_ids = is_array($task_ids)
+        ? array_values(array_filter(array_unique(array_map('absint', $task_ids))))
+        : [];
+    if ( empty($task_ids) ) return ['archived'=>0, 'skipped'=>0, 'requested'=>0];
+
+    $result = ['archived'=>0, 'skipped'=>0, 'requested'=>count($task_ids)];
+    foreach ( $task_ids as $task_id ) {
+        if ( eventosapp_task_queue_archive($task_id) ) $result['archived']++;
+        else $result['skipped']++;
+    }
+    return $result;
 }
 
 function eventosapp_task_queue_reschedule($task_id, $datetime, $context = []) {
@@ -1860,18 +1928,34 @@ function eventosapp_task_queue_send_status_email($task, $kind, $milestone = 0) {
 }
 
 /**
- * Limpieza automática.
+ * Mantenimiento automático conservador.
+ *
+ * Por defecto nunca elimina tareas terminales ni sus logs. Los registros solo
+ * salen de la base de datos mediante una acción administrativa explícita. Se
+ * limpian únicamente logs huérfanos y eliminaciones manuales que quedaron a la
+ * espera de que un worker liberara su lock.
+ *
+ * La limpieza histórica puede reactivarse expresamente con el filtro de
+ * configuración `automatic_terminal_cleanup`, manteniendo compatibilidad con
+ * instalaciones que realmente necesiten una retención automática.
  */
 function eventosapp_task_queue_cleanup() {
     global $wpdb;
+
+    eventosapp_task_queue_process_pending_deletions(500);
+
     $config = eventosapp_task_queue_config();
     $tasks = eventosapp_task_queue_table('tasks');
     $logs = eventosapp_task_queue_table('logs');
-    $log_before = gmdate('Y-m-d H:i:s', time() - ($config['log_retention_days'] * DAY_IN_SECONDS));
+
+    // Elimina únicamente logs cuyo registro padre ya no existe.
+    $wpdb->query("DELETE task_logs FROM {$logs} task_logs LEFT JOIN {$tasks} tasks ON tasks.id = task_logs.task_id WHERE tasks.id IS NULL");
+
+    if ( empty($config['automatic_terminal_cleanup']) ) return;
+
     $task_before = gmdate('Y-m-d H:i:s', time() - ($config['task_retention_days'] * DAY_IN_SECONDS));
-    $wpdb->query($wpdb->prepare("DELETE FROM {$logs} WHERE created_at < %s", $log_before));
     $ids = $wpdb->get_col($wpdb->prepare(
-        "SELECT id FROM {$tasks} WHERE status IN ('completed','cancelled','expired','failed') AND updated_at < %s",
+        "SELECT id FROM {$tasks} WHERE status IN ('completed','cancelled','expired','failed','archived') AND updated_at < %s",
         $task_before
     ));
     foreach ( (array)$ids as $id ) eventosapp_task_queue_delete(absint($id));
