@@ -941,325 +941,537 @@ if ( ! function_exists('eventosapp_metrics_build_default_payload') ) {
     }
 }
 
-// === Shortcode ===
-add_shortcode('eventosapp_front_metrics', function(){
-    if ( function_exists('eventosapp_require_feature') ) eventosapp_require_feature('metrics');
-
-    // Evento activo
-    $active_event = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
-    if ( ! $active_event ) {
-        ob_start();
-        if (function_exists('eventosapp_require_active_event')) {
-            eventosapp_require_active_event();
-        } else {
-            echo '<p>Debes seleccionar un evento activo.</p>';
+// === Render compartido por shortcode y widget de Elementor ===
+if ( ! function_exists('eventosapp_metrics_get_dashboard_return_url') ) {
+    function eventosapp_metrics_get_dashboard_return_url($custom_url = '') {
+        $custom_url = is_scalar($custom_url) ? trim((string) $custom_url) : '';
+        if ($custom_url !== '') {
+            return esc_url_raw($custom_url);
         }
-        return ob_get_clean();
+
+        if ( function_exists('eventosapp_get_dashboard_url') ) {
+            $dashboard_url = eventosapp_get_dashboard_url();
+            if (is_string($dashboard_url) && trim($dashboard_url) !== '') {
+                return esc_url_raw($dashboard_url);
+            }
+        }
+
+        return home_url('/');
     }
+}
 
-    // Nonces
-    $nonce_data   = wp_create_nonce('eventosapp_metrics_data');
-    $nonce_export = wp_create_nonce('eventosapp_export_tickets');
+if ( ! function_exists('eventosapp_metrics_print_frontend_styles') ) {
+    function eventosapp_metrics_print_frontend_styles() {
+        static $printed = false;
+        if ($printed) return;
+        $printed = true;
+        ?>
+        <style id="eventosapp-metrics-styles">
+.evapp-metrics{
+  --evapp-primary:#3279bd;
+  --evapp-primary-dark:#255f96;
+  --evapp-primary-soft:#eaf4ff;
+  --evapp-app-bg:#f5f8fc;
+  --evapp-surface:#ffffff;
+  --evapp-border:#dfe7f1;
+  --evapp-text:#182230;
+  --evapp-muted:#64748b;
+  --evapp-success:#15803d;
+  --evapp-success-soft:#ecfdf3;
+  --evapp-warning:#b45309;
+  --evapp-warning-soft:#fff7ed;
+  --evapp-danger:#b42318;
+  --evapp-danger-soft:#fff1f0;
+  --evapp-card-radius:18px;
+  --evapp-shell-radius:26px;
+  --evapp-grid-gap:16px;
+  --evapp-chart-height:330px;
+  width:100%;
+  color:var(--evapp-text);
+  font-family:inherit;
+  line-height:1.45;
+}
+.evapp-metrics,.evapp-metrics *{box-sizing:border-box}
+.evapp-metrics a{text-decoration:none}
+.evapp-metrics button,.evapp-metrics input,.evapp-metrics select{font:inherit}
+.evapp-metrics [hidden],.evapp-metrics .hidden{display:none!important}
+.evapp-metrics .screen-reader-text{
+  position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;
+  overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important;
+}
+.evapp-metrics-shell{
+  width:100%;
+  padding:clamp(18px,3vw,36px);
+  background:var(--evapp-app-bg);
+  border:1px solid var(--evapp-border);
+  border-radius:var(--evapp-shell-radius);
+  box-shadow:0 18px 50px rgba(31,52,73,.08);
+}
+.evapp-metrics-header{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:22px;
+}
+.evapp-metrics-heading{min-width:0;max-width:800px}
+.evapp-metrics-eyebrow{
+  margin:0 0 6px;color:var(--evapp-primary);font-size:12px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;
+}
+.evapp-metrics-title{
+  margin:0;color:var(--evapp-text);font-size:clamp(27px,4vw,42px);font-weight:850;line-height:1.08;letter-spacing:-.035em;
+}
+.evapp-metrics-subtitle{max-width:760px;margin:10px 0 0;color:var(--evapp-muted);font-size:15px}
+.evapp-metrics-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex:0 0 auto;flex-wrap:wrap}
+.evapp-metrics-button{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 16px;
+  border:1px solid var(--evapp-border);border-radius:12px;background:var(--evapp-surface);color:var(--evapp-text)!important;
+  font-size:14px;font-weight:750;line-height:1;cursor:pointer;white-space:nowrap;
+  transition:transform .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease,color .18s ease;
+}
+.evapp-metrics-button svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.evapp-metrics-button:hover{border-color:var(--evapp-primary);color:var(--evapp-primary-dark)!important;transform:translateY(-1px);box-shadow:0 8px 18px rgba(31,73,112,.12)}
+.evapp-metrics-button.is-primary{border-color:var(--evapp-primary);background:var(--evapp-primary);color:#fff!important}
+.evapp-metrics-button.is-primary:hover{border-color:var(--evapp-primary-dark);background:var(--evapp-primary-dark);color:#fff!important}
+.evapp-metrics-button:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
+.evapp-metrics-event{
+  display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:14px;margin-bottom:20px;padding:14px;
+  background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.05);
+}
+.evapp-metrics-event-icon{
+  display:flex;align-items:center;justify-content:center;width:46px;height:46px;color:var(--evapp-primary);background:var(--evapp-primary-soft);border-radius:14px;
+}
+.evapp-metrics-event-icon svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.evapp-metrics-event-copy{min-width:0}
+.evapp-metrics-event-label{display:block;margin-bottom:2px;color:var(--evapp-muted);font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.evapp-metrics-event-name{display:block;overflow:hidden;color:var(--evapp-text);font-size:16px;font-weight:800;text-overflow:ellipsis;white-space:nowrap}
+.evapp-live-badge{
+  display:inline-flex;align-items:center;gap:7px;min-height:34px;padding:7px 11px;color:var(--evapp-success);background:var(--evapp-success-soft);
+  border:1px solid rgba(21,128,61,.16);border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;
+}
+.evapp-live-badge-dot{width:8px;height:8px;border-radius:50%;background:var(--evapp-success);box-shadow:0 0 0 4px rgba(21,128,61,.12)}
+.evapp-filter-panel{
+  margin-bottom:18px;padding:18px;background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.045);
+}
+.evapp-filter-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:15px}
+.evapp-filter-title{margin:0;color:var(--evapp-text);font-size:17px;font-weight:820;letter-spacing:-.01em}
+.evapp-filter-help{margin:4px 0 0;color:var(--evapp-muted);font-size:13px}
+.evapp-filters{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px;align-items:end;margin:0}
+.evapp-filters .grp{display:flex;flex-direction:column;gap:6px;grid-column:span 3;min-width:0}
+.evapp-filters .grp.is-action{grid-column:span 3}
+.evapp-filters label{color:var(--evapp-text);font-size:12px;font-weight:750}
+.evapp-filters input[type="date"],.evapp-filters select{
+  width:100%;min-height:44px;margin:0;padding:9px 38px 9px 12px;color:var(--evapp-text);background:#fff;
+  border:1px solid var(--evapp-border);border-radius:12px;outline:none;box-shadow:none;
+  transition:border-color .18s ease,box-shadow .18s ease;
+}
+.evapp-filters input[type="date"]{padding-right:12px}
+.evapp-filters input[type="date"]:focus,.evapp-filters select:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.13)}
+.evapp-filters .evapp-metrics-button{width:100%;min-height:44px}
+.evapp-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--evapp-grid-gap);margin-bottom:var(--evapp-grid-gap)}
+.evapp-kpi-card{
+  position:relative;min-width:0;padding:18px;background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:var(--evapp-card-radius);
+  box-shadow:0 8px 24px rgba(31,52,73,.05);overflow:hidden;
+}
+.evapp-kpi-card::after{content:"";position:absolute;inset:auto 0 0;height:3px;background:var(--evapp-primary);opacity:.9}
+.evapp-kpi-card.is-success::after{background:var(--evapp-success)}
+.evapp-kpi-card.is-warning::after{background:var(--evapp-warning)}
+.evapp-kpi-card.is-rate::after{background:var(--evapp-primary-dark)}
+.evapp-kpi-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.evapp-kpi-label{color:var(--evapp-muted);font-size:12px;font-weight:750;letter-spacing:.02em;text-transform:uppercase}
+.evapp-kpi-icon{display:flex;align-items:center;justify-content:center;width:38px;height:38px;color:var(--evapp-primary);background:var(--evapp-primary-soft);border-radius:12px}
+.evapp-kpi-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.evapp-kpi-card.is-success .evapp-kpi-icon{color:var(--evapp-success);background:var(--evapp-success-soft)}
+.evapp-kpi-card.is-warning .evapp-kpi-icon{color:var(--evapp-warning);background:var(--evapp-warning-soft)}
+.evapp-kpi-value{display:block;color:var(--evapp-text);font-size:clamp(28px,3vw,38px);font-weight:900;line-height:1;letter-spacing:-.035em}
+.evapp-kpi-caption{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;color:var(--evapp-muted);font-size:12px}
+.evapp-kpi-scope{display:inline-flex;max-width:100%;padding:3px 8px;color:var(--evapp-primary-dark);background:var(--evapp-primary-soft);border-radius:999px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.evapp-m-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--evapp-grid-gap);width:100%}
+.evapp-metric-card{
+  min-width:0;padding:18px;background:var(--evapp-surface);color:var(--evapp-text);border:1px solid var(--evapp-border);
+  border-radius:var(--evapp-card-radius);box-shadow:0 8px 24px rgba(31,52,73,.05);
+}
+.evapp-metric-card h3{margin:0;color:var(--evapp-text);font-size:17px;font-weight:820;line-height:1.25;letter-spacing:-.01em}
+.evapp-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
+.evapp-card-kicker{display:block;margin-top:4px;color:var(--evapp-muted);font-size:12px}
+.evapp-pie{grid-column:span 5}
+.evapp-bars{grid-column:span 7}
+.evapp-table{grid-column:span 12}
+.evapp-qr-pie{grid-column:span 5}
+.evapp-qr-table{grid-column:span 7}
+.evapp-chart-frame{position:relative;width:100%;height:var(--evapp-chart-height);min-height:260px}
+.evapp-chart-frame.is-doughnut{height:min(330px,var(--evapp-chart-height))}
+.evapp-chart-frame canvas{display:block;width:100%!important;height:100%!important}
+.evapp-hint{margin:12px 0 0;color:var(--evapp-muted);font-size:12px;line-height:1.45}
+.evapp-table-scroll,.evapp-custom-table-wrap{width:100%;overflow:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--evapp-border);border-radius:14px}
+.evapp-table table,.evapp-qr-table table,.evapp-custom-table{width:100%;min-width:760px;border-collapse:separate;border-spacing:0;background:#fff}
+.evapp-table th,.evapp-table td,.evapp-qr-table th,.evapp-qr-table td,.evapp-custom-table th,.evapp-custom-table td{
+  padding:11px 13px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--evapp-border);color:var(--evapp-text);font-size:13px;white-space:nowrap;
+}
+.evapp-table thead th,.evapp-qr-table thead th,.evapp-custom-table thead th{
+  position:sticky;top:0;z-index:1;background:#f7f9fc;color:#334155;font-size:12px;font-weight:800;
+}
+.evapp-table thead tr:first-child th,.evapp-custom-table thead tr:first-child th{z-index:3}
+.evapp-table thead tr:nth-child(2) th,.evapp-custom-table thead tr:nth-child(2) th{top:41px;z-index:2}
+.evapp-table thead th.evapp-table-group-heading,.evapp-custom-table thead th.evapp-table-group-heading{text-align:center;background:var(--evapp-primary-soft);color:var(--evapp-primary-dark)}
+.evapp-table tbody tr:nth-child(even),.evapp-qr-table tbody tr:nth-child(even),.evapp-custom-table tbody tr:nth-child(even){background:#fbfcfe}
+.evapp-table tbody tr:hover,.evapp-qr-table tbody tr:hover,.evapp-custom-table tbody tr:hover{background:#f3f7fb}
+.evapp-table .evapp-total td,.evapp-qr-table .evapp-total td,.evapp-custom-table tbody tr.evapp-custom-total-row td{font-weight:850;background:var(--evapp-primary-soft);border-top:1px solid rgba(50,121,189,.24)}
+.evapp-footnote{margin:10px 0 0;color:var(--evapp-muted);font-size:12px;line-height:1.45}
+.evapp-metrics .evapp-muted{color:var(--evapp-muted)!important}
+.evapp-metrics .evapp-bad{color:var(--evapp-danger)!important}
+.evapp-metrics .evapp-ok{color:var(--evapp-success)!important}
+.evapp-custom-metrics-panel{grid-column:span 12;display:none}
+.evapp-custom-metrics-panel.is-visible{display:block}
+.evapp-custom-toolbar{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:16px 18px;
+  background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:var(--evapp-card-radius);box-shadow:0 8px 24px rgba(31,52,73,.05);
+}
+.evapp-custom-toolbar-title{margin:0 0 3px;color:var(--evapp-text);font-size:16px;font-weight:850}
+.evapp-custom-toolbar-status{color:var(--evapp-muted);font-size:12px;line-height:1.4}
+.evapp-custom-toolbar-status.is-loading{color:var(--evapp-warning)}
+.evapp-custom-toolbar-status.is-error{color:var(--evapp-danger)}
+.evapp-custom-metrics-shell{display:none}
+.evapp-custom-metrics-shell.is-visible{display:block}
+.evapp-custom-title{
+  margin:4px 0 12px;padding:11px 14px;color:var(--evapp-text);background:var(--evapp-surface);border:1px solid var(--evapp-border);
+  border-left:4px solid var(--evapp-custom-accent,var(--evapp-primary));border-radius:12px;font-size:17px;font-weight:850;
+}
+.evapp-custom-row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--evapp-grid-gap);margin-bottom:var(--evapp-grid-gap)}
+.evapp-custom-slot{grid-column:span 12;min-height:160px}
+.evapp-custom-slot.span-1{grid-column:span 6}
+.evapp-custom-slot.span-2{grid-column:span 12}
+.evapp-custom-card-value{margin-top:14px;color:var(--evapp-text);font-size:clamp(30px,4vw,44px);font-weight:900;line-height:1;letter-spacing:-.035em}
+.evapp-custom-card-label{margin-top:7px;color:var(--evapp-muted);font-size:13px}
+.evapp-custom-empty{padding:22px 0;color:var(--evapp-muted);font-size:13px}
+.evapp-custom-chart-frame{position:relative;width:100%;min-height:300px;margin-top:12px}
+.evapp-custom-chart-frame canvas{width:100%!important;height:100%!important}
+.evapp-custom-chart-values{display:grid;gap:6px;margin-top:12px;color:var(--evapp-muted);font-size:12px}
+.evapp-custom-chart-values div{display:flex;justify-content:space-between;gap:12px;padding-bottom:5px;border-bottom:1px solid var(--evapp-border)}
+.evapp-metrics.is-loading .evapp-live-badge-dot{animation:evappMetricsPulse 1.1s ease-in-out infinite}
+@keyframes evappMetricsPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.72)}}
+@media(max-width:1099px){
+  .evapp-metrics-header{align-items:flex-start}
+  .evapp-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .evapp-filters .grp{grid-column:span 4}
+  .evapp-pie,.evapp-bars,.evapp-qr-pie,.evapp-qr-table{grid-column:span 12}
+}
+@media(max-width:767px){
+  .evapp-metrics-shell{padding:16px;border-radius:20px}
+  .evapp-metrics-header{display:block;margin-bottom:18px}
+  .evapp-metrics-actions{justify-content:flex-start;margin-top:15px}
+  .evapp-metrics-event{grid-template-columns:auto minmax(0,1fr)}
+  .evapp-live-badge{grid-column:1/-1;justify-content:center}
+  .evapp-filter-header{display:block}
+  .evapp-filters .grp,.evapp-filters .grp.is-action{grid-column:span 6}
+  .evapp-chart-frame{height:300px;min-height:240px}
+  .evapp-custom-slot.span-1,.evapp-custom-slot.span-2{grid-column:span 12}
+}
+@media(max-width:520px){
+  .evapp-metrics-actions{display:grid;grid-template-columns:1fr;width:100%}
+  .evapp-metrics-button{width:100%}
+  .evapp-kpi-grid{grid-template-columns:1fr}
+  .evapp-filters .grp,.evapp-filters .grp.is-action{grid-column:span 12}
+  .evapp-metric-card{padding:15px}
+  .evapp-chart-frame{height:270px}
+  .evapp-custom-toolbar{display:block}
+  .evapp-custom-toolbar .evapp-metrics-button{margin-top:12px}
+}
+@media(prefers-reduced-motion:reduce){.evapp-metrics *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+        </style>
+        <?php
+    }
+}
 
-    ob_start(); ?>
-    <style>
-      .evapp-metrics-wrap { max-width:1100px; margin:0 auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-      .evapp-m-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
-      .evapp-m-title { font-weight:800; font-size:1.25rem; letter-spacing:.3px; color:#0b1020; }
-      .evapp-m-actions a.button { text-decoration:none; }
+if ( ! function_exists('eventosapp_render_metrics') ) {
+    function eventosapp_render_metrics($args = []) {
+        $defaults = [
+            'show_header'          => 'yes',
+            'eyebrow'              => 'EventosApp',
+            'title'                => 'Métricas en tiempo real',
+            'subtitle'             => 'Consulta la asistencia, los horarios de ingreso, las localidades y los medios de check-in del evento activo.',
+            'show_event_context'   => 'yes',
+            'show_back_button'     => 'yes',
+            'back_button_label'    => 'Volver al dashboard',
+            'dashboard_url'        => '',
+            'show_export_button'   => 'yes',
+            'export_button_label'  => 'Descargar base (Excel)',
+            'show_filters'         => 'yes',
+            'filter_title'         => 'Filtros de análisis',
+            'filter_description'   => 'Define el periodo y el tipo de check-in que deseas revisar.',
+            'apply_button_label'   => 'Aplicar filtros',
+            'refresh_interval'     => 15000,
+            'instance_id'          => '',
+        ];
+        $args = wp_parse_args(is_array($args) ? $args : [], $defaults);
 
-      .evapp-filters { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin:10px 0 14px; }
-      .evapp-filters .grp { display:flex; flex-direction:column; gap:4px; }
-      .evapp-filters label { font-size:.9rem; color:#334155; }
-      .evapp-filters input[type="date"], .evapp-filters select { min-height:34px; }
-      .evapp-filters .hidden { display:none !important; }
-
-      .evapp-m-grid { display:grid; grid-template-columns: repeat(12, 1fr); gap:12px; }
-      .evapp-card { background:#0b1020; color:#eaf1ff; border-radius:16px; padding:16px; box-shadow:0 8px 24px rgba(0,0,0,.12); }
-      .evapp-card h3 { margin:0 0 10px; font-size:1rem; letter-spacing:.2px; color:#cfe0ff; }
-
-      .evapp-kpi { grid-column: span 12; display:flex; align-items:center; justify-content:space-between; }
-      .evapp-kpi .big { font-size:2.8rem; font-weight:900; letter-spacing:.4px; }
-      .evapp-kpi .sub { opacity:.85; }
-
-      @media(min-width:740px){
-        .evapp-kpi { grid-column: span 12; }
-      }
-
-      .evapp-pie { grid-column: span 12; }
-      .evapp-bars { grid-column: span 12; }
-      @media(min-width:740px){
-        .evapp-pie { grid-column: span 5; }
-        .evapp-bars{ grid-column: span 7; }
-      }
-
-      .evapp-table { grid-column: span 12; overflow:auto; }
-      .evapp-table table { width:100%; border-collapse:separate; border-spacing:0; }
-      .evapp-table th, .evapp-table td { text-align:left; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.08); }
-      .evapp-table thead th { position:sticky; top:0; background:#0f1835; color:#cfe0ff; z-index:1; }
-      .evapp-table thead tr:first-child th { z-index:3; }
-      .evapp-table thead tr:nth-child(2) th { top:42px; z-index:2; }
-      .evapp-table thead th.evapp-table-row-heading,
-      .evapp-table thead th.evapp-table-total-heading { vertical-align:middle; }
-      .evapp-table thead th.evapp-table-group-heading { text-align:center; font-weight:900; background:#111d3d; }
-      .evapp-table thead tr.evapp-table-subhead th { background:#0f1835; }
-      .evapp-table tbody tr:nth-child(odd){ background:#0a1329; }
-      .evapp-table tbody tr:nth-child(even){ background:#0c1733; }
-      .evapp-pill-ok { background:#22c55e; color:#07120c; font-weight:900; border-radius:999px; padding:2px 8px; font-size:.85rem; }
-      .evapp-footnote { color:#a9b6d3; font-size:.85rem; margin-top:8px; opacity:.9 }
-      .evapp-hint { color:#a9b6d3; font-size:.9rem; margin:6px 0 0; opacity:.85 }
-
-      .evapp-bad { color:#ffb4b4; }
-      .evapp-ok { color:#7CFF8D; }
-      .evapp-muted { color:#a9b6d3; }
-		
-		.evapp-table .evapp-total td{
-          font-weight:700;
-          border-top:2px solid rgba(255,255,255,.25);
+        if ( function_exists('eventosapp_require_feature') ) {
+            eventosapp_require_feature('metrics');
         }
-        
-      /* Estilos para gráfico y tabla de medios de check-in */
-      .evapp-qr-pie { grid-column: span 12; }
-      .evapp-qr-table { grid-column: span 12; }
-      @media(min-width:740px){
-        .evapp-qr-pie { grid-column: span 6; }
-        .evapp-qr-table { grid-column: span 6; }
-      }
-      /* Métricas personalizadas configuradas por evento */
-      .evapp-custom-metrics-panel { grid-column: span 12; display:none; }
-      .evapp-custom-metrics-panel.is-visible { display:block; }
-      .evapp-custom-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; background:#0b1020; color:#eaf1ff; border-radius:16px; padding:14px 16px; margin:0 0 12px; box-shadow:0 8px 24px rgba(0,0,0,.12); }
-      .evapp-custom-toolbar-title { font-weight:900; color:#cfe0ff; margin:0 0 4px; font-size:1rem; }
-      .evapp-custom-toolbar-status { color:#a9b6d3; font-size:.9rem; line-height:1.35; }
-      .evapp-custom-toolbar-status.is-loading { color:#facc15; }
-      .evapp-custom-toolbar-status.is-error { color:#ffb4b4; }
-      .evapp-custom-toolbar .button { white-space:nowrap; }
-      .evapp-custom-metrics-shell { display:none; }
-      .evapp-custom-metrics-shell.is-visible { display:block; }
-      .evapp-custom-title { margin:8px 0 12px; font-size:1.15rem; font-weight:900; letter-spacing:.2px; }
-      .evapp-custom-row { display:grid; grid-template-columns:repeat(12,1fr); gap:12px; margin-bottom:12px; }
-      .evapp-custom-slot { grid-column: span 12; min-height:160px; }
-      .evapp-custom-slot.span-1 { grid-column: span 12; }
-      .evapp-custom-slot.span-2 { grid-column: span 12; }
-      @media(min-width:740px){
-        .evapp-custom-slot.span-1 { grid-column: span 6; }
-        .evapp-custom-slot.span-2 { grid-column: span 12; }
-      }
-      .evapp-custom-card-value { font-size:2.4rem; font-weight:900; line-height:1.05; margin-top:8px; }
-      .evapp-custom-card-label { color:#a9b6d3; margin-top:5px; }
-      .evapp-custom-table-wrap { overflow:auto; }
-      .evapp-custom-table { width:100%; border-collapse:separate; border-spacing:0; }
-      .evapp-custom-table th, .evapp-custom-table td { text-align:left; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.08); vertical-align:top; }
-      .evapp-custom-table thead th { background:#0f1835; color:#cfe0ff; position:sticky; top:0; z-index:1; }
-      .evapp-custom-table thead tr:first-child th { z-index:3; }
-      .evapp-custom-table thead tr:nth-child(2) th { top:42px; z-index:2; }
-      .evapp-custom-table thead th.evapp-table-row-heading,
-      .evapp-custom-table thead th.evapp-table-total-heading { vertical-align:middle; }
-      .evapp-custom-table thead th.evapp-table-group-heading { text-align:center; font-weight:900; background:#111d3d; }
-      .evapp-custom-table thead tr.evapp-table-subhead th { background:#0f1835; }
-      .evapp-custom-table tbody tr:nth-child(odd){ background:#0a1329; }
-      .evapp-custom-table tbody tr:nth-child(even){ background:#0c1733; }
-      .evapp-custom-table tbody tr.evapp-custom-total-row td { font-weight:800; border-top:2px solid rgba(255,255,255,.20); }
-      .evapp-custom-empty { color:#a9b6d3; font-size:.92rem; padding:8px 0; }
-      .evapp-custom-chart-values { margin-top:10px; font-size:.88rem; color:#cfe0ff; display:grid; gap:4px; }
-      .evapp-custom-chart-values div { display:flex; justify-content:space-between; gap:12px; border-bottom:1px solid rgba(255,255,255,.06); padding-bottom:4px; }
-    </style>
 
-    <div class="evapp-metrics-wrap" data-event="<?php echo esc_attr($active_event); ?>">
-      <div class="evapp-m-head">
-        <div class="evapp-m-title">Métricas en tiempo real — <span class="evapp-muted"><?php echo esc_html( get_the_title($active_event) ); ?></span></div>
-        <div class="evapp-m-actions">
-          <a class="button button-primary" id="evappExportBtn"
-             href="<?php echo esc_url( add_query_arg([
-                 'action'   => 'eventosapp_export_tickets',
-                 'security' => $nonce_export,
-             ], admin_url('admin-ajax.php')) ); ?>">
-             Descargar base (Excel)
-          </a>
-        </div>
-      </div>
+        ob_start();
+        eventosapp_metrics_print_frontend_styles();
+        $metrics_css = ob_get_clean();
 
-      <!-- Filtros para el gráfico de barras -->
-      <div class="evapp-filters" id="evappFilters">
-        <div class="grp">
-          <label for="evappMode">Modo</label>
-          <select id="evappMode">
-            <option value="sum">Acumulado por horas (rango)</option>
-            <option value="day">Por día</option>
-          </select>
-        </div>
+        $active_event = function_exists('eventosapp_get_active_event') ? absint(eventosapp_get_active_event()) : 0;
+        if ( ! $active_event ) {
+            ob_start();
+            echo $metrics_css;
+            if (function_exists('eventosapp_require_active_event')) {
+                eventosapp_require_active_event();
+            } else {
+                echo '<div class="evapp-metrics"><div class="evapp-metrics-shell"><p class="evapp-muted">Debes seleccionar un evento activo.</p></div></div>';
+            }
+            return ob_get_clean();
+        }
 
-        <div class="grp" id="grpFrom">
-          <label for="evappFrom">Desde</label>
-          <input type="date" id="evappFrom" />
-        </div>
-        <div class="grp" id="grpTo">
-          <label for="evappTo">Hasta</label>
-          <input type="date" id="evappTo" />
-        </div>
+        $instance_id = sanitize_html_class((string) $args['instance_id']);
+        if ($instance_id === '') {
+            $instance_id = function_exists('wp_unique_id') ? wp_unique_id('evapp-metrics-') : uniqid('evapp-metrics-', false);
+        }
 
-        <div class="grp hidden" id="grpDay">
-          <label for="evappDay">Fecha</label>
-          <input type="date" id="evappDay" />
-        </div>
+        $nonce_data   = wp_create_nonce('eventosapp_metrics_data');
+        $nonce_export = wp_create_nonce('eventosapp_export_tickets');
+        $dashboard_url = eventosapp_metrics_get_dashboard_return_url($args['dashboard_url']);
+        $export_url = add_query_arg([
+            'action'   => 'eventosapp_export_tickets',
+            'security' => $nonce_export,
+        ], admin_url('admin-ajax.php'));
+        $refresh_interval = max(0, absint($args['refresh_interval']));
+        $id = static function($key) use ($instance_id) {
+            return $instance_id . '-' . sanitize_html_class($key);
+        };
 
-        <div class="grp">
-          <label for="evappCheckinType">Tipo de check-in</label>
-          <select id="evappCheckinType">
-            <option value="all">Todos</option>
-            <option value="presencial">Presencial</option>
-            <option value="virtual">Virtual</option>
-          </select>
-        </div>
+        ob_start();
+        echo $metrics_css;
+        ?>
+        <div
+            class="evapp-metrics"
+            id="<?php echo esc_attr($instance_id); ?>"
+            data-evapp-metrics
+            data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>"
+            data-ajax-nonce="<?php echo esc_attr($nonce_data); ?>"
+            data-refresh-interval="<?php echo esc_attr($refresh_interval); ?>"
+            data-event="<?php echo esc_attr($active_event); ?>"
+        >
+          <div class="evapp-metrics-shell">
+            <?php if ($args['show_header'] === 'yes') : ?>
+              <header class="evapp-metrics-header">
+                <div class="evapp-metrics-heading">
+                  <?php if (trim((string) $args['eyebrow']) !== '') : ?><p class="evapp-metrics-eyebrow"><?php echo esc_html($args['eyebrow']); ?></p><?php endif; ?>
+                  <?php if (trim((string) $args['title']) !== '') : ?><h2 class="evapp-metrics-title"><?php echo esc_html($args['title']); ?></h2><?php endif; ?>
+                  <?php if (trim((string) $args['subtitle']) !== '') : ?><p class="evapp-metrics-subtitle"><?php echo esc_html($args['subtitle']); ?></p><?php endif; ?>
+                </div>
+                <?php if ($args['show_back_button'] === 'yes' || $args['show_export_button'] === 'yes') : ?>
+                  <div class="evapp-metrics-actions">
+                    <?php if ($args['show_back_button'] === 'yes') : ?>
+                      <a class="evapp-metrics-button" href="<?php echo esc_url($dashboard_url); ?>">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/><path d="M9 12h10"/></svg>
+                        <?php echo esc_html($args['back_button_label']); ?>
+                      </a>
+                    <?php endif; ?>
+                    <?php if ($args['show_export_button'] === 'yes') : ?>
+                      <a class="evapp-metrics-button is-primary" data-evapp-id="evappExportBtn" href="<?php echo esc_url($export_url); ?>">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                        <?php echo esc_html($args['export_button_label']); ?>
+                      </a>
+                    <?php endif; ?>
+                  </div>
+                <?php endif; ?>
+              </header>
+            <?php endif; ?>
 
-        <div class="grp">
-          <label>&nbsp;</label>
-          <button class="button" id="evappApply">Aplicar</button>
-        </div>
-      </div>
+            <?php if ($args['show_event_context'] === 'yes') : ?>
+              <div class="evapp-metrics-event">
+                <div class="evapp-metrics-event-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 9h18"/></svg>
+                </div>
+                <div class="evapp-metrics-event-copy">
+                  <span class="evapp-metrics-event-label">Evento activo</span>
+                  <span class="evapp-metrics-event-name"><?php echo esc_html(get_the_title($active_event)); ?></span>
+                </div>
+                <div class="evapp-live-badge"><span class="evapp-live-badge-dot"></span><span>Actualización automática</span></div>
+              </div>
+            <?php endif; ?>
 
-      <div class="evapp-m-grid">
-        <!-- KPI -->
-        <div class="evapp-card evapp-kpi">
-          <div>
-            <div class="big" id="evappKpiTotal">0</div>
-            <div class="sub">Tickets totales del evento activo</div>
-          </div>
-          <div class="evapp-pill-ok" id="evappKpiChecked">0 Checked In</div>
-        </div>
+            <section class="evapp-filter-panel"<?php echo $args['show_filters'] === 'yes' ? '' : ' hidden'; ?>>
+              <div class="evapp-filter-header">
+                <div>
+                  <h3 class="evapp-filter-title"><?php echo esc_html($args['filter_title']); ?></h3>
+                  <?php if (trim((string) $args['filter_description']) !== '') : ?><p class="evapp-filter-help"><?php echo esc_html($args['filter_description']); ?></p><?php endif; ?>
+                </div>
+              </div>
+              <div class="evapp-filters" data-evapp-id="evappFilters">
+                <div class="grp">
+                  <label for="<?php echo esc_attr($id('mode')); ?>">Modo</label>
+                  <select id="<?php echo esc_attr($id('mode')); ?>" data-evapp-id="evappMode">
+                    <option value="sum">Acumulado por horas (rango)</option>
+                    <option value="day">Por día</option>
+                  </select>
+                </div>
+                <div class="grp" data-evapp-id="grpFrom">
+                  <label for="<?php echo esc_attr($id('from')); ?>">Desde</label>
+                  <input type="date" id="<?php echo esc_attr($id('from')); ?>" data-evapp-id="evappFrom" />
+                </div>
+                <div class="grp" data-evapp-id="grpTo">
+                  <label for="<?php echo esc_attr($id('to')); ?>">Hasta</label>
+                  <input type="date" id="<?php echo esc_attr($id('to')); ?>" data-evapp-id="evappTo" />
+                </div>
+                <div class="grp hidden" data-evapp-id="grpDay">
+                  <label for="<?php echo esc_attr($id('day')); ?>">Fecha</label>
+                  <input type="date" id="<?php echo esc_attr($id('day')); ?>" data-evapp-id="evappDay" />
+                </div>
+                <div class="grp">
+                  <label for="<?php echo esc_attr($id('checkin-type')); ?>">Tipo de check-in</label>
+                  <select id="<?php echo esc_attr($id('checkin-type')); ?>" data-evapp-id="evappCheckinType">
+                    <option value="all">Todos</option>
+                    <option value="presencial">Presencial</option>
+                    <option value="virtual">Virtual</option>
+                  </select>
+                </div>
+                <div class="grp is-action">
+                  <label class="screen-reader-text" for="<?php echo esc_attr($id('apply')); ?>">Aplicar filtros</label>
+                  <button
+                    type="button"
+                    class="evapp-metrics-button is-primary"
+                    id="<?php echo esc_attr($id('apply')); ?>"
+                    data-evapp-id="evappApply"
+                    data-default-label="<?php echo esc_attr($args['apply_button_label']); ?>"
+                  ><?php echo esc_html($args['apply_button_label']); ?></button>
+                </div>
+              </div>
+            </section>
 
-        <!-- Pie -->
-        <div class="evapp-card evapp-pie">
-          <h3>Asistencia — Principal</h3>
-          <canvas id="evappPie"></canvas>
-          <div class="evapp-hint" id="evappPieHint"></div>
-        </div>
-
-        <!-- Barras -->
-        <div class="evapp-card evapp-bars">
-          <h3 id="evappBarsTitle">Check-ins por hora (acumulado)</h3>
-          <canvas id="evappBars"></canvas>
-          <div class="evapp-hint">Azul = check-in presencial. Violeta = check-in virtual. Sesiones = colores variados.</div>
-        </div>
-
-        <!-- Tabla -->
-        <div class="evapp-card evapp-table">
-          <h3>Resumen por Localidad</h3>
-          <div style="overflow:auto">
-            <table>
-              <thead id="evappTableHead">
-                <tr>
-                  <th>Localidad</th>
-                  <th>Check-ins</th>
-                  <th>Not Check-ins</th>
-                  <th>% Asistencia</th>
-                  <th>Check-ins sesiones adicionales (únicos)</th>
-                  <th>% asistentes a sesiones</th>
-                </tr>
-              </thead>
-              <tbody id="evappTableBody">
-                <tr><td colspan="6" class="evapp-muted">Cargando…</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="evapp-footnote">
-            * "Sesiones adicionales" cuenta asistentes únicos que confirmaron al menos una sesión.
-          </div>
-        </div>
-        
-        <!-- Gráfico de torta de medios de check-in -->
-        <div class="evapp-card evapp-qr-pie">
-          <h3>Check-ins por Medio</h3>
-          <canvas id="evappQrPie"></canvas>
-          <div class="evapp-hint" id="evappQrPieHint"></div>
-        </div>
-        
-        <!-- Tabla de estadísticas de medios de check-in -->
-        <div class="evapp-card evapp-qr-table">
-          <h3>Estadísticas por Medio</h3>
-          <div style="overflow:auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Medio</th>
-                  <th>Check-ins</th>
-                  <th>% Participación</th>
-                </tr>
-              </thead>
-              <tbody id="evappQrTableBody">
-                <tr><td colspan="3" class="evapp-muted">Cargando…</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- Métricas personalizadas configuradas en el evento -->
-        <div id="evappCustomMetricsPanel" class="evapp-custom-metrics-panel" aria-live="polite">
-          <div class="evapp-custom-toolbar">
-            <div>
-              <div class="evapp-custom-toolbar-title">Métricas personalizadas</div>
-              <div id="evappCustomMetricsStatus" class="evapp-custom-toolbar-status">Esperando a que terminen de cargar las métricas por defecto…</div>
+            <div class="evapp-kpi-grid" aria-label="Resumen de asistencia">
+              <article class="evapp-kpi-card">
+                <div class="evapp-kpi-top"><span class="evapp-kpi-label">Tickets totales</span><span class="evapp-kpi-icon"><svg viewBox="0 0 24 24"><path d="M5 7h14v3a2 2 0 0 0 0 4v3H5v-3a2 2 0 0 0 0-4V7Z"/><path d="M9 7v10"/></svg></span></div>
+                <strong class="evapp-kpi-value" data-evapp-id="evappKpiTotal">0</strong>
+                <div class="evapp-kpi-caption"><span>Base del evento activo</span></div>
+              </article>
+              <article class="evapp-kpi-card is-success">
+                <div class="evapp-kpi-top"><span class="evapp-kpi-label">Con check-in</span><span class="evapp-kpi-icon"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span></div>
+                <strong class="evapp-kpi-value" data-evapp-id="evappKpiChecked">0</strong>
+                <div class="evapp-kpi-caption"><span>Asistentes registrados</span><span class="evapp-kpi-scope" data-evapp-id="evappKpiScope">Todos</span></div>
+              </article>
+              <article class="evapp-kpi-card is-warning">
+                <div class="evapp-kpi-top"><span class="evapp-kpi-label">Pendientes</span><span class="evapp-kpi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span></div>
+                <strong class="evapp-kpi-value" data-evapp-id="evappKpiPending">0</strong>
+                <div class="evapp-kpi-caption"><span>Sin check-in registrado</span></div>
+              </article>
+              <article class="evapp-kpi-card is-rate">
+                <div class="evapp-kpi-top"><span class="evapp-kpi-label">Asistencia</span><span class="evapp-kpi-icon"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span></div>
+                <strong class="evapp-kpi-value" data-evapp-id="evappKpiRate">0.00%</strong>
+                <div class="evapp-kpi-caption"><span>Participación sobre tickets</span></div>
+              </article>
             </div>
-            <button type="button" class="button" id="evappCustomReloadBtn" disabled>Recargar personalizadas</button>
+
+            <div class="evapp-m-grid">
+              <section class="evapp-metric-card evapp-pie">
+                <div class="evapp-card-header"><div><h3>Asistencia principal</h3><span class="evapp-card-kicker">Distribución de asistentes con y sin check-in</span></div></div>
+                <div class="evapp-chart-frame is-doughnut"><canvas data-evapp-id="evappPie"></canvas></div>
+                <div class="evapp-hint" data-evapp-id="evappPieHint"></div>
+              </section>
+
+              <section class="evapp-metric-card evapp-bars">
+                <div class="evapp-card-header"><div><h3 data-evapp-id="evappBarsTitle">Check-ins por hora</h3><span class="evapp-card-kicker">Comportamiento de ingreso durante el periodo seleccionado</span></div></div>
+                <div class="evapp-chart-frame"><canvas data-evapp-id="evappBars"></canvas></div>
+                <div class="evapp-hint">Azul = presencial. Violeta = virtual. Las sesiones adicionales conservan colores diferenciados.</div>
+              </section>
+
+              <section class="evapp-metric-card evapp-table">
+                <div class="evapp-card-header"><div><h3>Resumen por localidad</h3><span class="evapp-card-kicker">Comparativo de asistencia y participación por tipo de entrada</span></div></div>
+                <div class="evapp-table-scroll">
+                  <table>
+                    <thead data-evapp-id="evappTableHead"><tr><th>Localidad</th><th>Check-ins</th><th>Not Check-ins</th><th>% Asistencia</th><th>Sesiones adicionales</th><th>% sesiones</th></tr></thead>
+                    <tbody data-evapp-id="evappTableBody"><tr><td colspan="6" class="evapp-muted">Cargando…</td></tr></tbody>
+                  </table>
+                </div>
+                <div class="evapp-footnote">“Sesiones adicionales” cuenta asistentes únicos que confirmaron al menos una sesión.</div>
+              </section>
+
+              <section class="evapp-metric-card evapp-qr-pie">
+                <div class="evapp-card-header"><div><h3>Check-ins por medio</h3><span class="evapp-card-kicker">Participación real de cada canal sobre el total de tickets</span></div></div>
+                <div class="evapp-chart-frame is-doughnut"><canvas data-evapp-id="evappQrPie"></canvas></div>
+                <div class="evapp-hint" data-evapp-id="evappQrPieHint"></div>
+              </section>
+
+              <section class="evapp-metric-card evapp-qr-table">
+                <div class="evapp-card-header"><div><h3>Estadísticas por medio</h3><span class="evapp-card-kicker">Detalle de check-ins y porcentaje de participación</span></div></div>
+                <div class="evapp-table-scroll">
+                  <table>
+                    <thead><tr><th>Medio</th><th>Check-ins</th><th>% Participación</th></tr></thead>
+                    <tbody data-evapp-id="evappQrTableBody"><tr><td colspan="3" class="evapp-muted">Cargando…</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section data-evapp-id="evappCustomMetricsPanel" class="evapp-custom-metrics-panel" aria-live="polite">
+                <div class="evapp-custom-toolbar">
+                  <div>
+                    <div class="evapp-custom-toolbar-title">Métricas personalizadas</div>
+                    <div data-evapp-id="evappCustomMetricsStatus" class="evapp-custom-toolbar-status">Esperando a que terminen de cargar las métricas por defecto…</div>
+                  </div>
+                  <button type="button" class="evapp-metrics-button" data-evapp-id="evappCustomReloadBtn" disabled>Recargar personalizadas</button>
+                </div>
+                <div data-evapp-id="evappCustomMetrics" class="evapp-custom-metrics-shell"></div>
+              </section>
+            </div>
           </div>
-          <div id="evappCustomMetrics" class="evapp-custom-metrics-shell"></div>
         </div>
-      </div>
-    </div>
-    <?php
-    // ===== Carga de scripts al estilo WP =====
+        <?php
 
-    // 1) Chart.js desde CDN (en el footer)
-    wp_enqueue_script(
-        'chartjs',
-        'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
-        [],
-        '4.4.1',
-        true
-    );
+        wp_enqueue_script(
+            'chartjs',
+            'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
+            [],
+            '4.4.1',
+            true
+        );
 
-    // 2) Registra el "handle" de tu script (vacío) y pasa datos con localize
-    wp_register_script('eventosapp-front-metrics', '', ['chartjs'], null, true);
+        if ( ! wp_script_is('eventosapp-front-metrics', 'registered') ) {
+            wp_register_script('eventosapp-front-metrics', '', ['chartjs'], null, true);
+        }
 
-    wp_localize_script('eventosapp-front-metrics', 'EventosAppMetrics', [
-        'ajaxUrl' => admin_url('admin-ajax.php'),
-        'nonce'   => $nonce_data,
-    ]);
-
-// 3) Tu JS como NOWDOC (no interpola ${...} de los template strings)
-$js = <<<'JS'
+        $js = <<<'JS'
     (function(){
-        const ajaxURL   = (window.EventosAppMetrics && EventosAppMetrics.ajaxUrl) || '';
-        const ajaxNonce = (window.EventosAppMetrics && EventosAppMetrics.nonce)   || '';
+        const root = document.getElementById(__EVAPP_METRICS_ROOT__);
+        if (!root || root.dataset.evappMetricsReady === '1') return;
+        root.dataset.evappMetricsReady = '1';
 
-        const kpiTotal   = document.getElementById('evappKpiTotal');
-        const kpiChecked = document.getElementById('evappKpiChecked');
-        const tableBody  = document.getElementById('evappTableBody');
-        const tableHead  = document.getElementById('evappTableHead');
-        const pieHint    = document.getElementById('evappPieHint');
-        const barsTitle  = document.getElementById('evappBarsTitle');
+        const find = function(name){
+            return root.querySelector('[data-evapp-id="' + name + '"]');
+        };
+        const ajaxURL   = root.getAttribute('data-ajax-url') || '';
+        const ajaxNonce = root.getAttribute('data-ajax-nonce') || '';
+        const refreshInterval = Math.max(0, Number(root.getAttribute('data-refresh-interval') || 15000));
+
+        const kpiTotal   = find('evappKpiTotal');
+        const kpiChecked = find('evappKpiChecked');
+        const kpiPending = find('evappKpiPending');
+        const kpiRate    = find('evappKpiRate');
+        const kpiScope   = find('evappKpiScope');
+        const tableBody  = find('evappTableBody');
+        const tableHead  = find('evappTableHead');
+        const pieHint    = find('evappPieHint');
+        const barsTitle  = find('evappBarsTitle');
         
         // Referencias para gráfico y tabla de medios de check-in
-        const qrPieHint = document.getElementById('evappQrPieHint');
-        const qrTableBody = document.getElementById('evappQrTableBody');
-        const customMetricsPanel = document.getElementById('evappCustomMetricsPanel');
-        const customMetricsWrap = document.getElementById('evappCustomMetrics');
-        const customMetricsStatus = document.getElementById('evappCustomMetricsStatus');
-        const customReloadBtn = document.getElementById('evappCustomReloadBtn');
+        const qrPieHint = find('evappQrPieHint');
+        const qrTableBody = find('evappQrTableBody');
+        const customMetricsPanel = find('evappCustomMetricsPanel');
+        const customMetricsWrap = find('evappCustomMetrics');
+        const customMetricsStatus = find('evappCustomMetricsStatus');
+        const customReloadBtn = find('evappCustomReloadBtn');
 
         // Filtros
-        const modeSel = document.getElementById('evappMode');
-        const gFrom   = document.getElementById('grpFrom');
-        const gTo     = document.getElementById('grpTo');
-        const gDay    = document.getElementById('grpDay');
-        const inFrom  = document.getElementById('evappFrom');
-        const inTo    = document.getElementById('evappTo');
-        const inDay   = document.getElementById('evappDay');
-        const btnApply= document.getElementById('evappApply');
-        const checkinTypeSel = document.getElementById('evappCheckinType');
+        const modeSel = find('evappMode');
+        const gFrom   = find('grpFrom');
+        const gTo     = find('grpTo');
+        const gDay    = find('grpDay');
+        const inFrom  = find('evappFrom');
+        const inTo    = find('evappTo');
+        const inDay   = find('evappDay');
+        const btnApply= find('evappApply');
+        const checkinTypeSel = find('evappCheckinType');
 
         function toggleInputs(){
-            const mode = modeSel.value;
+            const mode = modeSel ? modeSel.value : 'day';
             if (mode === 'sum'){
                 gFrom.classList.remove('hidden');
                 gTo.classList.remove('hidden');
@@ -1270,7 +1482,7 @@ $js = <<<'JS'
                 gDay.classList.remove('hidden');
             }
         }
-        modeSel.addEventListener('change', toggleInputs);
+        if (modeSel) modeSel.addEventListener('change', toggleInputs);
         toggleInputs();
 
         let pieChart = null;
@@ -1334,6 +1546,14 @@ $js = <<<'JS'
             if (label) customReloadBtn.textContent = label;
         }
 
+        function setDefaultLoading(loading){
+            root.classList.toggle('is-loading', !!loading);
+            if (!btnApply) return;
+            btnApply.disabled = !!loading;
+            const defaultLabel = btnApply.getAttribute('data-default-label') || 'Aplicar filtros';
+            btnApply.textContent = loading ? 'Actualizando…' : defaultLabel;
+        }
+
         function getCurrentFilters(){
             const mode = modeSel ? modeSel.value : 'sum';
             const filters = {
@@ -1350,14 +1570,16 @@ $js = <<<'JS'
         }
 
         function renderPie(data){
-            const ctx = document.getElementById('evappPie').getContext('2d');
+            const canvas = find('evappPie');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
             const checked = data.checked_in_total || 0;
             const notc    = data.not_checked_in_total || 0;
             const total   = Math.max(checked + notc, 0);
 
             const checkedPct = total ? (checked*100/total) : 0;
             const notPct     = total ? (notc   *100/total) : 0;
-            pieHint.textContent = `Checked In: ${fmt(checked)} (${pct(checkedPct)}) · Not Checked In: ${fmt(notc)} (${pct(notPct)})`;
+            if (pieHint) pieHint.textContent = `Checked In: ${fmt(checked)} (${pct(checkedPct)}) · Not Checked In: ${fmt(notc)} (${pct(notPct)})`;
 
             const cfg = {
                 type: 'doughnut',
@@ -1365,14 +1587,16 @@ $js = <<<'JS'
                     labels: ['Checked In', 'Not Checked In'],
                     datasets: [{ data:[checked, notc], backgroundColor: ['#4f7cff', '#94a3b8'], borderWidth: 0 }]
                 },
-                options: { responsive:true, plugins: { legend:{ position:'bottom', labels:{ color:'#eaf1ff' } } } }
+                options: { responsive:true, maintainAspectRatio:false, plugins: { legend:{ position:'bottom', labels:{ color:'#475569', boxWidth:12, boxHeight:12, padding:16 } } } }
             };
             if (pieChart){ pieChart.data = cfg.data; pieChart.update(); }
             else { pieChart = new Chart(ctx, cfg); }
         }
 
         function renderBars(data){
-            const ctx = document.getElementById('evappBars').getContext('2d');
+            const canvas = find('evappBars');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
             const labels = (data.bar && data.bar.labels) ? data.bar.labels : [];
             const datasets = [];
             const selectedType = (data.bar && data.bar.checkin_type) ? data.bar.checkin_type : 'all';
@@ -1418,11 +1642,12 @@ $js = <<<'JS'
                 data: { labels, datasets },
                 options: {
                     responsive:true,
+                    maintainAspectRatio:false,
                     scales: {
-                        x: { stacked:true, ticks:{ color:'#cfe0ff' }, grid:{ color:'rgba(255,255,255,.08)'} },
-                        y: { stacked:true, beginAtZero:true, ticks:{ color:'#cfe0ff' }, grid:{ color:'rgba(255,255,255,.08)'} }
+                        x: { stacked:true, ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} },
+                        y: { stacked:true, beginAtZero:true, ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} }
                     },
-                    plugins: { legend:{ position:'bottom', labels:{ color:'#eaf1ff' } } }
+                    plugins: { legend:{ position:'bottom', labels:{ color:'#475569', boxWidth:12, boxHeight:12, padding:16 } } }
                 }
             };
             if (barChart){ barChart.data = cfg.data; barChart.update(); }
@@ -1579,7 +1804,7 @@ $js = <<<'JS'
         // Renderizar gráfico de torta de medios de check-in con porcentaje real de participación.
         function renderQrPie(qrStats){
             if (!qrStats || !qrStats.types || Object.keys(qrStats.types).length === 0) {
-                qrPieHint.textContent = 'No hay datos de medios de check-in disponibles';
+                if (qrPieHint) qrPieHint.textContent = 'No hay datos de medios de check-in disponibles';
                 if (qrPieChart) {
                     qrPieChart.destroy();
                     qrPieChart = null;
@@ -1587,7 +1812,9 @@ $js = <<<'JS'
                 return;
             }
             
-            const ctx = document.getElementById('evappQrPie').getContext('2d');
+            const canvas = find('evappQrPie');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
             const types = qrStats.types || {};
             const mediaTotal = toNumber(qrStats.distribution_total || qrStats.total || 0);
             const participationBase = toNumber(qrStats.participation_base || qrStats.checked_total || qrStats.total || 0);
@@ -1632,7 +1859,7 @@ $js = <<<'JS'
             }
             
             const checkedPct = calcPercent(checkedTotal, participationBase);
-            qrPieHint.textContent = `Base real: ${fmt(participationBase)} tickets · Participación registrada: ${fmt(checkedTotal)} (${pct(checkedPct)}) · Check-ins por medio: ${fmt(mediaTotal)}`;
+            if (qrPieHint) qrPieHint.textContent = `Base real: ${fmt(participationBase)} tickets · Participación registrada: ${fmt(checkedTotal)} (${pct(checkedPct)}) · Check-ins por medio: ${fmt(mediaTotal)}`;
             
             const cfg = {
                 type: 'doughnut',
@@ -1646,10 +1873,11 @@ $js = <<<'JS'
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: false,
                     plugins: {
                         legend: {
                             position: 'bottom',
-                            labels: { color: '#eaf1ff' }
+                            labels: { color: '#475569', boxWidth:12, boxHeight:12, padding:16 }
                         },
                         tooltip: {
                             callbacks: {
@@ -1744,7 +1972,7 @@ $js = <<<'JS'
 
         function safeCssColor(color, fallback){
             color = String(color || '').trim();
-            return /^#[0-9a-f]{6}$/i.test(color) ? color : (fallback || '#eaf1ff');
+            return /^#[0-9a-f]{6}$/i.test(color) ? color : (fallback || '#3279bd');
         }
 
         function renderCustomTable(metric){
@@ -1807,8 +2035,8 @@ $js = <<<'JS'
         function drawCustomCharts(jobs){
             if (!Array.isArray(jobs)) return;
             jobs.forEach(function(metric){
-                const canvas = document.getElementById(metric.id);
-                if (!canvas) return;
+                const canvas = root.querySelector('[data-evapp-custom-chart="' + String(metric.canvas_key || '') + '"]');
+                if (!canvas || typeof Chart === 'undefined') return;
 
                 const chartType = metric.chart_type === 'pie' ? 'doughnut' : 'bar';
                 const labels = Array.isArray(metric.labels) ? metric.labels : [];
@@ -1838,11 +2066,12 @@ $js = <<<'JS'
                     data: { labels: labels, datasets: datasets },
                     options: {
                         responsive: true,
+                        maintainAspectRatio: chartType === 'doughnut',
                         plugins: {
                             legend: {
                                 display: !!metric.show_legend,
                                 position: chartType === 'doughnut' ? 'bottom' : 'top',
-                                labels: { color:'#eaf1ff' }
+                                labels: { color:'#475569', boxWidth:12, boxHeight:12, padding:16 }
                             },
                             tooltip: {
                                 callbacks: {
@@ -1855,13 +2084,13 @@ $js = <<<'JS'
                             }
                         },
                         scales: chartType === 'doughnut' ? {} : {
-                            x: { ticks:{ color:'#cfe0ff' }, grid:{ color:'rgba(255,255,255,.08)'} },
-                            y: { beginAtZero:true, ticks:{ color:'#cfe0ff' }, grid:{ color:'rgba(255,255,255,.08)'} }
+                            x: { ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} },
+                            y: { beginAtZero:true, ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} }
                         }
                     }
                 };
 
-                customCharts[metric.id] = new Chart(canvas.getContext('2d'), cfg);
+                customCharts[metric.canvas_key] = new Chart(canvas.getContext('2d'), cfg);
             });
         }
 
@@ -1878,11 +2107,11 @@ $js = <<<'JS'
             const settings = payload.settings || {};
             const showHeader = settings.show_header !== false;
             const headerText = settings.header_text || 'Métricas personalizadas';
-            const headerColor = safeCssColor(settings.header_color, '#eaf1ff');
+            const headerColor = safeCssColor(settings.header_color, '#3279bd');
             let html = '';
 
             if (showHeader) {
-                html += '<h3 class="evapp-custom-title" style="color:' + headerColor + '">' + escapeHTML(headerText) + '</h3>';
+                html += '<h3 class="evapp-custom-title" style="--evapp-custom-accent:' + headerColor + '">' + escapeHTML(headerText) + '</h3>';
             }
 
             const chartJobs = [];
@@ -1894,7 +2123,7 @@ $js = <<<'JS'
                 slots.forEach(function(metric){
                     if (!metric) return;
                     const span = parseInt(metric.span, 10) === 2 ? 2 : 1;
-                    html += '<div class="evapp-card evapp-custom-slot span-' + span + '">';
+                    html += '<div class="evapp-metric-card evapp-custom-slot span-' + span + '">';
                     html += '<h3>' + escapeHTML(metric.title || 'Métrica personalizada') + '</h3>';
 
                     if (metric.empty) {
@@ -1905,9 +2134,10 @@ $js = <<<'JS'
                         html += '<div class="evapp-custom-card-value">' + escapeHTML(metric.metric_value_display != null ? metric.metric_value_display : fmt(metric.metric_value || 0)) + '</div>';
                         html += '<div class="evapp-custom-card-label">' + escapeHTML(metric.metric_label || 'Valor') + '</div>';
                     } else {
-                        html += '<canvas id="' + escapeHTML(metric.id) + '"></canvas>';
+                        const canvasKey = 'custom-' + chartJobs.length;
+                        html += '<div class="evapp-custom-chart-frame"><canvas data-evapp-custom-chart="' + canvasKey + '"></canvas></div>';
                         html += renderCustomValues(metric);
-                        chartJobs.push(metric);
+                        chartJobs.push(Object.assign({}, metric, {canvas_key: canvasKey}));
                     }
 
                     html += '</div>';
@@ -1922,9 +2152,15 @@ $js = <<<'JS'
         }
 
         function setKpis(total, checked, label){
-            kpiTotal.textContent   = fmt(total||0);
-            const suffix = label ? (' · ' + label) : '';
-            kpiChecked.textContent = fmt(checked||0) + ' Checked In' + suffix;
+            total = toNumber(total);
+            checked = toNumber(checked);
+            const pending = Math.max(total - checked, 0);
+            const rate = calcPercent(checked, total);
+            if (kpiTotal) kpiTotal.textContent = fmt(total);
+            if (kpiChecked) kpiChecked.textContent = fmt(checked);
+            if (kpiPending) kpiPending.textContent = fmt(pending);
+            if (kpiRate) kpiRate.textContent = pct(rate);
+            if (kpiScope) kpiScope.textContent = label || 'Todos';
         }
 
         function afterDefaultMetricsLoaded(data){
@@ -1983,6 +2219,7 @@ $js = <<<'JS'
             }
 
             defaultFetchInProgress = true;
+            setDefaultLoading(true);
 
             defaultFetchPromise = (async function(){
                 try {
@@ -2040,6 +2277,7 @@ $js = <<<'JS'
                 } finally {
                     defaultFetchInProgress = false;
                     defaultFetchPromise = null;
+                    setDefaultLoading(false);
 
                     if (pendingDefaultFetch) {
                         pendingDefaultFetch = false;
@@ -2135,12 +2373,14 @@ $js = <<<'JS'
             }
         }
 
-        btnApply.addEventListener('click', function(e){
-            e.preventDefault();
-            customHasLoaded = false;
-            customReloadQueued = false;
-            requestDefaultMetricsLoad({force:true, reason:'apply'});
-        });
+        if (btnApply) {
+            btnApply.addEventListener('click', function(e){
+                e.preventDefault();
+                customHasLoaded = false;
+                customReloadQueued = false;
+                requestDefaultMetricsLoad({force:true, reason:'apply'});
+            });
+        }
 
         if (customReloadBtn) {
             customReloadBtn.addEventListener('click', function(e){
@@ -2155,24 +2395,41 @@ $js = <<<'JS'
 
         function init(){
             requestDefaultMetricsLoad({force:true, reason:'initial'});
-            setInterval(function(){
+            if (refreshInterval < 5000) return;
+            const timer = window.setInterval(function(){
+                if (!document.body.contains(root)) {
+                    window.clearInterval(timer);
+                    return;
+                }
                 if (!document.hidden && !defaultFetchInProgress && !customFetchInProgress) {
                     requestDefaultMetricsLoad({force:false, reason:'auto'});
                 }
-            }, 15000);
+            }, refreshInterval);
         }
     })();
 JS;
+        $js = str_replace('__EVAPP_METRICS_ROOT__', wp_json_encode($instance_id), $js);
+        wp_add_inline_script('eventosapp-front-metrics', $js, 'after');
+        wp_enqueue_script('eventosapp-front-metrics');
 
+        return ob_get_clean();
+    }
+}
 
-    wp_add_inline_script('eventosapp-front-metrics', $js, 'after');
-    wp_enqueue_script('eventosapp-front-metrics');
+if ( ! function_exists('eventosapp_front_metrics_shortcode') ) {
+    function eventosapp_front_metrics_shortcode($atts = []) {
+        $atts = shortcode_atts([
+            'show_header'        => 'yes',
+            'show_event_context' => 'yes',
+            'show_back_button'   => 'yes',
+            'show_export_button' => 'yes',
+            'show_filters'       => 'yes',
+        ], $atts, 'eventosapp_front_metrics');
 
-    // Devolvemos el HTML
-    return ob_get_clean();
-});
-
-
+        return eventosapp_render_metrics($atts);
+    }
+}
+add_shortcode('eventosapp_front_metrics', 'eventosapp_front_metrics_shortcode');
 
 
 //
