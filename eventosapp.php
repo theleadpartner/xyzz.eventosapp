@@ -1512,6 +1512,10 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/eventosapp-generador-ma
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-edit.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-frontend-metrics.php';
 eventosapp_require_first_existing_file([
+    'includes/frontend/eventosapp-metrics-elementor.php',
+    'eventosapp-metrics-elementor.php',
+]); // Widget Elementor de Métricas; reutiliza el motor y conserva AJAX/exportación.
+eventosapp_require_first_existing_file([
     'includes/frontend/eventosapp-whatsapp-flow-metrics.php',
     'eventosapp-whatsapp-flow-metrics.php',
 ]);
