@@ -982,6 +982,17 @@ if ( ! function_exists('eventosapp_metrics_print_frontend_styles') ) {
   --evapp-warning-soft:#fff7ed;
   --evapp-danger:#b42318;
   --evapp-danger-soft:#fff1f0;
+  --evapp-analytics-bg:#0b1020;
+  --evapp-analytics-bg-soft:#0f1835;
+  --evapp-analytics-bg-alt:#0c1733;
+  --evapp-analytics-bg-hover:#111d3d;
+  --evapp-analytics-text:#eaf1ff;
+  --evapp-analytics-title:#cfe0ff;
+  --evapp-analytics-muted:#a9b6d3;
+  --evapp-analytics-border:#263554;
+  --evapp-analytics-grid:rgba(148,163,184,.18);
+  --evapp-analytics-danger:#ffb4b4;
+  --evapp-analytics-success:#7cff8d;
   --evapp-card-radius:18px;
   --evapp-shell-radius:26px;
   --evapp-grid-gap:16px;
@@ -1084,12 +1095,12 @@ if ( ! function_exists('eventosapp_metrics_print_frontend_styles') ) {
 .evapp-kpi-scope{display:inline-flex;max-width:100%;padding:3px 8px;color:var(--evapp-primary-dark);background:var(--evapp-primary-soft);border-radius:999px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .evapp-m-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--evapp-grid-gap);width:100%}
 .evapp-metric-card{
-  min-width:0;padding:18px;background:var(--evapp-surface);color:var(--evapp-text);border:1px solid var(--evapp-border);
-  border-radius:var(--evapp-card-radius);box-shadow:0 8px 24px rgba(31,52,73,.05);
+  min-width:0;padding:18px;background:var(--evapp-analytics-bg);color:var(--evapp-analytics-text);border:1px solid var(--evapp-analytics-border);
+  border-radius:var(--evapp-card-radius);box-shadow:0 10px 28px rgba(5,12,24,.18);
 }
-.evapp-metric-card h3{margin:0;color:var(--evapp-text);font-size:17px;font-weight:820;line-height:1.25;letter-spacing:-.01em}
+.evapp-metric-card h3{margin:0;color:var(--evapp-analytics-title);font-size:17px;font-weight:820;line-height:1.25;letter-spacing:-.01em}
 .evapp-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
-.evapp-card-kicker{display:block;margin-top:4px;color:var(--evapp-muted);font-size:12px}
+.evapp-card-kicker{display:block;margin-top:4px;color:var(--evapp-analytics-muted);font-size:12px}
 .evapp-pie{grid-column:span 5}
 .evapp-bars{grid-column:span 7}
 .evapp-table{grid-column:span 12}
@@ -1098,25 +1109,34 @@ if ( ! function_exists('eventosapp_metrics_print_frontend_styles') ) {
 .evapp-chart-frame{position:relative;width:100%;height:var(--evapp-chart-height);min-height:260px}
 .evapp-chart-frame.is-doughnut{height:min(330px,var(--evapp-chart-height))}
 .evapp-chart-frame canvas{display:block;width:100%!important;height:100%!important}
-.evapp-hint{margin:12px 0 0;color:var(--evapp-muted);font-size:12px;line-height:1.45}
-.evapp-table-scroll,.evapp-custom-table-wrap{width:100%;overflow:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--evapp-border);border-radius:14px}
-.evapp-table table,.evapp-qr-table table,.evapp-custom-table{width:100%;min-width:760px;border-collapse:separate;border-spacing:0;background:#fff}
+.evapp-hint{margin:12px 0 0;color:var(--evapp-analytics-muted);font-size:12px;line-height:1.45}
+.evapp-table-scroll,.evapp-custom-table-wrap{
+  width:100%;overflow:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--evapp-analytics-border);border-radius:14px;
+  background:var(--evapp-analytics-bg);scrollbar-color:var(--evapp-analytics-border) var(--evapp-analytics-bg);
+}
+.evapp-table table,.evapp-qr-table table,.evapp-custom-table{width:100%;min-width:760px;border-collapse:separate;border-spacing:0;background:var(--evapp-analytics-bg)}
 .evapp-table th,.evapp-table td,.evapp-qr-table th,.evapp-qr-table td,.evapp-custom-table th,.evapp-custom-table td{
-  padding:11px 13px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--evapp-border);color:var(--evapp-text);font-size:13px;white-space:nowrap;
+  padding:11px 13px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--evapp-analytics-border);color:var(--evapp-analytics-text);font-size:13px;white-space:nowrap;
 }
 .evapp-table thead th,.evapp-qr-table thead th,.evapp-custom-table thead th{
-  position:sticky;top:0;z-index:1;background:#f7f9fc;color:#334155;font-size:12px;font-weight:800;
+  position:sticky;top:0;z-index:1;background:var(--evapp-analytics-bg-soft);color:var(--evapp-analytics-title);font-size:12px;font-weight:800;
 }
 .evapp-table thead tr:first-child th,.evapp-custom-table thead tr:first-child th{z-index:3}
 .evapp-table thead tr:nth-child(2) th,.evapp-custom-table thead tr:nth-child(2) th{top:41px;z-index:2}
-.evapp-table thead th.evapp-table-group-heading,.evapp-custom-table thead th.evapp-table-group-heading{text-align:center;background:var(--evapp-primary-soft);color:var(--evapp-primary-dark)}
-.evapp-table tbody tr:nth-child(even),.evapp-qr-table tbody tr:nth-child(even),.evapp-custom-table tbody tr:nth-child(even){background:#fbfcfe}
-.evapp-table tbody tr:hover,.evapp-qr-table tbody tr:hover,.evapp-custom-table tbody tr:hover{background:#f3f7fb}
-.evapp-table .evapp-total td,.evapp-qr-table .evapp-total td,.evapp-custom-table tbody tr.evapp-custom-total-row td{font-weight:850;background:var(--evapp-primary-soft);border-top:1px solid rgba(50,121,189,.24)}
-.evapp-footnote{margin:10px 0 0;color:var(--evapp-muted);font-size:12px;line-height:1.45}
+.evapp-table thead th.evapp-table-group-heading,.evapp-custom-table thead th.evapp-table-group-heading{text-align:center;background:var(--evapp-analytics-bg-hover);color:var(--evapp-analytics-title)}
+.evapp-table tbody tr,.evapp-qr-table tbody tr,.evapp-custom-table tbody tr{background:var(--evapp-analytics-bg)}
+.evapp-table tbody tr:nth-child(even),.evapp-qr-table tbody tr:nth-child(even),.evapp-custom-table tbody tr:nth-child(even){background:var(--evapp-analytics-bg-alt)}
+.evapp-table tbody tr:hover,.evapp-qr-table tbody tr:hover,.evapp-custom-table tbody tr:hover{background:var(--evapp-analytics-bg-hover)}
+.evapp-table .evapp-total td,.evapp-qr-table .evapp-total td,.evapp-custom-table tbody tr.evapp-custom-total-row td{
+  font-weight:850;color:var(--evapp-analytics-text);background:var(--evapp-analytics-bg-soft);border-top:1px solid rgba(79,124,255,.46);
+}
+.evapp-footnote{margin:10px 0 0;color:var(--evapp-analytics-muted);font-size:12px;line-height:1.45}
 .evapp-metrics .evapp-muted{color:var(--evapp-muted)!important}
 .evapp-metrics .evapp-bad{color:var(--evapp-danger)!important}
 .evapp-metrics .evapp-ok{color:var(--evapp-success)!important}
+.evapp-metric-card .evapp-muted,.evapp-custom-table-wrap .evapp-muted{color:var(--evapp-analytics-muted)!important}
+.evapp-metric-card .evapp-bad,.evapp-custom-table-wrap .evapp-bad{color:var(--evapp-analytics-danger)!important}
+.evapp-metric-card .evapp-ok,.evapp-custom-table-wrap .evapp-ok{color:var(--evapp-analytics-success)!important}
 .evapp-custom-metrics-panel{grid-column:span 12;display:none}
 .evapp-custom-metrics-panel.is-visible{display:block}
 .evapp-custom-toolbar{
@@ -1137,13 +1157,13 @@ if ( ! function_exists('eventosapp_metrics_print_frontend_styles') ) {
 .evapp-custom-slot{grid-column:span 12;min-height:160px}
 .evapp-custom-slot.span-1{grid-column:span 6}
 .evapp-custom-slot.span-2{grid-column:span 12}
-.evapp-custom-card-value{margin-top:14px;color:var(--evapp-text);font-size:clamp(30px,4vw,44px);font-weight:900;line-height:1;letter-spacing:-.035em}
-.evapp-custom-card-label{margin-top:7px;color:var(--evapp-muted);font-size:13px}
-.evapp-custom-empty{padding:22px 0;color:var(--evapp-muted);font-size:13px}
+.evapp-custom-card-value{margin-top:14px;color:var(--evapp-analytics-text);font-size:clamp(30px,4vw,44px);font-weight:900;line-height:1;letter-spacing:-.035em}
+.evapp-custom-card-label{margin-top:7px;color:var(--evapp-analytics-muted);font-size:13px}
+.evapp-custom-empty{padding:22px 0;color:var(--evapp-analytics-muted);font-size:13px}
 .evapp-custom-chart-frame{position:relative;width:100%;min-height:300px;margin-top:12px}
 .evapp-custom-chart-frame canvas{width:100%!important;height:100%!important}
-.evapp-custom-chart-values{display:grid;gap:6px;margin-top:12px;color:var(--evapp-muted);font-size:12px}
-.evapp-custom-chart-values div{display:flex;justify-content:space-between;gap:12px;padding-bottom:5px;border-bottom:1px solid var(--evapp-border)}
+.evapp-custom-chart-values{display:grid;gap:6px;margin-top:12px;color:var(--evapp-analytics-muted);font-size:12px}
+.evapp-custom-chart-values div{display:flex;justify-content:space-between;gap:12px;padding-bottom:5px;border-bottom:1px solid var(--evapp-analytics-border)}
 .evapp-metrics.is-loading .evapp-live-badge-dot{animation:evappMetricsPulse 1.1s ease-in-out infinite}
 @keyframes evappMetricsPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.72)}}
 @media(max-width:1099px){
@@ -1526,6 +1546,19 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
             return base > 0 ? (value * 100 / base) : 0;
         }
 
+        function cssVar(name, fallback){
+            const value = window.getComputedStyle(root).getPropertyValue(name).trim();
+            return value || fallback;
+        }
+
+        function analyticsTheme(){
+            return {
+                text: cssVar('--evapp-analytics-text', '#eaf1ff'),
+                muted: cssVar('--evapp-analytics-muted', '#a9b6d3'),
+                grid: cssVar('--evapp-analytics-grid', 'rgba(148,163,184,.18)')
+            };
+        }
+
         function setCustomPanelVisible(visible){
             if (!customMetricsPanel) return;
             if (visible) customMetricsPanel.classList.add('is-visible');
@@ -1573,6 +1606,7 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
             const canvas = find('evappPie');
             if (!canvas || typeof Chart === 'undefined') return;
             const ctx = canvas.getContext('2d');
+            const theme = analyticsTheme();
             const checked = data.checked_in_total || 0;
             const notc    = data.not_checked_in_total || 0;
             const total   = Math.max(checked + notc, 0);
@@ -1587,7 +1621,7 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
                     labels: ['Checked In', 'Not Checked In'],
                     datasets: [{ data:[checked, notc], backgroundColor: ['#4f7cff', '#94a3b8'], borderWidth: 0 }]
                 },
-                options: { responsive:true, maintainAspectRatio:false, plugins: { legend:{ position:'bottom', labels:{ color:'#475569', boxWidth:12, boxHeight:12, padding:16 } } } }
+                options: { responsive:true, maintainAspectRatio:false, plugins: { legend:{ position:'bottom', labels:{ color:theme.text, boxWidth:12, boxHeight:12, padding:16 } } } }
             };
             if (pieChart){ pieChart.data = cfg.data; pieChart.update(); }
             else { pieChart = new Chart(ctx, cfg); }
@@ -1597,6 +1631,7 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
             const canvas = find('evappBars');
             if (!canvas || typeof Chart === 'undefined') return;
             const ctx = canvas.getContext('2d');
+            const theme = analyticsTheme();
             const labels = (data.bar && data.bar.labels) ? data.bar.labels : [];
             const datasets = [];
             const selectedType = (data.bar && data.bar.checkin_type) ? data.bar.checkin_type : 'all';
@@ -1644,10 +1679,10 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
                     responsive:true,
                     maintainAspectRatio:false,
                     scales: {
-                        x: { stacked:true, ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} },
-                        y: { stacked:true, beginAtZero:true, ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} }
+                        x: { stacked:true, ticks:{ color:theme.muted }, grid:{ color:theme.grid} },
+                        y: { stacked:true, beginAtZero:true, ticks:{ color:theme.muted }, grid:{ color:theme.grid} }
                     },
-                    plugins: { legend:{ position:'bottom', labels:{ color:'#475569', boxWidth:12, boxHeight:12, padding:16 } } }
+                    plugins: { legend:{ position:'bottom', labels:{ color:theme.text, boxWidth:12, boxHeight:12, padding:16 } } }
                 }
             };
             if (barChart){ barChart.data = cfg.data; barChart.update(); }
@@ -1815,6 +1850,7 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
             const canvas = find('evappQrPie');
             if (!canvas || typeof Chart === 'undefined') return;
             const ctx = canvas.getContext('2d');
+            const theme = analyticsTheme();
             const types = qrStats.types || {};
             const mediaTotal = toNumber(qrStats.distribution_total || qrStats.total || 0);
             const participationBase = toNumber(qrStats.participation_base || qrStats.checked_total || qrStats.total || 0);
@@ -1877,7 +1913,7 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
                     plugins: {
                         legend: {
                             position: 'bottom',
-                            labels: { color: '#475569', boxWidth:12, boxHeight:12, padding:16 }
+                            labels: { color: theme.text, boxWidth:12, boxHeight:12, padding:16 }
                         },
                         tooltip: {
                             callbacks: {
@@ -2039,6 +2075,7 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
                 if (!canvas || typeof Chart === 'undefined') return;
 
                 const chartType = metric.chart_type === 'pie' ? 'doughnut' : 'bar';
+                const theme = analyticsTheme();
                 const labels = Array.isArray(metric.labels) ? metric.labels : [];
                 let datasets = [];
 
@@ -2071,7 +2108,7 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
                             legend: {
                                 display: !!metric.show_legend,
                                 position: chartType === 'doughnut' ? 'bottom' : 'top',
-                                labels: { color:'#475569', boxWidth:12, boxHeight:12, padding:16 }
+                                labels: { color:theme.text, boxWidth:12, boxHeight:12, padding:16 }
                             },
                             tooltip: {
                                 callbacks: {
@@ -2084,8 +2121,8 @@ if ( ! function_exists('eventosapp_render_metrics') ) {
                             }
                         },
                         scales: chartType === 'doughnut' ? {} : {
-                            x: { ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} },
-                            y: { beginAtZero:true, ticks:{ color:'#64748b' }, grid:{ color:'rgba(148,163,184,.22)'} }
+                            x: { ticks:{ color:theme.muted }, grid:{ color:theme.grid} },
+                            y: { beginAtZero:true, ticks:{ color:theme.muted }, grid:{ color:theme.grid} }
                         }
                     }
                 };

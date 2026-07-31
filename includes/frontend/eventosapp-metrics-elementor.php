@@ -241,8 +241,17 @@ if ( ! function_exists('eventosapp_register_metrics_elementor_widget') ) {
                         'text_color'         => ['Texto principal', '#182230', '--evapp-text'],
                         'muted_color'        => ['Texto secundario', '#64748b', '--evapp-muted'],
                         'border_color'       => ['Bordes', '#dfe7f1', '--evapp-border'],
-                        'success_color'      => ['Indicadores positivos', '#15803d', '--evapp-success'],
-                        'warning_color'      => ['Indicadores pendientes', '#b45309', '--evapp-warning'],
+                        'success_color'          => ['Indicadores positivos', '#15803d', '--evapp-success'],
+                        'warning_color'          => ['Indicadores pendientes', '#b45309', '--evapp-warning'],
+                        'analytics_background'   => ['Fondo de gráficos y tablas', '#0b1020', '--evapp-analytics-bg'],
+                        'analytics_surface'      => ['Encabezados y totales oscuros', '#0f1835', '--evapp-analytics-bg-soft'],
+                        'analytics_alt_surface'  => ['Filas alternas oscuras', '#0c1733', '--evapp-analytics-bg-alt'],
+                        'analytics_hover_surface'=> ['Fondo hover y grupos', '#111d3d', '--evapp-analytics-bg-hover'],
+                        'analytics_text'         => ['Texto de métricas', '#eaf1ff', '--evapp-analytics-text'],
+                        'analytics_title'        => ['Títulos de métricas', '#cfe0ff', '--evapp-analytics-title'],
+                        'analytics_muted'        => ['Texto secundario de métricas', '#a9b6d3', '--evapp-analytics-muted'],
+                        'analytics_border'       => ['Bordes de métricas', '#263554', '--evapp-analytics-border'],
+                        'analytics_grid'         => ['Líneas de los gráficos', 'rgba(148,163,184,0.18)', '--evapp-analytics-grid'],
                     ];
 
                     foreach ($controls as $key => $definition) {
@@ -559,9 +568,16 @@ if ( ! function_exists('eventosapp_register_metrics_elementor_widget') ) {
                     ]);
 
                     $this->add_control('card_background', [
-                        'label'     => 'Fondo',
-                        'type'      => \Elementor\Controls_Manager::COLOR,
-                        'selectors' => ['{{WRAPPER}} .evapp-metric-card' => 'background:{{VALUE}};'],
+                        'label'       => 'Fondo personalizado',
+                        'type'        => \Elementor\Controls_Manager::COLOR,
+                        'selectors'   => ['{{WRAPPER}} .evapp-metric-card' => 'background:{{VALUE}};'],
+                        'description' => 'Déjalo vacío para utilizar el fondo oscuro definido en Tema general.',
+                    ]);
+                    $this->add_control('card_border_color', [
+                        'label'       => 'Borde personalizado',
+                        'type'        => \Elementor\Controls_Manager::COLOR,
+                        'selectors'   => ['{{WRAPPER}} .evapp-metric-card' => 'border-color:{{VALUE}};'],
+                        'description' => 'Déjalo vacío para utilizar el borde oscuro definido en Tema general.',
                     ]);
                     $this->add_control('card_title_color', [
                         'label'     => 'Color del título',
@@ -649,6 +665,49 @@ if ( ! function_exists('eventosapp_register_metrics_elementor_widget') ) {
                         'type'      => \Elementor\Controls_Manager::COLOR,
                         'selectors' => [
                             '{{WRAPPER}} .evapp-table td, {{WRAPPER}} .evapp-qr-table td, {{WRAPPER}} .evapp-custom-table td' => 'color:{{VALUE}};',
+                        ],
+                    ]);
+                    $this->add_control('table_body_background', [
+                        'label'     => 'Fondo de filas',
+                        'type'      => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [
+                            '{{WRAPPER}} .evapp-table table, {{WRAPPER}} .evapp-qr-table table, {{WRAPPER}} .evapp-custom-table, {{WRAPPER}} .evapp-table tbody tr, {{WRAPPER}} .evapp-qr-table tbody tr, {{WRAPPER}} .evapp-custom-table tbody tr' => 'background:{{VALUE}};',
+                        ],
+                    ]);
+                    $this->add_control('table_alt_background', [
+                        'label'     => 'Fondo de filas alternas',
+                        'type'      => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [
+                            '{{WRAPPER}} .evapp-table tbody tr:nth-child(even), {{WRAPPER}} .evapp-qr-table tbody tr:nth-child(even), {{WRAPPER}} .evapp-custom-table tbody tr:nth-child(even)' => 'background:{{VALUE}};',
+                        ],
+                    ]);
+                    $this->add_control('table_hover_background', [
+                        'label'     => 'Fondo al pasar el cursor',
+                        'type'      => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [
+                            '{{WRAPPER}} .evapp-table tbody tr:hover, {{WRAPPER}} .evapp-qr-table tbody tr:hover, {{WRAPPER}} .evapp-custom-table tbody tr:hover' => 'background:{{VALUE}};',
+                        ],
+                    ]);
+                    $this->add_control('table_border_color', [
+                        'label'     => 'Color de divisiones',
+                        'type'      => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [
+                            '{{WRAPPER}} .evapp-table-scroll, {{WRAPPER}} .evapp-custom-table-wrap' => 'border-color:{{VALUE}};',
+                            '{{WRAPPER}} .evapp-table th, {{WRAPPER}} .evapp-table td, {{WRAPPER}} .evapp-qr-table th, {{WRAPPER}} .evapp-qr-table td, {{WRAPPER}} .evapp-custom-table th, {{WRAPPER}} .evapp-custom-table td' => 'border-color:{{VALUE}};',
+                        ],
+                    ]);
+                    $this->add_control('table_total_background', [
+                        'label'     => 'Fondo de fila total',
+                        'type'      => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [
+                            '{{WRAPPER}} .evapp-table .evapp-total td, {{WRAPPER}} .evapp-qr-table .evapp-total td, {{WRAPPER}} .evapp-custom-table tbody tr.evapp-custom-total-row td' => 'background:{{VALUE}};',
+                        ],
+                    ]);
+                    $this->add_control('table_total_color', [
+                        'label'     => 'Texto de fila total',
+                        'type'      => \Elementor\Controls_Manager::COLOR,
+                        'selectors' => [
+                            '{{WRAPPER}} .evapp-table .evapp-total td, {{WRAPPER}} .evapp-qr-table .evapp-total td, {{WRAPPER}} .evapp-custom-table tbody tr.evapp-custom-total-row td' => 'color:{{VALUE}};',
                         ],
                     ]);
                     $this->add_group_control(\Elementor\Group_Control_Typography::get_type(), [
