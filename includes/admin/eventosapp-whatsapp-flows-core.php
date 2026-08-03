@@ -610,11 +610,18 @@ function eventosapp_whatsapp_flows_get_flow_config($flow_post_id) {
         'created_at_meta'        => get_post_meta($flow_post_id, '_eventosapp_wa_flow_created_at_meta', true),
         'published_at'           => get_post_meta($flow_post_id, '_eventosapp_wa_flow_published_at', true),
         'last_sync_at'           => get_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', true),
+        'json_source'            => sanitize_key((string) get_post_meta($flow_post_id, '_eventosapp_wa_flow_json_source', true)) ?: 'local',
+        'meta_json_synced_at'    => get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_json_synced_at', true),
+        'meta_json_hash'         => get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_json_hash', true),
+        'local_json_hash'        => get_post_meta($flow_post_id, '_eventosapp_wa_flow_local_json_hash', true),
+        'last_meta_json'         => get_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_json', true),
+        'unsupported_components'=> get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_unsupported_components', true),
     ];
 
     $config['category'] = array_key_exists($config['category'], eventosapp_whatsapp_flows_categories()) ? $config['category'] : 'SURVEY';
     $config['screen_id'] = eventosapp_whatsapp_flows_sanitize_flow_screen_id($config['screen_id'], 'SURVEY');
     $config['questions_per_screen'] = min(15, max(3, absint($config['questions_per_screen'] ?? 8)));
+    $config['unsupported_components'] = is_array($config['unsupported_components']) ? $config['unsupported_components'] : [];
 
     return $config;
 }
@@ -736,6 +743,18 @@ function eventosapp_whatsapp_flows_question_to_component($question) {
 
 
 function eventosapp_whatsapp_flows_build_flow_json($flow_post_id, $override_config = []) {
+    $flow_post_id = absint($flow_post_id);
+    $override_config = is_array($override_config) ? $override_config : [];
+    $force_local_json = ! empty($override_config['_force_local_json']);
+    unset($override_config['_force_local_json']);
+
+    if ( $flow_post_id && ! $force_local_json ) {
+        $meta_json_override = eventosapp_whatsapp_flows_get_meta_json_override($flow_post_id);
+        if ( ! empty($meta_json_override) ) {
+            return $meta_json_override;
+        }
+    }
+
     $config = $flow_post_id ? eventosapp_whatsapp_flows_get_flow_config($flow_post_id) : [];
     $config = wp_parse_args($override_config, $config);
 
@@ -1085,6 +1104,672 @@ function eventosapp_whatsapp_flows_extract_meta_flow_id($response) {
     return '';
 }
 
+/**
+ * Normaliza un JSON para poder comparar su contenido sin depender del orden
+ * de las claves de los objetos. El orden de las listas sí se conserva porque
+ * es significativo en screens, children y data-source.
+ */
+function eventosapp_whatsapp_flows_json_canonicalize($value) {
+    if ( ! is_array($value) ) {
+        return $value;
+    }
+
+    $keys = array_keys($value);
+    $is_list = empty($value) || ($keys === range(0, count($value) - 1));
+    if ( ! $is_list ) {
+        ksort($value, SORT_STRING);
+    }
+
+    foreach ( $value as $key => $item ) {
+        $value[$key] = eventosapp_whatsapp_flows_json_canonicalize($item);
+    }
+
+    return $value;
+}
+
+function eventosapp_whatsapp_flows_json_hash($value) {
+    if ( is_string($value) ) {
+        $decoded = json_decode($value, true);
+        if ( json_last_error() === JSON_ERROR_NONE && is_array($decoded) ) {
+            $value = $decoded;
+        }
+    }
+
+    if ( ! is_array($value) ) {
+        return '';
+    }
+
+    $encoded = eventosapp_whatsapp_flows_json_encode(
+        eventosapp_whatsapp_flows_json_canonicalize($value),
+        false
+    );
+
+    return is_string($encoded) && $encoded !== '' ? hash('sha256', $encoded) : '';
+}
+
+function eventosapp_whatsapp_flows_get_meta_json_override($flow_post_id) {
+    $flow_post_id = absint($flow_post_id);
+    if ( ! $flow_post_id ) {
+        return [];
+    }
+
+    $source = sanitize_key((string) get_post_meta($flow_post_id, '_eventosapp_wa_flow_json_source', true));
+    if ( ! in_array($source, ['meta', 'synced'], true) ) {
+        return [];
+    }
+
+    $json = get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_json_override', true);
+    return is_array($json) && ! empty($json['screens']) && is_array($json['screens']) ? $json : [];
+}
+
+function eventosapp_whatsapp_flows_clear_meta_json_override($flow_post_id) {
+    $flow_post_id = absint($flow_post_id);
+    if ( ! $flow_post_id ) {
+        return;
+    }
+
+    delete_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_json_override');
+    delete_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_unsupported_components');
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_json_source', 'local');
+}
+
+function eventosapp_whatsapp_flows_mark_json_synced($flow_post_id, $flow_json, $source = 'synced', $unsupported_components = []) {
+    $flow_post_id = absint($flow_post_id);
+    if ( ! $flow_post_id || ! is_array($flow_json) ) {
+        return false;
+    }
+
+    $source = sanitize_key((string) $source);
+    if ( ! in_array($source, ['meta', 'synced'], true) ) {
+        $source = 'synced';
+    }
+
+    $unsupported_components = is_array($unsupported_components)
+        ? array_values(array_unique(array_filter(array_map('sanitize_text_field', $unsupported_components))))
+        : [];
+
+    $pretty_json = eventosapp_whatsapp_flows_json_encode($flow_json, true);
+    $hash = eventosapp_whatsapp_flows_json_hash($flow_json);
+    $now = current_time('mysql');
+
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_json_source', $source);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_json_override', $flow_json);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_json', $pretty_json);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_json', $pretty_json);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_json_hash', $hash);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_local_json_hash', $hash);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_json_synced_at', $now);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_unsupported_components', $unsupported_components);
+
+    return true;
+}
+
+function eventosapp_whatsapp_flows_component_type_to_local($component_type) {
+    $map = [
+        'TextHeading'       => 'heading',
+        'TextSubheading'    => 'subheading',
+        'TextBody'          => 'body',
+        'TextCaption'       => 'caption',
+        'RadioButtonsGroup' => 'radio',
+        'CheckboxGroup'     => 'checkbox',
+        'Dropdown'          => 'dropdown',
+        'TextInput'         => 'text',
+        'TextArea'          => 'textarea',
+        'DatePicker'        => 'date',
+        'OptIn'             => 'optin',
+    ];
+
+    return $map[(string) $component_type] ?? '';
+}
+
+function eventosapp_whatsapp_flows_meta_component_to_question($component, $fallback_slug = '') {
+    if ( ! is_array($component) ) {
+        return new WP_Error('invalid_meta_component', 'Meta devolvió un componente inválido.');
+    }
+
+    $component_type = (string)($component['type'] ?? '');
+    $local_type = eventosapp_whatsapp_flows_component_type_to_local($component_type);
+    if ( $local_type === '' ) {
+        return new WP_Error('unsupported_meta_component', 'Componente no soportado por el constructor local: ' . ($component_type !== '' ? $component_type : 'sin tipo') . '.');
+    }
+
+    $display_types = eventosapp_whatsapp_flows_display_question_types();
+    $is_display = in_array($local_type, $display_types, true);
+    $label = $is_display
+        ? sanitize_text_field((string)($component['text'] ?? ''))
+        : sanitize_text_field((string)($component['label'] ?? ''));
+
+    if ( $label === '' ) {
+        $label = $is_display ? $component_type : 'Campo importado desde Meta';
+    }
+
+    $slug = $is_display
+        ? eventosapp_whatsapp_flows_sanitize_slug($fallback_slug, 'bloque_' . wp_generate_password(6, false, false))
+        : eventosapp_whatsapp_flows_sanitize_slug($component['name'] ?? '', $fallback_slug);
+
+    $input_type = sanitize_key((string)($component['input-type'] ?? 'text'));
+    if ( ! array_key_exists($input_type, eventosapp_whatsapp_flows_text_input_types()) ) {
+        $input_type = 'text';
+    }
+
+    $options = [];
+    if ( in_array($local_type, ['radio', 'checkbox', 'dropdown'], true) ) {
+        $options = eventosapp_whatsapp_flows_normalize_options($component['data-source'] ?? []);
+    }
+
+    return [
+        'slug'        => $slug,
+        'label'       => $label,
+        'help'        => '',
+        'placeholder' => '',
+        'type'        => $local_type,
+        'input_type'  => $input_type,
+        'required'    => ! $is_display && ! empty($component['required']) ? '1' : '0',
+        'options'     => $options,
+        'min_chars'   => absint($component['min-chars'] ?? 0),
+        'max_chars'   => absint($component['max-chars'] ?? 0),
+    ];
+}
+
+/**
+ * Convierte la parte editable del Flow JSON de Meta al modelo del constructor.
+ * El JSON exacto se conserva por separado, por lo que los componentes que el
+ * constructor todavía no representa nunca se pierden durante una sincronización.
+ */
+function eventosapp_whatsapp_flows_parse_meta_flow_json($flow_json, $fallback_config = [], $meta_data = []) {
+    if ( ! is_array($flow_json) || empty($flow_json['screens']) || ! is_array($flow_json['screens']) ) {
+        return new WP_Error('invalid_meta_flow_json', 'El asset FLOW_JSON descargado desde Meta no contiene screens válidas.');
+    }
+
+    $fallback_config = is_array($fallback_config) ? $fallback_config : [];
+    $meta_data = is_array($meta_data) ? $meta_data : [];
+    $questions = [];
+    $unsupported = [];
+    $title = sanitize_text_field((string)($fallback_config['title'] ?? ($meta_data['name'] ?? 'WhatsApp Flow')));
+    $description = sanitize_textarea_field((string)($fallback_config['description'] ?? ''));
+    $submit_label = sanitize_text_field((string)($fallback_config['submit_label'] ?? 'Enviar respuestas'));
+    $screen_id = eventosapp_whatsapp_flows_sanitize_flow_screen_id($flow_json['screens'][0]['id'] ?? ($fallback_config['screen_id'] ?? 'SURVEY'), 'SURVEY');
+    $max_inputs_per_screen = 0;
+    $title_found = false;
+    $description_found = false;
+
+    foreach ( $flow_json['screens'] as $screen_index => $screen ) {
+        if ( ! is_array($screen) ) {
+            $unsupported[] = 'screens[' . absint($screen_index) . '] inválida';
+            continue;
+        }
+
+        $layout = isset($screen['layout']) && is_array($screen['layout']) ? $screen['layout'] : [];
+        $layout_children = isset($layout['children']) && is_array($layout['children']) ? $layout['children'] : [];
+        $screen_input_count = 0;
+
+        foreach ( $layout_children as $layout_index => $layout_child ) {
+            if ( ! is_array($layout_child) ) {
+                $unsupported[] = 'Componente de layout inválido en pantalla ' . ($screen['id'] ?? ($screen_index + 1));
+                continue;
+            }
+
+            $layout_type = (string)($layout_child['type'] ?? '');
+
+            if ( $screen_index === 0 && $layout_type === 'TextHeading' && ! $title_found ) {
+                $candidate = sanitize_text_field((string)($layout_child['text'] ?? ''));
+                if ( $candidate !== '' ) {
+                    $title = $candidate;
+                    $title_found = true;
+                }
+                continue;
+            }
+
+            if ( $screen_index === 0 && $layout_type === 'TextBody' && ! $description_found ) {
+                $candidate = sanitize_textarea_field((string)($layout_child['text'] ?? ''));
+                if ( $candidate !== '' ) {
+                    $description = $candidate;
+                    $description_found = true;
+                }
+                continue;
+            }
+
+            if ( $layout_type !== 'Form' ) {
+                if ( in_array($layout_type, ['TextHeading', 'TextSubheading', 'TextBody', 'TextCaption'], true) ) {
+                    // Los textos automáticos situados fuera del Form no forman parte
+                    // de la lista editable de preguntas del constructor.
+                    continue;
+                }
+                $unsupported[] = ($layout_type !== '' ? $layout_type : 'Componente sin tipo')
+                    . ' fuera de Form en ' . ($screen['id'] ?? ('pantalla ' . ($screen_index + 1)));
+                continue;
+            }
+
+            $form_children = isset($layout_child['children']) && is_array($layout_child['children'])
+                ? $layout_child['children']
+                : [];
+            $pending_help = '';
+
+            foreach ( $form_children as $component_index => $component ) {
+                if ( ! is_array($component) ) {
+                    $unsupported[] = 'Componente inválido en ' . ($screen['id'] ?? ('pantalla ' . ($screen_index + 1)));
+                    continue;
+                }
+
+                $component_type = (string)($component['type'] ?? '');
+                if ( $component_type === 'Footer' ) {
+                    $action_name = sanitize_key((string)($component['on-click-action']['name'] ?? ''));
+                    if ( $action_name === 'complete' || ! empty($screen['terminal']) ) {
+                        $candidate = sanitize_text_field((string)($component['label'] ?? ''));
+                        if ( $candidate !== '' ) {
+                            $submit_label = $candidate;
+                        }
+                    }
+                    $pending_help = '';
+                    continue;
+                }
+
+                if ( $component_type === 'TextCaption' ) {
+                    $next = $form_children[$component_index + 1] ?? null;
+                    $next_type = is_array($next) ? (string)($next['type'] ?? '') : '';
+                    $next_local_type = eventosapp_whatsapp_flows_component_type_to_local($next_type);
+                    if ( $next_local_type !== '' && in_array($next_local_type, eventosapp_whatsapp_flows_input_question_types(), true) ) {
+                        $pending_help = sanitize_textarea_field((string)($component['text'] ?? ''));
+                        continue;
+                    }
+                }
+
+                $fallback_slug = 'meta_' . ($screen_index + 1) . '_' . ($component_index + 1);
+                $question = eventosapp_whatsapp_flows_meta_component_to_question($component, $fallback_slug);
+                if ( is_wp_error($question) ) {
+                    $unsupported[] = ($component_type !== '' ? $component_type : 'Componente sin tipo')
+                        . ' en ' . ($screen['id'] ?? ('pantalla ' . ($screen_index + 1)));
+                    $pending_help = '';
+                    continue;
+                }
+
+                if ( $pending_help !== '' && in_array($question['type'], eventosapp_whatsapp_flows_input_question_types(), true) ) {
+                    $question['help'] = $pending_help;
+                }
+                $pending_help = '';
+
+                if ( in_array($question['type'], eventosapp_whatsapp_flows_input_question_types(), true) ) {
+                    $screen_input_count++;
+                }
+
+                $questions[] = $question;
+            }
+        }
+
+        $max_inputs_per_screen = max($max_inputs_per_screen, $screen_input_count);
+    }
+
+    $categories = eventosapp_whatsapp_flows_categories();
+    $meta_categories = isset($meta_data['categories']) && is_array($meta_data['categories']) ? $meta_data['categories'] : [];
+    $category = strtoupper(preg_replace('/[^A-Z0-9_]+/', '', (string)($meta_categories[0] ?? ($fallback_config['category'] ?? 'SURVEY'))));
+    if ( ! isset($categories[$category]) ) {
+        $category = 'SURVEY';
+    }
+
+    if ( empty($questions) ) {
+        $questions = eventosapp_whatsapp_flows_default_questions();
+        $unsupported[] = 'Meta no devolvió componentes convertibles al constructor local; se conserva el JSON remoto exacto.';
+    }
+
+    return [
+        'flow' => [
+            'title'                => $title !== '' ? $title : 'WhatsApp Flow',
+            'description'          => $description,
+            'category'             => $category,
+            'cta'                  => sanitize_text_field((string)($fallback_config['cta'] ?? 'Responder encuesta')),
+            'submit_label'         => $submit_label !== '' ? $submit_label : 'Enviar respuestas',
+            'screen_id'            => $screen_id,
+            'questions_per_screen' => min(15, max(3, $max_inputs_per_screen ?: absint($fallback_config['questions_per_screen'] ?? 8))),
+            'questions'            => eventosapp_whatsapp_flows_normalize_questions($questions),
+        ],
+        'unsupported_components' => array_values(array_unique(array_filter($unsupported))),
+    ];
+}
+
+function eventosapp_whatsapp_flows_get_meta_flow_details($flow_post_id) {
+    $flow_post_id = absint($flow_post_id);
+    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
+
+    if ( $meta_flow_id === '' ) {
+        return new WP_Error('missing_meta_flow_id', 'El Flow local todavía no tiene Flow ID de Meta.');
+    }
+
+    $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
+    $result = eventosapp_whatsapp_flows_graph_request(
+        'GET',
+        $meta_flow_id . '?fields=id,name,status,categories,validation_errors,json_version,data_api_version,preview',
+        null,
+        $settings
+    );
+
+    if ( empty($result['ok']) || ! is_array($result['response'] ?? null) ) {
+        return new WP_Error('meta_flow_details_error', $result['message'] ?? 'No se pudieron consultar los datos del Flow en Meta.');
+    }
+
+    return [
+        'config'   => $config,
+        'settings' => $settings,
+        'result'   => $result,
+        'response' => $result['response'],
+    ];
+}
+
+function eventosapp_whatsapp_flows_download_meta_flow_json($flow_post_id, $settings = null) {
+    $flow_post_id = absint($flow_post_id);
+    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
+
+    if ( $meta_flow_id === '' ) {
+        return new WP_Error('missing_meta_flow_id', 'El Flow local todavía no tiene Flow ID de Meta.');
+    }
+
+    $settings = is_array($settings)
+        ? $settings
+        : eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
+
+    $assets_result = eventosapp_whatsapp_flows_graph_request('GET', $meta_flow_id . '/assets', null, $settings);
+    if ( empty($assets_result['ok']) || ! is_array($assets_result['response'] ?? null) ) {
+        return new WP_Error('meta_assets_error', $assets_result['message'] ?? 'Meta no devolvió los assets del Flow.');
+    }
+
+    $asset = [];
+    foreach ( (array)($assets_result['response']['data'] ?? []) as $candidate ) {
+        if ( is_array($candidate) && strtoupper((string)($candidate['asset_type'] ?? '')) === 'FLOW_JSON' ) {
+            $asset = $candidate;
+            break;
+        }
+    }
+
+    $download_url = esc_url_raw((string)($asset['download_url'] ?? ''));
+    if ( $download_url === '' || strtolower((string) wp_parse_url($download_url, PHP_URL_SCHEME)) !== 'https' ) {
+        return new WP_Error('meta_flow_json_url_missing', 'Meta no devolvió una URL HTTPS válida para descargar el asset FLOW_JSON.');
+    }
+
+    $download_headers = [
+        'Accept' => 'application/json',
+    ];
+    if ( ! empty($settings['access_token']) ) {
+        $download_headers['Authorization'] = 'Bearer ' . trim((string)$settings['access_token']);
+    }
+
+    $download = wp_remote_get($download_url, [
+        'timeout'     => 45,
+        'redirection' => 3,
+        'headers'     => $download_headers,
+    ]);
+
+    if ( is_wp_error($download) ) {
+        return new WP_Error('meta_flow_json_download_error', 'No se pudo descargar el FLOW_JSON desde Meta: ' . $download->get_error_message());
+    }
+
+    $http_code = (int) wp_remote_retrieve_response_code($download);
+    $raw_json = (string) wp_remote_retrieve_body($download);
+    if ( $http_code < 200 || $http_code >= 300 ) {
+        return new WP_Error('meta_flow_json_http_error', 'Meta entregó el asset FLOW_JSON con HTTP ' . $http_code . '.');
+    }
+    if ( $raw_json === '' || strlen($raw_json) > 5242880 ) {
+        return new WP_Error('meta_flow_json_invalid_size', 'El FLOW_JSON descargado está vacío o supera 5 MB.');
+    }
+
+    $decoded = json_decode($raw_json, true);
+    if ( json_last_error() !== JSON_ERROR_NONE || ! is_array($decoded) ) {
+        return new WP_Error('meta_flow_json_invalid', 'El asset descargado desde Meta no contiene un JSON válido: ' . json_last_error_msg());
+    }
+
+    return [
+        'json'          => $decoded,
+        'raw_json'      => $raw_json,
+        'asset'         => $asset,
+        'assets_result' => $assets_result,
+    ];
+}
+
+function eventosapp_whatsapp_flows_apply_meta_flow_json($flow_post_id, $flow_json, $meta_data = []) {
+    $flow_post_id = absint($flow_post_id);
+    $current_config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    if ( ! $flow_post_id || empty($current_config) || ! is_array($flow_json) ) {
+        return new WP_Error('invalid_meta_sync_context', 'No se pudo preparar el Flow local para aplicar el JSON de Meta.');
+    }
+
+    $local_before = eventosapp_whatsapp_flows_build_flow_json(
+        $flow_post_id,
+        array_merge($current_config, ['_force_local_json' => true])
+    );
+    update_post_meta(
+        $flow_post_id,
+        '_eventosapp_wa_flow_local_json_before_meta_sync',
+        eventosapp_whatsapp_flows_json_encode($local_before, true)
+    );
+
+    $parsed = eventosapp_whatsapp_flows_parse_meta_flow_json($flow_json, $current_config, $meta_data);
+    if ( is_wp_error($parsed) ) {
+        return $parsed;
+    }
+
+    $editable = $parsed['flow'];
+    wp_update_post([
+        'ID'         => $flow_post_id,
+        'post_title' => sanitize_text_field((string)$editable['title']),
+    ]);
+
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_description', sanitize_textarea_field((string)$editable['description']));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_category', sanitize_text_field((string)$editable['category']));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_cta', sanitize_text_field((string)$editable['cta']));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_submit_label', sanitize_text_field((string)$editable['submit_label']));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_screen_id', eventosapp_whatsapp_flows_sanitize_flow_screen_id($editable['screen_id'] ?? 'SURVEY', 'SURVEY'));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_questions_per_screen', min(15, max(3, absint($editable['questions_per_screen'] ?? 8))));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_questions', eventosapp_whatsapp_flows_normalize_questions($editable['questions'] ?? []));
+
+    if ( ! empty($meta_data['status']) ) {
+        update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', sanitize_key(strtolower((string)$meta_data['status'])));
+    }
+    if ( isset($meta_data['validation_errors']) && is_array($meta_data['validation_errors']) ) {
+        update_post_meta($flow_post_id, '_eventosapp_wa_flow_validation_errors', $meta_data['validation_errors']);
+    }
+    $preview_url = esc_url_raw((string)($meta_data['preview']['preview_url'] ?? ''));
+    if ( $preview_url !== '' ) {
+        update_post_meta($flow_post_id, '_eventosapp_wa_flow_preview_url', $preview_url);
+    }
+
+    $local_after = eventosapp_whatsapp_flows_build_flow_json(
+        $flow_post_id,
+        array_merge(eventosapp_whatsapp_flows_get_flow_config($flow_post_id), ['_force_local_json' => true])
+    );
+    $meta_json_hash = eventosapp_whatsapp_flows_json_hash($flow_json);
+    $local_json_hash = eventosapp_whatsapp_flows_json_hash($local_after);
+    $unsupported_components = is_array($parsed['unsupported_components'] ?? null)
+        ? $parsed['unsupported_components']
+        : [];
+
+    if (
+        $meta_json_hash !== ''
+        && $local_json_hash !== ''
+        && ! hash_equals($meta_json_hash, $local_json_hash)
+    ) {
+        $unsupported_components[] = 'Propiedades o estructura avanzada del FLOW_JSON que el constructor local no representa de forma exacta';
+        $unsupported_components = array_values(array_unique($unsupported_components));
+    }
+
+    eventosapp_whatsapp_flows_mark_json_synced(
+        $flow_post_id,
+        $flow_json,
+        'meta',
+        $unsupported_components
+    );
+
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_local_json_hash', $local_json_hash);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', current_time('mysql'));
+
+    return [
+        'ok'                     => true,
+        'unsupported_components' => $unsupported_components,
+        'meta_json_hash'         => $meta_json_hash,
+        'local_json_hash'        => $local_json_hash,
+    ];
+}
+
+function eventosapp_whatsapp_flows_sync_json_from_meta($flow_post_id) {
+    $details = eventosapp_whatsapp_flows_get_meta_flow_details($flow_post_id);
+    if ( is_wp_error($details) ) {
+        return $details;
+    }
+
+    $download = eventosapp_whatsapp_flows_download_meta_flow_json($flow_post_id, $details['settings']);
+    if ( is_wp_error($download) ) {
+        return $download;
+    }
+
+    $applied = eventosapp_whatsapp_flows_apply_meta_flow_json(
+        $flow_post_id,
+        $download['json'],
+        $details['response']
+    );
+    if ( is_wp_error($applied) ) {
+        return $applied;
+    }
+
+    $technical_response = [
+        'flow'   => $details['result'],
+        'assets' => [
+            'ok'        => ! empty($download['assets_result']['ok']),
+            'http_code' => absint($download['assets_result']['http_code'] ?? 0),
+            'message'   => sanitize_text_field((string)($download['assets_result']['message'] ?? '')),
+            'asset'     => [
+                'name'       => sanitize_file_name((string)($download['asset']['name'] ?? 'flow.json')),
+                'asset_type' => sanitize_text_field((string)($download['asset']['asset_type'] ?? 'FLOW_JSON')),
+            ],
+        ],
+    ];
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_response', $technical_response);
+
+    eventosapp_whatsapp_flows_add_activity('flow_json_sincronizado_desde_meta', [
+        'flow_post_id'          => absint($flow_post_id),
+        'meta_flow_id'          => preg_replace('/\D+/', '', (string)($details['config']['meta_flow_id'] ?? '')),
+        'meta_json_hash'        => $applied['meta_json_hash'] ?? '',
+        'local_json_hash'       => $applied['local_json_hash'] ?? '',
+        'unsupported_components'=> $applied['unsupported_components'] ?? [],
+    ]);
+
+    return $applied;
+}
+
+function eventosapp_whatsapp_flows_refresh_preview_url($flow_post_id, $invalidate = true) {
+    $flow_post_id = absint($flow_post_id);
+    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
+
+    if ( $meta_flow_id === '' ) {
+        return new WP_Error('missing_meta_flow_id', 'Falta Flow ID de Meta.');
+    }
+
+    $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
+    $invalidate_value = $invalidate ? 'true' : 'false';
+    $result = eventosapp_whatsapp_flows_graph_request(
+        'GET',
+        $meta_flow_id . '?fields=preview.invalidate(' . $invalidate_value . ')',
+        null,
+        $settings
+    );
+
+    if ( empty($result['ok']) || ! is_array($result['response'] ?? null) ) {
+        return new WP_Error('meta_preview_error', $result['message'] ?? 'No se pudo obtener la vista previa.');
+    }
+
+    $preview_url = esc_url_raw((string)($result['response']['preview']['preview_url'] ?? ($result['response']['preview_url'] ?? ($result['response']['url'] ?? ''))));
+    if ( $preview_url !== '' ) {
+        update_post_meta($flow_post_id, '_eventosapp_wa_flow_preview_url', $preview_url);
+    }
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', current_time('mysql'));
+
+    return [
+        'ok'          => true,
+        'preview_url' => $preview_url,
+        'result'      => $result,
+    ];
+}
+
+function eventosapp_whatsapp_flows_upload_local_json_to_meta($flow_post_id, $invalidate_preview = true) {
+    $flow_post_id = absint($flow_post_id);
+    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+    $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
+
+    if ( $meta_flow_id === '' ) {
+        return new WP_Error('missing_meta_flow_id', 'Primero debes crear el Flow en Meta para obtener el Flow ID.');
+    }
+
+    $current_status = sanitize_key((string)($config['status'] ?? ''));
+    if ( in_array($current_status, ['published', 'publicado'], true) ) {
+        return new WP_Error(
+            'published_flow_immutable',
+            'Meta no permite modificar el JSON de un Flow publicado. Debes crear o recrear un nuevo Flow ID con la configuración local.'
+        );
+    }
+
+    $flow_json = eventosapp_whatsapp_flows_build_flow_json($flow_post_id);
+    $upload_dir = wp_upload_dir();
+    if ( empty($upload_dir['basedir']) || ! wp_mkdir_p($upload_dir['basedir'] . '/eventosapp-whatsapp-flows') ) {
+        return new WP_Error('flow_json_dir', 'No se pudo crear la carpeta temporal para el JSON del Flow.');
+    }
+
+    $json_text = eventosapp_whatsapp_flows_json_encode($flow_json, true);
+    $file_path = trailingslashit($upload_dir['basedir']) . 'eventosapp-whatsapp-flows/flow-sync-' . $flow_post_id . '-' . time() . '.json';
+    if ( file_put_contents($file_path, $json_text) === false ) {
+        return new WP_Error('flow_json_write', 'No se pudo escribir el archivo JSON temporal.');
+    }
+
+    $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
+    $result = eventosapp_whatsapp_flows_graph_multipart_file_request('POST', $meta_flow_id . '/assets', $file_path, [
+        'name'       => 'flow.json',
+        'asset_type' => 'FLOW_JSON',
+    ], $settings);
+
+    if ( file_exists($file_path) ) {
+        @unlink($file_path);
+    }
+
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_response', $result);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', current_time('mysql'));
+
+    $validation_errors = [];
+    if ( is_array($result['response'] ?? null) && isset($result['response']['validation_errors']) ) {
+        $validation_errors = is_array($result['response']['validation_errors']) ? $result['response']['validation_errors'] : [];
+    }
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_validation_errors', $validation_errors);
+
+    $meta_success = true;
+    if ( is_array($result['response'] ?? null) && array_key_exists('success', $result['response']) ) {
+        $meta_success = ! empty($result['response']['success']);
+    }
+
+    if ( empty($result['ok']) || ! $meta_success ) {
+        return new WP_Error('meta_flow_json_upload_error', $result['message'] ?? 'Meta rechazó la subida del JSON.');
+    }
+
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', empty($validation_errors) ? 'json_uploaded' : 'json_with_validation_errors');
+    eventosapp_whatsapp_flows_mark_json_synced($flow_post_id, $flow_json, 'synced', []);
+
+    $preview = null;
+    if ( $invalidate_preview && empty($validation_errors) ) {
+        $preview = eventosapp_whatsapp_flows_refresh_preview_url($flow_post_id, true);
+    }
+
+    eventosapp_whatsapp_flows_add_activity('flow_json_subido', [
+        'flow_post_id'     => $flow_post_id,
+        'meta_flow_id'     => $meta_flow_id,
+        'validation_errors'=> $validation_errors,
+        'preview_refreshed'=> ! is_wp_error($preview) && is_array($preview) && ! empty($preview['ok']),
+        'result'           => $result,
+    ]);
+
+    return [
+        'ok'                => true,
+        'validation_errors' => $validation_errors,
+        'preview'           => $preview,
+        'result'            => $result,
+    ];
+}
+
 function eventosapp_whatsapp_flows_notice_redirect($args = []) {
     $args = wp_parse_args($args, [
         'page' => 'eventosapp_whatsapp_flows',
@@ -1120,6 +1805,14 @@ function eventosapp_whatsapp_flows_system_managed_keys() {
         'published_at',
         'last_sync_at',
         'last_json',
+        'json_source',
+        'meta_json_synced_at',
+        'meta_json_hash',
+        'local_json_hash',
+        'last_meta_json',
+        'meta_json_override',
+        'meta_unsupported_components',
+        'local_json_before_meta_sync',
         'duplicate_source_id',
         'duplicate_source_status',
         'duplicate_source_meta_id',
@@ -1586,11 +2279,20 @@ function eventosapp_whatsapp_flows_create_imported_local_flow($imported_flow, $i
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_created_at_meta', '');
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_published_at', '');
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_sync_at', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_json_source', 'local');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_json_override');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_last_meta_json');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_json_hash');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_local_json_hash');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_json_synced_at');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_unsupported_components');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_local_json_before_meta_sync');
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_imported_at', current_time('mysql'));
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_import_source_title', sanitize_text_field((string)($import_context['source_title'] ?? $title)));
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_import_source_exported_at', sanitize_text_field((string)($import_context['exported_at'] ?? '')));
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_import_source_version', absint($import_context['version'] ?? 1));
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($new_flow_id), true));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_local_json_hash', eventosapp_whatsapp_flows_json_hash(eventosapp_whatsapp_flows_build_flow_json($new_flow_id)));
 
     eventosapp_whatsapp_flows_add_activity('flow_importado_local', [
         'new_flow_post_id' => absint($new_flow_id),
@@ -1658,11 +2360,20 @@ function eventosapp_whatsapp_flows_duplicate_local_flow($source_flow_id) {
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_created_at_meta', '');
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_published_at', '');
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_sync_at', '');
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_json_source', 'local');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_json_override');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_last_meta_json');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_json_hash');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_local_json_hash');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_json_synced_at');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_meta_unsupported_components');
+    delete_post_meta($new_flow_id, '_eventosapp_wa_flow_local_json_before_meta_sync');
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicate_source_id', $source_flow_id);
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicate_source_status', sanitize_text_field((string)($source_config['status'] ?? '')));
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicate_source_meta_id', sanitize_text_field((string)($source_config['meta_flow_id'] ?? '')));
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_duplicated_at', current_time('mysql'));
     update_post_meta($new_flow_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($new_flow_id), true));
+    update_post_meta($new_flow_id, '_eventosapp_wa_flow_local_json_hash', eventosapp_whatsapp_flows_json_hash(eventosapp_whatsapp_flows_build_flow_json($new_flow_id)));
 
     eventosapp_whatsapp_flows_add_activity('flow_duplicado_local', [
         'source_flow_post_id' => $source_flow_id,
@@ -3267,6 +3978,21 @@ add_action('admin_post_eventosapp_whatsapp_flow_save', function() {
     check_admin_referer('eventosapp_whatsapp_flow_save');
 
     $flow_post_id = absint($_POST['flow_post_id'] ?? 0);
+    $save_action = sanitize_key((string)($_POST['flow_save_action'] ?? 'save_local'));
+    $existing_config = $flow_post_id ? eventosapp_whatsapp_flows_get_flow_config($flow_post_id) : [];
+
+    if (
+        $flow_post_id
+        && ! empty($existing_config['unsupported_components'])
+        && empty($_POST['confirm_replace_meta_json'])
+    ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'flow_id'      => $flow_post_id,
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode('El JSON sincronizado desde Meta contiene componentes que el constructor local no puede representar. Marca la confirmación antes de reemplazar ese JSON con el contenido del constructor.'),
+        ]);
+    }
+
     $title = sanitize_text_field((string)($_POST['flow_title'] ?? ''));
     if ( $title === '' ) {
         $title = 'Encuesta WhatsApp Flow ' . current_time('YmdHis');
@@ -3304,17 +4030,47 @@ add_action('admin_post_eventosapp_whatsapp_flow_save', function() {
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_waba_id', function_exists('eventosapp_whatsapp_sanitize_waba_id') ? eventosapp_whatsapp_sanitize_waba_id($_POST['flow_waba_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['flow_waba_id'] ?? '')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_sender_phone_number_id', function_exists('eventosapp_whatsapp_sanitize_phone_number_id') ? eventosapp_whatsapp_sanitize_phone_number_id($_POST['flow_sender_phone_number_id'] ?? '') : preg_replace('/\D+/', '', (string)($_POST['flow_sender_phone_number_id'] ?? '')));
     update_post_meta($flow_post_id, '_eventosapp_wa_flow_questions', eventosapp_whatsapp_flows_normalize_questions($_POST['questions'] ?? []));
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($flow_post_id), true));
+
+    // Al guardar desde el constructor, la configuración local vuelve a ser la fuente.
+    // Esto evita que un snapshot descargado desde Meta oculte los cambios recién hechos.
+    eventosapp_whatsapp_flows_clear_meta_json_override($flow_post_id);
+    $local_json = eventosapp_whatsapp_flows_build_flow_json($flow_post_id);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode($local_json, true));
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_local_json_hash', eventosapp_whatsapp_flows_json_hash($local_json));
+
     if ( ! get_post_meta($flow_post_id, '_eventosapp_wa_flow_status', true) ) {
         update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', 'local_draft');
+    }
+
+    if ( $save_action === 'save_and_sync_meta' ) {
+        $sync_result = eventosapp_whatsapp_flows_upload_local_json_to_meta($flow_post_id, true);
+        if ( is_wp_error($sync_result) ) {
+            eventosapp_whatsapp_flows_notice_redirect([
+                'flow_id'      => $flow_post_id,
+                'flow_notice'  => 'warning',
+                'flow_message' => rawurlencode('El Flow se guardó localmente, pero no pudo sincronizarse con Meta: ' . $sync_result->get_error_message()),
+            ]);
+        }
+
+        $validation_errors = is_array($sync_result['validation_errors'] ?? null) ? $sync_result['validation_errors'] : [];
+        $message = empty($validation_errors)
+            ? 'Flow guardado y JSON sincronizado con Meta. Se generó un preview nuevo para evitar mostrar una versión anterior.'
+            : 'Flow guardado y enviado a Meta, pero Meta devolvió errores de validación. Revisa el detalle antes de publicar.';
+
+        eventosapp_whatsapp_flows_notice_redirect([
+            'flow_id'      => $flow_post_id,
+            'flow_notice'  => empty($validation_errors) ? 'success' : 'warning',
+            'flow_message' => rawurlencode($message),
+        ]);
     }
 
     eventosapp_whatsapp_flows_notice_redirect([
         'flow_id'      => $flow_post_id,
         'flow_notice'  => 'success',
-        'flow_message' => rawurlencode('Flow guardado localmente.'),
+        'flow_message' => rawurlencode('Flow guardado localmente. Los cambios todavía no se han enviado a Meta.'),
     ]);
 });
+
 
 add_action('admin_post_eventosapp_whatsapp_flow_duplicate', function() {
     if ( ! current_user_can('manage_options') ) {
@@ -3547,8 +4303,9 @@ add_action('admin_post_eventosapp_whatsapp_flow_create_meta', function() {
     }
 
     $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
-    $flow_json = eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($flow_post_id), false);
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode(eventosapp_whatsapp_flows_build_flow_json($flow_post_id), true));
+    $flow_json_array = eventosapp_whatsapp_flows_build_flow_json($flow_post_id);
+    $flow_json = eventosapp_whatsapp_flows_json_encode($flow_json_array, false);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_json', eventosapp_whatsapp_flows_json_encode($flow_json_array, true));
 
     $body = [
         'name'       => sanitize_text_field($config['title']),
@@ -3571,6 +4328,10 @@ add_action('admin_post_eventosapp_whatsapp_flow_create_meta', function() {
             update_post_meta($flow_post_id, '_eventosapp_wa_flow_waba_id', $waba_id);
             update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', 'draft_meta_json_ready');
             update_post_meta($flow_post_id, '_eventosapp_wa_flow_created_at_meta', current_time('mysql'));
+            update_post_meta($flow_post_id, '_eventosapp_wa_flow_preview_url', '');
+            update_post_meta($flow_post_id, '_eventosapp_wa_flow_published_at', '');
+            update_post_meta($flow_post_id, '_eventosapp_wa_flow_validation_errors', []);
+            eventosapp_whatsapp_flows_mark_json_synced($flow_post_id, $flow_json_array, 'synced', []);
         }
         eventosapp_whatsapp_flows_add_activity('flow_creado_en_meta', ['flow_post_id' => $flow_post_id, 'meta_flow_id' => $meta_flow_id, 'result' => $result]);
         eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'success', 'flow_message' => rawurlencode('Flow creado en Meta correctamente con el JSON local generado por EventosApp. Revisa la vista previa antes de publicar.')]);
@@ -3587,56 +4348,43 @@ add_action('admin_post_eventosapp_whatsapp_flow_upload_json', function() {
     check_admin_referer('eventosapp_whatsapp_flow_upload_json');
 
     $flow_post_id = absint($_POST['flow_post_id'] ?? 0);
-    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
-    $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
-    if ( $meta_flow_id === '' ) {
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('Primero debes crear el Flow en Meta para obtener el Flow ID.')]);
+    $result = eventosapp_whatsapp_flows_upload_local_json_to_meta($flow_post_id, true);
+
+    if ( is_wp_error($result) ) {
+        eventosapp_whatsapp_flows_add_activity('flow_json_error', [
+            'flow_post_id' => $flow_post_id,
+            'message'      => $result->get_error_message(),
+        ]);
+        eventosapp_whatsapp_flows_notice_redirect([
+            'flow_id'      => $flow_post_id,
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode($result->get_error_message()),
+        ]);
     }
 
-    $current_status = sanitize_key((string)($config['status'] ?? ''));
-    if ( in_array($current_status, ['published', 'publicado'], true) ) {
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('Meta no permite modificar el JSON de un Flow ya publicado. Presiona “Crear/Recrear en Meta con JSON local” para generar un nuevo Flow ID con la configuración actual de EventosApp.')]);
+    $validation_errors = is_array($result['validation_errors'] ?? null) ? $result['validation_errors'] : [];
+    $preview_refreshed = ! is_wp_error($result['preview'] ?? null)
+        && is_array($result['preview'] ?? null)
+        && ! empty($result['preview']['ok']);
+
+    if ( empty($validation_errors) ) {
+        $message = $preview_refreshed
+            ? 'JSON subido y validado por Meta. Se invalidó el preview anterior y se generó uno nuevo con el contenido actualizado.'
+            : 'JSON subido y validado por Meta. No fue posible renovar automáticamente el enlace de preview; usa “Pedir preview actualizado”.';
+        eventosapp_whatsapp_flows_notice_redirect([
+            'flow_id'      => $flow_post_id,
+            'flow_notice'  => $preview_refreshed ? 'success' : 'warning',
+            'flow_message' => rawurlencode($message),
+        ]);
     }
 
-    $file_path = eventosapp_whatsapp_flows_write_temp_flow_json($flow_post_id);
-    if ( is_wp_error($file_path) ) {
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode($file_path->get_error_message())]);
-    }
-
-    $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
-    $result = eventosapp_whatsapp_flows_graph_multipart_file_request('POST', $meta_flow_id . '/assets', $file_path, [
-        'name'       => 'flow.json',
-        'asset_type' => 'FLOW_JSON',
-    ], $settings);
-
-    if ( file_exists($file_path) ) {
-        @unlink($file_path);
-    }
-
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_response', $result);
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', current_time('mysql'));
-
-    $validation_errors = [];
-    if ( is_array($result['response'] ?? null) && isset($result['response']['validation_errors']) ) {
-        $validation_errors = is_array($result['response']['validation_errors']) ? $result['response']['validation_errors'] : [];
-    }
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_validation_errors', $validation_errors);
-
-    $meta_success = true;
-    if ( is_array($result['response'] ?? null) && array_key_exists('success', $result['response']) ) {
-        $meta_success = ! empty($result['response']['success']);
-    }
-
-    if ( ! empty($result['ok']) && $meta_success ) {
-        update_post_meta($flow_post_id, '_eventosapp_wa_flow_status', empty($validation_errors) ? 'json_uploaded' : 'json_with_validation_errors');
-        eventosapp_whatsapp_flows_add_activity('flow_json_subido', ['flow_post_id' => $flow_post_id, 'meta_flow_id' => $meta_flow_id, 'validation_errors' => $validation_errors, 'result' => $result]);
-        $msg = empty($validation_errors) ? 'JSON subido y validado por Meta. Ahora pide la vista previa para confirmar que no siga apareciendo el ejemplo “Hello World”.' : 'JSON subido, pero Meta reportó errores de validación. Revisa el detalle antes de publicar.';
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => empty($validation_errors) ? 'success' : 'warning', 'flow_message' => rawurlencode($msg)]);
-    }
-
-    eventosapp_whatsapp_flows_add_activity('flow_json_error', ['flow_post_id' => $flow_post_id, 'meta_flow_id' => $meta_flow_id, 'result' => $result]);
-    eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode($result['message'] ?? 'Meta rechazó la subida del JSON.')]);
+    eventosapp_whatsapp_flows_notice_redirect([
+        'flow_id'      => $flow_post_id,
+        'flow_notice'  => 'warning',
+        'flow_message' => rawurlencode('JSON subido, pero Meta reportó errores de validación. Revisa el detalle antes de publicar.'),
+    ]);
 });
+
 
 add_action('admin_post_eventosapp_whatsapp_flow_publish', function() {
     if ( ! current_user_can('manage_options') ) {
@@ -3700,6 +4448,36 @@ add_action('admin_post_eventosapp_whatsapp_flow_refresh', function() {
     eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode($result['message'] ?? 'No se pudo consultar el estado del Flow.')]);
 });
 
+add_action('admin_post_eventosapp_whatsapp_flow_sync_json_from_meta', function() {
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('No tienes permisos suficientes.');
+    }
+    check_admin_referer('eventosapp_whatsapp_flow_sync_json_from_meta');
+
+    $flow_post_id = absint($_POST['flow_post_id'] ?? 0);
+    $result = eventosapp_whatsapp_flows_sync_json_from_meta($flow_post_id);
+
+    if ( is_wp_error($result) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'flow_id'      => $flow_post_id,
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode($result->get_error_message()),
+        ]);
+    }
+
+    $unsupported = is_array($result['unsupported_components'] ?? null) ? $result['unsupported_components'] : [];
+    $message = empty($unsupported)
+        ? 'JSON descargado desde Meta y aplicado al constructor de EventosApp. Ambos lados quedaron sincronizados.'
+        : 'JSON descargado desde Meta. EventosApp conservó el JSON remoto exacto, pero detectó componentes que el constructor local no representa; revisa la advertencia antes de guardar cambios locales.';
+
+    eventosapp_whatsapp_flows_notice_redirect([
+        'flow_id'      => $flow_post_id,
+        'flow_notice'  => empty($unsupported) ? 'success' : 'warning',
+        'flow_message' => rawurlencode($message),
+    ]);
+});
+
+
 add_action('admin_post_eventosapp_whatsapp_flow_preview', function() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('No tienes permisos suficientes.');
@@ -3707,26 +4485,24 @@ add_action('admin_post_eventosapp_whatsapp_flow_preview', function() {
     check_admin_referer('eventosapp_whatsapp_flow_preview');
 
     $flow_post_id = absint($_POST['flow_post_id'] ?? 0);
-    $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
-    $meta_flow_id = preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
-    if ( $meta_flow_id === '' ) {
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode('Falta Flow ID de Meta.')]);
+    $result = eventosapp_whatsapp_flows_refresh_preview_url($flow_post_id, true);
+
+    if ( is_wp_error($result) ) {
+        eventosapp_whatsapp_flows_notice_redirect([
+            'flow_id'      => $flow_post_id,
+            'flow_notice'  => 'error',
+            'flow_message' => rawurlencode($result->get_error_message()),
+        ]);
     }
 
-    $settings = eventosapp_whatsapp_flows_get_effective_settings(0, $config['sender_phone_number_id'] ?? '');
-    $result = eventosapp_whatsapp_flows_graph_request('GET', $meta_flow_id . '?fields=preview.invalidate(false)', null, $settings);
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_response', $result);
-    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_sync_at', current_time('mysql'));
-
-    if ( ! empty($result['ok']) && is_array($result['response'] ?? null) ) {
-        $preview_url = esc_url_raw((string)($result['response']['preview']['preview_url'] ?? ($result['response']['preview_url'] ?? ($result['response']['url'] ?? ''))));
-        if ( $preview_url !== '' ) {
-            update_post_meta($flow_post_id, '_eventosapp_wa_flow_preview_url', $preview_url);
-        }
-        eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'success', 'flow_message' => rawurlencode('Vista previa solicitada a Meta.')]);
-    }
-    eventosapp_whatsapp_flows_notice_redirect(['flow_id' => $flow_post_id, 'flow_notice' => 'error', 'flow_message' => rawurlencode($result['message'] ?? 'No se pudo obtener la vista previa.')]);
+    update_post_meta($flow_post_id, '_eventosapp_wa_flow_last_meta_response', $result['result'] ?? []);
+    eventosapp_whatsapp_flows_notice_redirect([
+        'flow_id'      => $flow_post_id,
+        'flow_notice'  => 'success',
+        'flow_message' => rawurlencode('Preview actualizado. Meta invalidó el enlace anterior y generó uno nuevo con el JSON vigente.'),
+    ]);
 });
+
 
 add_action('admin_post_eventosapp_whatsapp_flow_test_send', function() {
     if ( ! current_user_can('manage_options') ) {
@@ -5547,6 +6323,12 @@ function eventosapp_whatsapp_flows_render_page() {
         'questions'              => eventosapp_whatsapp_flows_default_questions(),
         'last_meta_response'     => [],
         'validation_errors'      => [],
+        'json_source'            => 'local',
+        'meta_json_synced_at'    => '',
+        'meta_json_hash'         => '',
+        'local_json_hash'        => '',
+        'last_meta_json'         => '',
+        'unsupported_components'=> [],
     ];
     $edit_config = ! empty($selected) ? wp_parse_args($selected, $new_config) : $new_config;
     $flow_id = absint($edit_config['id']);
@@ -5648,7 +6430,25 @@ function eventosapp_whatsapp_flows_render_page() {
                             <?php endforeach; ?>
                         </div>
 
-                        <p class="submit"><button type="submit" class="button button-primary button-hero">Guardar Flow local</button></p>
+                        <?php if ( ! empty($edit_config['unsupported_components']) ) : ?>
+                            <div class="evapp-warning">
+                                <strong>Protección del JSON recibido desde Meta:</strong>
+                                el asset remoto contiene componentes que este constructor todavía no representa visualmente:
+                                <?php echo esc_html(implode(', ', array_map('sanitize_text_field', $edit_config['unsupported_components']))); ?>.
+                                El JSON exacto está conservado y se seguirá usando mientras no guardes desde el constructor.
+                                <label style="display:block;margin-top:10px;">
+                                    <input type="checkbox" name="confirm_replace_meta_json" value="1">
+                                    Entiendo que guardar desde el constructor reemplazará esos componentes no soportados.
+                                </label>
+                            </div>
+                        <?php endif; ?>
+
+                        <p class="submit evapp-actions">
+                            <button type="submit" name="flow_save_action" value="save_local" class="button button-hero">Guardar solo en EventosApp</button>
+                            <?php if ( $flow_id && ! empty($edit_config['meta_flow_id']) && ! in_array(sanitize_key((string)$edit_config['status']), ['published', 'publicado'], true) ) : ?>
+                                <button type="submit" name="flow_save_action" value="save_and_sync_meta" class="button button-primary button-hero">Guardar y sincronizar con Meta</button>
+                            <?php endif; ?>
+                        </p>
                     </form>
                 </div>
 
@@ -5704,24 +6504,76 @@ function eventosapp_whatsapp_flows_render_page() {
                 <?php if ( $flow_id ) : ?>
                     <div class="evapp-card">
                         <h2>Sincronización con Meta</h2>
+                        <?php
+                        $json_source_label = [
+                            'local'  => 'EventosApp',
+                            'meta'   => 'Meta',
+                            'synced' => 'Sincronizado',
+                        ][$edit_config['json_source'] ?? 'local'] ?? 'EventosApp';
+                        $json_hashes_match = ! empty($edit_config['meta_json_hash'])
+                            && ! empty($edit_config['local_json_hash'])
+                            && hash_equals((string)$edit_config['meta_json_hash'], (string)$edit_config['local_json_hash']);
+                        ?>
                         <p><strong>Estado:</strong> <span class="evapp-pill <?php echo esc_attr($edit_config['status'] === 'published' ? 'green' : ''); ?>"><?php echo esc_html($edit_config['status']); ?></span></p>
                         <p><strong>Flow ID Meta:</strong> <?php echo esc_html($edit_config['meta_flow_id'] ?: 'No creado'); ?></p>
-                        <?php if ( ! empty($edit_config['preview_url']) ) : ?>
-                            <p><a class="button" target="_blank" href="<?php echo esc_url($edit_config['preview_url']); ?>">Abrir vista previa</a></p>
+                        <p><strong>Fuente actual del JSON:</strong> <?php echo esc_html($json_source_label); ?></p>
+                        <p><strong>Última sincronización de JSON:</strong> <?php echo esc_html($edit_config['meta_json_synced_at'] ?: 'Aún no sincronizado'); ?></p>
+                        <?php if ( ! empty($edit_config['meta_json_hash']) && ! empty($edit_config['local_json_hash']) ) : ?>
+                            <p><strong>Comparación:</strong>
+                                <span class="evapp-pill <?php echo $json_hashes_match ? 'green' : ''; ?>">
+                                    <?php echo $json_hashes_match ? 'JSON coincidentes' : 'JSON diferentes'; ?>
+                                </span>
+                            </p>
                         <?php endif; ?>
+
+                        <?php if ( ! empty($edit_config['preview_url']) ) : ?>
+                            <p><a class="button" target="_blank" rel="noopener noreferrer" href="<?php echo esc_url($edit_config['preview_url']); ?>">Abrir preview vigente</a></p>
+                        <?php endif; ?>
+
+                        <div class="evapp-info">
+                            <strong>El preview no bloquea el Flow.</strong> Mientras Meta lo mantenga en estado DRAFT, puedes modificarlo desde EventosApp y volver a subir el JSON. Al sincronizar hacia Meta se invalida el preview anterior para evitar que muestre una versión en caché.
+                        </div>
+
                         <div class="evapp-actions">
                             <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_create_meta', 'eventosapp_whatsapp_flow_create_meta', 'Crear/Recrear en Meta con JSON local', $flow_id); ?>
-                            <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_upload_json', 'eventosapp_whatsapp_flow_upload_json', 'Subir JSON', $flow_id); ?>
-                            <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_preview', 'eventosapp_whatsapp_flow_preview', 'Pedir preview', $flow_id); ?>
-                            <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_refresh', 'eventosapp_whatsapp_flow_refresh', 'Sincronizar estado', $flow_id); ?>
-                            <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_publish', 'eventosapp_whatsapp_flow_publish', 'Publicar', $flow_id, 'button-primary'); ?>
+                            <?php if ( ! empty($edit_config['meta_flow_id']) ) : ?>
+                                <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_sync_json_from_meta', 'eventosapp_whatsapp_flow_sync_json_from_meta', 'Meta → EventosApp: descargar JSON', $flow_id); ?>
+                                <?php if ( ! in_array(sanitize_key((string)$edit_config['status']), ['published', 'publicado'], true) ) : ?>
+                                    <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_upload_json', 'eventosapp_whatsapp_flow_upload_json', 'EventosApp → Meta: subir JSON', $flow_id); ?>
+                                <?php endif; ?>
+                                <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_preview', 'eventosapp_whatsapp_flow_preview', 'Pedir preview actualizado', $flow_id); ?>
+                                <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_refresh', 'eventosapp_whatsapp_flow_refresh', 'Sincronizar estado', $flow_id); ?>
+                                <?php if ( ! in_array(sanitize_key((string)$edit_config['status']), ['published', 'publicado'], true) ) : ?>
+                                    <?php eventosapp_whatsapp_flows_render_small_post_button('eventosapp_whatsapp_flow_publish', 'eventosapp_whatsapp_flow_publish', 'Publicar', $flow_id, 'button-primary'); ?>
+                                <?php endif; ?>
+                            <?php endif; ?>
                         </div>
-                        <div class="evapp-warning"><strong>Importante:</strong> si un Flow ya fue publicado, Meta no permite modificarlo como si fuera borrador. Para cambios grandes, recrea un nuevo Meta ID y revisa el preview antes de publicar.</div>
+
+                        <div class="evapp-warning">
+                            <strong>Flow publicado:</strong> Meta vuelve inmutable el Flow y sus assets después de publicarlo. Para cambiar un Flow publicado debes crear/recrear otro Meta ID; la sincronización Meta → EventosApp seguirá disponible para recuperar su JSON exacto.
+                        </div>
+
+                        <?php if ( ! empty($edit_config['unsupported_components']) ) : ?>
+                            <div class="evapp-warning">
+                                <strong>Componentes remotos conservados fuera del constructor visual:</strong>
+                                <?php echo esc_html(implode(', ', array_map('sanitize_text_field', $edit_config['unsupported_components']))); ?>.
+                                EventosApp conserva el JSON exacto descargado desde Meta y evita que lo reemplaces accidentalmente sin confirmación.
+                            </div>
+                        <?php endif; ?>
+
                         <?php if ( ! empty($edit_config['validation_errors']) && is_array($edit_config['validation_errors']) ) : ?>
                             <div class="evapp-warning"><strong>Errores de validación Meta:</strong><?php eventosapp_whatsapp_flows_render_debug($edit_config['validation_errors']); ?></div>
                         <?php endif; ?>
+
+                        <?php if ( ! empty($edit_config['last_meta_json']) ) : ?>
+                            <details style="margin-top:12px;">
+                                <summary>Último FLOW_JSON exacto recibido o confirmado por Meta</summary>
+                                <textarea class="code" readonly style="min-height:260px;"><?php echo esc_textarea($edit_config['last_meta_json']); ?></textarea>
+                            </details>
+                        <?php endif; ?>
                         <details style="margin-top:12px;"><summary>Última respuesta técnica de Meta</summary><?php eventosapp_whatsapp_flows_render_debug($edit_config['last_meta_response']); ?></details>
                     </div>
+
 
                     <div class="evapp-card">
                         <h2>Enviar prueba directa</h2>
