@@ -666,11 +666,45 @@ function eventosapp_task_queue_process_whatsapp_reminder($task, $runtime) {
 }
 
 /**
+ * Adaptador de importación masiva de tickets desde Herramientas.
+ *
+ * El procesamiento real permanece en eventosapp-herramientas.php para que el modo
+ * ventana y Cola y Tareas compartan exactamente la misma validación, deduplicación,
+ * creación y generación condicional de anexos.
+ */
+function eventosapp_task_queue_process_ticket_import($task, $runtime) {
+    if ( ! function_exists('evapp_import_task_queue_process_batch') ) {
+        return [
+            'processed'     => 0,
+            'success'       => 0,
+            'errors'        => 1,
+            'skipped'       => 0,
+            'next_cursor'   => absint($task['cursor_value'] ?? 0),
+            'total_items'   => absint($task['total_items'] ?? 0),
+            'done'          => false,
+            'fatal'         => true,
+            'error_message' => 'El procesador de importación de Herramientas no está disponible.',
+            'logs'          => [[
+                'level'   => 'error',
+                'message' => 'No se cargó evapp_import_task_queue_process_batch(). Revisa el orden de includes del plugin.',
+            ]],
+        ];
+    }
+
+    return evapp_import_task_queue_process_batch($task, $runtime);
+}
+
+/**
  * Registro de adaptadores después de que todos los módulos del plugin cargaron.
  */
 function eventosapp_task_queue_register_integrations() {
     if ( ! function_exists('eventosapp_task_queue_register_adapter') ) return;
 
+    eventosapp_task_queue_register_adapter('ticket_import', [
+        'label'=>'Importación masiva de tickets','group'=>'massive','channel'=>'tickets',
+        'batch_size'=>20,'min_batch_size'=>1,'max_batch_size'=>40,
+        'process_batch'=>'eventosapp_task_queue_process_ticket_import',
+    ]);
     eventosapp_task_queue_register_adapter('email_bulk', [
         'label'=>'Envío masivo de tickets por correo','group'=>'massive','channel'=>'email',
         'batch_size'=>12,'min_batch_size'=>2,'max_batch_size'=>30,
