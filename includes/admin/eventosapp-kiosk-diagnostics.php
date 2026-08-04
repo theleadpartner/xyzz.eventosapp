@@ -235,6 +235,12 @@ if ( ! function_exists( 'eventosapp_kiosk_diagnostics_collect' ) ) {
                 || function_exists( 'eventosapp_self_checkin_find_tickets_by_identifier' ),
         ];
         $dependencies[] = [
+            'label'     => 'Resolución de autenticación QR',
+            'function'  => 'eventosapp_qr_find_ticket_by_scanned_code / EventosApp_QR_Manager::validate_qr',
+            'available' => function_exists( 'eventosapp_qr_find_ticket_by_scanned_code' )
+                || is_callable( [ 'EventosApp_QR_Manager', 'validate_qr' ] ),
+        ];
+        $dependencies[] = [
             'label'     => 'Registro de check-in',
             'function'  => 'eventosapp_register_ticket_checkin / self_checkin_mark_ticket',
             'available' => function_exists( 'eventosapp_register_ticket_checkin' )
