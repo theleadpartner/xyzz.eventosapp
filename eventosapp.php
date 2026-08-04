@@ -2867,6 +2867,15 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
             ],
         ];
 
+    $qr_option = function_exists('eventosapp_self_checkin_qr_auth_option')
+        ? eventosapp_self_checkin_qr_auth_option()
+        : [
+            'label'       => 'Código QR',
+            'help'        => 'Identifica al asistente leyendo el QR de su ticket o escarapela.',
+            'keyboard'    => 'qr',
+            'placeholder' => '',
+        ];
+
     $selected = function_exists('eventosapp_self_checkin_get_event_auth_fields')
         ? eventosapp_self_checkin_get_event_auth_fields($post->ID)
         : (array) get_post_meta($post->ID, '_eventosapp_self_checkin_auth_fields', true);
@@ -2874,6 +2883,13 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
     if (empty($selected)) {
         $selected = ['identification'];
     }
+
+    $qr_enabled = function_exists('eventosapp_self_checkin_event_qr_auth_enabled')
+        ? eventosapp_self_checkin_event_qr_auth_enabled($post->ID)
+        : (get_post_meta($post->ID, '_eventosapp_self_checkin_qr_enabled', true) === '1');
+    $text_auth_enabled = function_exists('eventosapp_self_checkin_event_text_auth_enabled')
+        ? eventosapp_self_checkin_event_text_auth_enabled($post->ID)
+        : true;
 
     $keyboard_mode = function_exists('eventosapp_self_checkin_auth_keyboard_mode')
         ? eventosapp_self_checkin_auth_keyboard_mode($selected)
@@ -2893,6 +2909,7 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
         .evapp-kiosk-auth-option{display:block;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px;min-height:120px}
         .evapp-kiosk-auth-option strong{display:flex;align-items:center;gap:8px;font-size:14px;color:#111827;margin-bottom:6px}
         .evapp-kiosk-auth-option small{display:block;color:#6b7280;line-height:1.35;margin-top:5px}
+        .evapp-kiosk-auth-option.is-qr{border-color:#a5b4fc;background:linear-gradient(180deg,#fff 0%,#eef2ff 100%)}
         .evapp-kiosk-auth-pill{display:inline-flex;align-items:center;border-radius:999px;background:#e0f2fe;color:#075985;font-size:11px;font-weight:800;padding:3px 8px;margin-top:8px}
         .evapp-kiosk-auth-preview{margin-top:12px;padding:12px;border-radius:10px;background:#fff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:13px;line-height:1.45}
         .evapp-kiosk-auth-preview strong{color:#111827}
@@ -2905,8 +2922,8 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
                 <small style="display:block;margin-top:4px;color:#64748b;line-height:1.4;">Solo los eventos habilitados aparecerán para los usuarios autorizados que ingresen en la aplicación. Al desactivarlo, el kiosko web existente no se elimina y la configuración se conserva.</small>
             </span>
         </label>
-        <p class="evapp-kiosk-auth-title">Datos permitidos para buscar asistentes en el kiosko</p>
-        <p class="evapp-kiosk-auth-help">Esta configuración aplica solo para este evento. Puedes activar uno o varios datos. Si activas nombres o apellidos como único criterio, el teclado táctil abrirá primero en letras; si activas identificación o celular, abrirá primero en números. El asistente siempre podrá cambiar entre letras y números desde el panel.</p>
+        <p class="evapp-kiosk-auth-title">Métodos permitidos para identificar asistentes en el kiosko</p>
+        <p class="evapp-kiosk-auth-help">Esta configuración aplica solo para este evento. Puedes mantener uno o varios datos escritos y, además, habilitar la lectura de QR en la aplicación Android. El lector QR usa la cámara frontal del dispositivo y no modifica el kiosko web existente.</p>
         <div class="evapp-kiosk-auth-grid">
             <?php foreach ($options as $key => $field): ?>
                 <?php
@@ -2918,7 +2935,7 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
                 ?>
                 <label class="evapp-kiosk-auth-option">
                     <strong>
-                        <input type="checkbox" name="eventosapp_self_checkin_auth_fields[]" value="<?php echo esc_attr($key); ?>" <?php checked(in_array($key, $selected, true)); ?>>
+                        <input type="checkbox" name="eventosapp_self_checkin_auth_fields[]" value="<?php echo esc_attr($key); ?>" <?php checked($text_auth_enabled && in_array($key, $selected, true)); ?>>
                         <?php echo esc_html($label); ?>
                     </strong>
                     <?php if ($help): ?>
@@ -2930,11 +2947,26 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
                     <span class="evapp-kiosk-auth-pill">Teclado sugerido: <?php echo esc_html($keyboard); ?></span>
                 </label>
             <?php endforeach; ?>
+
+            <label class="evapp-kiosk-auth-option is-qr">
+                <strong>
+                    <input type="checkbox" name="eventosapp_self_checkin_qr_enabled" value="1" <?php checked($qr_enabled); ?>>
+                    <?php echo esc_html($qr_option['label'] ?? 'Código QR'); ?>
+                </strong>
+                <small><?php echo esc_html($qr_option['help'] ?? 'Identifica al asistente leyendo el QR de su ticket o escarapela.'); ?></small>
+                <small><strong>Cámara:</strong> frontal o selfie del dispositivo Android.</small>
+                <span class="evapp-kiosk-auth-pill">Método sugerido: Cámara frontal</span>
+            </label>
         </div>
         <div class="evapp-kiosk-auth-preview">
             <strong>Comportamiento actual:</strong>
-            el kiosko buscará por <?php echo esc_html(function_exists('eventosapp_self_checkin_auth_label') ? eventosapp_self_checkin_auth_label($selected) : implode(', ', $selected)); ?>.
-            Teclado inicial: <strong><?php echo $keyboard_mode === 'letters' ? 'Letras' : 'Números'; ?></strong>.
+            <?php if ($qr_enabled && !$text_auth_enabled): ?>
+                la aplicación Android abrirá el lector de QR como único método de identificación.
+            <?php else: ?>
+                el kiosko buscará por <?php echo esc_html(function_exists('eventosapp_self_checkin_auth_label') ? eventosapp_self_checkin_auth_label($selected) : implode(', ', $selected)); ?>.
+                Teclado inicial: <strong><?php echo $keyboard_mode === 'letters' ? 'Letras' : 'Números'; ?></strong>.
+                <?php if ($qr_enabled): ?>También mostrará la opción <strong>Código QR</strong>.<?php endif; ?>
+            <?php endif; ?>
         </div>
     </div>
     <?php
@@ -3447,6 +3479,18 @@ function eventosapp_save_self_checkin_auth_metabox($post_id) {
         }
     }
 
+    $qr_enabled = !empty($_POST['eventosapp_self_checkin_qr_enabled']);
+    $text_auth_enabled = !empty($fields);
+
+    /*
+     * Debe quedar al menos un método disponible. Si el usuario desmarca todo,
+     * se conserva el comportamiento histórico por identificación.
+     */
+    if (!$text_auth_enabled && !$qr_enabled) {
+        $fields = ['identification'];
+        $text_auth_enabled = true;
+    }
+
     $fields = function_exists('eventosapp_self_checkin_normalize_auth_fields')
         ? eventosapp_self_checkin_normalize_auth_fields($fields)
         : array_values(array_unique(array_filter($fields)));
@@ -3457,6 +3501,8 @@ function eventosapp_save_self_checkin_auth_metabox($post_id) {
 
     update_post_meta($post_id, '_eventosapp_self_checkin_enabled', !empty($_POST['eventosapp_self_checkin_enabled']) ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_self_checkin_auth_fields', $fields);
+    update_post_meta($post_id, '_eventosapp_self_checkin_text_auth_enabled', $text_auth_enabled ? '1' : '0');
+    update_post_meta($post_id, '_eventosapp_self_checkin_qr_enabled', $qr_enabled ? '1' : '0');
 }
 
 /**
