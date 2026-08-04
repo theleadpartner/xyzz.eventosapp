@@ -949,6 +949,53 @@ if ( ! function_exists('eventosapp_self_checkin_auth_field_options') ) {
     }
 }
 
+
+if ( ! function_exists('eventosapp_self_checkin_qr_auth_option') ) {
+    /**
+     * Configuración del método QR exclusivo de la aplicación Android.
+     *
+     * Se mantiene separado de los campos de búsqueda escritos para no cambiar el
+     * comportamiento del kiosko web existente ni mezclar el valor leído por cámara
+     * con las búsquedas por identificación, nombre, apellido o celular.
+     */
+    function eventosapp_self_checkin_qr_auth_option() {
+        return [
+            'label'       => 'Código QR',
+            'short_label' => 'QR',
+            'placeholder' => '',
+            'help'        => 'Identifica al asistente leyendo el QR de su ticket, Wallet, PDF, WhatsApp, correo o escarapela.',
+            'keyboard'    => 'qr',
+            'input_mode'  => 'camera',
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_event_qr_auth_enabled') ) {
+    function eventosapp_self_checkin_event_qr_auth_enabled( $event_id ) {
+        $event_id = absint( $event_id );
+        return $event_id > 0
+            && get_post_meta( $event_id, '_eventosapp_self_checkin_qr_enabled', true ) === '1';
+    }
+}
+
+if ( ! function_exists('eventosapp_self_checkin_event_text_auth_enabled') ) {
+    /**
+     * Los eventos configurados antes de esta mejora siguen usando búsqueda escrita.
+     */
+    function eventosapp_self_checkin_event_text_auth_enabled( $event_id ) {
+        $event_id = absint( $event_id );
+        if ( ! $event_id ) {
+            return true;
+        }
+
+        if ( ! metadata_exists( 'post', $event_id, '_eventosapp_self_checkin_text_auth_enabled' ) ) {
+            return true;
+        }
+
+        return get_post_meta( $event_id, '_eventosapp_self_checkin_text_auth_enabled', true ) === '1';
+    }
+}
+
 if ( ! function_exists('eventosapp_self_checkin_default_auth_fields') ) {
     function eventosapp_self_checkin_default_auth_fields() {
         return [ 'identification' ];
