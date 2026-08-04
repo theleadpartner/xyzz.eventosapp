@@ -15,8 +15,12 @@ if ( ! defined( 'EVENTOSAPP_KIOSK_API_NAMESPACE' ) ) {
     define( 'EVENTOSAPP_KIOSK_API_NAMESPACE', 'eventosapp-kiosk/v1' );
 }
 
+if ( ! defined( 'EVENTOSAPP_KIOSK_QR_QUERY_PREFIX' ) ) {
+    define( 'EVENTOSAPP_KIOSK_QR_QUERY_PREFIX', 'EVAPPQR:' );
+}
+
 if ( ! defined( 'EVENTOSAPP_KIOSK_API_VERSION' ) ) {
-    define( 'EVENTOSAPP_KIOSK_API_VERSION', '1.1.0' );
+    define( 'EVENTOSAPP_KIOSK_API_VERSION', '1.2.0' );
 }
 
 if ( ! defined( 'EVENTOSAPP_KIOSK_API_LOADED' ) ) {
@@ -502,21 +506,72 @@ if ( ! function_exists( 'eventosapp_kiosk_api_event_config' ) ) {
         $auth_options = function_exists( 'eventosapp_self_checkin_auth_field_options' )
             ? eventosapp_self_checkin_auth_field_options()
             : [];
+        $text_auth_enabled = function_exists( 'eventosapp_self_checkin_event_text_auth_enabled' )
+            ? eventosapp_self_checkin_event_text_auth_enabled( $event_id )
+            : true;
+        $qr_auth_enabled = function_exists( 'eventosapp_self_checkin_event_qr_auth_enabled' )
+            ? eventosapp_self_checkin_event_qr_auth_enabled( $event_id )
+            : get_post_meta( $event_id, '_eventosapp_self_checkin_qr_enabled', true ) === '1';
+
+        $api_auth_fields = $text_auth_enabled ? array_values( $auth_fields ) : [];
+        if ( $qr_auth_enabled ) {
+            $api_auth_fields[] = 'qr';
+        }
 
         $auth_payload = [];
-        foreach ( $auth_fields as $field_key ) {
-            if ( empty( $auth_options[ $field_key ] ) ) {
+        foreach ( $api_auth_fields as $field_key ) {
+            if ( $field_key === 'qr' ) {
+                $field = function_exists( 'eventosapp_self_checkin_qr_auth_option' )
+                    ? eventosapp_self_checkin_qr_auth_option()
+                    : [
+                        'label'       => 'Código QR',
+                        'short_label' => 'QR',
+                        'placeholder' => '',
+                        'help'        => 'Usa la cámara frontal del dispositivo para leer el QR del asistente.',
+                        'keyboard'    => 'qr',
+                    ];
+            } elseif ( ! empty( $auth_options[ $field_key ] ) ) {
+                $field = $auth_options[ $field_key ];
+            } else {
                 continue;
             }
-            $field = $auth_options[ $field_key ];
+
+            $keyboard = sanitize_key( $field['keyboard'] ?? 'numbers' );
+            if ( ! in_array( $keyboard, [ 'numbers', 'letters', 'qr' ], true ) ) {
+                $keyboard = 'numbers';
+            }
+
             $auth_payload[] = [
                 'key'         => sanitize_key( $field_key ),
                 'label'       => sanitize_text_field( $field['label'] ?? $field_key ),
                 'short_label' => sanitize_text_field( $field['short_label'] ?? $field['label'] ?? $field_key ),
                 'placeholder' => sanitize_text_field( $field['placeholder'] ?? '' ),
                 'help'        => sanitize_text_field( $field['help'] ?? '' ),
-                'keyboard'    => ( $field['keyboard'] ?? 'numbers' ) === 'letters' ? 'letters' : 'numbers',
+                'keyboard'    => $keyboard,
             ];
+        }
+
+        if ( $qr_auth_enabled && ! $text_auth_enabled ) {
+            $auth_label            = 'Código QR';
+            $auth_placeholder      = '';
+            $auth_help             = 'Usa la cámara frontal del dispositivo y coloca el QR del asistente dentro del marco.';
+            $auth_keyboard_default = 'qr';
+        } else {
+            $auth_label = function_exists( 'eventosapp_self_checkin_auth_label' )
+                ? eventosapp_self_checkin_auth_label( $auth_fields )
+                : 'Identificación';
+            $auth_placeholder = function_exists( 'eventosapp_self_checkin_auth_placeholder' )
+                ? eventosapp_self_checkin_auth_placeholder( $auth_fields )
+                : 'Escribe tu identificación';
+            $auth_help = function_exists( 'eventosapp_self_checkin_auth_help_text' )
+                ? eventosapp_self_checkin_auth_help_text( $auth_fields )
+                : '';
+            if ( $qr_auth_enabled ) {
+                $auth_help = trim( $auth_help . ' También puedes seleccionar Código QR y usar la cámara frontal.' );
+            }
+            $auth_keyboard_default = function_exists( 'eventosapp_self_checkin_auth_keyboard_mode' )
+                ? eventosapp_self_checkin_auth_keyboard_mode( $auth_fields )
+                : 'numbers';
         }
 
         $colors = [];
@@ -559,11 +614,13 @@ if ( ! function_exists( 'eventosapp_kiosk_api_event_config' ) ) {
                 'extra_logo_max_height' => sanitize_text_field( $design['extra_logo_max_height'] ?? '72px' ),
             ],
             'authentication' => [
-                'fields'          => $auth_payload,
-                'label'           => function_exists( 'eventosapp_self_checkin_auth_label' ) ? eventosapp_self_checkin_auth_label( $auth_fields ) : 'Identificación',
-                'placeholder'     => function_exists( 'eventosapp_self_checkin_auth_placeholder' ) ? eventosapp_self_checkin_auth_placeholder( $auth_fields ) : 'Escribe tu identificación',
-                'help'            => function_exists( 'eventosapp_self_checkin_auth_help_text' ) ? eventosapp_self_checkin_auth_help_text( $auth_fields ) : '',
-                'keyboard_default'=> function_exists( 'eventosapp_self_checkin_auth_keyboard_mode' ) ? eventosapp_self_checkin_auth_keyboard_mode( $auth_fields ) : 'numbers',
+                'fields'           => $auth_payload,
+                'label'            => $auth_label,
+                'placeholder'      => $auth_placeholder,
+                'help'             => $auth_help,
+                'keyboard_default' => $auth_keyboard_default,
+                'text_enabled'     => (bool) $text_auth_enabled,
+                'qr_enabled'       => (bool) $qr_auth_enabled,
             ],
             'paper' => eventosapp_kiosk_api_paper_config( $event_id ),
             'operation' => [
@@ -620,6 +677,72 @@ if ( ! function_exists( 'eventosapp_kiosk_api_ticket_payload' ) ) {
     }
 }
 
+
+if ( ! function_exists( 'eventosapp_kiosk_api_is_qr_query' ) ) {
+    function eventosapp_kiosk_api_is_qr_query( $query ) {
+        return strpos( (string) $query, EVENTOSAPP_KIOSK_QR_QUERY_PREFIX ) === 0;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_kiosk_api_qr_value_from_query' ) ) {
+    function eventosapp_kiosk_api_qr_value_from_query( $query ) {
+        $query = (string) $query;
+        if ( ! eventosapp_kiosk_api_is_qr_query( $query ) ) {
+            return '';
+        }
+
+        $value = trim( substr( $query, strlen( EVENTOSAPP_KIOSK_QR_QUERY_PREFIX ) ) );
+        if ( strlen( $value ) > 2048 ) {
+            $value = substr( $value, 0, 2048 );
+        }
+
+        return sanitize_text_field( $value );
+    }
+}
+
+if ( ! function_exists( 'eventosapp_kiosk_api_find_ticket_by_qr' ) ) {
+    /**
+     * Resuelve el QR sin registrar check-in. El resultado se entrega al mismo modal
+     * de coincidencias y el check-in continúa únicamente después de la confirmación.
+     */
+    function eventosapp_kiosk_api_find_ticket_by_qr( $qr_value, $event_id ) {
+        $event_id = absint( $event_id );
+        $qr_value = trim( (string) $qr_value );
+        if ( ! $event_id || $qr_value === '' ) {
+            return 0;
+        }
+
+        $ticket_id = 0;
+
+        if ( function_exists( 'eventosapp_qr_find_ticket_by_scanned_code' ) ) {
+            $lookup = eventosapp_qr_find_ticket_by_scanned_code( $qr_value, $event_id );
+            if ( is_array( $lookup ) && ! empty( $lookup['found'] ) ) {
+                $ticket_id = absint( $lookup['ticket_id'] ?? 0 );
+            }
+        } elseif ( is_callable( [ 'EventosApp_QR_Manager', 'validate_qr' ] ) ) {
+            $lookup = EventosApp_QR_Manager::validate_qr( $qr_value );
+            if ( is_array( $lookup ) && ! empty( $lookup['valid'] ) ) {
+                $ticket_id = absint( $lookup['ticket_id'] ?? 0 );
+            }
+        }
+
+        if ( ! $ticket_id || get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
+            return 0;
+        }
+
+        $ticket_event_id = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
+        if ( $ticket_event_id !== $event_id ) {
+            return 0;
+        }
+
+        if ( function_exists( 'eventosapp_ticket_is_virtual' ) && eventosapp_ticket_is_virtual( $ticket_id ) ) {
+            return 0;
+        }
+
+        return $ticket_id;
+    }
+}
+
 if ( ! function_exists( 'eventosapp_kiosk_api_search' ) ) {
     function eventosapp_kiosk_api_search( WP_REST_Request $request ) {
         $event_id = absint( $request['id'] );
@@ -633,18 +756,52 @@ if ( ! function_exists( 'eventosapp_kiosk_api_search' ) ) {
         $auth_fields = function_exists( 'eventosapp_self_checkin_get_event_auth_fields' )
             ? eventosapp_self_checkin_get_event_auth_fields( $event_id )
             : [ 'identification' ];
-        $raw_query = $request->get_param( 'query' );
-        $query = function_exists( 'eventosapp_self_checkin_validate_auth_search' )
-            ? eventosapp_self_checkin_validate_auth_search( $raw_query, $auth_fields )
-            : sanitize_text_field( (string) $raw_query );
+        $text_auth_enabled = function_exists( 'eventosapp_self_checkin_event_text_auth_enabled' )
+            ? eventosapp_self_checkin_event_text_auth_enabled( $event_id )
+            : true;
+        $qr_auth_enabled = function_exists( 'eventosapp_self_checkin_event_qr_auth_enabled' )
+            ? eventosapp_self_checkin_event_qr_auth_enabled( $event_id )
+            : get_post_meta( $event_id, '_eventosapp_self_checkin_qr_enabled', true ) === '1';
 
-        if ( is_wp_error( $query ) ) {
-            return new WP_Error( $query->get_error_code(), $query->get_error_message(), [ 'status' => 400 ] );
+        $raw_query = (string) $request->get_param( 'query' );
+        $is_qr_query = eventosapp_kiosk_api_is_qr_query( $raw_query );
+        $ticket_ids = [];
+        $response_query = '';
+        $query_type = $is_qr_query ? 'qr' : 'text';
+
+        if ( $is_qr_query ) {
+            if ( ! $qr_auth_enabled ) {
+                return new WP_Error( 'qr_auth_disabled', 'Este evento no tiene habilitada la autenticación con QR.', [ 'status' => 409 ] );
+            }
+
+            $qr_value = eventosapp_kiosk_api_qr_value_from_query( $raw_query );
+            if ( $qr_value === '' ) {
+                return new WP_Error( 'empty_qr', 'No fue posible leer un contenido válido del código QR.', [ 'status' => 400 ] );
+            }
+
+            $ticket_id = eventosapp_kiosk_api_find_ticket_by_qr( $qr_value, $event_id );
+            if ( $ticket_id ) {
+                $ticket_ids[] = $ticket_id;
+            }
+        } else {
+            if ( ! $text_auth_enabled ) {
+                return new WP_Error( 'text_auth_disabled', 'Este evento está configurado para autenticación mediante código QR.', [ 'status' => 409 ] );
+            }
+
+            $query = function_exists( 'eventosapp_self_checkin_validate_auth_search' )
+                ? eventosapp_self_checkin_validate_auth_search( $raw_query, $auth_fields )
+                : sanitize_text_field( $raw_query );
+
+            if ( is_wp_error( $query ) ) {
+                return new WP_Error( $query->get_error_code(), $query->get_error_message(), [ 'status' => 400 ] );
+            }
+
+            $response_query = sanitize_text_field( $query );
+            $ticket_ids = function_exists( 'eventosapp_self_checkin_find_tickets_by_auth_fields' )
+                ? eventosapp_self_checkin_find_tickets_by_auth_fields( $query, $event_id, $auth_fields, 20 )
+                : [];
         }
 
-        $ticket_ids = function_exists( 'eventosapp_self_checkin_find_tickets_by_auth_fields' )
-            ? eventosapp_self_checkin_find_tickets_by_auth_fields( $query, $event_id, $auth_fields, 20 )
-            : [];
         if ( $ticket_ids ) {
             update_meta_cache( 'post', $ticket_ids );
         }
@@ -661,11 +818,17 @@ if ( ! function_exists( 'eventosapp_kiosk_api_search' ) ) {
             $results[] = $ticket;
         }
 
+        $enabled_auth_fields = $text_auth_enabled ? array_values( $auth_fields ) : [];
+        if ( $qr_auth_enabled ) {
+            $enabled_auth_fields[] = 'qr';
+        }
+
         return rest_ensure_response( [
-            'query'       => sanitize_text_field( $query ),
+            'query'       => $response_query,
+            'query_type'  => $query_type,
             'results'     => $results,
             'total'       => count( $results ),
-            'auth_fields' => array_values( $auth_fields ),
+            'auth_fields' => $enabled_auth_fields,
         ] );
     }
 }
@@ -896,6 +1059,8 @@ if ( ! function_exists( 'eventosapp_kiosk_api_health' ) ) {
             'checkin'          => function_exists( 'eventosapp_register_ticket_checkin' )
                 || function_exists( 'eventosapp_self_checkin_mark_ticket' ),
             'badge'            => function_exists( 'eventosapp_get_badge_html_from_event' ),
+            'qr_lookup'        => function_exists( 'eventosapp_qr_find_ticket_by_scanned_code' )
+                || is_callable( [ 'EventosApp_QR_Manager', 'validate_qr' ] ),
         ];
         $healthy = ! in_array( false, $dependencies, true );
 
