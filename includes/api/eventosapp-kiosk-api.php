@@ -20,7 +20,7 @@ if ( ! defined( 'EVENTOSAPP_KIOSK_QR_QUERY_PREFIX' ) ) {
 }
 
 if ( ! defined( 'EVENTOSAPP_KIOSK_API_VERSION' ) ) {
-    define( 'EVENTOSAPP_KIOSK_API_VERSION', '1.2.0' );
+    define( 'EVENTOSAPP_KIOSK_API_VERSION', '1.3.0' );
 }
 
 if ( ! defined( 'EVENTOSAPP_KIOSK_API_LOADED' ) ) {
@@ -512,6 +512,8 @@ if ( ! function_exists( 'eventosapp_kiosk_api_event_config' ) ) {
         $qr_auth_enabled = function_exists( 'eventosapp_self_checkin_event_qr_auth_enabled' )
             ? eventosapp_self_checkin_event_qr_auth_enabled( $event_id )
             : get_post_meta( $event_id, '_eventosapp_self_checkin_qr_enabled', true ) === '1';
+        $qr_auto_print = $qr_auth_enabled
+            && get_post_meta( $event_id, '_eventosapp_self_checkin_qr_auto_print', true ) === '1';
 
         $api_auth_fields = $text_auth_enabled ? array_values( $auth_fields ) : [];
         if ( $qr_auth_enabled ) {
@@ -621,6 +623,7 @@ if ( ! function_exists( 'eventosapp_kiosk_api_event_config' ) ) {
                 'keyboard_default' => $auth_keyboard_default,
                 'text_enabled'     => (bool) $text_auth_enabled,
                 'qr_enabled'       => (bool) $qr_auth_enabled,
+                'qr_auto_print'    => (bool) $qr_auto_print,
             ],
             'paper' => eventosapp_kiosk_api_paper_config( $event_id ),
             'operation' => [
