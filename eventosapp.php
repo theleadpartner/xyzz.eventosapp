@@ -2314,7 +2314,7 @@ add_action('add_meta_boxes', function() {
 
     add_meta_box(
         'eventosapp_self_checkin_auth_evento',
-        'Autogestión Kiosko - Autenticación',
+        'Autogestión Kiosko - Métodos de identificación',
         'eventosapp_render_metabox_self_checkin_auth',
         'eventosapp_event',
         'normal',
@@ -2905,6 +2905,8 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
     $text_auth_enabled = function_exists('eventosapp_self_checkin_event_text_auth_enabled')
         ? eventosapp_self_checkin_event_text_auth_enabled($post->ID)
         : true;
+    $qr_auto_print = $qr_enabled
+        && get_post_meta($post->ID, '_eventosapp_self_checkin_qr_auto_print', true) === '1';
 
     $keyboard_mode = function_exists('eventosapp_self_checkin_auth_keyboard_mode')
         ? eventosapp_self_checkin_auth_keyboard_mode($selected)
@@ -2925,6 +2927,12 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
         .evapp-kiosk-auth-option strong{display:flex;align-items:center;gap:8px;font-size:14px;color:#111827;margin-bottom:6px}
         .evapp-kiosk-auth-option small{display:block;color:#6b7280;line-height:1.35;margin-top:5px}
         .evapp-kiosk-auth-option.is-qr{border-color:#a5b4fc;background:linear-gradient(180deg,#fff 0%,#eef2ff 100%)}
+        .evapp-kiosk-auth-option-title{display:flex;align-items:center;gap:8px;font-size:14px;color:#111827;margin-bottom:6px;font-weight:700}
+        .evapp-kiosk-qr-auto-print{display:block;margin-top:12px;padding:10px;border:1px solid #c7d2fe;border-radius:8px;background:#fff}
+        .evapp-kiosk-qr-auto-print label{display:flex;align-items:flex-start;gap:8px;font-weight:700;color:#312e81;cursor:pointer}
+        .evapp-kiosk-qr-auto-print input{margin-top:2px}
+        .evapp-kiosk-qr-auto-print small{margin-left:24px}
+        .evapp-kiosk-qr-auto-print.is-disabled{opacity:.55}
         .evapp-kiosk-auth-pill{display:inline-flex;align-items:center;border-radius:999px;background:#e0f2fe;color:#075985;font-size:11px;font-weight:800;padding:3px 8px;margin-top:8px}
         .evapp-kiosk-auth-preview{margin-top:12px;padding:12px;border-radius:10px;background:#fff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:13px;line-height:1.45}
         .evapp-kiosk-auth-preview strong{color:#111827}
@@ -2963,15 +2971,23 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
                 </label>
             <?php endforeach; ?>
 
-            <label class="evapp-kiosk-auth-option is-qr">
-                <strong>
-                    <input type="checkbox" name="eventosapp_self_checkin_qr_enabled" value="1" <?php checked($qr_enabled); ?>>
+            <div class="evapp-kiosk-auth-option is-qr">
+                <label class="evapp-kiosk-auth-option-title" for="eventosapp_self_checkin_qr_enabled">
+                    <input type="checkbox" id="eventosapp_self_checkin_qr_enabled" name="eventosapp_self_checkin_qr_enabled" value="1" <?php checked($qr_enabled); ?>>
                     <?php echo esc_html($qr_option['label'] ?? 'Código QR'); ?>
-                </strong>
+                </label>
                 <small><?php echo esc_html($qr_option['help'] ?? 'Identifica al asistente leyendo el QR de su ticket o escarapela.'); ?></small>
                 <small><strong>Cámara:</strong> frontal o selfie del dispositivo Android.</small>
                 <span class="evapp-kiosk-auth-pill">Método sugerido: Cámara frontal</span>
-            </label>
+
+                <div id="eventosapp_self_checkin_qr_auto_print_wrap" class="evapp-kiosk-qr-auto-print<?php echo $qr_enabled ? '' : ' is-disabled'; ?>">
+                    <label for="eventosapp_self_checkin_qr_auto_print">
+                        <input type="checkbox" id="eventosapp_self_checkin_qr_auto_print" name="eventosapp_self_checkin_qr_auto_print" value="1" <?php checked($qr_auto_print); ?> <?php disabled(!$qr_enabled); ?>>
+                        Imprimir automáticamente después de leer el QR
+                    </label>
+                    <small>Cuando el QR sea válido y pertenezca a este evento, Android omitirá la segunda confirmación, registrará el check-in y enviará la escarapela a la impresora configurada. Las búsquedas escritas conservarán la confirmación actual.</small>
+                </div>
+            </div>
         </div>
         <div class="evapp-kiosk-auth-preview">
             <strong>Comportamiento actual:</strong>
@@ -2982,8 +2998,32 @@ function eventosapp_render_metabox_self_checkin_auth($post) {
                 Teclado inicial: <strong><?php echo $keyboard_mode === 'letters' ? 'Letras' : 'Números'; ?></strong>.
                 <?php if ($qr_enabled): ?>También mostrará la opción <strong>Código QR</strong>.<?php endif; ?>
             <?php endif; ?>
+            <?php if ($qr_enabled): ?>
+                Al leer un QR válido, <?php echo $qr_auto_print
+                    ? '<strong>se registrará el check-in y se imprimirá la escarapela automáticamente, sin una segunda confirmación</strong>.'
+                    : 'se mostrará la confirmación del asistente antes de registrar el check-in e imprimir.'; ?>
+            <?php endif; ?>
         </div>
     </div>
+    <script>
+    (function(){
+        var qrToggle = document.getElementById('eventosapp_self_checkin_qr_enabled');
+        var autoToggle = document.getElementById('eventosapp_self_checkin_qr_auto_print');
+        var autoWrap = document.getElementById('eventosapp_self_checkin_qr_auto_print_wrap');
+        if (!qrToggle || !autoToggle || !autoWrap) return;
+
+        function syncQrAutoPrint(){
+            autoToggle.disabled = !qrToggle.checked;
+            autoWrap.classList.toggle('is-disabled', !qrToggle.checked);
+            if (!qrToggle.checked) {
+                autoToggle.checked = false;
+            }
+        }
+
+        qrToggle.addEventListener('change', syncQrAutoPrint);
+        syncQrAutoPrint();
+    })();
+    </script>
     <?php
 }
 
@@ -3495,6 +3535,7 @@ function eventosapp_save_self_checkin_auth_metabox($post_id) {
     }
 
     $qr_enabled = !empty($_POST['eventosapp_self_checkin_qr_enabled']);
+    $qr_auto_print = $qr_enabled && !empty($_POST['eventosapp_self_checkin_qr_auto_print']);
     $text_auth_enabled = !empty($fields);
 
     /*
@@ -3518,6 +3559,7 @@ function eventosapp_save_self_checkin_auth_metabox($post_id) {
     update_post_meta($post_id, '_eventosapp_self_checkin_auth_fields', $fields);
     update_post_meta($post_id, '_eventosapp_self_checkin_text_auth_enabled', $text_auth_enabled ? '1' : '0');
     update_post_meta($post_id, '_eventosapp_self_checkin_qr_enabled', $qr_enabled ? '1' : '0');
+    update_post_meta($post_id, '_eventosapp_self_checkin_qr_auto_print', $qr_auto_print ? '1' : '0');
 }
 
 /**
