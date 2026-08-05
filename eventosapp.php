@@ -1454,6 +1454,21 @@ eventosapp_require_first_existing_file([
     'eventosapp-kiosk-api.php',
 ]);
 
+// API móvil de operaciones para Android: permisos efectivos por evento,
+// listado de funciones disponibles y Check-in QR Staff sin impresión.
+// Debe cargarse después de la API base del Kiosko.
+eventosapp_require_first_existing_file([
+    'includes/api/eventosapp-mobile-staff-checkin-api.php',
+    'eventosapp-mobile-staff-checkin-api.php',
+]);
+
+// Contexto de permisos por evento para las rutas históricas del Kiosko.
+// Depende de la API móvil anterior y debe cargarse después de ella.
+eventosapp_require_first_existing_file([
+    'includes/api/eventosapp-mobile-kiosk-feature-permission.php',
+    'eventosapp-mobile-kiosk-feature-permission.php',
+]);
+
 // Diagnóstico administrativo de carga, rutas REST y comunicación con la app Android.
 eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-kiosk-diagnostics.php',
