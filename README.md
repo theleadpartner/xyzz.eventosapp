@@ -7,9 +7,14 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 - **Versión candidata:** `1.3.0-rc.2`
 - **Fecha de corte:** 2026-08-06
 - **Commit base de pruebas:** `47ac48e00ab90868d49ece5e2790fa1bca52eb9d`
-- **Rama del hotfix:** `fix/whatsapp-ticket-consumables-landing-20260806`
+- **Rama del hotfix en pruebas:** `fix/whatsapp-ticket-consumables-landing-20260806`
+- **Commit del hotfix en pruebas:** `4acfba3d95eafdf347f3613c7e68c9ab03d6badd`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** corrección aislada en rama independiente; requiere validación de la landing presencial y virtual antes de promoverse a producción.
+- **Rama del hotfix en producción:** `hotfix/whatsapp-ticket-consumables-landing-20260806`
+- **Commit de código en producción:** `d540f3bd8bffd3dc02b6f25d44964650ba2a3af3`
+- **Commit de documentación y versión en producción:** `d47efc6c8395d9eb2204004d3cb7bae309ba4dd8`
+- **Commit de preservación documental en producción:** `94a5a94caaa47a52e0a3761d0b965efa75ad5b47`
+- **Estado:** hotfix promovido al repositorio de producción en una rama independiente. Falta validación funcional antes de integrarlo en `main`.
 
 ## Hotfix de la landing pública del ticket
 
@@ -36,6 +41,18 @@ includes/functions/eventosapp-consumables-core.php
 includes/frontend/eventosapp-virtual-landing-widget.php
 README.md
 ```
+
+## Promoción a producción
+
+La corrección fue trasladada desde este repositorio al repositorio `theleadpartner/EventosApp` partiendo del `main` de producción que ya contenía `1.3.0-rc.1`.
+
+En producción se realizaron tres commits separados:
+
+1. `d540f3bd8bffd3dc02b6f25d44964650ba2a3af3`: implementación del cargador seguro, conservación del núcleo y restauración de la landing virtual.
+2. `d47efc6c8395d9eb2204004d3cb7bae309ba4dd8`: actualización de `README.md`, `CHANGELOG.md` y `VERSION` a `1.3.0-rc.2`.
+3. `94a5a94caaa47a52e0a3761d0b965efa75ad5b47`: preservación íntegra de la documentación anterior de `1.3.0-rc.1` dentro de `docs/history/`.
+
+La rama `main` de producción no fue modificada durante esta promoción. La rama del hotfix debe validarse antes de crear o fusionar un pull request.
 
 ## Alcance de la versión candidata 1.3.0
 
@@ -89,17 +106,17 @@ includes/frontend/eventosapp-virtual-landing-widget.php   c81e1682b602aedc749597
 includes/functions/eventosapp-consumables.php             4f8c9e04fe28c1ffec2123505ae63a6bff6c639c
 ```
 
-El hotfix `1.3.0-rc.2` reemplaza únicamente la integración de landing de los dos últimos archivos antes de una nueva promoción.
+El hotfix `1.3.0-rc.2` conserva el núcleo completo del último archivo como `eventosapp-consumables-core.php`, reemplaza su punto de entrada por un cargador seguro y restaura la landing virtual al blob anterior a la integración de Consumibles.
 
 ## Procedimiento de promoción
 
 1. Leer el README de pruebas y el README/CHANGELOG de producción.
 2. Definir un commit exacto de origen en este repositorio.
-3. Comparar el origen contra el último commit de pruebas documentado en producción.
+3. Comparar el origen contra el último commit documentado en producción.
 4. Verificar si producción contiene cambios propios en los archivos candidatos.
-5. Crear una rama desde `main` de producción.
+5. Crear una rama desde el `main` actual de producción.
 6. Copiar únicamente los archivos pendientes mediante lista cerrada.
-7. Confirmar igualdad byte a byte mediante el SHA de cada blob.
+7. Confirmar igualdad de los blobs reutilizados.
 8. Comparar la rama completa contra `main` para detectar archivos fuera de alcance.
 9. Probar la rama antes de abrir y fusionar el pull request.
 10. Actualizar README, CHANGELOG y versión del repositorio de producción.
@@ -136,12 +153,12 @@ El hotfix `1.3.0-rc.2` reemplaza únicamente la integración de landing de los d
 
 ### `1.3.0-rc.2` — 2026-08-06
 
-Hotfix de la landing pública del ticket presencial: eliminación del búfer anidado que dejaba la página en blanco, restricción de la integración de Consumibles a `/ticket/` y restauración de la independencia de la landing virtual.
+Hotfix de la landing pública del ticket presencial: eliminación del búfer anidado que dejaba la página en blanco, restricción de la integración de Consumibles a `/ticket/`, restauración de la independencia de la landing virtual y promoción a una rama del repositorio de producción.
 
 ### `1.3.0-rc.1` — 2026-08-06
 
-Candidato de promoción con la versión final del módulo de Consumibles, política de permisos por rol y usuario, mejoras de Co-gestión y actualización de la API del Kiosko Android.
+Candidato con la versión inicial del módulo de Consumibles, política de permisos por rol y usuario, mejoras de Co-gestión y actualización de la API del Kiosko Android.
 
 ### `1.2.0` — 2026-08-05
 
-Base previamente promovida a producción desde el commit `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kiosko Android, Staff QR, diagnóstico y permisos por evento.
+Base previamente promovida desde el commit `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kiosko Android, Staff QR, diagnóstico y permisos por evento.
