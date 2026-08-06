@@ -1484,6 +1484,14 @@ require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-registrat
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-qr-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'includes/frontend/eventosapp-face-checkin.php';
 require_once plugin_dir_path(__FILE__) . 'eventosapp-qr-manager.php';
+
+// Control de Consumibles: configuración por evento, módulos del dashboard,
+// descuento por QR e inventario visible en la landing del asistente.
+eventosapp_require_first_existing_file([
+    'includes/functions/eventosapp-consumables.php',
+    'eventosapp-consumables.php',
+]);
+
 eventosapp_require_first_existing_file([
     'includes/admin/eventosapp-whatsapp-ticket.php',
     'eventosapp-whatsapp-ticket.php',
