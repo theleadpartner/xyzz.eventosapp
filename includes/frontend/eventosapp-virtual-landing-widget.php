@@ -375,19 +375,6 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
         $ticket_company   = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true) : '';
         $ticket_modalidad = $ticket_id && function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : '';
         $virtual_checked  = $ticket_id && function_exists('eventosapp_ticket_has_checkin_type') ? eventosapp_ticket_has_checkin_type($ticket_id, 'virtual') : false;
-        // Los consumibles pertenecen exclusivamente a la experiencia presencial.
-        // La landing virtual nunca debe exponer este inventario, incluso en eventos híbridos.
-        $consumables_snapshot = [];
-        if (
-            $ticket_id
-            && function_exists('eventosapp_ticket_is_virtual')
-            && ! eventosapp_ticket_is_virtual($ticket_id)
-            && function_exists('eventosapp_consumables_is_enabled')
-            && eventosapp_consumables_is_enabled($event_id)
-            && function_exists('eventosapp_consumables_get_ticket_inventory_snapshot')
-        ) {
-            $consumables_snapshot = eventosapp_consumables_get_ticket_inventory_snapshot($ticket_id, $event_id);
-        }
 
         $ajax_url = $ticket_id ? add_query_arg([
             'action'     => 'eventosapp_register_virtual_checkin',
@@ -432,22 +419,7 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
                 .evapp-vl-button:disabled{opacity:.55;box-shadow:none;cursor:not-allowed;transform:none;}
                 .evapp-vl-status{border-radius:16px;background:var(--evapp-vl-badge-bg);color:var(--evapp-vl-badge-text);padding:12px 14px;font-weight:700;font-size:14px;margin-top:14px;}
                 .evapp-vl-warning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:16px;padding:12px 14px;font-weight:700;font-size:14px;margin-top:14px;}
-                .evapp-vl-consumables{margin-top:22px;}
-                .evapp-vl-consumables-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;}
-                .evapp-vl-consumables-head h2{margin:0 0 5px;font-size:26px;color:var(--evapp-vl-text);}
-                .evapp-vl-consumables-head p{margin:0;color:var(--evapp-vl-muted);font-size:14px;}
-                .evapp-vl-consumables-period{display:inline-flex;align-items:center;border-radius:999px;padding:7px 11px;background:var(--evapp-vl-badge-bg);color:var(--evapp-vl-badge-text);font-size:12px;font-weight:800;white-space:nowrap;}
-                .evapp-vl-consumables-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
-                .evapp-vl-consumable-item{padding:16px;border:1px solid var(--evapp-vl-border);border-radius:17px;background:rgba(248,250,252,.72);}
-                .evapp-vl-consumable-item.is-empty{background:#fff7ed;border-color:#fed7aa;}
-                .evapp-vl-consumable-name{display:block;color:var(--evapp-vl-text);font-size:15px;font-weight:850;margin-bottom:8px;}
-                .evapp-vl-consumable-balance{display:flex;align-items:flex-end;gap:7px;}
-                .evapp-vl-consumable-balance strong{font-size:30px;line-height:1;color:var(--evapp-vl-primary);}
-                .evapp-vl-consumable-item.is-empty .evapp-vl-consumable-balance strong{color:#c2410c;}
-                .evapp-vl-consumable-balance span{color:var(--evapp-vl-muted);font-size:13px;padding-bottom:2px;}
-                .evapp-vl-consumable-state{display:block;margin-top:8px;color:var(--evapp-vl-muted);font-size:12px;font-weight:700;}
-                .evapp-vl-consumables-empty{padding:14px;border:1px dashed var(--evapp-vl-border);border-radius:15px;background:rgba(248,250,252,.72);color:var(--evapp-vl-muted);font-weight:700;}
-                @media(max-width:900px){.evapp-vl-content{grid-template-columns:1fr}.evapp-vl-details{grid-template-columns:1fr}.evapp-virtual-landing{padding:18px 10px}.evapp-vl-card{padding:18px}.evapp-vl-hero-generated{min-height:170px;padding:24px}.evapp-vl-consumables-head{flex-direction:column}.evapp-vl-consumables-period{white-space:normal}}
+                @media(max-width:900px){.evapp-vl-content{grid-template-columns:1fr}.evapp-vl-details{grid-template-columns:1fr}.evapp-virtual-landing{padding:18px 10px}.evapp-vl-card{padding:18px}.evapp-vl-hero-generated{min-height:170px;padding:24px}}
             </style>
 
             <div class="evapp-vl-shell">
@@ -528,42 +500,6 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
                         <?php endif; ?>
                     </aside>
                 </div>
-
-                <?php if ( $ticket_id && ! empty($consumables_snapshot) && ! empty($consumables_snapshot['enabled']) ): ?>
-                    <section class="evapp-vl-card evapp-vl-consumables">
-                        <div class="evapp-vl-consumables-head">
-                            <div>
-                                <span class="evapp-vl-badge">Tus consumibles</span>
-                                <h2>Inventario disponible</h2>
-                                <p>Este saldo se actualiza con cada consumo registrado por el staff.</p>
-                            </div>
-                            <?php if ( ! empty($consumables_snapshot['period_label']) ): ?>
-                                <span class="evapp-vl-consumables-period"><?php echo esc_html($consumables_snapshot['period_label']); ?></span>
-                            <?php endif; ?>
-                        </div>
-
-                        <?php if ( ! empty($consumables_snapshot['assigned']) && ! empty($consumables_snapshot['items']) ): ?>
-                            <div class="evapp-vl-consumables-grid">
-                                <?php foreach ( $consumables_snapshot['items'] as $consumable_item ):
-                                    $remaining = max(0, absint($consumable_item['remaining'] ?? 0));
-                                    $allocated = absint($consumable_item['allocated'] ?? 0);
-                                    $is_empty  = $remaining <= 0;
-                                    ?>
-                                    <div class="evapp-vl-consumable-item <?php echo $is_empty ? 'is-empty' : ''; ?>">
-                                        <span class="evapp-vl-consumable-name"><?php echo esc_html($consumable_item['name'] ?? 'Consumible'); ?></span>
-                                        <div class="evapp-vl-consumable-balance">
-                                            <strong><?php echo esc_html($remaining); ?></strong>
-                                            <span>de <?php echo esc_html($allocated); ?> disponibles</span>
-                                        </div>
-                                        <span class="evapp-vl-consumable-state"><?php echo $is_empty ? 'Saldo agotado' : 'Unidades restantes'; ?></span>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php else: ?>
-                            <div class="evapp-vl-consumables-empty">No tienes consumibles asignados con la segmentación actual del evento.</div>
-                        <?php endif; ?>
-                    </section>
-                <?php endif; ?>
             </div>
 
             <?php if ( $ticket_id && $platform_url && ! empty($access_state['enabled']) ): ?>

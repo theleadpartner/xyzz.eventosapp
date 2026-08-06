@@ -4,13 +4,38 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.3.0-rc.1`
+- **Versión candidata:** `1.3.0-rc.2`
 - **Fecha de corte:** 2026-08-06
-- **Commit validado de pruebas:** `7eaa1ca363068bc7d6262f0ffedfb8c9c4912ce6`
+- **Commit base de pruebas:** `47ac48e00ab90868d49ece5e2790fa1bca52eb9d`
+- **Rama del hotfix:** `fix/whatsapp-ticket-consumables-landing-20260806`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Rama preparada en producción:** `sync/consumables-permissions-20260806`
-- **Commit de sincronización en producción:** `4b424bad614cd1e27b97a49df17cc51b983def9b`
-- **Estado:** código sincronizado en rama independiente; `main` de producción permanece sin cambios hasta revisión e integración.
+- **Estado:** corrección aislada en rama independiente; requiere validación de la landing presencial y virtual antes de promoverse a producción.
+
+## Hotfix de la landing pública del ticket
+
+### Incidencia corregida
+
+La landing pública `/ticket/?ticket=...` podía quedar completamente en blanco al abrir el botón **Ver mi ticket** de WhatsApp. La integración inicial del inventario de Consumibles activaba un búfer de salida con callback y, desde ese callback, intentaba generar el bloque de inventario mediante otro `ob_start()`. PHP no permite iniciar un nuevo búfer mientras se ejecuta un manejador de salida.
+
+### Solución aplicada
+
+- La implementación completa de Consumibles se conserva sin eliminar funciones en `eventosapp-consumables-core.php`.
+- `eventosapp-consumables.php` actúa como cargador seguro y define únicamente la integración corregida antes de incluir el núcleo.
+- El HTML del inventario se calcula antes de iniciar el búfer.
+- El callback del búfer se limita a insertar una cadena ya preparada; no consulta datos, no genera plantillas y no abre otro búfer.
+- La intervención queda restringida a la landing presencial `/ticket/` y a la ruta heredada equivalente.
+- Los tickets virtuales quedan excluidos antes de generar inventario.
+- La landing `/virtual/` se restauró a su implementación independiente anterior a Consumibles.
+- No se modificaron el envío de WhatsApp, las plantillas de Meta, Wallet, PDF, ICS ni el registro de check-in virtual.
+
+### Archivos del hotfix
+
+```text
+includes/functions/eventosapp-consumables.php
+includes/functions/eventosapp-consumables-core.php
+includes/frontend/eventosapp-virtual-landing-widget.php
+README.md
+```
 
 ## Alcance de la versión candidata 1.3.0
 
@@ -51,9 +76,9 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 - Opción de impresión automática después de validar el QR.
 - La lectura QR resuelve el ticket sin alterar los flujos de confirmación que siguen siendo necesarios.
 
-## Archivos promovidos a producción
+## Archivos promovidos previamente a producción
 
-La comparación entre el último punto documentado de producción y este commit identificó exactamente seis archivos pendientes. Cada archivo se copió conservando el mismo SHA de blob de este repositorio:
+La comparación entre el último punto documentado de producción y el candidato `1.3.0-rc.1` identificó seis archivos pendientes. Cada archivo fue copiado conservando el mismo SHA de blob del repositorio de pruebas:
 
 ```text
 includes/admin/eventosapp-access-staff-control-event.php  39db9c0ceaa5d648f9c0a67cfd45b8bf1742edad
@@ -64,7 +89,7 @@ includes/frontend/eventosapp-virtual-landing-widget.php   c81e1682b602aedc749597
 includes/functions/eventosapp-consumables.php             4f8c9e04fe28c1ffec2123505ae63a6bff6c639c
 ```
 
-`eventosapp.php` ya era idéntico entre pruebas y producción, por lo que no fue reemplazado.
+El hotfix `1.3.0-rc.2` reemplaza únicamente la integración de landing de los dos últimos archivos antes de una nueva promoción.
 
 ## Procedimiento de promoción
 
@@ -81,13 +106,25 @@ includes/functions/eventosapp-consumables.php             4f8c9e04fe28c1ffec2123
 
 ## Validación funcional requerida antes de producción
 
+### Hotfix de landing
+
+- Abrir `/ticket/?ticket={ID_PUBLICO}` para un ticket presencial con Consumibles activo.
+- Confirmar que la landing carga QR, datos del evento, Wallet, PDF e ICS como antes.
+- Confirmar que el inventario se muestra antes del bloque de acciones.
+- Abrir un ticket presencial sin inventario asignado y comprobar el mensaje de segmentación.
+- Abrir `/virtual/{evento}?ticket_pub={ID_PUBLICO}` para un ticket virtual.
+- Confirmar que la landing virtual conserva el botón de acceso y el registro de check-in virtual.
+- Confirmar que la landing virtual no muestra ni calcula inventario de Consumibles.
+- Revisar el log PHP y confirmar que no aparece el error de búfer de salida anidado.
+
+### Módulo de Consumibles
+
 - Crear, editar, ordenar y eliminar configuraciones de inventario.
 - Verificar segmentación por localidad y campo personalizado.
 - Confirmar inventario único y reinicio diario.
 - Probar descuento de un artículo, varios artículos y varias cantidades.
 - Confirmar que una falta de saldo impide todo el descuento del lote.
 - Confirmar que repetir la misma lectura no genera descuentos adicionales.
-- Validar la landing del ticket presencial y la exclusión en asistentes virtuales.
 - Probar permisos de Administrador, Organizador, Staff y Logístico.
 - Probar una excepción individual de acceso por usuario.
 - Validar usuarios con configuraciones personalizadas creadas antes de Consumibles.
@@ -96,6 +133,10 @@ includes/functions/eventosapp-consumables.php             4f8c9e04fe28c1ffec2123
 - Confirmar creación de las tablas de balance y ledger en una instalación controlada.
 
 ## Historial resumido
+
+### `1.3.0-rc.2` — 2026-08-06
+
+Hotfix de la landing pública del ticket presencial: eliminación del búfer anidado que dejaba la página en blanco, restricción de la integración de Consumibles a `/ticket/` y restauración de la independencia de la landing virtual.
 
 ### `1.3.0-rc.1` — 2026-08-06
 
