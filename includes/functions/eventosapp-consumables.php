@@ -553,6 +553,12 @@ if ( ! function_exists('eventosapp_consumables_user_can_feature') ) {
         $feature  = sanitize_key($feature);
         if ( ! $event_id || ! $user_id || ! eventosapp_consumables_is_enabled($event_id) ) return false;
 
+        // Este helper reúne alcance por evento, política por rol y la excepción
+        // personalizada del metabox Control de Acceso Dashboard Staff.
+        if ( function_exists('eventosapp_user_can_access_dashboard_feature_in_event') ) {
+            return eventosapp_user_can_access_dashboard_feature_in_event($user_id, $feature, $event_id);
+        }
+
         if ( user_can($user_id, 'manage_options') ) return true;
 
         $can_manage_event = function_exists('eventosapp_user_can_manage_event')
@@ -589,7 +595,7 @@ if ( ! function_exists('eventosapp_consumables_dashboard_modules') ) {
 
         $modules['consumables_staff'] = [
             'title'       => 'Consumo de Consumibles',
-            'description' => 'Selecciona un consumible, escanea el QR y descuenta una unidad.',
+            'description' => 'Selecciona uno o varios consumibles, define cantidades y descuéntalos con una sola lectura QR.',
             'icon'        => 'qrcode',
             'category'    => 'access',
             'url'         => function_exists('eventosapp_get_consumables_staff_url') ? eventosapp_get_consumables_staff_url() : '#',
@@ -994,7 +1000,9 @@ if ( ! function_exists('eventosapp_consumables_handle_front_save') ) {
 
         $event_id = absint($_POST['eventosapp_consumables_event_id'] ?? 0);
         $nonce = sanitize_text_field(wp_unslash($_POST['eventosapp_consumables_front_nonce'] ?? ''));
-        $back = wp_get_referer() ?: (function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/'));
+        $back = function_exists('eventosapp_get_consumables_manager_url')
+            ? eventosapp_get_consumables_manager_url()
+            : (wp_get_referer() ?: (function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/')));
         $back = remove_query_arg([ 'evapp_consumables_saved', 'evapp_consumables_error' ], $back);
 
         if ( ! wp_verify_nonce($nonce, 'eventosapp_consumables_front_save_' . $event_id) ) {
@@ -1056,6 +1064,152 @@ if ( ! function_exists('eventosapp_consumables_render_manager_shortcode') ) {
 add_shortcode('eventosapp_consumables_manager', 'eventosapp_consumables_render_manager_shortcode');
 
 /* -------------------------------------------------------------------------
+ * Inventario del asistente en la landing presencial de WhatsApp
+ * ---------------------------------------------------------------------- */
+
+if ( ! function_exists('eventosapp_consumables_resolve_public_ticket_request') ) {
+    function eventosapp_consumables_resolve_public_ticket_request() {
+        if ( function_exists('eventosapp_whatsapp_templates_resolve_ticket_from_request') ) {
+            return absint(eventosapp_whatsapp_templates_resolve_ticket_from_request());
+        }
+
+        foreach ( ['ticket', 'ticket_pub', 'public_id', 'ticketID'] as $key ) {
+            if ( empty($_GET[$key]) ) continue;
+            $public_id = sanitize_text_field(wp_unslash($_GET[$key]));
+            if ( function_exists('eventosapp_find_ticket_by_public_id') ) {
+                $ticket_id = absint(eventosapp_find_ticket_by_public_id($public_id));
+                if ( $ticket_id ) return $ticket_id;
+            }
+        }
+
+        return 0;
+    }
+}
+
+if ( ! function_exists('eventosapp_consumables_public_inventory_html') ) {
+    function eventosapp_consumables_public_inventory_html($ticket_id, $event_id) {
+        $ticket_id = absint($ticket_id);
+        $event_id = absint($event_id);
+        if ( ! $ticket_id || ! $event_id ) return '';
+        if ( function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id) ) return '';
+        if ( ! eventosapp_consumables_is_enabled($event_id) ) return '';
+
+        $snapshot = eventosapp_consumables_get_ticket_inventory_snapshot($ticket_id, $event_id);
+        if ( empty($snapshot['enabled']) ) return '';
+
+        ob_start();
+        ?>
+        <section class="evapp-ticket-consumables" aria-labelledby="evapp-ticket-consumables-title">
+            <style>
+                .evapp-ticket-consumables{margin:20px 28px 26px;padding:20px;border:1px solid #dbe7f3;border-radius:16px;background:#f8fbff}
+                .evapp-ticket-consumables-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+                .evapp-ticket-consumables h2{margin:0 0 5px;font-size:21px;line-height:1.2;color:#111827}
+                .evapp-ticket-consumables p{margin:0;color:#64748b;font-size:14px;line-height:1.45}
+                .evapp-ticket-consumables-period{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;background:#e8f2fc;color:#135e96;font-size:11px;font-weight:800;white-space:nowrap}
+                .evapp-ticket-consumables-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px}
+                .evapp-ticket-consumable{padding:13px;border:1px solid #dbe7f3;border-radius:13px;background:#fff}
+                .evapp-ticket-consumable.is-empty{background:#f8fafc;opacity:.72}
+                .evapp-ticket-consumable-name{display:block;margin-bottom:9px;font-size:14px;font-weight:800;color:#1f2937}
+                .evapp-ticket-consumable-balance{display:flex;align-items:baseline;gap:5px;color:#2563eb}
+                .evapp-ticket-consumable-balance strong{font-size:25px;line-height:1}
+                .evapp-ticket-consumable-balance span{font-size:12px;color:#64748b}
+                .evapp-ticket-consumable-progress{height:6px;margin-top:10px;border-radius:999px;background:#e5e7eb;overflow:hidden}
+                .evapp-ticket-consumable-progress span{display:block;height:100%;border-radius:999px;background:#2563eb}
+                .evapp-ticket-consumables-empty{padding:13px;border:1px dashed #cbd5e1;border-radius:12px;background:#fff;color:#64748b;font-size:14px}
+                @media(max-width:520px){.evapp-ticket-consumables{margin:16px 18px 22px}.evapp-ticket-consumables-head{display:block}.evapp-ticket-consumables-period{margin-top:10px}.evapp-ticket-consumables-grid{grid-template-columns:1fr 1fr}}
+            </style>
+            <div class="evapp-ticket-consumables-head">
+                <div>
+                    <h2 id="evapp-ticket-consumables-title">Mi inventario de consumibles</h2>
+                    <p>Consulta aquí las unidades asignadas, consumidas y disponibles para tu ticket presencial.</p>
+                </div>
+                <?php if ( ! empty($snapshot['period_label']) ): ?>
+                    <span class="evapp-ticket-consumables-period"><?php echo esc_html($snapshot['period_label']); ?></span>
+                <?php endif; ?>
+            </div>
+
+            <?php if ( ! empty($snapshot['assigned']) && ! empty($snapshot['items']) ): ?>
+                <div class="evapp-ticket-consumables-grid">
+                    <?php foreach ( $snapshot['items'] as $item ):
+                        $allocated = max(0, absint($item['allocated'] ?? 0));
+                        $remaining = max(0, absint($item['remaining'] ?? 0));
+                        $consumed = max(0, absint($item['consumed'] ?? 0));
+                        $percent = $allocated > 0 ? min(100, max(0, round(($remaining / $allocated) * 100))) : 0;
+                        ?>
+                        <div class="evapp-ticket-consumable <?php echo $remaining < 1 ? 'is-empty' : ''; ?>">
+                            <span class="evapp-ticket-consumable-name"><?php echo esc_html($item['name'] ?? 'Consumible'); ?></span>
+                            <div class="evapp-ticket-consumable-balance"><strong><?php echo (int)$remaining; ?></strong><span>disponibles de <?php echo (int)$allocated; ?></span></div>
+                            <div class="evapp-ticket-consumable-progress" aria-label="<?php echo esc_attr($remaining . ' de ' . $allocated . ' disponibles'); ?>"><span style="width:<?php echo (int)$percent; ?>%"></span></div>
+                            <p style="margin:8px 0 0;font-size:11px"><?php echo (int)$consumed; ?> consumido(s)</p>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <div class="evapp-ticket-consumables-empty">Este ticket presencial no tiene un inventario de consumibles asignado por las reglas de segmentación del evento.</div>
+            <?php endif; ?>
+        </section>
+        <?php
+        return ob_get_clean();
+    }
+}
+
+if ( ! function_exists('eventosapp_consumables_inject_public_inventory') ) {
+    function eventosapp_consumables_inject_public_inventory($html) {
+        if ( ! is_string($html) || $html === '' || strpos($html, 'evapp-ticket-consumables') !== false ) return $html;
+
+        $ticket_id = eventosapp_consumables_resolve_public_ticket_request();
+        if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) return $html;
+        if ( function_exists('eventosapp_ticket_is_virtual') && eventosapp_ticket_is_virtual($ticket_id) ) return $html;
+
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $inventory_html = eventosapp_consumables_public_inventory_html($ticket_id, $event_id);
+        if ( $inventory_html === '' ) return $html;
+
+        $marker = '<div class="evapp-ticket-actions">';
+        $position = strpos($html, $marker);
+        if ( $position !== false ) {
+            return substr($html, 0, $position) . $inventory_html . substr($html, $position);
+        }
+
+        $fallback = '</section>';
+        $position = strrpos($html, $fallback);
+        if ( $position !== false ) {
+            return substr($html, 0, $position) . $inventory_html . substr($html, $position);
+        }
+
+        return $html;
+    }
+}
+
+if ( ! function_exists('eventosapp_consumables_start_public_landing_buffer') ) {
+    function eventosapp_consumables_start_public_landing_buffer() {
+        static $started = false;
+        if ( $started ) return;
+
+        $has_ticket = false;
+        foreach ( ['ticket', 'ticket_pub', 'public_id', 'ticketID'] as $key ) {
+            if ( isset($_GET[$key]) && $_GET[$key] !== '' ) {
+                $has_ticket = true;
+                break;
+            }
+        }
+        if ( ! $has_ticket ) return;
+
+        $action = isset($_GET['eventosapp_whatsapp_public_action'])
+            ? sanitize_key(wp_unslash($_GET['eventosapp_whatsapp_public_action']))
+            : '';
+        if ( $action !== '' && $action !== 'ticket_landing' ) return;
+        if ( isset($_GET['evapp_vticket']) ) return;
+
+        $started = true;
+        ob_start('eventosapp_consumables_inject_public_inventory');
+    }
+}
+add_action('template_redirect', 'eventosapp_consumables_start_public_landing_buffer', -100);
+add_action('admin_post_nopriv_eventosapp_whatsapp_ticket_landing', 'eventosapp_consumables_start_public_landing_buffer', 0);
+add_action('admin_post_eventosapp_whatsapp_ticket_landing', 'eventosapp_consumables_start_public_landing_buffer', 0);
+
+/* -------------------------------------------------------------------------
  * Descuento por QR
  * ---------------------------------------------------------------------- */
 
@@ -1095,38 +1249,99 @@ if ( ! function_exists('eventosapp_consumables_find_ticket_from_qr') ) {
     }
 }
 
-if ( ! function_exists('eventosapp_consumables_consume_item') ) {
-    function eventosapp_consumables_consume_item($event_id, $ticket_id, $item_id, $staff_user_id, $request_uuid, $qr_type = '') {
+if ( ! function_exists('eventosapp_consumables_sanitize_selection') ) {
+    /**
+     * Normaliza la selección enviada por el lector QR.
+     * Formato preferido: [item_id => cantidad]. También acepta filas con
+     * item_id/quantity para conservar compatibilidad con integraciones futuras.
+     */
+    function eventosapp_consumables_sanitize_selection($raw) {
+        if ( ! is_array($raw) ) return [];
+
+        $selection = [];
+        foreach ( $raw as $key => $value ) {
+            if ( is_array($value) ) {
+                $item_id = sanitize_key($value['item_id'] ?? $value['id'] ?? $key);
+                $quantity = absint($value['quantity'] ?? $value['qty'] ?? 0);
+            } else {
+                $item_id = sanitize_key($key);
+                $quantity = absint($value);
+            }
+
+            if ( $item_id === '' || $quantity < 1 ) continue;
+            $selection[$item_id] = min(999999, $quantity);
+        }
+
+        return $selection;
+    }
+}
+
+if ( ! function_exists('eventosapp_consumables_batch_line_uuid') ) {
+    /**
+     * El ledger conserva una fila por consumible. Este UUID determinístico permite
+     * que una misma lectura con varios artículos siga siendo idempotente.
+     */
+    function eventosapp_consumables_batch_line_uuid($request_uuid, $item_id) {
+        $request_uuid = sanitize_text_field((string)$request_uuid);
+        $item_id = sanitize_key((string)$item_id);
+        return 'batch_' . substr(hash('sha256', $request_uuid . '|' . $item_id), 0, 56);
+    }
+}
+
+if ( ! function_exists('eventosapp_consumables_consume_items') ) {
+    /**
+     * Descuenta varios consumibles y cantidades en una sola transacción.
+     * La operación es todo-o-nada: si una línea no tiene saldo, ninguna se descuenta.
+     */
+    function eventosapp_consumables_consume_items($event_id, $ticket_id, $selection, $staff_user_id, $request_uuid, $qr_type = '') {
         global $wpdb;
 
         $event_id = absint($event_id);
         $ticket_id = absint($ticket_id);
         $staff_user_id = absint($staff_user_id);
-        $item_id = sanitize_key($item_id);
+        $selection = eventosapp_consumables_sanitize_selection($selection);
         $request_uuid = sanitize_text_field($request_uuid ?: eventosapp_consumables_make_id('req'));
         $qr_type = sanitize_key($qr_type);
 
-        if ( ! $event_id || ! $ticket_id || $item_id === '' ) return new WP_Error('invalid_data', 'Los datos del consumo están incompletos.');
-        if ( ! eventosapp_consumables_is_enabled($event_id) ) return new WP_Error('disabled', 'El Control de Consumibles no está activo para este evento.');
+        if ( ! $event_id || ! $ticket_id || empty($selection) ) {
+            return new WP_Error('invalid_data', 'Selecciona al menos un consumible y una cantidad válida antes de escanear.');
+        }
+        if ( ! eventosapp_consumables_is_enabled($event_id) ) {
+            return new WP_Error('disabled', 'El Control de Consumibles no está activo para este evento.');
+        }
 
         $day = eventosapp_consumables_validate_operating_day($event_id);
         if ( is_wp_error($day) ) return $day;
 
         $ticket_event = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
-        if ( $ticket_event !== $event_id ) return new WP_Error('wrong_event', 'El ticket no corresponde al evento activo.');
+        if ( $ticket_event !== $event_id ) {
+            return new WP_Error('wrong_event', 'El ticket no corresponde al evento activo.');
+        }
 
         $rule = eventosapp_consumables_get_ticket_rule($ticket_id, $event_id);
-        if ( empty($rule) ) return new WP_Error('not_assigned', 'El asistente no tiene un inventario de consumibles asignado según la segmentación configurada.');
-
-        $selected_item = [];
-        foreach ( (array) ($rule['items'] ?? []) as $item ) {
-            if ( sanitize_key($item['id'] ?? '') === $item_id ) {
-                $selected_item = $item;
-                break;
-            }
+        if ( empty($rule) ) {
+            return new WP_Error('not_assigned', 'El asistente no tiene un inventario de consumibles asignado según la segmentación configurada.');
         }
-        if ( empty($selected_item) ) {
-            return new WP_Error('item_not_assigned', 'El consumible seleccionado no está asignado a este asistente. Revisa la segmentación o selecciona otro consumible.');
+
+        $rule_items = [];
+        foreach ( (array)($rule['items'] ?? []) as $item ) {
+            $item_id = sanitize_key($item['id'] ?? '');
+            if ( $item_id !== '' ) $rule_items[$item_id] = $item;
+        }
+
+        $selected_items = [];
+        foreach ( $selection as $item_id => $quantity ) {
+            if ( ! isset($rule_items[$item_id]) ) {
+                return new WP_Error(
+                    'item_not_assigned',
+                    'Uno de los consumibles seleccionados no está asignado a este asistente. Revisa la segmentación o ajusta la selección antes de volver a escanear.'
+                );
+            }
+            $selected_items[$item_id] = [
+                'item'     => $rule_items[$item_id],
+                'quantity' => absint($quantity),
+                'line_uuid'=> eventosapp_consumables_batch_line_uuid($request_uuid, $item_id),
+            ];
         }
 
         $period = eventosapp_consumables_resolve_period($event_id, $rule['behavior'] ?? 'shared', true);
@@ -1137,104 +1352,193 @@ if ( ! function_exists('eventosapp_consumables_consume_item') ) {
         }
         $tables = eventosapp_consumables_table_names();
 
-        $existing = $wpdb->get_row($wpdb->prepare(
-            "SELECT id,remaining_after FROM {$tables['ledger']} WHERE request_uuid=%s LIMIT 1",
-            $request_uuid
-        ), ARRAY_A);
-        if ( is_array($existing) ) {
+        // Comprobar idempotencia antes de abrir la transacción.
+        $existing_lines = [];
+        foreach ( $selected_items as $item_id => $line ) {
+            $existing = $wpdb->get_row($wpdb->prepare(
+                "SELECT item_id,item_name,quantity,remaining_after FROM {$tables['ledger']} WHERE request_uuid=%s LIMIT 1",
+                $line['line_uuid']
+            ), ARRAY_A);
+            if ( is_array($existing) ) $existing_lines[$item_id] = $existing;
+        }
+
+        if ( count($existing_lines) === count($selected_items) ) {
+            $results = [];
+            foreach ( $selected_items as $item_id => $line ) {
+                $existing = $existing_lines[$item_id];
+                $results[] = [
+                    'item_id'   => $item_id,
+                    'item_name' => sanitize_text_field($existing['item_name'] ?? $line['item']['name'] ?? ''),
+                    'quantity'  => absint($existing['quantity'] ?? $line['quantity']),
+                    'remaining' => max(0, intval($existing['remaining_after'] ?? 0)),
+                ];
+            }
             return [
                 'duplicate' => true,
-                'remaining' => max(0, intval($existing['remaining_after'] ?? 0)),
-                'item'      => $selected_item,
+                'items'     => $results,
                 'rule'      => $rule,
                 'period'    => $period,
             ];
+        }
+
+        if ( ! empty($existing_lines) ) {
+            return new WP_Error('request_conflict', 'Esta lectura ya fue usada con una selección diferente. Inicia una nueva lectura para evitar descuentos duplicados.');
         }
 
         $wpdb->query('START TRANSACTION');
         try {
             $now = current_time('mysql');
-            $allocated = absint($selected_item['quantity'] ?? 0);
+            $locked_balances = [];
 
-            $wpdb->query($wpdb->prepare(
-                "INSERT INTO {$tables['balances']}
-                    (event_id,ticket_id,config_id,item_id,period_key,allocated,consumed,updated_at)
-                 VALUES (%d,%d,%s,%s,%s,%d,0,%s)
-                 ON DUPLICATE KEY UPDATE
-                    config_id=VALUES(config_id),
-                    allocated=VALUES(allocated),
-                    updated_at=VALUES(updated_at)",
-                $event_id,
-                $ticket_id,
-                sanitize_key($rule['id'] ?? ''),
-                $item_id,
-                sanitize_text_field($period['key']),
-                $allocated,
-                $now
-            ));
+            // Crear/sincronizar y bloquear todas las filas antes de descontar.
+            foreach ( $selected_items as $item_id => $line ) {
+                $allocated = absint($line['item']['quantity'] ?? 0);
+                $wpdb->query($wpdb->prepare(
+                    "INSERT INTO {$tables['balances']}
+                        (event_id,ticket_id,config_id,item_id,period_key,allocated,consumed,updated_at)
+                     VALUES (%d,%d,%s,%s,%s,%d,0,%s)
+                     ON DUPLICATE KEY UPDATE
+                        config_id=VALUES(config_id),
+                        allocated=VALUES(allocated),
+                        updated_at=VALUES(updated_at)",
+                    $event_id,
+                    $ticket_id,
+                    sanitize_key($rule['id'] ?? ''),
+                    $item_id,
+                    sanitize_text_field($period['key']),
+                    $allocated,
+                    $now
+                ));
 
-            $updated = $wpdb->query($wpdb->prepare(
-                "UPDATE {$tables['balances']}
-                 SET consumed=consumed+1, updated_at=%s
-                 WHERE event_id=%d AND ticket_id=%d AND item_id=%s AND period_key=%s
-                   AND consumed + 1 <= allocated",
-                $now,
-                $event_id,
-                $ticket_id,
-                $item_id,
-                sanitize_text_field($period['key'])
-            ));
+                $balance = $wpdb->get_row($wpdb->prepare(
+                    "SELECT allocated,consumed FROM {$tables['balances']}
+                     WHERE event_id=%d AND ticket_id=%d AND item_id=%s AND period_key=%s
+                     LIMIT 1 FOR UPDATE",
+                    $event_id,
+                    $ticket_id,
+                    $item_id,
+                    sanitize_text_field($period['key'])
+                ), ARRAY_A);
 
-            if ( intval($updated) !== 1 ) {
-                $wpdb->query('ROLLBACK');
-                return new WP_Error('no_balance', 'No se realizó el descuento. El asistente ya no tiene unidades disponibles de ' . sanitize_text_field($selected_item['name'] ?? 'este consumible') . '.');
+                if ( ! is_array($balance) ) {
+                    throw new RuntimeException('balance_not_found');
+                }
+
+                $remaining = max(0, absint($balance['allocated'] ?? 0) - absint($balance['consumed'] ?? 0));
+                if ( $line['quantity'] > $remaining ) {
+                    $wpdb->query('ROLLBACK');
+                    $name = sanitize_text_field($line['item']['name'] ?? 'este consumible');
+                    return new WP_Error(
+                        'insufficient_balance',
+                        'No se realizó ningún descuento. Para ' . $name . ' solicitaste ' . absint($line['quantity']) . ' y el asistente solo tiene ' . $remaining . ' disponible(s).'
+                    );
+                }
+
+                $locked_balances[$item_id] = $balance;
             }
 
-            $balance = $wpdb->get_row($wpdb->prepare(
-                "SELECT allocated,consumed FROM {$tables['balances']}
-                 WHERE event_id=%d AND ticket_id=%d AND item_id=%s AND period_key=%s LIMIT 1",
-                $event_id,
-                $ticket_id,
-                $item_id,
-                sanitize_text_field($period['key'])
-            ), ARRAY_A);
+            $results = [];
+            foreach ( $selected_items as $item_id => $line ) {
+                $quantity = absint($line['quantity']);
+                $updated = $wpdb->query($wpdb->prepare(
+                    "UPDATE {$tables['balances']}
+                     SET consumed=consumed+%d, updated_at=%s
+                     WHERE event_id=%d AND ticket_id=%d AND item_id=%s AND period_key=%s
+                       AND consumed + %d <= allocated",
+                    $quantity,
+                    $now,
+                    $event_id,
+                    $ticket_id,
+                    $item_id,
+                    sanitize_text_field($period['key']),
+                    $quantity
+                ));
 
-            $remaining = max(0, absint($balance['allocated'] ?? 0) - absint($balance['consumed'] ?? 0));
-            $inserted = $wpdb->insert($tables['ledger'], [
-                'request_uuid'   => $request_uuid,
-                'event_id'       => $event_id,
-                'ticket_id'      => $ticket_id,
-                'config_id'      => sanitize_key($rule['id'] ?? ''),
-                'item_id'        => $item_id,
-                'item_name'      => sanitize_text_field($selected_item['name'] ?? ''),
-                'period_key'     => sanitize_text_field($period['key']),
-                'quantity'       => 1,
-                'action'         => 'consume',
-                'staff_user_id'  => $staff_user_id,
-                'qr_type'        => $qr_type,
-                'source'         => 'staff_qr',
-                'remaining_after'=> $remaining,
-                'note'           => '',
-                'created_at'     => $now,
-            ], [ '%s','%d','%d','%s','%s','%s','%s','%d','%s','%d','%s','%s','%d','%s','%s' ]);
+                if ( intval($updated) !== 1 ) {
+                    throw new RuntimeException('balance_update_failed');
+                }
 
-            if ( ! $inserted ) {
-                $wpdb->query('ROLLBACK');
-                return new WP_Error('ledger_error', 'No se pudo confirmar el consumo. El saldo no fue modificado.');
+                $allocated = absint($locked_balances[$item_id]['allocated'] ?? 0);
+                $consumed_after = absint($locked_balances[$item_id]['consumed'] ?? 0) + $quantity;
+                $remaining = max(0, $allocated - $consumed_after);
+                $item_name = sanitize_text_field($line['item']['name'] ?? 'Consumible');
+
+                $inserted = $wpdb->insert($tables['ledger'], [
+                    'request_uuid'    => $line['line_uuid'],
+                    'event_id'        => $event_id,
+                    'ticket_id'       => $ticket_id,
+                    'config_id'       => sanitize_key($rule['id'] ?? ''),
+                    'item_id'         => $item_id,
+                    'item_name'       => $item_name,
+                    'period_key'      => sanitize_text_field($period['key']),
+                    'quantity'        => $quantity,
+                    'action'          => 'consume',
+                    'staff_user_id'   => $staff_user_id,
+                    'qr_type'         => $qr_type,
+                    'source'          => 'staff_qr',
+                    'remaining_after' => $remaining,
+                    'note'            => 'batch_request=' . $request_uuid,
+                    'created_at'      => $now,
+                ], [ '%s','%d','%d','%s','%s','%s','%s','%d','%s','%d','%s','%s','%d','%s','%s' ]);
+
+                if ( ! $inserted ) {
+                    throw new RuntimeException('ledger_insert_failed');
+                }
+
+                $results[] = [
+                    'item_id'   => $item_id,
+                    'item_name' => $item_name,
+                    'quantity'  => $quantity,
+                    'remaining' => $remaining,
+                ];
             }
 
             $wpdb->query('COMMIT');
             return [
                 'duplicate' => false,
-                'remaining' => $remaining,
-                'item'      => $selected_item,
+                'items'     => $results,
                 'rule'      => $rule,
                 'period'    => $period,
             ];
         } catch ( Throwable $e ) {
             $wpdb->query('ROLLBACK');
-            return new WP_Error('consume_error', 'No se pudo registrar el consumo. Intenta nuevamente.');
+            return new WP_Error('consume_error', 'No se pudo registrar el consumo. Ningún saldo fue modificado; intenta nuevamente.');
         }
+    }
+}
+
+if ( ! function_exists('eventosapp_consumables_consume_item') ) {
+    /**
+     * Wrapper de compatibilidad para integraciones que todavía descuentan una unidad.
+     */
+    function eventosapp_consumables_consume_item($event_id, $ticket_id, $item_id, $staff_user_id, $request_uuid, $qr_type = '') {
+        $result = eventosapp_consumables_consume_items(
+            $event_id,
+            $ticket_id,
+            [sanitize_key($item_id) => 1],
+            $staff_user_id,
+            $request_uuid,
+            $qr_type
+        );
+        if ( is_wp_error($result) ) return $result;
+
+        $first = !empty($result['items'][0]) ? $result['items'][0] : [];
+        $selected_item = [];
+        foreach ( (array)($result['rule']['items'] ?? []) as $item ) {
+            if ( sanitize_key($item['id'] ?? '') === sanitize_key($item_id) ) {
+                $selected_item = $item;
+                break;
+            }
+        }
+
+        return [
+            'duplicate' => !empty($result['duplicate']),
+            'remaining' => absint($first['remaining'] ?? 0),
+            'item'      => $selected_item,
+            'quantity'  => 1,
+            'rule'      => $result['rule'] ?? [],
+            'period'    => $result['period'] ?? [],
+        ];
     }
 }
 
@@ -1244,7 +1548,15 @@ if ( ! function_exists('eventosapp_consumables_ajax_consume') ) {
         check_ajax_referer('eventosapp_consumables_consume', 'nonce');
 
         $event_id = absint($_POST['event_id'] ?? 0);
-        $item_id = sanitize_key($_POST['item_id'] ?? '');
+        $raw_selection = isset($_POST['items']) && is_array($_POST['items']) ? wp_unslash($_POST['items']) : [];
+        $selection = eventosapp_consumables_sanitize_selection($raw_selection);
+
+        // Compatibilidad con la interfaz anterior de un solo consumible.
+        if ( empty($selection) ) {
+            $legacy_item_id = sanitize_key($_POST['item_id'] ?? '');
+            if ( $legacy_item_id !== '' ) $selection[$legacy_item_id] = max(1, absint($_POST['quantity'] ?? 1));
+        }
+
         $raw_code = isset($_POST['raw_code']) ? wp_unslash($_POST['raw_code']) : '';
         $request_uuid = sanitize_text_field(wp_unslash($_POST['request_uuid'] ?? ''));
         $user_id = get_current_user_id();
@@ -1252,6 +1564,9 @@ if ( ! function_exists('eventosapp_consumables_ajax_consume') ) {
 
         if ( ! $event_id || $event_id !== absint($active_event) ) {
             wp_send_json_error([ 'message' => 'El evento activo cambió. Regresa al dashboard y vuelve a seleccionar el evento.' ], 400);
+        }
+        if ( empty($selection) ) {
+            wp_send_json_error([ 'message' => 'Selecciona al menos un consumible y define su cantidad.' ], 400);
         }
         if ( ! eventosapp_consumables_user_can_feature($event_id, $user_id, 'consumables_staff') ) {
             wp_send_json_error([ 'message' => 'No tienes permisos para descontar consumibles en este evento.' ], 403);
@@ -1263,7 +1578,7 @@ if ( ! function_exists('eventosapp_consumables_ajax_consume') ) {
         }
 
         $ticket_id = absint($lookup['ticket_id']);
-        $result = eventosapp_consumables_consume_item($event_id, $ticket_id, $item_id, $user_id, $request_uuid, $lookup['type'] ?? '');
+        $result = eventosapp_consumables_consume_items($event_id, $ticket_id, $selection, $user_id, $request_uuid, $lookup['type'] ?? '');
         if ( is_wp_error($result) ) {
             $snapshot = eventosapp_consumables_get_ticket_inventory_snapshot($ticket_id, $event_id);
             wp_send_json_error([
@@ -1276,29 +1591,35 @@ if ( ! function_exists('eventosapp_consumables_ajax_consume') ) {
 
         $snapshot = eventosapp_consumables_get_ticket_inventory_snapshot($ticket_id, $event_id);
         $name = trim(get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true) . ' ' . get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true));
-        $item_name = sanitize_text_field($result['item']['name'] ?? 'Consumible');
-        $remaining = absint($result['remaining'] ?? 0);
-
-        if ( $remaining === 0 ) {
-            $message = 'Consumo registrado. Informa al asistente que ya no le quedan unidades de ' . $item_name . '.';
-        } elseif ( $remaining === 1 ) {
-            $message = 'Consumo registrado. Informa al asistente que le queda 1 unidad de ' . $item_name . '.';
-        } else {
-            $message = 'Consumo registrado. Informa al asistente que le quedan ' . $remaining . ' unidades de ' . $item_name . '.';
+        $consumptions = array_values((array)($result['items'] ?? []));
+        $total_deducted = 0;
+        $summary_parts = [];
+        foreach ( $consumptions as $line ) {
+            $quantity = absint($line['quantity'] ?? 0);
+            $total_deducted += $quantity;
+            $summary_parts[] = $quantity . ' × ' . sanitize_text_field($line['item_name'] ?? 'Consumible');
         }
+        $summary_label = implode(', ', $summary_parts);
+        $duplicate = !empty($result['duplicate']);
+        $message = $duplicate
+            ? 'Esta lectura ya había sido procesada. No se realizaron descuentos adicionales.'
+            : 'Consumo registrado correctamente: ' . $summary_label . '.';
 
+        $first = $consumptions[0] ?? [];
         wp_send_json_success([
-            'message'         => $message,
-            'attendee'        => $name ?: 'Asistente',
-            'ticket_id'       => $ticket_id,
-            'ticket_public_id'=> get_post_meta($ticket_id, 'eventosapp_ticketID', true),
-            'item_name'       => $item_name,
-            'deducted'        => 1,
-            'remaining'       => $remaining,
-            'period_label'    => $result['period']['label'] ?? '',
-            'qr_type'         => sanitize_text_field($lookup['type_label'] ?? 'QR'),
-            'inventory'       => $snapshot,
-            'duplicate'       => ! empty($result['duplicate']),
+            'message'          => $message,
+            'attendee'         => $name ?: 'Asistente',
+            'ticket_id'        => $ticket_id,
+            'ticket_public_id' => get_post_meta($ticket_id, 'eventosapp_ticketID', true),
+            'consumptions'     => $consumptions,
+            'summary_label'    => $summary_label,
+            'item_name'        => sanitize_text_field($first['item_name'] ?? ''),
+            'deducted'         => $total_deducted,
+            'remaining'        => absint($first['remaining'] ?? 0),
+            'period_label'     => $result['period']['label'] ?? '',
+            'qr_type'          => sanitize_text_field($lookup['type_label'] ?? 'QR'),
+            'inventory'        => $snapshot,
+            'duplicate'        => $duplicate,
         ]);
     }
 }
@@ -1311,7 +1632,7 @@ if ( ! function_exists('eventosapp_consumables_get_recent_activity') ) {
         $tables = eventosapp_consumables_table_names();
         $limit = max(1, min(30, absint($limit)));
         return $wpdb->get_results($wpdb->prepare(
-            "SELECT ticket_id,item_name,remaining_after,staff_user_id,created_at
+            "SELECT ticket_id,item_name,quantity,remaining_after,staff_user_id,created_at
              FROM {$tables['ledger']} WHERE event_id=%d AND action='consume'
              ORDER BY id DESC LIMIT %d",
             absint($event_id),
@@ -1337,183 +1658,210 @@ if ( ! function_exists('eventosapp_consumables_render_staff_shortcode') ) {
         ?>
         <div id="<?php echo esc_attr($instance); ?>" class="evapp-cscan" data-event-id="<?php echo esc_attr($event_id); ?>">
             <style>
-                .evapp-cscan{--evc-primary:#3279bd;--evc-dark:#255f96;--evc-soft:#eaf4ff;--evc-bg:#f5f8fc;--evc-surface:#fff;--evc-border:#dfe7f1;--evc-text:#182230;--evc-muted:#64748b;--evc-success:#15803d;--evc-danger:#b42318;max-width:980px;margin:0 auto;padding:clamp(16px,3vw,32px);background:var(--evc-bg);border:1px solid var(--evc-border);border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);color:var(--evc-text);font-family:inherit}.evapp-cscan *{box-sizing:border-box}.evapp-cscan-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.evapp-cscan-head h2{margin:0;font-size:clamp(27px,4vw,40px);letter-spacing:-.03em}.evapp-cscan-head p{margin:7px 0 0;color:var(--evc-muted)}.evapp-cscan-back{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 15px;border:1px solid var(--evc-border);border-radius:12px;background:#fff;color:var(--evc-text);text-decoration:none;font-weight:750}.evapp-cscan-event{display:flex;align-items:center;gap:12px;padding:14px 16px;margin-bottom:18px;background:#fff;border:1px solid var(--evc-border);border-radius:15px}.evapp-cscan-event-icon{display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;background:var(--evc-soft);color:var(--evc-primary);font-weight:900}.evapp-cscan-event small{display:block;color:var(--evc-muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em}.evapp-cscan-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);gap:18px}.evapp-cscan-card{background:#fff;border:1px solid var(--evc-border);border-radius:18px;padding:18px;box-shadow:0 10px 28px rgba(31,52,73,.05)}.evapp-cscan-card h3{margin:0 0 12px;font-size:17px}.evapp-cscan-label{display:block;margin-bottom:6px;font-weight:800}.evapp-cscan-select{width:100%;min-height:48px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;font:inherit}.evapp-cscan-help{margin:6px 0 14px;color:var(--evc-muted);font-size:12px}.evapp-cscan-btn{display:flex;align-items:center;justify-content:center;width:100%;min-height:48px;padding:11px 16px;border:1px solid var(--evc-primary);border-radius:12px;background:var(--evc-primary);color:#fff;font:inherit;font-weight:850;cursor:pointer}.evapp-cscan-btn:hover{background:var(--evc-dark)}.evapp-cscan-btn.is-stop{background:#b42318;border-color:#b42318}.evapp-cscan-btn:disabled{opacity:.5;cursor:not-allowed}.evapp-cscan-video-wrap{position:relative;display:none;overflow:hidden;margin-top:14px;aspect-ratio:3/4;background:#0b1020;border-radius:16px}.evapp-cscan-video{width:100%;height:100%;object-fit:cover}.evapp-cscan-frame{position:absolute;inset:16%;border:3px solid #60a5fa;border-radius:18px;box-shadow:0 0 0 9999px rgba(3,7,18,.42);pointer-events:none}.evapp-cscan-result{display:none;margin-top:14px;padding:16px;border:1px solid var(--evc-border);border-radius:15px;background:#f8fafc}.evapp-cscan-result.is-success{display:block;border-color:#bbf7d0;background:#f0fdf4}.evapp-cscan-result.is-error{display:block;border-color:#fecaca;background:#fef2f2}.evapp-cscan-result-title{font-size:18px;font-weight:900;margin-bottom:8px}.evapp-cscan-result-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:14px}.evapp-cscan-result-grid strong{color:#475569}.evapp-cscan-message{margin-top:12px;padding:12px;border-radius:12px;background:#fff;font-weight:800;line-height:1.45}.evapp-cscan-inventory{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:12px}.evapp-cscan-inventory-item{padding:10px;border:1px solid var(--evc-border);border-radius:11px;background:#fff}.evapp-cscan-inventory-item span{display:block;color:var(--evc-muted);font-size:12px}.evapp-cscan-inventory-item strong{font-size:18px}.evapp-cscan-inventory-item.is-empty strong{color:var(--evc-danger)}.evapp-cscan-notice{padding:13px 15px;border:1px solid #bbf7d0;border-left:4px solid var(--evc-success);border-radius:12px;background:#f0fdf4;color:#166534;font-weight:700}.evapp-cscan-notice.is-error{border-color:#fecaca;border-left-color:var(--evc-danger);background:#fef2f2;color:#991b1b}.evapp-cscan-recent{display:grid;gap:8px}.evapp-cscan-recent-row{padding:10px 0;border-bottom:1px solid var(--evc-border)}.evapp-cscan-recent-row:last-child{border-bottom:0}.evapp-cscan-recent-row strong{display:block}.evapp-cscan-recent-row span{color:var(--evc-muted);font-size:12px}.evapp-cscan-empty{color:var(--evc-muted);font-size:14px}@media(max-width:820px){.evapp-cscan-grid{grid-template-columns:1fr}.evapp-cscan-head{flex-direction:column}.evapp-cscan-back{width:100%}.evapp-cscan-result-grid{grid-template-columns:1fr}.evapp-cscan-result-grid strong{margin-top:4px}}
+                .evapp-cscan{--evc-primary:#3279bd;--evc-dark:#255f96;--evc-soft:#eaf4ff;--evc-bg:#f5f8fc;--evc-surface:#fff;--evc-border:#dfe7f1;--evc-text:#182230;--evc-muted:#64748b;--evc-success:#15803d;--evc-danger:#b42318;max-width:1040px;margin:0 auto;padding:clamp(16px,3vw,32px);background:var(--evc-bg);border:1px solid var(--evc-border);border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);color:var(--evc-text);font-family:inherit}.evapp-cscan *{box-sizing:border-box}.evapp-cscan-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.evapp-cscan-head h2{margin:0;font-size:clamp(27px,4vw,40px);letter-spacing:-.03em}.evapp-cscan-head p{margin:7px 0 0;color:var(--evc-muted)}.evapp-cscan-back{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 15px;border:1px solid var(--evc-border);border-radius:12px;background:#fff;color:var(--evc-text);text-decoration:none;font-weight:750}.evapp-cscan-event{display:flex;align-items:center;gap:12px;padding:14px 16px;margin-bottom:18px;background:#fff;border:1px solid var(--evc-border);border-radius:15px}.evapp-cscan-event-icon{display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;background:var(--evc-soft);color:var(--evc-primary);font-weight:900}.evapp-cscan-event small{display:block;color:var(--evc-muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em}.evapp-cscan-grid{display:grid;grid-template-columns:minmax(0,1.18fr) minmax(290px,.82fr);gap:18px}.evapp-cscan-card{background:#fff;border:1px solid var(--evc-border);border-radius:18px;padding:18px;box-shadow:0 10px 28px rgba(31,52,73,.05)}.evapp-cscan-card h3{margin:0 0 8px;font-size:18px}.evapp-cscan-help{margin:0 0 14px;color:var(--evc-muted);font-size:12px;line-height:1.45}.evapp-cscan-items{display:grid;gap:9px;max-height:410px;overflow:auto;padding-right:3px}.evapp-cscan-item{display:grid;grid-template-columns:auto minmax(0,1fr) 90px;gap:10px;align-items:center;padding:11px;border:1px solid var(--evc-border);border-radius:13px;background:#fff;transition:border-color .15s,background .15s}.evapp-cscan-item:has([data-item-check]:checked){border-color:var(--evc-primary);background:var(--evc-soft)}.evapp-cscan-item input[type="checkbox"]{width:20px;height:20px;margin:0}.evapp-cscan-item-name{display:block;font-weight:800;line-height:1.25}.evapp-cscan-item-meta{display:block;margin-top:3px;color:var(--evc-muted);font-size:11px}.evapp-cscan-qty-wrap label{display:block;margin-bottom:3px;color:var(--evc-muted);font-size:10px;font-weight:800;text-transform:uppercase}.evapp-cscan-qty{width:100%;min-height:39px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;font:inherit;text-align:center;font-weight:800}.evapp-cscan-selection-summary{margin:12px 0;padding:11px 13px;border-radius:12px;background:#f8fafc;border:1px solid var(--evc-border);color:var(--evc-muted);font-size:13px}.evapp-cscan-selection-summary strong{color:var(--evc-text)}.evapp-cscan-btn{display:flex;align-items:center;justify-content:center;width:100%;min-height:50px;border:0;border-radius:14px;padding:11px 16px;background:var(--evc-primary);color:#fff;font:inherit;font-size:16px;font-weight:850;cursor:pointer}.evapp-cscan-btn:hover{background:var(--evc-dark)}.evapp-cscan-btn:disabled{opacity:.48;cursor:not-allowed}.evapp-cscan-btn.is-stop{background:var(--evc-danger)}.evapp-cscan-video-wrap{display:none;margin-top:14px;overflow:hidden;border-radius:16px;background:#0f172a;position:relative}.evapp-cscan-video{display:block;width:100%;max-height:440px;object-fit:cover}.evapp-cscan-frame{position:absolute;inset:50% auto auto 50%;width:min(68%,310px);aspect-ratio:1;border:3px solid #fff;border-radius:18px;transform:translate(-50%,-50%);box-shadow:0 0 0 999px rgba(15,23,42,.35)}.evapp-cscan-result{display:none;margin-top:14px;padding:15px;border-radius:15px;border:1px solid var(--evc-border);background:#fff}.evapp-cscan-result.is-success{border-color:#86efac;background:#f0fdf4}.evapp-cscan-result.is-error{border-color:#fecaca;background:#fef2f2}.evapp-cscan-result-title{font-size:18px;font-weight:900;margin-bottom:9px}.evapp-cscan-result-grid{display:grid;grid-template-columns:minmax(120px,.4fr) minmax(0,1fr);gap:7px 12px;font-size:13px}.evapp-cscan-result-grid strong{color:var(--evc-muted)}.evapp-cscan-lines{display:grid;gap:7px;margin:11px 0}.evapp-cscan-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:9px 10px;border-radius:10px;background:rgba(255,255,255,.75);border:1px solid rgba(203,213,225,.75)}.evapp-cscan-line span{font-weight:800}.evapp-cscan-line small{color:var(--evc-muted);text-align:right}.evapp-cscan-message{margin-top:10px;font-size:13px;line-height:1.45}.evapp-cscan-inventory{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-top:12px}.evapp-cscan-inventory-item{padding:10px;border:1px solid #bbf7d0;border-radius:11px;background:#fff}.evapp-cscan-inventory-item.is-empty{opacity:.6;border-color:#e5e7eb}.evapp-cscan-inventory-item span,.evapp-cscan-inventory-item strong{display:block}.evapp-cscan-inventory-item span{font-size:12px;color:var(--evc-muted)}.evapp-cscan-inventory-item strong{margin-top:3px;font-size:17px}.evapp-cscan-recent{display:grid;gap:8px}.evapp-cscan-recent-row{padding:10px 11px;border:1px solid var(--evc-border);border-radius:11px;background:#f8fafc}.evapp-cscan-recent-row strong,.evapp-cscan-recent-row span{display:block}.evapp-cscan-recent-row strong{font-size:13px}.evapp-cscan-recent-row span{margin-top:2px;color:var(--evc-muted);font-size:11px}.evapp-cscan-empty{color:var(--evc-muted);font-size:13px}.evapp-cscan-notice{padding:13px 15px;border:1px solid var(--evc-border);border-radius:12px;background:#fff}.evapp-cscan-notice.is-error{border-color:#fecaca;background:#fef2f2;color:#991b1b}@media(max-width:780px){.evapp-cscan-grid{grid-template-columns:1fr}.evapp-cscan-head{flex-direction:column}.evapp-cscan-back{width:100%}}@media(max-width:520px){.evapp-cscan-item{grid-template-columns:auto minmax(0,1fr);}.evapp-cscan-qty-wrap{grid-column:2}.evapp-cscan-result-grid{grid-template-columns:1fr}.evapp-cscan-inventory{grid-template-columns:1fr 1fr}}
             </style>
+
             <div class="evapp-cscan-head">
-                <div><h2>Consumo de Consumibles</h2><p>Selecciona el consumible y escanea cualquier QR válido del ticket.</p></div>
+                <div><h2>Consumo de Consumibles</h2><p>Define todo lo que vas a entregar y descuéntalo con una sola lectura QR.</p></div>
                 <a class="evapp-cscan-back" href="<?php echo esc_url(function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/')); ?>">← Volver al dashboard</a>
             </div>
+
             <div class="evapp-cscan-event"><div class="evapp-cscan-event-icon">QR</div><div><small>Evento activo</small><strong><?php echo esc_html(get_the_title($event_id)); ?></strong></div></div>
 
-            <?php if ( empty($items) ): ?>
-                <div class="evapp-cscan-notice is-error">No hay consumibles configurados. El organizador debe crear al menos una configuración con un ítem.</div>
-            <?php else: ?>
-                <div class="evapp-cscan-grid">
-                    <section class="evapp-cscan-card">
-                        <h3>Registrar consumo</h3>
-                        <label class="evapp-cscan-label" for="<?php echo esc_attr($instance); ?>-item">Consumible a descontar</label>
-                        <select id="<?php echo esc_attr($instance); ?>-item" class="evapp-cscan-select" data-item-select>
-                            <option value="">— Selecciona un consumible —</option>
-                            <?php foreach ( $items as $item ): ?>
-                                <option value="<?php echo esc_attr($item['id']); ?>"><?php echo esc_html($item['name'] . ' — ' . $item['config_name']); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                        <p class="evapp-cscan-help">Cada lectura descuenta 1 unidad. Si el asistente no pertenece a la segmentación de ese consumible, el saldo no se modifica.</p>
-                        <button type="button" class="evapp-cscan-btn" data-scan-button disabled>Activar cámara y escanear</button>
-                        <div class="evapp-cscan-video-wrap" data-video-wrap>
-                            <video class="evapp-cscan-video" data-video playsinline muted></video>
-                            <div class="evapp-cscan-frame" aria-hidden="true"></div>
-                            <canvas data-canvas hidden></canvas>
-                        </div>
-                        <div class="evapp-cscan-result" data-result></div>
-                    </section>
+            <div class="evapp-cscan-grid">
+                <section class="evapp-cscan-card">
+                    <h3>1. Selecciona consumibles y cantidades</h3>
+                    <p class="evapp-cscan-help">Puedes marcar varios elementos. El sistema validará todos los saldos antes de descontar; si uno no está disponible, no descontará ninguno.</p>
 
-                    <aside class="evapp-cscan-card">
-                        <h3>Actividad reciente</h3>
-                        <div class="evapp-cscan-recent" data-recent>
-                            <?php if ( empty($recent) ): ?>
-                                <div class="evapp-cscan-empty">Aún no hay consumos registrados en este evento.</div>
-                            <?php else: foreach ( $recent as $row ):
-                                $recent_name = trim(get_post_meta(absint($row['ticket_id']), '_eventosapp_asistente_nombre', true) . ' ' . get_post_meta(absint($row['ticket_id']), '_eventosapp_asistente_apellido', true));
-                                ?>
-                                <div class="evapp-cscan-recent-row"><strong><?php echo esc_html(($recent_name ?: 'Asistente') . ' · ' . ($row['item_name'] ?? 'Consumible')); ?></strong><span><?php echo esc_html('Saldo: ' . max(0, intval($row['remaining_after'])) . ' · ' . date_i18n('d/m/Y H:i', strtotime($row['created_at']))); ?></span></div>
-                            <?php endforeach; endif; ?>
+                    <?php if ( $items ): ?>
+                        <div class="evapp-cscan-items" data-items>
+                            <?php foreach ( $items as $item ): ?>
+                                <div class="evapp-cscan-item" data-item-row data-item-id="<?php echo esc_attr($item['id']); ?>">
+                                    <input type="checkbox" value="<?php echo esc_attr($item['id']); ?>" data-item-check aria-label="Seleccionar <?php echo esc_attr($item['name']); ?>">
+                                    <div>
+                                        <span class="evapp-cscan-item-name"><?php echo esc_html($item['name']); ?></span>
+                                        <span class="evapp-cscan-item-meta"><?php echo esc_html($item['config_name']); ?> · máximo configurado: <?php echo (int)$item['quantity']; ?></span>
+                                    </div>
+                                    <div class="evapp-cscan-qty-wrap">
+                                        <label>Cantidad</label>
+                                        <input class="evapp-cscan-qty" type="number" min="1" max="<?php echo max(1, (int)$item['quantity']); ?>" step="1" value="1" data-item-qty disabled>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
                         </div>
-                    </aside>
-                </div>
-            <?php endif; ?>
+                        <div class="evapp-cscan-selection-summary" data-selection-summary>No hay consumibles seleccionados.</div>
+                        <button type="button" class="evapp-cscan-btn" data-scan-button disabled>Activar cámara y escanear</button>
+                    <?php else: ?>
+                        <div class="evapp-cscan-notice is-error">No hay consumibles configurados para este evento.</div>
+                    <?php endif; ?>
+
+                    <div class="evapp-cscan-video-wrap" data-video-wrap>
+                        <video class="evapp-cscan-video" data-video playsinline muted></video>
+                        <canvas data-canvas hidden></canvas>
+                        <div class="evapp-cscan-frame" aria-hidden="true"></div>
+                    </div>
+                    <div class="evapp-cscan-result" data-result></div>
+                </section>
+
+                <aside class="evapp-cscan-card">
+                    <h3>Actividad reciente</h3>
+                    <p class="evapp-cscan-help">Últimos descuentos registrados en este evento.</p>
+                    <div class="evapp-cscan-recent" data-recent>
+                        <?php if ( $recent ): ?>
+                            <?php foreach ( $recent as $entry ):
+                                $ticket_name = trim(get_post_meta(absint($entry['ticket_id']), '_eventosapp_asistente_nombre', true) . ' ' . get_post_meta(absint($entry['ticket_id']), '_eventosapp_asistente_apellido', true));
+                                ?>
+                                <div class="evapp-cscan-recent-row">
+                                    <strong><?php echo esc_html(($ticket_name ?: 'Asistente') . ' · ' . absint($entry['quantity'] ?? 1) . ' × ' . $entry['item_name']); ?></strong>
+                                    <span>Saldo: <?php echo (int)$entry['remaining_after']; ?> · <?php echo esc_html(date_i18n('d/m/Y H:i', strtotime($entry['created_at']))); ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="evapp-cscan-empty">Todavía no hay consumos registrados.</div>
+                        <?php endif; ?>
+                    </div>
+                </aside>
+            </div>
 
             <script>
             (function(){
                 var root = document.getElementById(<?php echo wp_json_encode($instance); ?>);
                 if (!root || root.dataset.ready === '1') return;
                 root.dataset.ready = '1';
-                var itemSelect = root.querySelector('[data-item-select]');
+
+                var itemRows = Array.prototype.slice.call(root.querySelectorAll('[data-item-row]'));
                 var button = root.querySelector('[data-scan-button]');
+                var selectionSummary = root.querySelector('[data-selection-summary]');
                 var videoWrap = root.querySelector('[data-video-wrap]');
                 var video = root.querySelector('[data-video]');
                 var canvas = root.querySelector('[data-canvas]');
                 var resultBox = root.querySelector('[data-result]');
                 var recentBox = root.querySelector('[data-recent]');
-                if (!itemSelect || !button) return;
+                if (!button) return;
 
                 var ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
                 var nonce = <?php echo wp_json_encode($nonce); ?>;
-                var eventId = <?php echo (int) $event_id; ?>;
-                var stream = null;
-                var running = false;
-                var detector = null;
-                var raf = 0;
-                var busy = false;
+                var eventId = <?php echo (int)$event_id; ?>;
+                var stream = null, running = false, detector = null, raf = 0, busy = false;
                 try { if ('BarcodeDetector' in window) detector = new BarcodeDetector({formats:['qr_code']}); } catch(e){}
 
-                function escapeHtml(value){
-                    return String(value == null ? '' : value).replace(/[&<>'"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[ch];});
+                function escapeHtml(value){ return String(value == null ? '' : value).replace(/[&<>'"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[ch];}); }
+                function uuid(){ if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID(); return 'req_' + Date.now().toString(36) + Math.random().toString(36).slice(2,12); }
+                function beep(ok){ try{var Ctx=window.AudioContext||window.webkitAudioContext;if(Ctx){var ctx=new Ctx(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.frequency.value=ok?880:220;gain.gain.value=.05;osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+.12);}}catch(e){} if(navigator.vibrate)navigator.vibrate(ok?80:[80,50,80]); }
+
+                function getSelection(){
+                    var selected = {};
+                    itemRows.forEach(function(row){
+                        var check = row.querySelector('[data-item-check]');
+                        var qty = row.querySelector('[data-item-qty]');
+                        if (!check || !qty || !check.checked) return;
+                        var value = parseInt(qty.value,10) || 0;
+                        var max = parseInt(qty.max,10) || 999999;
+                        value = Math.max(1,Math.min(max,value));
+                        qty.value = value;
+                        selected[check.value] = value;
+                    });
+                    return selected;
                 }
-                function uuid(){
-                    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
-                    return 'req_' + Date.now().toString(36) + Math.random().toString(36).slice(2,12);
+
+                function updateSelection(){
+                    var selected = getSelection();
+                    var ids = Object.keys(selected);
+                    var total = ids.reduce(function(sum,id){return sum+selected[id];},0);
+                    button.disabled = busy || ids.length === 0;
+                    if (selectionSummary) selectionSummary.innerHTML = ids.length
+                        ? '<strong>'+ids.length+'</strong> tipo(s) seleccionado(s), <strong>'+total+'</strong> unidad(es) por cada QR leído.'
+                        : 'No hay consumibles seleccionados.';
+                    return selected;
                 }
-                function beep(ok){
-                    try {
-                        var Ctx = window.AudioContext || window.webkitAudioContext;
-                        if (Ctx) { var ctx = new Ctx(), osc=ctx.createOscillator(), gain=ctx.createGain(); osc.frequency.value=ok?880:220; gain.gain.value=.05; osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime+.12); }
-                    } catch(e){}
-                    if (navigator.vibrate) navigator.vibrate(ok ? 80 : [80,50,80]);
-                }
+
+                itemRows.forEach(function(row){
+                    var check = row.querySelector('[data-item-check]');
+                    var qty = row.querySelector('[data-item-qty]');
+                    if (check) check.addEventListener('change',function(){ if(qty)qty.disabled=!check.checked; if(resultBox)resultBox.style.display='none'; updateSelection(); });
+                    if (qty) qty.addEventListener('input',updateSelection);
+                });
+
                 function stop(){
-                    running = false;
-                    if (raf) cancelAnimationFrame(raf);
-                    raf = 0;
-                    if (stream) stream.getTracks().forEach(function(track){track.stop();});
-                    stream = null;
-                    if (video) video.srcObject = null;
-                    if (videoWrap) videoWrap.style.display = 'none';
+                    running=false;if(raf)cancelAnimationFrame(raf);raf=0;
+                    if(stream)stream.getTracks().forEach(function(track){track.stop();});stream=null;
+                    if(video)video.srcObject=null;if(videoWrap)videoWrap.style.display='none';
                     button.classList.remove('is-stop');
-                    button.textContent = 'Activar cámara y escanear';
+                    if(!busy)button.textContent='Activar cámara y escanear';
+                    updateSelection();
                 }
+
                 function inventoryHtml(snapshot){
-                    if (!snapshot || !snapshot.enabled) return '';
-                    if (!snapshot.assigned) return '<div class="evapp-cscan-message">El asistente no tiene inventario asignado por segmentación.</div>';
-                    var rows = (snapshot.items || []).map(function(item){
-                        return '<div class="evapp-cscan-inventory-item '+(item.remaining<=0?'is-empty':'')+'"><span>'+escapeHtml(item.name)+'</span><strong>'+escapeHtml(item.remaining)+' / '+escapeHtml(item.allocated)+'</strong></div>';
-                    }).join('');
+                    if(!snapshot||!snapshot.enabled)return '';
+                    if(!snapshot.assigned)return '<div class="evapp-cscan-message">El asistente no tiene inventario asignado por segmentación.</div>';
+                    var rows=(snapshot.items||[]).map(function(item){return '<div class="evapp-cscan-inventory-item '+(item.remaining<=0?'is-empty':'')+'"><span>'+escapeHtml(item.name)+'</span><strong>'+escapeHtml(item.remaining)+' / '+escapeHtml(item.allocated)+'</strong></div>';}).join('');
                     return '<div class="evapp-cscan-inventory">'+rows+'</div>';
                 }
-                function showResult(ok, data){
-                    var cls = ok ? 'is-success' : 'is-error';
-                    var title = ok ? 'Consumo registrado' : 'No se realizó el descuento';
-                    var html = '<div class="evapp-cscan-result-title">'+title+'</div>';
-                    if (data.attendee) html += '<div class="evapp-cscan-result-grid"><strong>Asistente</strong><span>'+escapeHtml(data.attendee)+'</span>';
-                    if (ok) {
-                        html += '<strong>Consumible descontado</strong><span>'+escapeHtml(data.item_name)+'</span>';
-                        html += '<strong>Descuento</strong><span>1 unidad</span>';
-                        html += '<strong>Saldo restante</strong><span>'+escapeHtml(data.remaining)+' unidades</span>';
-                        html += '<strong>Medio leído</strong><span>'+escapeHtml(data.qr_type)+'</span>';
-                    }
-                    if (data.attendee) html += '</div>';
-                    html += '<div class="evapp-cscan-message">'+escapeHtml(data.message || 'No fue posible procesar el QR.')+'</div>';
-                    html += inventoryHtml(data.inventory);
-                    html += '<button type="button" class="evapp-cscan-btn" style="margin-top:12px" data-scan-again>Escanear otro QR</button>';
-                    resultBox.className = 'evapp-cscan-result ' + cls;
-                    resultBox.innerHTML = html;
-                    resultBox.style.display = 'block';
-                    var again = resultBox.querySelector('[data-scan-again]');
-                    if (again) again.addEventListener('click', function(){ resultBox.style.display='none'; start(); });
+
+                function consumptionLines(data){
+                    var lines=data.consumptions||[];
+                    if(!lines.length)return '';
+                    return '<div class="evapp-cscan-lines">'+lines.map(function(line){return '<div class="evapp-cscan-line"><span>'+escapeHtml(line.quantity)+' × '+escapeHtml(line.item_name)+'</span><small>Saldo: '+escapeHtml(line.remaining)+'</small></div>';}).join('')+'</div>';
                 }
+
+                function showResult(ok,data){
+                    data=data||{};
+                    var cls=ok?'is-success':'is-error';
+                    var title=ok?(data.duplicate?'Lectura ya procesada':'Consumo registrado'):'No se realizó el descuento';
+                    var html='<div class="evapp-cscan-result-title">'+title+'</div>';
+                    if(data.attendee){html+='<div class="evapp-cscan-result-grid"><strong>Asistente</strong><span>'+escapeHtml(data.attendee)+'</span>';if(ok){html+='<strong>Total descontado</strong><span>'+escapeHtml(data.deducted)+' unidad(es)</span><strong>Medio leído</strong><span>'+escapeHtml(data.qr_type)+'</span>';}html+='</div>';}
+                    if(ok)html+=consumptionLines(data);
+                    html+='<div class="evapp-cscan-message">'+escapeHtml(data.message||'No fue posible procesar el QR.')+'</div>'+inventoryHtml(data.inventory);
+                    html+='<button type="button" class="evapp-cscan-btn" style="margin-top:12px" data-scan-again>Escanear otro QR</button>';
+                    resultBox.className='evapp-cscan-result '+cls;resultBox.innerHTML=html;resultBox.style.display='block';
+                    var again=resultBox.querySelector('[data-scan-again]');if(again)again.addEventListener('click',function(){resultBox.style.display='none';start();});
+                }
+
                 function addRecent(data){
-                    if (!recentBox || !data.attendee || !data.item_name) return;
-                    var empty = recentBox.querySelector('.evapp-cscan-empty'); if (empty) empty.remove();
-                    var row = document.createElement('div'); row.className='evapp-cscan-recent-row';
-                    row.innerHTML='<strong>'+escapeHtml(data.attendee)+' · '+escapeHtml(data.item_name)+'</strong><span>Saldo: '+escapeHtml(data.remaining)+' · ahora</span>';
-                    recentBox.insertBefore(row, recentBox.firstChild);
-                    while(recentBox.children.length>8) recentBox.removeChild(recentBox.lastChild);
+                    if(!recentBox||!data.attendee||!data.summary_label)return;
+                    var empty=recentBox.querySelector('.evapp-cscan-empty');if(empty)empty.remove();
+                    var row=document.createElement('div');row.className='evapp-cscan-recent-row';
+                    row.innerHTML='<strong>'+escapeHtml(data.attendee)+' · '+escapeHtml(data.summary_label)+'</strong><span>Registrado ahora</span>';
+                    recentBox.insertBefore(row,recentBox.firstChild);while(recentBox.children.length>8)recentBox.removeChild(recentBox.lastChild);
                 }
+
                 async function sendCode(raw){
-                    if (busy) return;
-                    busy = true; stop();
-                    button.disabled = true; button.textContent='Procesando consumo...';
-                    var body = new URLSearchParams();
-                    body.set('action','eventosapp_consumables_consume'); body.set('nonce',nonce); body.set('event_id',eventId); body.set('item_id',itemSelect.value); body.set('raw_code',raw); body.set('request_uuid',uuid());
-                    try {
-                        var response = await fetch(ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:body.toString()});
-                        var json = await response.json();
-                        if (json && json.success) { beep(true); showResult(true,json.data||{}); addRecent(json.data||{}); }
-                        else { beep(false); showResult(false,(json&&json.data)||{message:'No se pudo procesar el consumo.'}); }
-                    } catch(e) { beep(false); showResult(false,{message:'Error de conexión. Verifica la red e intenta nuevamente.'}); }
-                    busy=false; button.disabled=!itemSelect.value; button.textContent='Activar cámara y escanear';
+                    if(busy)return;
+                    var selected=getSelection();
+                    if(!Object.keys(selected).length){showResult(false,{message:'Selecciona al menos un consumible y su cantidad.'});return;}
+                    busy=true;stop();button.disabled=true;button.textContent='Procesando consumo...';
+                    var body=new URLSearchParams();
+                    body.set('action','eventosapp_consumables_consume');body.set('nonce',nonce);body.set('event_id',eventId);body.set('raw_code',raw);body.set('request_uuid',uuid());
+                    Object.keys(selected).forEach(function(itemId){body.set('items['+itemId+']',selected[itemId]);});
+                    try{
+                        var response=await fetch(ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:body.toString()});
+                        var json=await response.json();
+                        if(json&&json.success){beep(true);showResult(true,json.data||{});if(!(json.data||{}).duplicate)addRecent(json.data||{});}else{beep(false);showResult(false,(json&&json.data)||{message:'No se pudo procesar el consumo.'});}
+                    }catch(e){beep(false);showResult(false,{message:'Error de conexión. Verifica la red e intenta nuevamente.'});}
+                    busy=false;button.textContent='Activar cámara y escanear';updateSelection();
                 }
-                async function ensureJsQR(){
-                    if (detector || window.jsQR) return;
-                    await new Promise(function(resolve,reject){var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';s.onload=resolve;s.onerror=reject;document.head.appendChild(s);});
-                }
+
+                async function ensureJsQR(){if(detector||window.jsQR)return;await new Promise(function(resolve,reject){var script=document.createElement('script');script.src='https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';script.onload=resolve;script.onerror=reject;document.head.appendChild(script);});}
                 async function tick(){
-                    if (!running || busy) return;
-                    try {
-                        if (video.readyState >= 2) {
-                            if (detector) {
-                                var codes = await detector.detect(video);
-                                if (codes && codes[0] && codes[0].rawValue) { sendCode(codes[0].rawValue); return; }
-                            } else if (window.jsQR) {
-                                var width=video.videoWidth, height=video.videoHeight;
-                                if (width && height) { canvas.width=width; canvas.height=height; var ctx=canvas.getContext('2d',{willReadFrequently:true}); ctx.drawImage(video,0,0,width,height); var image=ctx.getImageData(0,0,width,height); var code=window.jsQR(image.data,width,height,{inversionAttempts:'dontInvert'}); if(code&&code.data){sendCode(code.data);return;} }
-                            }
+                    if(!running||busy)return;
+                    try{
+                        if(video.readyState>=2){
+                            if(detector){var codes=await detector.detect(video);if(codes&&codes[0]&&codes[0].rawValue){sendCode(codes[0].rawValue);return;}}
+                            else if(window.jsQR){var width=video.videoWidth,height=video.videoHeight;if(width&&height){canvas.width=width;canvas.height=height;var ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(video,0,0,width,height);var image=ctx.getImageData(0,0,width,height);var code=window.jsQR(image.data,width,height,{inversionAttempts:'dontInvert'});if(code&&code.data){sendCode(code.data);return;}}}
                         }
-                    } catch(e){}
+                    }catch(e){}
                     raf=requestAnimationFrame(tick);
                 }
                 async function start(){
-                    if (!itemSelect.value) { showResult(false,{message:'Selecciona primero el consumible que vas a descontar.'}); return; }
+                    if(!Object.keys(getSelection()).length){showResult(false,{message:'Selecciona al menos un consumible y define su cantidad antes de escanear.'});return;}
                     resultBox.style.display='none';
-                    try {
-                        await ensureJsQR();
-                        stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
-                        video.srcObject=stream; await video.play(); running=true; videoWrap.style.display='block'; button.classList.add('is-stop'); button.textContent='Detener cámara'; tick();
-                    } catch(e) { stop(); showResult(false,{message:'No se pudo acceder a la cámara. Revisa los permisos del navegador y usa una conexión HTTPS.'}); }
+                    try{await ensureJsQR();stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});video.srcObject=stream;await video.play();running=true;videoWrap.style.display='block';button.classList.add('is-stop');button.textContent='Detener cámara';tick();}
+                    catch(e){stop();showResult(false,{message:'No se pudo acceder a la cámara. Revisa los permisos del navegador y usa una conexión HTTPS.'});}
                 }
-                itemSelect.addEventListener('change',function(){button.disabled=!itemSelect.value;resultBox.style.display='none';});
+
                 button.addEventListener('click',function(){if(running)stop();else start();});
                 window.addEventListener('pagehide',stop);
+                updateSelection();
             })();
             </script>
         </div>
