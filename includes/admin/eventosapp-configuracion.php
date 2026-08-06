@@ -1097,6 +1097,43 @@ if ( ! function_exists('eventosapp_get_all_roles') ) {
     }
 }
 
+/**
+ * Política base obligatoria para los módulos de consumibles.
+ *
+ * Esta política mantiene los módulos disponibles de forma coherente aunque la
+ * opción de visibilidad se haya guardado antes de que existieran estas features:
+ * - Administrador y Organizador: configuración + consumo.
+ * - Staff y Logístico: solamente consumo.
+ *
+ * La excepción individual se resuelve posteriormente desde el metabox
+ * "Control de Acceso Dashboard Staff", que trabaja por usuario y evento.
+ *
+ * @param string $role    Slug del rol.
+ * @param string $feature Feature del dashboard.
+ * @return int|null 1/0 cuando existe una regla fija; null en los demás casos.
+ */
+if ( ! function_exists('eventosapp_consumables_role_policy') ) {
+    function eventosapp_consumables_role_policy($role, $feature) {
+        $role    = sanitize_key((string) $role);
+        $feature = sanitize_key((string) $feature);
+
+        if ( ! in_array($feature, ['consumables_manage', 'consumables_staff'], true) ) {
+            return null;
+        }
+
+        if ( in_array($role, ['administrator', 'organizador'], true) ) {
+            return 1;
+        }
+
+        if ( in_array($role, ['staff', 'logistico'], true) ) {
+            return $feature === 'consumables_staff' ? 1 : 0;
+        }
+
+        return null;
+    }
+}
+
+
 // 3) Defaults sensatos (admin/organizador todo ON; staff/logistico limitado; resto OFF)
 if ( ! function_exists('eventosapp_default_dashboard_visibility') ) {
 function eventosapp_default_dashboard_visibility() {
@@ -1165,12 +1202,18 @@ if ( ! function_exists('eventosapp_get_dashboard_visibility') ) {
         $saved    = get_option('eventosapp_dashboard_visibility', []);
         $defaults = eventosapp_default_dashboard_visibility();
 
-        // Asegura que existan todos los roles/features
+        // Asegura que existan todos los roles/features y aplica la política
+        // obligatoria de consumibles, incluso en opciones guardadas antiguas.
         foreach ($defaults as $role => $map) {
             if (!isset($saved[$role]) || !is_array($saved[$role])) $saved[$role] = [];
             foreach ($map as $feat => $on) {
                 if (!isset($saved[$role][$feat])) $saved[$role][$feat] = $on;
                 $saved[$role][$feat] = (int) !!$saved[$role][$feat];
+
+                $fixed_policy = eventosapp_consumables_role_policy($role, $feat);
+                if ($fixed_policy !== null) {
+                    $saved[$role][$feat] = (int) $fixed_policy;
+                }
             }
         }
 
@@ -1226,7 +1269,8 @@ add_action('admin_init', function() {
                 $out[$r] = [];
                 foreach ($features as $f) {
                     $val = isset($input[$r][$f]) ? (int) !!$input[$r][$f] : 0;
-                    $out[$r][$f] = $val;
+                    $fixed_policy = eventosapp_consumables_role_policy($r, $f);
+                    $out[$r][$f] = $fixed_policy !== null ? (int) $fixed_policy : $val;
                 }
             }
             return $out;
@@ -1274,7 +1318,16 @@ add_action('admin_init', function() {
                 foreach ($features as $featKey => $featLabel) {
                     $checked = !empty($cfg[$slug][$featKey]) ? 'checked' : '';
                     $name = 'eventosapp_dashboard_visibility['.esc_attr($slug).']['.esc_attr($featKey).']';
-                    echo '<td><input type="checkbox" name="'.$name.'" value="1" '.$checked.'></td>';
+                    $fixed_policy = eventosapp_consumables_role_policy($slug, $featKey);
+
+                    if ($fixed_policy !== null) {
+                        echo '<td title="Regla base de Consumibles. La excepción se configura por usuario y evento en Control de Acceso Dashboard Staff.">';
+                        echo '<input type="hidden" name="'.$name.'" value="'.(int)$fixed_policy.'">';
+                        echo '<input type="checkbox" value="1" '.checked(1, (int)$fixed_policy, false).' disabled>';
+                        echo '</td>';
+                    } else {
+                        echo '<td><input type="checkbox" name="'.$name.'" value="1" '.$checked.'></td>';
+                    }
                 }
                 echo '</tr>';
             }
@@ -1282,7 +1335,9 @@ add_action('admin_init', function() {
 
             echo '<p class="description" style="margin-top:6px;">'
                . 'Consejo: <b>Ver Dashboard</b> controla el acceso general al panel; '
-               . 'el resto controla la <em>visualización</em> de cada botón.</p>';
+               . 'el resto controla la <em>visualización</em> de cada botón. '
+               . 'Los permisos de Consumibles bloqueados en esta tabla siguen la regla operativa por rol; '
+               . 'las excepciones se crean por usuario y evento en <b>Control de Acceso Dashboard Staff</b>.</p>';
         },
         'eventosapp_configuracion',
         'eventosapp_roles_section'
@@ -1315,6 +1370,8 @@ function eventosapp_feature_page_map() {
         'expositor'            => 'expositor_page_id',
         'expositor_gestion'    => 'expositor_gestion_page_id',
         'company_checkin'       => 'company_checkin_page_id',
+        'consumables_manage'    => 'consumables_manager_page_id',
+        'consumables_staff'     => 'consumables_staff_page_id',
     ];
 }
 }

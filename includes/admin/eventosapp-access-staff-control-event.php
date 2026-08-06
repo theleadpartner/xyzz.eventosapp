@@ -77,8 +77,13 @@ if (!function_exists('eventosapp_staff_access_normalize_user_access')) {
                 $source_features = $row;
             }
 
+            // Solo conservar las features que realmente existían en la fila guardada.
+            // Así, cuando se agregan módulos nuevos, una configuración personalizada antigua
+            // no los convierte automáticamente en una negación explícita.
             foreach ($features as $feature_key => $feature_label) {
-                $feature_values[$feature_key] = !empty($source_features[$feature_key]) ? 1 : 0;
+                if (array_key_exists($feature_key, $source_features)) {
+                    $feature_values[$feature_key] = !empty($source_features[$feature_key]) ? 1 : 0;
+                }
             }
 
             $out[$user_id] = [
@@ -160,9 +165,9 @@ if (!function_exists('eventosapp_staff_access_get_user_feature_value')) {
             return $default;
         }
 
-        return isset($user_access[$user_id]['features'][$feature])
+        return array_key_exists($feature, $user_access[$user_id]['features'])
             ? (int) $user_access[$user_id]['features'][$feature]
-            : 0;
+            : $default;
     }
 }
 
@@ -603,6 +608,38 @@ if (!function_exists('eventosapp_dashboard_enforce_event_scope_on_role_can')) {
 }
 add_filter('eventosapp_role_can', 'eventosapp_dashboard_enforce_event_scope_on_role_can', 20000, 3);
 
+
+if (!function_exists('eventosapp_staff_access_get_inherited_feature_value')) {
+    /**
+     * Calcula el valor que debe heredar una feature nueva cuando una fila
+     * personalizada antigua todavía no la contiene.
+     */
+    function eventosapp_staff_access_get_inherited_feature_value($event_id, $user_id, $feature) {
+        $event_id = absint($event_id);
+        $user_id = absint($user_id);
+        $feature = sanitize_key($feature);
+        if (!$event_id || !$user_id || $feature === '') return 0;
+
+        if (user_can($user_id, 'manage_options')) return 1;
+
+        $user = get_userdata($user_id);
+        if (!$user) return 0;
+
+        foreach ((array)$user->roles as $role) {
+            if (function_exists('eventosapp_role_can_in_event') && eventosapp_role_can_in_event($role, $feature, $event_id)) {
+                return 1;
+            }
+
+            if (function_exists('eventosapp_consumables_role_policy')) {
+                $policy = eventosapp_consumables_role_policy($role, $feature);
+                if ($policy !== null && (int)$policy === 1) return 1;
+            }
+        }
+
+        return 0;
+    }
+}
+
 // ========================================
 // METABOX: Control de Acceso por Evento
 // ========================================
@@ -814,20 +851,27 @@ function eventosapp_render_staff_access_control_metabox($post) {
                             </td>
                             <?php foreach ($features as $feature_key => $feature_label): ?>
                                 <?php
-                                // Verificar si el rol tiene permiso global para esta feature
+                                // Verificar si el rol tiene permiso global para esta feature.
                                 $has_global_permission = !empty($global_visibility[$role_slug][$feature_key]);
+                                $fixed_policy = function_exists('eventosapp_consumables_role_policy')
+                                    ? eventosapp_consumables_role_policy($role_slug, $feature_key)
+                                    : null;
 
-                                // Verificar si está habilitado para este evento específico.
-                                // Por defecto, si tiene permiso global, está habilitado a menos que se haya desmarcado.
-                                $event_permission = isset($event_access[$role_slug][$feature_key])
-                                    ? (int)$event_access[$role_slug][$feature_key]
-                                    : ($has_global_permission ? 1 : 0);
+                                // Consumibles sigue una regla base obligatoria por rol. Las únicas
+                                // excepciones se configuran en la matriz personalizada por usuario.
+                                if ($fixed_policy !== null) {
+                                    $event_permission = (int) $fixed_policy;
+                                    $has_global_permission = ((int) $fixed_policy === 1);
+                                } else {
+                                    $event_permission = isset($event_access[$role_slug][$feature_key])
+                                        ? (int)$event_access[$role_slug][$feature_key]
+                                        : ($has_global_permission ? 1 : 0);
+                                }
 
                                 $field_name = '_eventosapp_staff_event_access[' . esc_attr($role_slug) . '][' . esc_attr($feature_key) . ']';
 
-                                // Si no tiene permiso global, el checkbox está deshabilitado
-                                $disabled = !$has_global_permission;
-                                $checked = $has_global_permission && $event_permission ? 'checked' : '';
+                                $disabled = ($fixed_policy !== null) || !$has_global_permission;
+                                $checked = $event_permission ? 'checked' : '';
                                 $td_class = $disabled ? 'disabled' : '';
                                 ?>
                                 <td class="<?php echo esc_attr($td_class); ?>">
@@ -837,11 +881,16 @@ function eventosapp_render_staff_access_control_metabox($post) {
                                         value="1"
                                         <?php echo $checked; ?>
                                         <?php echo $disabled ? 'disabled' : ''; ?>
-                                        <?php if ($disabled): ?>
+                                        <?php if ($fixed_policy !== null): ?>
+                                            title="Regla base de Consumibles. La excepción se configura por usuario."
+                                        <?php elseif ($disabled): ?>
                                             title="Bloqueado globalmente"
                                         <?php endif; ?>
                                     />
-                                    <?php if ($disabled): ?>
+                                    <?php if ($fixed_policy !== null): ?>
+                                        <input type="hidden" name="<?php echo esc_attr($field_name); ?>" value="<?php echo (int)$fixed_policy; ?>">
+                                        <span class="global-blocked" style="color:#2271b1;">Fijo</span>
+                                    <?php elseif ($disabled): ?>
                                         <span class="global-blocked">❌</span>
                                     <?php endif; ?>
                                 </td>
@@ -858,7 +907,8 @@ function eventosapp_render_staff_access_control_metabox($post) {
         <ul style="margin-left: 20px; list-style: disc;">
             <li>Las casillas <strong>marcadas</strong> indican que el rol puede ver esa sección en este evento.</li>
             <li>Las casillas <strong>desmarcadas</strong> bloquean el acceso a esa sección para este evento específico.</li>
-            <li>Las casillas <strong>deshabilitadas</strong> están bloqueadas en la configuración global y no se pueden habilitar aquí.</li>
+            <li>Las casillas <strong>deshabilitadas</strong> están bloqueadas globalmente o corresponden a la regla fija de Consumibles.</li>
+            <li>En Consumibles, las excepciones se definen exclusivamente por usuario en la sección personalizada de este metabox.</li>
             <li>Por defecto, todos los permisos globales están habilitados hasta que los desmarques manualmente.</li>
         </ul>
 
@@ -905,7 +955,11 @@ function eventosapp_render_staff_access_control_metabox($post) {
                                 <?php foreach ($user_features as $feature_key => $feature_label): ?>
                                     <?php
                                     $field_name = '_eventosapp_staff_user_event_access[' . esc_attr($access_user_id) . '][' . esc_attr($feature_key) . ']';
-                                    $checked = !empty($access_row['features'][$feature_key]) ? 'checked' : '';
+                                    $feature_is_explicit = array_key_exists($feature_key, $access_row['features']);
+                                    $feature_value = $feature_is_explicit
+                                        ? (int)$access_row['features'][$feature_key]
+                                        : eventosapp_staff_access_get_inherited_feature_value($post->ID, $access_user_id, $feature_key);
+                                    $checked = $feature_value ? 'checked' : '';
                                     ?>
                                     <td>
                                         <input
@@ -1022,15 +1076,21 @@ function eventosapp_save_staff_access_control_metabox($post_id, $post) {
         $event_access[$role_slug] = [];
 
         foreach ($features as $feature_key => $feature_label) {
-            // Verificar que el rol tenga permiso global
+            $fixed_policy = function_exists('eventosapp_consumables_role_policy')
+                ? eventosapp_consumables_role_policy($role_slug, $feature_key)
+                : null;
+
+            if ($fixed_policy !== null) {
+                $event_access[$role_slug][$feature_key] = (int) $fixed_policy;
+                continue;
+            }
+
+            // Verificar que el rol tenga permiso global.
             $has_global_permission = !empty($global_visibility[$role_slug][$feature_key]);
 
-            // Solo guardar si tiene permiso global y está marcado
             if ($has_global_permission) {
-                $value = isset($input[$role_slug][$feature_key]) ? 1 : 0;
-                $event_access[$role_slug][$feature_key] = $value;
+                $event_access[$role_slug][$feature_key] = isset($input[$role_slug][$feature_key]) ? 1 : 0;
             } else {
-                // Si no tiene permiso global, forzar a 0
                 $event_access[$role_slug][$feature_key] = 0;
             }
         }
@@ -1164,6 +1224,24 @@ function eventosapp_validate_event_specific_access($has_permission, $feature, $u
         return (bool) $custom_permission;
     }
 
+    // Regla operativa fija para Consumibles. Solo una configuración personalizada
+    // por usuario puede modificarla.
+    if (function_exists('eventosapp_consumables_role_policy')) {
+        $fixed_values = [];
+        foreach ((array) $user->roles as $role) {
+            $policy = eventosapp_consumables_role_policy($role, $feature);
+            if ($policy !== null) {
+                $fixed_values[] = (int) $policy;
+            }
+        }
+        if (in_array(1, $fixed_values, true)) {
+            return true;
+        }
+        if (!empty($fixed_values)) {
+            return false;
+        }
+    }
+
     // Si ya no tiene permiso global y no existe una capa personalizada, no hacer nada más.
     if (!$has_permission) {
         return false;
@@ -1252,7 +1330,16 @@ function eventosapp_apply_user_specific_dashboard_access($has_permission, $featu
  * @return bool
  */
 function eventosapp_role_can_in_event($role, $feature, $event_id) {
-    // Verificar permiso global primero
+    // Consumibles sigue una política base por rol que no puede ser restringida
+    // por la matriz de rol del evento. La excepción se resuelve antes, por usuario.
+    if (function_exists('eventosapp_consumables_role_policy')) {
+        $fixed_policy = eventosapp_consumables_role_policy($role, $feature);
+        if ($fixed_policy !== null) {
+            return ((int) $fixed_policy === 1);
+        }
+    }
+
+    // Verificar permiso global primero.
     if (!function_exists('eventosapp_get_dashboard_visibility')) {
         return false;
     }
