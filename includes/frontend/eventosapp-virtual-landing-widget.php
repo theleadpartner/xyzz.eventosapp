@@ -375,8 +375,17 @@ if ( ! function_exists('eventosapp_render_virtual_landing') ) {
         $ticket_company   = $ticket_id ? get_post_meta($ticket_id, '_eventosapp_asistente_empresa', true) : '';
         $ticket_modalidad = $ticket_id && function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($ticket_id) : '';
         $virtual_checked  = $ticket_id && function_exists('eventosapp_ticket_has_checkin_type') ? eventosapp_ticket_has_checkin_type($ticket_id, 'virtual') : false;
+        // Los consumibles pertenecen exclusivamente a la experiencia presencial.
+        // La landing virtual nunca debe exponer este inventario, incluso en eventos híbridos.
         $consumables_snapshot = [];
-        if ( $ticket_id && function_exists('eventosapp_consumables_is_enabled') && eventosapp_consumables_is_enabled($event_id) && function_exists('eventosapp_consumables_get_ticket_inventory_snapshot') ) {
+        if (
+            $ticket_id
+            && function_exists('eventosapp_ticket_is_virtual')
+            && ! eventosapp_ticket_is_virtual($ticket_id)
+            && function_exists('eventosapp_consumables_is_enabled')
+            && eventosapp_consumables_is_enabled($event_id)
+            && function_exists('eventosapp_consumables_get_ticket_inventory_snapshot')
+        ) {
             $consumables_snapshot = eventosapp_consumables_get_ticket_inventory_snapshot($ticket_id, $event_id);
         }
 
