@@ -14,7 +14,9 @@ if ( ! defined('ABSPATH') ) exit;
  *   'flow_metrics_page_id' => (int), // Métricas de Encuestas
  *   'edit_page_id'         => (int),
  *   'qr_localidad_page_id' => (int), // Validador de Localidad (solo lectura)
- *   'qr_sesion_page_id'    => (int), // NUEVO: Control por sesión
+ *   'qr_sesion_page_id'         => (int), // Control por sesión
+ *   'consumables_manager_page_id'=> (int), // Configuración de consumibles
+ *   'consumables_staff_page_id'  => (int), // Consumo por QR
  * ]
  */
 
@@ -42,6 +44,8 @@ function eventosapp_get_pages_config() {
         'expositor_page_id'            => 0, // Módulo Expositor
         'expositor_gestion_page_id'    => 0, // Gestión de Expositores
         'company_checkin_page_id'       => 0, // Monitor de empresas con check-in
+        'consumables_manager_page_id'  => 0, // Configuración de consumibles
+        'consumables_staff_page_id'    => 0, // Consumo de consumibles por QR
     ]);
 }
 
@@ -125,6 +129,14 @@ function eventosapp_get_expositor_gestion_url() {
 
 function eventosapp_get_company_checkin_url() {
     return eventosapp_get_configured_page_url('company_checkin_page_id', '#');
+}
+
+function eventosapp_get_consumables_manager_url() {
+    return eventosapp_get_configured_page_url('consumables_manager_page_id', '#');
+}
+
+function eventosapp_get_consumables_staff_url() {
+    return eventosapp_get_configured_page_url('consumables_staff_page_id', '#');
 }
 
 
@@ -335,6 +347,24 @@ add_settings_field(
         ['key'=>'company_checkin_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_company_checkin_monitor]</code>']
     );
 
+    add_settings_field(
+        'consumables_manager_page_id',
+        'Página de Control de Consumibles',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'consumables_manager_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_consumables_manager]</code>']
+    );
+
+    add_settings_field(
+        'consumables_staff_page_id',
+        'Página de Consumo de Consumibles',
+        'eventosapp_render_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        ['key'=>'consumables_staff_page_id', 'desc'=>'Debe contener el shortcode: <code>[eventosapp_consumables_staff]</code>']
+    );
+
 });
 
 function eventosapp_sanitize_pages_option($input){
@@ -359,6 +389,8 @@ function eventosapp_sanitize_pages_option($input){
         'expositor_page_id',
         'expositor_gestion_page_id',
         'company_checkin_page_id',
+        'consumables_manager_page_id',
+        'consumables_staff_page_id',
     ];
     foreach ($keys as $k) {
         $out[$k] = isset($input[$k]) ? absint($input[$k]) : 0;
@@ -1009,6 +1041,8 @@ function eventosapp_render_configuracion_page(){
             <li><code>[eventosapp_expositor]</code> — Módulo de entregas del expositor.</li>
             <li><code>[eventosapp_expositor_gestion]</code> — Gestión/autorización de expositores por organizador.</li>
             <li><code>[eventosapp_company_checkin_monitor]</code> — Monitor dinámico de empresas y asistentes con check-in.</li>
+            <li><code>[eventosapp_consumables_manager]</code> — Configuración de inventarios y segmentación de consumibles.</li>
+            <li><code>[eventosapp_consumables_staff]</code> — Lectura QR y descuento de consumibles por el staff.</li>
         </ul>
         <?php eventosapp_render_bulk_users_section(); ?>
     </div>
@@ -1040,6 +1074,8 @@ function eventosapp_dashboard_features() {
         'expositor'            => 'Expositor',
         'expositor_gestion'    => 'Gestión de Expositores',
         'company_checkin'       => 'Empresas con Check-In',
+        'consumables_manage'   => 'Control de Consumibles',
+        'consumables_staff'    => 'Consumo de Consumibles',
     ];
 }
 }
@@ -1087,7 +1123,8 @@ function eventosapp_default_dashboard_visibility() {
         $defaults['staff']['self_checkin']  = 1;
         $defaults['staff']['qr']            = 1;
         $defaults['staff']['qr_localidad']  = 1;
-        $defaults['staff']['qr_sesion']     = 1;
+        $defaults['staff']['qr_sesion']          = 1;
+        $defaults['staff']['consumables_staff']   = 1;
         // checklist: OFF por defecto para staff
         // networking_ranking: OFF por defecto para staff (ajústalo si lo deseas ON)
     }
@@ -1098,7 +1135,8 @@ function eventosapp_default_dashboard_visibility() {
         $defaults['logistico']['self_checkin']  = 1;
         $defaults['logistico']['qr']            = 1;
         $defaults['logistico']['qr_localidad']  = 1;
-        $defaults['logistico']['qr_sesion']     = 1;
+        $defaults['logistico']['qr_sesion']          = 1;
+        $defaults['logistico']['consumables_staff']   = 1;
         // checklist: OFF
         // networking_ranking: OFF (ajústalo si lo deseas)
     }
