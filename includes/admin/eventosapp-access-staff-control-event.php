@@ -32,9 +32,36 @@ if (!function_exists('eventosapp_staff_access_get_features')) {
      * @return array
      */
     function eventosapp_staff_access_get_features($include_support = false) {
-        $features = function_exists('eventosapp_dashboard_features')
-            ? eventosapp_dashboard_features()
-            : [];
+        if (function_exists('eventosapp_dashboard_features_complete')) {
+            $features = eventosapp_dashboard_features_complete();
+        } elseif (function_exists('eventosapp_dashboard_features')) {
+            $features = eventosapp_dashboard_features();
+        } else {
+            $features = [];
+        }
+
+        if (!is_array($features)) {
+            $features = [];
+        }
+
+        // Compatibilidad defensiva: aunque exista una definición antigua del registro
+        // central, Consumibles siempre debe aparecer en este metabox.
+        unset($features['consumables_manage'], $features['consumables_staff']);
+        $ordered = [];
+        $inserted = false;
+        foreach ($features as $feature_key => $feature_label) {
+            $ordered[$feature_key] = $feature_label;
+            if ($feature_key === 'qr_sesion') {
+                $ordered['consumables_manage'] = 'Control de Consumibles';
+                $ordered['consumables_staff']  = 'Consumo de Consumibles';
+                $inserted = true;
+            }
+        }
+        if (!$inserted) {
+            $ordered['consumables_manage'] = 'Control de Consumibles';
+            $ordered['consumables_staff']  = 'Consumo de Consumibles';
+        }
+        $features = $ordered;
 
         if (!$include_support) {
             foreach (eventosapp_staff_access_excluded_support_features() as $excluded_feature) {
@@ -42,7 +69,7 @@ if (!function_exists('eventosapp_staff_access_get_features')) {
             }
         }
 
-        return is_array($features) ? $features : [];
+        return $features;
     }
 }
 
@@ -703,7 +730,9 @@ function eventosapp_render_staff_access_control_metabox($post) {
         <p class="description" style="margin-bottom: 15px;">
             <strong>Importante:</strong> la matriz por rol funciona <em>sobre</em> los permisos globales configurados en
             <a href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_configuracion')); ?>" target="_blank">Configuración</a>.
-            Solo puedes <strong>restringir</strong> lo que ya está habilitado globalmente para cada rol.
+            Solo puedes <strong>restringir</strong> lo que ya está habilitado globalmente para cada rol. Los módulos
+            <strong>Control de Consumibles</strong> y <strong>Consumo de Consumibles</strong> se incorporan siempre al registro completo;
+            sus excepciones se pueden ajustar en la sección personalizada por usuario.
         </p>
         <p class="description" style="margin-bottom: 15px; padding: 10px; border-left: 4px solid #2271b1; background: #f0f6fc;">
             <strong>Asistencia y Métrica de equipo de apoyo:</strong> estas dos secciones no se controlan desde la matriz por rol. Su asignación interna sigue dependiendo del metabox <strong>Equipo de apoyo / Asistencia</strong>.

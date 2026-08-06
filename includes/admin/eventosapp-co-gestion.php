@@ -579,6 +579,9 @@ function eventosapp_render_metabox_co_gestion($post){
   $support_staff_ids = function_exists('eventosapp_support_get_event_staff_user_ids')
     ? array_map('intval', (array)eventosapp_support_get_event_staff_user_ids($event_id))
     : [];
+  $consumables_enabled = function_exists('eventosapp_consumables_is_enabled')
+    ? eventosapp_consumables_is_enabled($event_id)
+    : (get_post_meta($event_id, '_eventosapp_consumables_enabled', true) === '1');
   ?>
   <style>
     .evapp-mini{font-size:11px;color:#646970;margin:4px 0;line-height:1.35}
@@ -598,7 +601,24 @@ function eventosapp_render_metabox_co_gestion($post){
     .evapp-expiry-grid input[type="date"]{width:100%;min-width:130px}
     .evapp-never-label{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:11px}
     .evapp-role-pill{display:inline-block;border-radius:999px;background:#e8f2fc;color:#135e96;padding:2px 6px;font-size:10px;margin-top:3px}
+    .evapp-consumables-access{margin:0 0 12px;padding:10px;border-left:4px solid #2271b1;background:#f0f6fc;font-size:11px;line-height:1.45}
+    .evapp-consumables-access.is-disabled{border-left-color:#8c8f94;background:#f6f7f7;color:#646970}
+    .evapp-consumables-access strong{display:block;margin-bottom:4px;font-size:12px;color:#1d2327}
+    .evapp-consumables-access ul{margin:5px 0 0 17px;list-style:disc}
   </style>
+
+  <div class="evapp-consumables-access <?php echo $consumables_enabled ? '' : 'is-disabled'; ?>">
+    <strong>Permisos de Consumibles</strong>
+    <?php if ($consumables_enabled): ?>
+      <ul>
+        <li><b>Administrador y Organizador:</b> Control de Consumibles y Consumo de Consumibles.</li>
+        <li><b>Staff y Logístico:</b> únicamente Consumo de Consumibles.</li>
+        <li>Las excepciones individuales se configuran en <b>Control de Acceso Dashboard Staff</b>.</li>
+      </ul>
+    <?php else: ?>
+      El sistema de consumibles está desactivado en este evento. Al activarlo, las asignaciones de esta sección aplicarán automáticamente según el rol del usuario.
+    <?php endif; ?>
+  </div>
 
   <div id="evapp-co-gestion-wrap">
     <strong>Co-gestores</strong>

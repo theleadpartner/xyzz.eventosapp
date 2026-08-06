@@ -1065,6 +1065,8 @@ function eventosapp_dashboard_features() {
         'edit'               => 'Edición de Tickets',
         'qr_localidad'       => 'Validador de Localidad',
         'qr_sesion'          => 'Control por Sesión',
+        'consumables_manage' => 'Control de Consumibles',
+        'consumables_staff'  => 'Consumo de Consumibles',
         'checklist'          => 'Checklist de Evento',
         'networking_ranking' => 'Ranking Networking',
         'qr_double_auth'     => 'Check-In QR Doble Autenticación',
@@ -1074,10 +1076,51 @@ function eventosapp_dashboard_features() {
         'expositor'            => 'Expositor',
         'expositor_gestion'    => 'Gestión de Expositores',
         'company_checkin'       => 'Empresas con Check-In',
-        'consumables_manage'   => 'Control de Consumibles',
-        'consumables_staff'    => 'Consumo de Consumibles',
     ];
 }
+}
+
+/**
+ * Registro completo y compatible de funcionalidades del dashboard.
+ *
+ * Algunas instalaciones pueden tener una definición previa de
+ * eventosapp_dashboard_features() cargada por una versión antigua o por un snippet.
+ * Este helper no intenta redeclararla: toma lo que exista, incorpora siempre los
+ * módulos de Consumibles y conserva un orden operativo coherente.
+ *
+ * @return array<string,string>
+ */
+if ( ! function_exists('eventosapp_dashboard_features_complete') ) {
+    function eventosapp_dashboard_features_complete() {
+        $base = function_exists('eventosapp_dashboard_features')
+            ? eventosapp_dashboard_features()
+            : [];
+
+        if ( ! is_array($base) ) {
+            $base = [];
+        }
+
+        unset($base['consumables_manage'], $base['consumables_staff']);
+
+        $complete = [];
+        $inserted = false;
+        foreach ($base as $key => $label) {
+            $complete[$key] = $label;
+
+            if ($key === 'qr_sesion') {
+                $complete['consumables_manage'] = 'Control de Consumibles';
+                $complete['consumables_staff']  = 'Consumo de Consumibles';
+                $inserted = true;
+            }
+        }
+
+        if (!$inserted) {
+            $complete['consumables_manage'] = 'Control de Consumibles';
+            $complete['consumables_staff']  = 'Consumo de Consumibles';
+        }
+
+        return (array) apply_filters('eventosapp_dashboard_features_complete', $complete);
+    }
 }
 
 
@@ -1138,7 +1181,7 @@ if ( ! function_exists('eventosapp_consumables_role_policy') ) {
 if ( ! function_exists('eventosapp_default_dashboard_visibility') ) {
 function eventosapp_default_dashboard_visibility() {
     $roles    = eventosapp_get_all_roles();
-    $features = array_keys( eventosapp_dashboard_features() );
+    $features = array_keys( eventosapp_dashboard_features_complete() );
     $defaults = [];
 
     // Base: todo OFF
@@ -1229,7 +1272,7 @@ if ( ! function_exists('eventosapp_get_dashboard_visibility') ) {
 // 5) Helper: ¿el usuario puede X?
 if ( ! function_exists('eventosapp_role_can') ) {
     function eventosapp_role_can($feature, $user = null) {
-        $features = eventosapp_dashboard_features();
+        $features = eventosapp_dashboard_features_complete();
         if (!isset($features[$feature])) return false;
 
         $u = $user ? get_userdata($user) : wp_get_current_user();
@@ -1260,7 +1303,7 @@ add_action('admin_init', function() {
         'type'              => 'array',
         'sanitize_callback' => function($input) {
             $roles    = eventosapp_get_all_roles();
-            $features = array_keys( eventosapp_dashboard_features() );
+            $features = array_keys( eventosapp_dashboard_features_complete() );
             $out = [];
 
             if (!is_array($input)) $input = [];
@@ -1295,17 +1338,18 @@ add_action('admin_init', function() {
         'Permisos de menús por rol',
         function() {
             $roles    = eventosapp_get_all_roles();
-            $features = eventosapp_dashboard_features();
+            $features = eventosapp_dashboard_features_complete();
             $cfg      = eventosapp_get_dashboard_visibility();
 
             echo '<style>
-                .evapp-perm-table { border-collapse: collapse; margin-top:4px; }
+                .evapp-perm-table-wrap { overflow-x:auto; width:100%; border:1px solid #dcdcde; }
+                .evapp-perm-table { border-collapse: collapse; margin:0; min-width:1900px; }
                 .evapp-perm-table th, .evapp-perm-table td { border:1px solid #ddd; padding:6px 8px; text-align:center; }
                 .evapp-perm-table th { background:#f6f7f7; }
                 .evapp-perm-table td.role { text-align:left; font-weight:600; background:#fafafa; }
             </style>';
 
-            echo '<table class="evapp-perm-table">';
+            echo '<div class="evapp-perm-table-wrap"><table class="evapp-perm-table">';
             echo '<thead><tr><th>Rol</th>';
             foreach ($features as $key => $label) {
                 echo '<th>'.esc_html($label).'</th>';
@@ -1331,7 +1375,7 @@ add_action('admin_init', function() {
                 }
                 echo '</tr>';
             }
-            echo '</tbody></table>';
+            echo '</tbody></table></div>';
 
             echo '<p class="description" style="margin-top:6px;">'
                . 'Consejo: <b>Ver Dashboard</b> controla el acceso general al panel; '
@@ -1400,6 +1444,56 @@ if ( ! function_exists('eventosapp_redirect_with_error') ) {
 }
 
 
+/**
+ * Resuelve el permiso efectivo de una funcionalidad frontend.
+ *
+ * Para Consumibles usa el evento activo y la misma capa de permisos empleada
+ * por las tarjetas del dashboard. Esto evita que el botón sea visible y que la
+ * protección de la URL lo rechace después por consultar una ruta diferente.
+ *
+ * @param string   $feature  Feature solicitada.
+ * @param int|null $user_id  Usuario; null usa el usuario actual.
+ * @param int      $event_id Evento; 0 usa el evento activo.
+ * @return bool
+ */
+if ( ! function_exists('eventosapp_user_can_access_frontend_feature') ) {
+    function eventosapp_user_can_access_frontend_feature($feature, $user_id = null, $event_id = 0) {
+        $feature = sanitize_key((string) $feature);
+        if ($feature === '') return false;
+
+        $user_id = $user_id === null ? get_current_user_id() : absint($user_id);
+        if (!$user_id) return false;
+
+        if (user_can($user_id, 'manage_options')) return true;
+
+        $event_id = absint($event_id);
+        if (!$event_id && function_exists('eventosapp_get_active_event')) {
+            $event_id = absint(eventosapp_get_active_event());
+        }
+
+        if (in_array($feature, ['consumables_manage', 'consumables_staff'], true)) {
+            if ($event_id && function_exists('eventosapp_user_can_access_dashboard_feature_in_event')) {
+                return (bool) eventosapp_user_can_access_dashboard_feature_in_event($user_id, $feature, $event_id);
+            }
+
+            $user = get_userdata($user_id);
+            if (!$user) return false;
+
+            foreach ((array) $user->roles as $role) {
+                if (function_exists('eventosapp_consumables_role_policy')) {
+                    $policy = eventosapp_consumables_role_policy($role, $feature);
+                    if ($policy !== null && (int) $policy === 1) return true;
+                }
+            }
+            return false;
+        }
+
+        return function_exists('eventosapp_role_can')
+            ? (bool) eventosapp_role_can($feature, $user_id)
+            : false;
+    }
+}
+
 // =====================================================
 // Guardado común (para usar dentro de shortcodes si se desea)
 // =====================================================
@@ -1408,8 +1502,8 @@ if ( ! function_exists('eventosapp_require_feature') ) {
         if ( ! is_user_logged_in() ) {
             eventosapp_redirect_with_error('Debes iniciar sesión para acceder a esta sección.', ['from'=>$feature]);
         }
-        if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can($feature) ) {
-            $labels = eventosapp_dashboard_features();
+        if ( ! eventosapp_user_can_access_frontend_feature($feature) ) {
+            $labels = eventosapp_dashboard_features_complete();
             $nice   = isset($labels[$feature]) ? $labels[$feature] : $feature;
             eventosapp_redirect_with_error('No tienes permisos para acceder a: '.$nice.'.', ['from'=>$feature]);
         }
@@ -1444,8 +1538,8 @@ add_action('template_redirect', function () {
     if ( ! is_user_logged_in() ) {
         eventosapp_redirect_with_error('Debes iniciar sesión para acceder a esta sección.', ['from'=>$current_feature]);
     }
-    if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can($current_feature) ) {
-        $labels = eventosapp_dashboard_features();
+    if ( ! eventosapp_user_can_access_frontend_feature($current_feature) ) {
+        $labels = eventosapp_dashboard_features_complete();
         $nice   = isset($labels[$current_feature]) ? $labels[$current_feature] : $current_feature;
         eventosapp_redirect_with_error('No tienes permisos para acceder a: '.$nice.'.', ['from'=>$current_feature]);
     }
