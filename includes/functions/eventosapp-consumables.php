@@ -546,6 +546,20 @@ if ( ! function_exists('eventosapp_consumables_get_event_items') ) {
  * Permisos y dashboard
  * ---------------------------------------------------------------------- */
 
+if ( ! function_exists('eventosapp_consumables_append_dashboard_features') ) {
+    /**
+     * Registra los dos módulos en el catálogo completo del dashboard.
+     * La función es idempotente y conserva cualquier otro módulo agregado por filtros.
+     */
+    function eventosapp_consumables_append_dashboard_features($features) {
+        if ( ! is_array($features) ) $features = [];
+        $features['consumables_manage'] = 'Control de Consumibles';
+        $features['consumables_staff']  = 'Consumo de Consumibles';
+        return $features;
+    }
+}
+add_filter('eventosapp_dashboard_features_complete', 'eventosapp_consumables_append_dashboard_features', 20);
+
 if ( ! function_exists('eventosapp_consumables_user_can_feature') ) {
     function eventosapp_consumables_user_can_feature($event_id, $user_id, $feature) {
         $event_id = absint($event_id);
@@ -553,8 +567,12 @@ if ( ! function_exists('eventosapp_consumables_user_can_feature') ) {
         $feature  = sanitize_key($feature);
         if ( ! $event_id || ! $user_id || ! eventosapp_consumables_is_enabled($event_id) ) return false;
 
-        // Este helper reúne alcance por evento, política por rol y la excepción
-        // personalizada del metabox Control de Acceso Dashboard Staff.
+        // Usa la misma ruta efectiva que protege la URL configurada. De esta forma
+        // la tarjeta y la página nunca pueden producir decisiones contradictorias.
+        if ( function_exists('eventosapp_user_can_access_frontend_feature') ) {
+            return eventosapp_user_can_access_frontend_feature($feature, $user_id, $event_id);
+        }
+
         if ( function_exists('eventosapp_user_can_access_dashboard_feature_in_event') ) {
             return eventosapp_user_can_access_dashboard_feature_in_event($user_id, $feature, $event_id);
         }
