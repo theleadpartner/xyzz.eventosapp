@@ -4,14 +4,63 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.3.0-rc.2`
-- **Fecha de corte:** 2026-08-06
-- **Commit base de pruebas:** `47ac48e00ab90868d49ece5e2790fa1bca52eb9d`
-- **Rama del hotfix:** `fix/whatsapp-ticket-consumables-landing-20260806`
+- **Versión candidata:** `1.4.0-rc.1`
+- **Fecha de corte:** 2026-08-07
+- **Commit candidato de pruebas:** `8a7e1717351790ae2117120a8b4157e8895df46f`
+- **Base inmediatamente anterior:** `3975588693b03b1ed3643d3d6632897f791aeabb` (`1.3.0-rc.2`)
+- **Rama de documentación:** `docs/consumables-transactions-progress-20260807`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** corrección aislada en rama independiente; requiere validación de la landing presencial y virtual antes de promoverse a producción.
+- **Rama de promoción en producción:** `sync/consumables-transactions-audit-20260807`
+- **Estado:** candidato identificado y acotado a dos archivos de Consumibles. La promoción a producción se realiza mediante lista cerrada, validación de sintaxis y verificación de hashes antes de documentar la rama de destino.
 
-## Hotfix de la landing pública del ticket
+## Candidato 1.4.0-rc.1 — Transacciones y auditoría de Consumibles
+
+El commit `8a7e1717351790ae2117120a8b4157e8895df46f` es el único commit de `main` posterior al último estado de pruebas ya sincronizado con producción. La comparación contra `3975588693b03b1ed3643d3d6632897f791aeabb` arroja exactamente dos archivos pendientes:
+
+```text
+includes/functions/eventosapp-consumables-transactions.php  54b8989b3890099d008f46929230bdc96ccfa0e8  NUEVO
+includes/functions/eventosapp-consumables.php               638d7d4ac9a38d9c26e5c4cec6a535d5881e30be  MODIFICADO
+```
+
+El núcleo existente `includes/functions/eventosapp-consumables-core.php` conserva el blob `4f8c9e04fe28c1ffec2123505ae63a6bff6c639c`, idéntico al núcleo de producción, por lo que no forma parte de esta promoción.
+
+### Control de Consumibles — Transacciones
+
+- Nueva pestaña **Transacciones** para Administradores y Organizadores con permiso `consumables_manage`.
+- Consulta de transacciones agrupadas por lectura/lote, con estado activo, cancelación solicitada, anulación parcial o anulación completa.
+- Filtros por búsqueda general, ítem, Staff, cédula, localidad, fecha, rango horario y estado.
+- Resumen general por ítem con cantidades brutas, anuladas, pendientes y netas.
+- Exportación CSV completa del ledger del evento, incluyendo movimientos originales, solicitudes de cancelación y reversos.
+- El CSV incluye ticket, nombre, apellido, cédula, localidad, configuraciones asignadas/aplicadas, ítem, cantidad, Staff, fecha, hora, periodo, saldo posterior, origen y nota de auditoría.
+- Anulación administrativa de una transacción con restauración de saldos mediante transacción SQL y bloqueo de filas.
+- Los movimientos originales nunca se eliminan; el reverso se registra como una nueva entrada del ledger.
+
+### Consumo de Consumibles — Mis transacciones
+
+- Nueva pestaña **Mis transacciones** para Staff y Logístico con permiso `consumables_staff`.
+- Consulta limitada a las transacciones registradas por el usuario autenticado en el evento activo.
+- Sumatoria neta de artículos entregados por el usuario.
+- Solicitud de cancelación de una transacción propia para revisión del administrador.
+- Las solicitudes no restauran saldo por sí mismas y quedan registradas en el ledger.
+
+### Landing presencial del asistente
+
+- El inventario público conserva la integración segura introducida en `1.3.0-rc.2`.
+- Se agrega **Movimientos de mi inventario**, organizado por día del evento.
+- Cada movimiento muestra hora, artículos y estado de consumo o anulación.
+- Las anulaciones permanecen visibles como parte de la trazabilidad.
+- Los tickets virtuales continúan explícitamente excluidos.
+
+### Seguridad e integridad
+
+- Los endpoints AJAX exigen sesión, nonce, evento activo y permiso específico por función.
+- Staff solo puede solicitar cancelación de transacciones creadas por su propio usuario.
+- Administradores/Organizadores con `consumables_manage` son quienes pueden ejecutar el reverso.
+- El reverso usa `START TRANSACTION`, `SELECT ... FOR UPDATE`, actualización condicionada del saldo y `ROLLBACK` ante cualquier inconsistencia.
+- Los identificadores de solicitud/reverso son determinísticos y el índice único de `request_uuid` preserva la idempotencia.
+- La promoción no reemplaza `eventosapp-consumables-core.php` ni modifica módulos ajenos a Consumibles.
+
+## Hotfix 1.3.0-rc.2 — Landing pública del ticket
 
 ### Incidencia corregida
 
@@ -37,7 +86,7 @@ includes/frontend/eventosapp-virtual-landing-widget.php
 README.md
 ```
 
-## Alcance de la versión candidata 1.3.0
+## Alcance conservado de 1.3.0
 
 ### Control de Consumibles
 
@@ -76,9 +125,15 @@ README.md
 - Opción de impresión automática después de validar el QR.
 - La lectura QR resuelve el ticket sin alterar los flujos de confirmación que siguen siendo necesarios.
 
-## Archivos promovidos previamente a producción
+## Estado de promociones previas
 
-La comparación entre el último punto documentado de producción y el candidato `1.3.0-rc.1` identificó seis archivos pendientes. Cada archivo fue copiado conservando el mismo SHA de blob del repositorio de pruebas:
+### `1.3.0-rc.2`
+
+La corrección de la landing pública ya fue integrada en `main` de producción mediante el commit de merge `08aabcf1a8667cfe56a536b14edfd591202d02d3`.
+
+### `1.3.0-rc.1`
+
+La comparación previa identificó seis archivos pendientes y fueron promovidos conservando los blobs validados del repositorio de pruebas:
 
 ```text
 includes/admin/eventosapp-access-staff-control-event.php  39db9c0ceaa5d648f9c0a67cfd45b8bf1742edad
@@ -88,8 +143,6 @@ includes/api/eventosapp-kiosk-api.php                     d30efe9d9623e578873fc2
 includes/frontend/eventosapp-virtual-landing-widget.php   c81e1682b602aedc749597b77f0ec0af77d89527
 includes/functions/eventosapp-consumables.php             4f8c9e04fe28c1ffec2123505ae63a6bff6c639c
 ```
-
-El hotfix `1.3.0-rc.2` reemplaza únicamente la integración de landing de los dos últimos archivos antes de una nueva promoción.
 
 ## Procedimiento de promoción
 
@@ -106,7 +159,23 @@ El hotfix `1.3.0-rc.2` reemplaza únicamente la integración de landing de los d
 
 ## Validación funcional requerida antes de producción
 
-### Hotfix de landing
+### Transacciones y auditoría 1.4.0-rc.1
+
+- Generar consumos de uno y varios artículos y confirmar su agrupación como una sola transacción por lectura.
+- Verificar la pestaña **Transacciones** con Administrador y Organizador.
+- Probar búsqueda y filtros por ítem, Staff, cédula, localidad, fecha, hora y estado.
+- Descargar el CSV y confirmar que contiene tanto consumos como solicitudes de cancelación y reversos.
+- Verificar el resumen bruto, anulado, pendiente y neto por ítem.
+- Iniciar sesión como Staff/Logístico y confirmar que **Mis transacciones** solo muestra operaciones propias.
+- Solicitar la cancelación de una transacción propia y comprobar que todavía no restaura el saldo.
+- Confirmar que otro Staff no puede solicitar la cancelación de una transacción ajena.
+- Anular la transacción desde Control de Consumibles y confirmar que el saldo se restablece exactamente una vez.
+- Repetir el intento de anulación y confirmar que no genera un segundo reverso.
+- Confirmar que el consumo original y el reverso continúan visibles en auditoría y CSV.
+- Revisar la landing presencial y confirmar el historial por día, hora, artículos y estado.
+- Confirmar que la landing virtual no muestra ni calcula inventario o historial de Consumibles.
+
+### Hotfix de landing 1.3.0-rc.2
 
 - Abrir `/ticket/?ticket={ID_PUBLICO}` para un ticket presencial con Consumibles activo.
 - Confirmar que la landing carga QR, datos del evento, Wallet, PDF e ICS como antes.
@@ -117,7 +186,7 @@ El hotfix `1.3.0-rc.2` reemplaza únicamente la integración de landing de los d
 - Confirmar que la landing virtual no muestra ni calcula inventario de Consumibles.
 - Revisar el log PHP y confirmar que no aparece el error de búfer de salida anidado.
 
-### Módulo de Consumibles
+### Regresión del módulo base
 
 - Crear, editar, ordenar y eliminar configuraciones de inventario.
 - Verificar segmentación por localidad y campo personalizado.
@@ -133,6 +202,10 @@ El hotfix `1.3.0-rc.2` reemplaza únicamente la integración de landing de los d
 - Confirmar creación de las tablas de balance y ledger en una instalación controlada.
 
 ## Historial resumido
+
+### `1.4.0-rc.1` — 2026-08-07
+
+Candidato con consulta y exportación de transacciones, resumen por ítem, vista de transacciones propias del Staff, solicitudes de cancelación, reversos auditables con restauración de saldo e historial de movimientos en la landing presencial.
 
 ### `1.3.0-rc.2` — 2026-08-06
 
