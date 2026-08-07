@@ -33,8 +33,11 @@ function eventosapp_render_metabox_extras_ticket($post) {
     // Envío auto para registro público
     $auto_public = get_post_meta($post->ID, '_eventosapp_ticket_auto_email_public', true);
 
-    // Envío auto para registro manual
+    // Envío por correo disponible para registro manual del Dashboard
     $auto_manual = get_post_meta($post->ID, '_eventosapp_ticket_auto_email_manual', true);
+
+    // Envío por WhatsApp disponible para registro manual del Dashboard
+    $auto_whatsapp_manual = get_post_meta($post->ID, '_eventosapp_ticket_auto_whatsapp_manual', true);
 
     // Flag "usar QR preimpreso"
     $use_preprinted = get_post_meta($post->ID, '_eventosapp_ticket_use_preprinted_qr', true);
@@ -97,8 +100,9 @@ function eventosapp_render_metabox_extras_ticket($post) {
     </label>
     <br>
     <small style="color:#666">
-        Permite enviar el ticket por WhatsApp junto con el correo cuando la API global esté configurada.
-        Las reglas de envío se configuran en el metabox <strong>WhatsApp Tickets - Reglas de Envío</strong>.
+        Habilita WhatsApp como canal de entrega del ticket cuando la API global esté configurada.
+        El correo y WhatsApp pueden enviarse de forma independiente. Las reglas de envío se
+        configuran en el metabox <strong>WhatsApp Tickets - Reglas de Envío</strong>.
     </small>
     <br><br>
     <label>
@@ -117,10 +121,32 @@ function eventosapp_render_metabox_extras_ticket($post) {
     <hr>
     <label>
         <input type="checkbox" name="eventosapp_ticket_auto_email_manual" value="1" <?php checked($auto_manual, '1'); ?>>
-        <strong>Enviar ticket automáticamente en el registro manual</strong>
+        <strong>Habilitar envío por correo en el registro manual</strong>
     </label>
     <br>
-    <small style="color:#666">Aplica cuando el staff/organizador registra asistentes manualmente desde el panel frontal.</small>
+    <small style="color:#666;line-height:1.4;display:block;margin-top:4px;">
+        Aplica al módulo <strong>Registro Manual de Asistentes</strong> del Dashboard.
+        Al activarlo, el formulario mostrará un checkbox <strong>Enviar por correo</strong>,
+        marcado por defecto, para que el staff decida por cada ticket si desea enviarlo.
+    </small>
+
+    <hr>
+    <label>
+        <input type="checkbox" name="eventosapp_ticket_auto_whatsapp_manual" value="1" <?php checked($auto_whatsapp_manual, '1'); ?>>
+        <strong>Habilitar envío por WhatsApp en el registro manual</strong>
+    </label>
+    <br>
+    <small style="color:#666;line-height:1.4;display:block;margin-top:4px;">
+        Aplica al módulo <strong>Registro Manual de Asistentes</strong> del Dashboard.
+        Al activarlo, el formulario mostrará un checkbox <strong>Enviar por WhatsApp</strong>,
+        marcado por defecto, para que el staff decida por cada ticket si desea enviarlo.
+    </small>
+    <?php if ($whatsapp_enabled !== '1'): ?>
+        <small style="color:#b45309;line-height:1.4;display:block;margin-top:6px;">
+            Para que esta opción sea efectiva también debes activar
+            <strong>Mensajería de WhatsApp para tickets</strong> en este mismo metabox.
+        </small>
+    <?php endif; ?>
 
     <hr>
     <label>
@@ -239,8 +265,21 @@ add_action('save_post_eventosapp_event', function($post_id){
     // Solo para registro público
     update_post_meta($post_id, '_eventosapp_ticket_auto_email_public',  isset($_POST['eventosapp_ticket_auto_email_public']) ? '1' : '0');
 
-    // Solo para registro manual (staff/organizador)
-    update_post_meta($post_id, '_eventosapp_ticket_auto_email_manual',  isset($_POST['eventosapp_ticket_auto_email_manual']) ? '1' : '0');
+    // Solo para registro manual (staff/organizador): habilita el checkbox
+    // de envío por correo dentro del formulario del Dashboard.
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_auto_email_manual',
+        isset($_POST['eventosapp_ticket_auto_email_manual']) ? '1' : '0'
+    );
+
+    // Solo para registro manual (staff/organizador): habilita el checkbox
+    // de envío por WhatsApp dentro del formulario del Dashboard.
+    update_post_meta(
+        $post_id,
+        '_eventosapp_ticket_auto_whatsapp_manual',
+        isset($_POST['eventosapp_ticket_auto_whatsapp_manual']) ? '1' : '0'
+    );
 
     // Usar QR preimpreso (por evento)
     update_post_meta($post_id, '_eventosapp_ticket_use_preprinted_qr', isset($_POST['eventosapp_ticket_use_preprinted_qr']) ? '1' : '0');
@@ -296,6 +335,21 @@ add_action('save_post_eventosapp_event', function($post_id){
 
 }, 25); // prioridad > 20 para correr después del guardado base
 
+/**
+ * Compatibilidad con Preconfiguraciones de Eventos.
+ *
+ * El módulo de presets usa una lista controlada de metadatos copiables. Este
+ * filtro agrega la nueva preferencia sin modificar eventosapp-event-presets.php
+ * ni ampliar la lista de forma indiscriminada.
+ */
+add_filter('eventosapp_event_preset_copy_meta_key', function($decision, $meta_key, $event_id) {
+    if ($meta_key === '_eventosapp_ticket_auto_whatsapp_manual') {
+        return true;
+    }
+
+    return $decision;
+}, 10, 3);
+
 
 // ========================================
 // NUEVO METABOX: Configuración de Doble Autenticación
@@ -317,51 +371,51 @@ add_action('add_meta_boxes', function () {
  */
 function eventosapp_render_metabox_double_auth_config($post) {
     $double_auth_enabled = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_enabled', true);
-    
+
     // Solo mostrar si está activada la doble autenticación
     if ($double_auth_enabled !== '1') {
         echo '<p style="color:#666;">⚠️ Para activar este sistema, marca la casilla <strong>"Activar Doble Autenticación para Check-In"</strong> en el panel lateral "Funciones Extra del Ticket".</p>';
         return;
     }
-    
+
     // Recuperar datos guardados
     $scheduled_datetime = get_post_meta($post->ID, '_eventosapp_double_auth_scheduled_datetime', true);
     $scheduled_timezone = get_post_meta($post->ID, '_eventosapp_double_auth_scheduled_timezone', true);
     $auth_mode = get_post_meta($post->ID, '_eventosapp_ticket_double_auth_mode', true);
     $mass_log = eventosapp_get_event_mass_log($post->ID);
-    
+
     // NUEVO: Configuración para días siguientes (eventos multi-día)
     $followup_amount = get_post_meta($post->ID, '_eventosapp_double_auth_followup_amount', true);
     $followup_unit = get_post_meta($post->ID, '_eventosapp_double_auth_followup_unit', true);
     $followup_time = get_post_meta($post->ID, '_eventosapp_double_auth_followup_time', true);
-    
+
     // Obtener tipo de fecha del evento
     $tipo_fecha = get_post_meta($post->ID, '_eventosapp_tipo_fecha', true) ?: 'unica';
-    
+
     // Valores por defecto
     if (!$auth_mode) {
         $auth_mode = 'first_day';
     }
-    
+
     if (!$followup_amount) {
         $followup_amount = 1;
     }
-    
+
     if (!$followup_unit) {
         $followup_unit = 'days';
     }
-    
+
     if (!$followup_time) {
         $followup_time = '06:00';
     }
-    
+
     // Timezone por defecto
     if (!$scheduled_timezone) {
         $scheduled_timezone = wp_timezone_string();
     }
-    
+
     wp_nonce_field('eventosapp_double_auth_config_save', 'eventosapp_double_auth_config_nonce');
-    
+
     ?>
     <style>
     .evapp-double-auth-section {
@@ -553,11 +607,11 @@ function eventosapp_render_metabox_double_auth_config($post) {
         border: 1px solid #f5c6cb;
     }
     </style>
-    
+
     <div class="evapp-double-auth-section">
         <h4>⏰ Envío Programado Automático</h4>
         <p>Programa la fecha y hora exacta en la que se enviarán los códigos de verificación a todos los tickets emitidos.</p>
-        
+
         <div class="evapp-form-row">
             <label for="evapp-scheduled-datetime">Fecha y Hora de Envío:</label>
             <input 
@@ -580,7 +634,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 ?>"
             />
         </div>
-        
+
         <div class="evapp-form-row">
             <label for="evapp-scheduled-timezone">Zona Horaria:</label>
             <select id="evapp-scheduled-timezone" name="eventosapp_double_auth_scheduled_timezone">
@@ -597,18 +651,18 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 ?>
             </select>
         </div>
-        
+
         <p style="color:#666;font-size:13px;">
             <strong>Nota:</strong> El envío programado se ejecutará automáticamente en la fecha/hora especificada.
             Guarda los cambios del evento para activar la programación.
         </p>
     </div>
-    
+
     <?php if ($tipo_fecha !== 'unica'): ?>
     <div class="evapp-double-auth-section">
         <h4>📅 Configuración Multi-Día</h4>
         <p style="margin-bottom:15px;">Este evento tiene múltiples fechas. Configura cómo funcionará la doble autenticación:</p>
-        
+
         <div class="evapp-radio-option">
             <label>
                 <input type="radio" name="eventosapp_ticket_double_auth_mode" value="first_day" <?php checked($auth_mode, 'first_day'); ?> class="evapp-auth-mode-radio">
@@ -621,7 +675,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 </div>
             </label>
         </div>
-        
+
         <div class="evapp-radio-option">
             <label>
                 <input type="radio" name="eventosapp_ticket_double_auth_mode" value="all_days" <?php checked($auth_mode, 'all_days'); ?> class="evapp-auth-mode-radio">
@@ -635,14 +689,14 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 </div>
             </label>
         </div>
-        
+
         <!-- Configuración para días siguientes -->
         <div class="evapp-followup-config <?php echo ($auth_mode === 'all_days') ? 'active' : ''; ?>" id="evapp-followup-config">
             <h5>⏰ Programación de Códigos para Días Siguientes (desde día 2 en adelante)</h5>
             <p style="font-size:13px;color:#004c73;margin:8px 0;">
                 Configura cuándo se deben enviar los códigos para los días siguientes del evento:
             </p>
-            
+
             <div class="evapp-inline-fields">
                 <div class="evapp-inline-field">
                     <label for="evapp-followup-amount">Enviar</label>
@@ -655,7 +709,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
                         max="999"
                     />
                 </div>
-                
+
                 <div class="evapp-inline-field">
                     <label for="evapp-followup-unit">Unidad</label>
                     <select id="evapp-followup-unit" name="eventosapp_double_auth_followup_unit">
@@ -664,7 +718,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
                         <option value="weeks" <?php selected($followup_unit, 'weeks'); ?>>Semanas antes</option>
                     </select>
                 </div>
-                
+
                 <div class="evapp-inline-field">
                     <label for="evapp-followup-time">A las</label>
                     <input 
@@ -675,25 +729,25 @@ function eventosapp_render_metabox_double_auth_config($post) {
                     />
                 </div>
             </div>
-            
+
             <p style="font-size:12px;color:#666;margin:10px 0 0 0;line-height:1.5;">
                 <strong>Ejemplo:</strong> Si configuras "1 día antes a las 06:00", los asistentes recibirán 
                 el código del día 2 un día antes del día 2 a las 6:00 AM, el código del día 3 un día antes 
                 del día 3 a las 6:00 AM, y así sucesivamente.
             </p>
         </div>
-        
+
         <p style="color:#d9534f;font-size:13px;margin-top:15px;background:#fff3cd;padding:10px;border-radius:4px;border-left:3px solid #d9534f;">
             <strong>⚠️ Importante:</strong> Si cambias esta configuración después de haber enviado códigos, 
             deberás usar "Regenerar y Enviar Códigos" para actualizar todos los tickets.
         </p>
     </div>
     <?php endif; ?>
-    
+
     <div class="evapp-double-auth-section">
         <h4>🧪 Prueba Manual</h4>
         <p>Envía un código de verificación a un ticket específico para probar el sistema.</p>
-        
+
         <div class="evapp-form-row">
             <label for="evapp-test-ticket-id">ID del Ticket (ej: tkA9fL2...):</label>
             <input 
@@ -706,33 +760,33 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 Enviar Código de Prueba
             </button>
         </div>
-        
+
         <div id="evapp-test-message" class="evapp-ajax-message"></div>
     </div>
-    
+
     <div class="evapp-double-auth-section">
         <h4>📤 Envío Masivo</h4>
         <p>Envía códigos de verificación a <strong>todos los tickets emitidos</strong> de este evento.</p>
-        
+
         <button type="button" id="evapp-mass-send-btn" class="evapp-btn-mass">
             Enviar Códigos a Todos los Tickets Ahora
         </button>
-        
+
         <div id="evapp-mass-message" class="evapp-ajax-message"></div>
-        
+
         <hr style="margin: 20px 0;">
-        
+
         <h4 style="color: #d9534f;">🔄 Regenerar y Enviar Nuevos Códigos</h4>
         <p style="color:#d9534f;"><strong>⚠️ ATENCIÓN:</strong> Esta acción <strong>BORRARÁ</strong> todos los códigos actuales y generará nuevos códigos para todos los tickets.</p>
         <p>Usa esta opción cuando necesites invalidar todos los códigos existentes por seguridad.</p>
-        
+
         <button type="button" id="evapp-regenerate-send-btn" class="evapp-btn-regenerate">
             Regenerar y Enviar Códigos a Todos los Tickets
         </button>
-        
+
         <div id="evapp-regenerate-message" class="evapp-ajax-message"></div>
     </div>
-    
+
     <div class="evapp-double-auth-section">
         <h4>📊 Log de Envíos Masivos (Últimos 3)</h4>
         <?php if (empty($mass_log)): ?>
@@ -762,7 +816,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
             </table>
 <?php endif; ?>
     </div>
-    
+
     <!-- NUEVA SECCIÓN: Reprogramar Envío Completo -->
     <div class="evapp-double-auth-section">
         <h4 style="color:#d9534f;">🔄 Reprogramar Envío Completo</h4>
@@ -771,41 +825,41 @@ function eventosapp_render_metabox_double_auth_config($post) {
             puedes limpiar el registro de días enviados. Esto permitirá que se vuelvan a enviar los códigos 
             según la programación configurada.
         </p>
-        
+
         <button type="button" class="button" id="evapp-clear-sent-days" style="background:#dc3545;color:#fff;border-color:#dc3545;">
             🗑️ Limpiar Registro de Días Enviados
         </button>
-        
+
         <div id="evapp-clear-message" class="evapp-ajax-message"></div>
     </div>
-    
+
     <script>
     jQuery(document).ready(function($) {
         // Control de visibilidad de configuración de días siguientes
         $('.evapp-auth-mode-radio').on('change', function() {
             const selectedMode = $('input[name="eventosapp_ticket_double_auth_mode"]:checked').val();
-            
+
             if (selectedMode === 'all_days') {
                 $('#evapp-followup-config').addClass('active');
             } else {
                 $('#evapp-followup-config').removeClass('active');
             }
         });
-        
+
         // Envío de prueba
         $('#evapp-test-send-btn').on('click', function() {
             const ticketId = $('#evapp-test-ticket-id').val().trim();
             const $btn = $(this);
             const $msg = $('#evapp-test-message');
-            
+
             if (!ticketId) {
                 $msg.removeClass('success').addClass('error').text('Por favor ingresa un ID de ticket').show();
                 return;
             }
-            
+
             $btn.prop('disabled', true).text('Enviando...');
             $msg.hide();
-            
+
             $.ajax({
                 url: ajaxurl,
                 method: 'POST',
@@ -816,7 +870,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 },
                 success: function(response) {
                     $btn.prop('disabled', false).text('Enviar Código de Prueba');
-                    
+
                     if (response.success) {
                         $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
                         $('#evapp-test-ticket-id').val('');
@@ -830,19 +884,19 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 }
             });
         });
-        
+
         // Envío masivo
         $('#evapp-mass-send-btn').on('click', function() {
             if (!confirm('¿Estás seguro de que deseas enviar códigos a TODOS los tickets de este evento?')) {
                 return;
             }
-            
+
             const $btn = $(this);
             const $msg = $('#evapp-mass-message');
-            
+
             $btn.prop('disabled', true).text('Enviando...');
             $msg.hide();
-            
+
             $.ajax({
                 url: ajaxurl,
                 method: 'POST',
@@ -853,7 +907,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 },
                 success: function(response) {
                     $btn.prop('disabled', false).text('Enviar Códigos a Todos los Tickets Ahora');
-                    
+
                     if (response.success) {
                         $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
                         // Recargar página después de 2 segundos para actualizar el log
@@ -866,28 +920,32 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 },
                 error: function() {
                     $btn.prop('disabled', false).text('Enviar Códigos a Todos los Tickets Ahora');
-                    $msg.removeClass('success').addClass('error').text('❌ Error de conexión').show();
+                    $msg.removeClass('error').addClass('success').text('❌ Error de conexión').show();
                 }
             });
         });
-        
+
         // Regenerar y enviar códigos
         $('#evapp-regenerate-send-btn').on('click', function() {
-            if (!confirm('⚠️ ADVERTENCIA: Esta acción BORRARÁ todos los códigos actuales y generará nuevos códigos para TODOS los tickets.\n\n¿Estás completamente seguro de que deseas continuar?')) {
+            if (!confirm('⚠️ ADVERTENCIA: Esta acción BORRARÁ todos los códigos actuales y generará nuevos códigos para TODOS los tickets.\
+\
+¿Estás completamente seguro de que deseas continuar?')) {
                 return;
             }
-            
+
             // Confirmación doble
-            if (!confirm('Esta es una acción irreversible. Los códigos antiguos dejarán de funcionar.\n\n¿Confirmas que deseas regenerar TODOS los códigos?')) {
+            if (!confirm('Esta es una acción irreversible. Los códigos antiguos dejarán de funcionar.\
+\
+¿Confirmas que deseas regenerar TODOS los códigos?')) {
                 return;
             }
-            
+
             const $btn = $(this);
             const $msg = $('#evapp-regenerate-message');
-            
+
             $btn.prop('disabled', true).text('Regenerando y enviando...');
             $msg.hide();
-            
+
             $.ajax({
                 url: ajaxurl,
                 method: 'POST',
@@ -898,7 +956,7 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 },
                 success: function(response) {
                     $btn.prop('disabled', false).text('Regenerar y Enviar Códigos a Todos los Tickets');
-                    
+
                     if (response.success) {
                         $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
                         // Recargar página después de 2 segundos para actualizar el log
@@ -911,23 +969,27 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 },
                 error: function() {
                     $btn.prop('disabled', false).text('Regenerar y Enviar Códigos a Todos los Tickets');
-                    $msg.removeClass('success').addClass('error').text('❌ Error de conexión').show();
+                    $msg.removeClass('error').addClass('success').text('❌ Error de conexión').show();
                 }
             });
         });
-        
+
         // NUEVO: Limpiar registro de días enviados
         $('#evapp-clear-sent-days').on('click', function() {
-            if (!confirm('⚠️ ADVERTENCIA: Esta acción limpiará el registro de días enviados.\n\nEsto significa que el sistema volverá a enviar los códigos según la programación configurada, incluso para días que ya se enviaron anteriormente.\n\n¿Estás completamente seguro?')) {
+            if (!confirm('⚠️ ADVERTENCIA: Esta acción limpiará el registro de días enviados.\
+\
+Esto significa que el sistema volverá a enviar los códigos según la programación configurada, incluso para días que ya se enviaron anteriormente.\
+\
+¿Estás completamente seguro?')) {
                 return;
             }
-            
+
             const $btn = $(this);
             const $msg = $('#evapp-clear-message');
-            
+
             $btn.prop('disabled', true).text('Limpiando...');
             $msg.hide();
-            
+
             $.ajax({
                 url: ajaxurl,
                 method: 'POST',
@@ -938,10 +1000,10 @@ function eventosapp_render_metabox_double_auth_config($post) {
                 },
                 success: function(response) {
                     $btn.prop('disabled', false).text('🗑️ Limpiar Registro de Días Enviados');
-                    
+
                     if (response.success) {
                         $msg.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
-                        
+
                         setTimeout(function() {
                             location.reload();
                         }, 2000);
@@ -967,42 +1029,42 @@ add_action('save_post_eventosapp_event', function($post_id){
     // Evitar autosaves y revisiones
     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
     if (wp_is_post_revision($post_id)) return;
-    
+
     // Verifica capacidades mínimas
     if (!current_user_can('edit_post', $post_id)) return;
-    
+
     // Nonce del metabox de doble auth
     if (!isset($_POST['eventosapp_double_auth_config_nonce']) || !wp_verify_nonce($_POST['eventosapp_double_auth_config_nonce'], 'eventosapp_double_auth_config_save')) {
         return;
     }
-    
+
     // Guardar modo de autenticación (first_day o all_days)
     $auth_mode = isset($_POST['eventosapp_ticket_double_auth_mode']) ? sanitize_text_field($_POST['eventosapp_ticket_double_auth_mode']) : 'first_day';
     if (in_array($auth_mode, ['first_day', 'all_days'])) {
         update_post_meta($post_id, '_eventosapp_ticket_double_auth_mode', $auth_mode);
     }
-    
+
     // NUEVO: Guardar configuración de días siguientes (solo para modo all_days)
     if ($auth_mode === 'all_days') {
         $followup_amount = isset($_POST['eventosapp_double_auth_followup_amount']) ? absint($_POST['eventosapp_double_auth_followup_amount']) : 1;
         $followup_unit = isset($_POST['eventosapp_double_auth_followup_unit']) ? sanitize_text_field($_POST['eventosapp_double_auth_followup_unit']) : 'days';
         $followup_time = isset($_POST['eventosapp_double_auth_followup_time']) ? sanitize_text_field($_POST['eventosapp_double_auth_followup_time']) : '06:00';
-        
+
         // Validar unidad
         if (!in_array($followup_unit, ['hours', 'days', 'weeks'])) {
             $followup_unit = 'days';
         }
-        
+
         // Validar cantidad
         if ($followup_amount < 1) {
             $followup_amount = 1;
         }
-        
+
         // Validar formato de hora (HH:MM)
         if (!preg_match('/^\d{2}:\d{2}$/', $followup_time)) {
             $followup_time = '06:00';
         }
-        
+
         update_post_meta($post_id, '_eventosapp_double_auth_followup_amount', $followup_amount);
         update_post_meta($post_id, '_eventosapp_double_auth_followup_unit', $followup_unit);
         update_post_meta($post_id, '_eventosapp_double_auth_followup_time', $followup_time);
@@ -1012,20 +1074,20 @@ add_action('save_post_eventosapp_event', function($post_id){
         delete_post_meta($post_id, '_eventosapp_double_auth_followup_unit');
         delete_post_meta($post_id, '_eventosapp_double_auth_followup_time');
     }
-    
+
     // Guardar fecha/hora programada
     if (isset($_POST['eventosapp_double_auth_scheduled_datetime']) && $_POST['eventosapp_double_auth_scheduled_datetime']) {
         $datetime_local = sanitize_text_field($_POST['eventosapp_double_auth_scheduled_datetime']);
         $timezone = isset($_POST['eventosapp_double_auth_scheduled_timezone']) ? sanitize_text_field($_POST['eventosapp_double_auth_scheduled_timezone']) : wp_timezone_string();
-        
+
         // Convertir a timestamp
         try {
             $dt = new DateTime($datetime_local, new DateTimeZone($timezone));
             $timestamp = $dt->getTimestamp();
-            
+
             update_post_meta($post_id, '_eventosapp_double_auth_scheduled_datetime', $timestamp);
             update_post_meta($post_id, '_eventosapp_double_auth_scheduled_timezone', $timezone);
-            
+
             // Programar el envío
             if (function_exists('eventosapp_schedule_auth_codes_send')) {
                 eventosapp_schedule_auth_codes_send($post_id);
@@ -1039,7 +1101,7 @@ add_action('save_post_eventosapp_event', function($post_id){
         delete_post_meta($post_id, '_eventosapp_double_auth_scheduled_timezone');
         wp_clear_scheduled_hook('eventosapp_auto_send_auth_codes', [$post_id]);
     }
-    
+
 }, 30); // prioridad > 25 para correr después del guardado de extras
 
 /**
@@ -1047,24 +1109,24 @@ add_action('save_post_eventosapp_event', function($post_id){
  */
 add_action('wp_ajax_eventosapp_clear_sent_days', function() {
     check_ajax_referer('eventosapp_clear_sent_days', 'nonce');
-    
+
     if (!current_user_can('edit_posts')) {
         wp_send_json_error('Permisos insuficientes');
     }
-    
+
     $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
-    
+
     if (!$event_id) {
         wp_send_json_error('ID de evento no proporcionado');
     }
-    
+
     // Limpiar el registro
     if (function_exists('eventosapp_clear_sent_days')) {
         eventosapp_clear_sent_days($event_id);
-        
+
         // También cancelar todos los crons programados para reprogramar desde cero
         wp_clear_scheduled_hook('eventosapp_send_auth_codes_scheduled', [$event_id]);
-        
+
         // Cancelar crons de días específicos
         if (function_exists('eventosapp_get_event_days')) {
             $days = eventosapp_get_event_days($event_id);
@@ -1075,12 +1137,12 @@ add_action('wp_ajax_eventosapp_clear_sent_days', function() {
                 }
             }
         }
-        
+
         // Reprogramar desde cero
         if (function_exists('eventosapp_schedule_auth_codes_send')) {
             eventosapp_schedule_auth_codes_send($event_id);
         }
-        
+
         wp_send_json_success([
             'message' => 'Registro limpiado exitosamente. Los envíos se han reprogramado desde cero.'
         ]);
