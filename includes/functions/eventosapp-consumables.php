@@ -160,3 +160,9 @@ if ( ! is_file($core_file) ) {
 }
 
 require_once $core_file;
+
+// Mejoras de auditoría, consulta, reversos y movimientos del asistente.
+$transactions_file = __DIR__ . '/eventosapp-consumables-transactions.php';
+if ( is_file($transactions_file) ) {
+    require_once $transactions_file;
+}
