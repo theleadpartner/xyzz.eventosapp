@@ -12,7 +12,9 @@
  * - campos adicionales
  * - deduplicación por cédula + evento
  * - Variantes de Tickets
+ * - Envío manual por correo con segundo control por ticket
  * - WhatsApp y anexos mediante eventosapp_frontend_ticket_created
+ * - Segundo control frontend de entrega por WhatsApp
  * - Elementor
  */
 
@@ -52,6 +54,89 @@ if ( ! function_exists('eventosapp_user_can_manage_event') ) {
         if ( ! $evento || $evento->post_type !== 'eventosapp_event' ) return false;
 
         return (int) $evento->post_author === (int) $u->ID;
+    }
+}
+
+/**
+ * Disponibilidad de canales para el Registro Manual.
+ *
+ * El backend actúa como control maestro:
+ * - Correo: _eventosapp_ticket_auto_email_manual
+ * - WhatsApp: _eventosapp_ticket_auto_whatsapp_manual
+ *   + _eventosapp_ticket_whatsapp_enabled
+ *   + integración global de WhatsApp activa.
+ *
+ * El formulario frontend agrega un segundo control por cada registro.
+ */
+if ( ! function_exists('eventosapp_front_register_get_delivery_availability') ) {
+    function eventosapp_front_register_get_delivery_availability( $event_id ) {
+        $event_id = absint($event_id);
+
+        $availability = [
+            'email'            => false,
+            'whatsapp'         => false,
+            'whatsapp_manual'  => false,
+            'whatsapp_event'   => false,
+            'whatsapp_global'  => false,
+            'whatsapp_runtime' => false,
+        ];
+
+        if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+            return $availability;
+        }
+
+        $availability['email'] = (
+            get_post_meta(
+                $event_id,
+                '_eventosapp_ticket_auto_email_manual',
+                true
+            ) === '1'
+        );
+
+        $availability['whatsapp_manual'] = (
+            get_post_meta(
+                $event_id,
+                '_eventosapp_ticket_auto_whatsapp_manual',
+                true
+            ) === '1'
+        );
+
+        $availability['whatsapp_event'] = (
+            get_post_meta(
+                $event_id,
+                '_eventosapp_ticket_whatsapp_enabled',
+                true
+            ) === '1'
+        );
+
+        $availability['whatsapp_runtime'] = (
+            function_exists('eventosapp_whatsapp_send_ticket')
+            || function_exists('eventosapp_whatsapp_maybe_send_after_ticket_creation')
+            || has_action('eventosapp_frontend_ticket_created')
+        );
+
+        if ( function_exists('eventosapp_whatsapp_get_settings') ) {
+            $whatsapp_settings = eventosapp_whatsapp_get_settings();
+
+            $availability['whatsapp_global'] = (
+                is_array($whatsapp_settings)
+                && ! empty($whatsapp_settings['enabled'])
+                && (string) $whatsapp_settings['enabled'] === '1'
+            );
+        } else {
+            // Compatibilidad: si el módulo está cargado pero no expone settings,
+            // dejamos que su propia validación de runtime sea la autoridad final.
+            $availability['whatsapp_global'] = $availability['whatsapp_runtime'];
+        }
+
+        $availability['whatsapp'] = (
+            $availability['whatsapp_manual']
+            && $availability['whatsapp_event']
+            && $availability['whatsapp_global']
+            && $availability['whatsapp_runtime']
+        );
+
+        return $availability;
     }
 }
 
@@ -124,6 +209,22 @@ function eventosapp_evreg_submit() {
             403
         );
     }
+
+    // Segundo control de entrega por registro.
+    // El POST nunca puede habilitar un canal que esté desactivado en backend.
+    $delivery_availability = eventosapp_front_register_get_delivery_availability($eid);
+
+    $send_email = (
+        ! empty($delivery_availability['email'])
+        && isset($_POST['evreg_send_email'])
+        && (string) wp_unslash($_POST['evreg_send_email']) === '1'
+    );
+
+    $send_whatsapp = (
+        ! empty($delivery_availability['whatsapp'])
+        && isset($_POST['evreg_send_whatsapp'])
+        && (string) wp_unslash($_POST['evreg_send_whatsapp']) === '1'
+    );
 
     // Detectar si el evento usa QR preimpreso.
     $use_preprinted_qr = false;
@@ -231,6 +332,37 @@ function eventosapp_evreg_submit() {
         ]);
     }
 
+    // Si el staff decidió enviar por WhatsApp, el teléfono pasa a ser
+    // obligatorio para esta operación concreta.
+    if ( $send_whatsapp ) {
+        if ( trim((string) $tel) === '' ) {
+            wp_send_json_error([
+                'message' => 'Para enviar el ticket por WhatsApp, ingresa el número de teléfono del asistente o desactiva ese envío.',
+            ]);
+        }
+
+        if (
+            function_exists('eventosapp_whatsapp_normalize_phone')
+            && function_exists('eventosapp_whatsapp_get_settings')
+        ) {
+            $wa_settings = eventosapp_whatsapp_get_settings();
+            $default_country_code = is_array($wa_settings)
+                ? (string) ($wa_settings['default_country_code'] ?? '57')
+                : '57';
+
+            $normalized_whatsapp_phone = eventosapp_whatsapp_normalize_phone(
+                $tel,
+                $default_country_code
+            );
+
+            if ( ! $normalized_whatsapp_phone ) {
+                wp_send_json_error([
+                    'message' => 'El teléfono no tiene un formato válido para WhatsApp. Corrígelo o desactiva el envío por WhatsApp.',
+                ]);
+            }
+        }
+    }
+
     if ( $localidad !== '' && empty($localidades_allowed[$localidad]) ) {
         wp_send_json_error([
             'message' => 'La localidad seleccionada no existe en este evento.',
@@ -311,6 +443,22 @@ function eventosapp_evreg_submit() {
     if ( $existing_ticket_id ) {
         // Actualizar ticket existente. save_post_eventosapp_ticket ya está configurado
         // para leer $_POST, así que dispararlo con wp_update_post es suficiente.
+        //
+        // IMPORTANTE: se marca el canal como frontend ANTES de wp_update_post.
+        // Así evitamos que el hook histórico de auto-correo para channel=manual
+        // envíe el ticket antes de respetar el checkbox de este formulario.
+        $previous_creation_channel = get_post_meta(
+            $existing_ticket_id,
+            '_eventosapp_creation_channel',
+            true
+        );
+
+        update_post_meta(
+            $existing_ticket_id,
+            '_eventosapp_creation_channel',
+            'frontend'
+        );
+
         remove_action(
             'save_post_eventosapp_ticket',
             'evapp_vincular_ticket_a_asistente',
@@ -330,6 +478,20 @@ function eventosapp_evreg_submit() {
         );
 
         if ( is_wp_error($updated) ) {
+            // Restaurar el canal anterior si la actualización no llegó a completarse.
+            if ( $previous_creation_channel === '' ) {
+                delete_post_meta(
+                    $existing_ticket_id,
+                    '_eventosapp_creation_channel'
+                );
+            } else {
+                update_post_meta(
+                    $existing_ticket_id,
+                    '_eventosapp_creation_channel',
+                    $previous_creation_channel
+                );
+            }
+
             wp_send_json_error([
                 'message' => 'No fue posible actualizar el ticket existente. Recarga la página e inténtalo de nuevo.',
             ]);
@@ -385,22 +547,162 @@ function eventosapp_evreg_submit() {
         eventosapp_ticket_variants_apply_to_ticket($post_id, $eid, true);
     }
 
-    // WhatsApp: prepara landing/QR/anexos y envía si el canal está activo para el evento.
-    // Se usa un hook para mantener este módulo desacoplado del archivo de WhatsApp.
-    do_action(
-        'eventosapp_frontend_ticket_created',
-        $post_id,
-        $eid,
-        $variant_context
-    );
+    /**
+     * Entrega seleccionada por el staff.
+     *
+     * Importante:
+     * - La disponibilidad del backend ya fue validada antes de crear/actualizar.
+     * - El correo usa source=manual para conservar la independencia de canales:
+     *   el puente automático Correo -> WhatsApp del módulo WhatsApp ignora
+     *   expresamente los correos manuales.
+     * - WhatsApp solo recibe el hook cuando el checkbox frontend fue marcado.
+     */
+    $delivery_result = [
+        'email' => [
+            'requested' => (bool) $send_email,
+            'status'    => $send_email ? 'pending' : 'not_requested',
+            'message'   => '',
+        ],
+        'whatsapp' => [
+            'requested' => (bool) $send_whatsapp,
+            'status'    => $send_whatsapp ? 'pending' : 'not_requested',
+            'message'   => '',
+        ],
+    ];
+
+    if ( $send_email ) {
+        if ( function_exists('eventosapp_send_ticket_email_now') ) {
+            try {
+                $email_send_result = eventosapp_send_ticket_email_now(
+                    $post_id,
+                    [
+                        'recipient' => $email,
+                        'source'    => 'manual',
+                        'force'     => true,
+                    ]
+                );
+
+                $email_ok = false;
+                $email_message = '';
+
+                if ( is_array($email_send_result) ) {
+                    $email_ok = ! empty($email_send_result[0]);
+                    $email_message = isset($email_send_result[1])
+                        ? sanitize_text_field((string) $email_send_result[1])
+                        : '';
+                } else {
+                    $email_ok = (bool) $email_send_result;
+                }
+
+                if ( $email_ok ) {
+                    update_post_meta(
+                        $post_id,
+                        '_eventosapp_ticket_email_sent',
+                        '1'
+                    );
+
+                    $delivery_result['email']['status'] = 'sent';
+                    $delivery_result['email']['message'] = (
+                        $email_message !== ''
+                            ? $email_message
+                            : 'Ticket enviado por correo.'
+                    );
+                } else {
+                    $delivery_result['email']['status'] = 'error';
+                    $delivery_result['email']['message'] = (
+                        $email_message !== ''
+                            ? $email_message
+                            : 'El ticket se guardó, pero no fue posible enviarlo por correo.'
+                    );
+                }
+            } catch (\Throwable $e) {
+                $delivery_result['email']['status'] = 'error';
+                $delivery_result['email']['message'] = 'El ticket se guardó, pero el envío por correo produjo un error.';
+            }
+        } else {
+            $delivery_result['email']['status'] = 'error';
+            $delivery_result['email']['message'] = 'El módulo de envío por correo no está disponible.';
+        }
+    }
+
+    if ( $send_whatsapp ) {
+        if ( has_action('eventosapp_frontend_ticket_created') ) {
+            do_action(
+                'eventosapp_frontend_ticket_created',
+                $post_id,
+                $eid,
+                $variant_context
+            );
+
+            // El módulo WhatsApp registra el resultado del hook en el ticket.
+            $whatsapp_hook_result = get_post_meta(
+                $post_id,
+                '_eventosapp_whatsapp_last_creation_hook_result',
+                true
+            );
+
+            $whatsapp_send_result = (
+                is_array($whatsapp_hook_result)
+                && isset($whatsapp_hook_result['send'])
+                && is_array($whatsapp_hook_result['send'])
+            )
+                ? $whatsapp_hook_result['send']
+                : [];
+
+            if ( ! empty($whatsapp_send_result['skipped_rules']) ) {
+                $delivery_result['whatsapp']['status'] = 'skipped';
+                $delivery_result['whatsapp']['message'] = (
+                    ! empty($whatsapp_send_result['message'])
+                        ? sanitize_text_field((string) $whatsapp_send_result['message'])
+                        : 'El envío por WhatsApp fue omitido por las reglas del evento.'
+                );
+            } elseif ( ! empty($whatsapp_send_result['skipped_duplicate']) ) {
+                $delivery_result['whatsapp']['status'] = 'skipped';
+                $delivery_result['whatsapp']['message'] = (
+                    ! empty($whatsapp_send_result['message'])
+                        ? sanitize_text_field((string) $whatsapp_send_result['message'])
+                        : 'WhatsApp omitió un envío duplicado.'
+                );
+            } elseif (
+                array_key_exists('ok', $whatsapp_send_result)
+                && ! empty($whatsapp_send_result['ok'])
+            ) {
+                $delivery_result['whatsapp']['status'] = 'sent';
+                $delivery_result['whatsapp']['message'] = (
+                    ! empty($whatsapp_send_result['message'])
+                        ? sanitize_text_field((string) $whatsapp_send_result['message'])
+                        : 'Solicitud de WhatsApp aceptada para envío.'
+                );
+            } elseif (
+                array_key_exists('ok', $whatsapp_send_result)
+                && empty($whatsapp_send_result['ok'])
+            ) {
+                $delivery_result['whatsapp']['status'] = 'error';
+                $delivery_result['whatsapp']['message'] = (
+                    ! empty($whatsapp_send_result['message'])
+                        ? sanitize_text_field((string) $whatsapp_send_result['message'])
+                        : 'El ticket se guardó, pero no fue posible enviarlo por WhatsApp.'
+                );
+            } else {
+                // El hook pudo tener otros listeners o una versión antigua
+                // del módulo WhatsApp que no persiste un resultado estructurado.
+                $delivery_result['whatsapp']['status'] = 'processed';
+                $delivery_result['whatsapp']['message'] = 'La solicitud de WhatsApp fue procesada por el módulo de mensajería.';
+            }
+        } else {
+            $delivery_result['whatsapp']['status'] = 'error';
+            $delivery_result['whatsapp']['message'] = 'El módulo de envío por WhatsApp no está disponible.';
+        }
+    }
 
     // ID público.
     $ticket_pub = get_post_meta($post_id, 'eventosapp_ticketID', true);
     $tid        = $ticket_pub ?: '#' . $post_id;
 
     wp_send_json_success([
-        'tid'     => (string) $tid,
-        'updated' => (bool) $existing_ticket_id,
+        'tid'      => (string) $tid,
+        'updated'  => (bool) $existing_ticket_id,
+        'delivery' => $delivery_result,
     ]);
 }
 
@@ -566,6 +868,15 @@ add_shortcode('eventosapp_front_register', function($atts) {
     $extras_schema = function_exists('eventosapp_get_event_extra_fields')
         ? (eventosapp_get_event_extra_fields($eid) ?: [])
         : [];
+
+    // Canales habilitados por el backend para el segundo control frontend.
+    $delivery_availability = eventosapp_front_register_get_delivery_availability($eid);
+    $manual_email_available = ! empty($delivery_availability['email']);
+    $manual_whatsapp_available = ! empty($delivery_availability['whatsapp']);
+    $show_delivery_controls = (
+        $manual_email_available
+        || $manual_whatsapp_available
+    );
 
     // URLs.
     $url_search = function_exists('eventosapp_get_search_url')
@@ -1244,6 +1555,90 @@ add_shortcode('eventosapp_front_register', function($atts) {
                     </section>
                 <?php endif; ?>
 
+                <?php if ( $show_delivery_controls ): ?>
+                    <section class="evreg-form-section evreg-delivery-section">
+                        <div class="evreg-section-heading">
+                            <div class="evreg-section-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24">
+                                    <path d="M4 6h16v12H4z"></path>
+                                    <path d="m4 7 8 6 8-6"></path>
+                                </svg>
+                            </div>
+
+                            <div>
+                                <h2 class="evreg-title">Entrega del ticket</h2>
+                                <p class="evreg-sub">
+                                    Elige los canales que se usarán para este registro.
+                                    Puedes activar o desactivar cada envío antes de crear el ticket.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="evreg-delivery-grid">
+                            <?php if ( $manual_email_available ): ?>
+                                <label class="evreg-delivery-option">
+                                    <input
+                                        class="evreg-delivery-checkbox"
+                                        type="checkbox"
+                                        name="evreg_send_email"
+                                        value="1"
+                                        checked
+                                    >
+
+                                    <span
+                                        class="evreg-delivery-check"
+                                        aria-hidden="true"
+                                    >
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="m5 12 4 4L19 6"></path>
+                                        </svg>
+                                    </span>
+
+                                    <span class="evreg-delivery-option-copy">
+                                        <strong>Enviar por correo</strong>
+                                        <small>
+                                            Usa el email del asistente y las configuraciones actuales del ticket.
+                                        </small>
+                                    </span>
+                                </label>
+                            <?php endif; ?>
+
+                            <?php if ( $manual_whatsapp_available ): ?>
+                                <label class="evreg-delivery-option">
+                                    <input
+                                        class="evreg-delivery-checkbox"
+                                        type="checkbox"
+                                        name="evreg_send_whatsapp"
+                                        value="1"
+                                        checked
+                                    >
+
+                                    <span
+                                        class="evreg-delivery-check"
+                                        aria-hidden="true"
+                                    >
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="m5 12 4 4L19 6"></path>
+                                        </svg>
+                                    </span>
+
+                                    <span class="evreg-delivery-option-copy">
+                                        <strong>Enviar por WhatsApp</strong>
+                                        <small>
+                                            Requiere un teléfono válido y respeta las reglas de WhatsApp del evento.
+                                        </small>
+                                    </span>
+                                </label>
+                            <?php endif; ?>
+                        </div>
+
+                        <p class="evreg-delivery-note">
+                            Estos controles aparecen porque los canales están habilitados en la configuración del evento.
+                            Desmarcarlos afecta únicamente este ticket.
+                        </p>
+                    </section>
+                <?php endif; ?>
+
                 <div
                     id="<?php echo esc_attr($processing_id); ?>"
                     class="evreg-processing"
@@ -1601,6 +1996,154 @@ add_shortcode('eventosapp_front_register', function($atts) {
             font-weight: 750;
         }
 
+        .evreg-delivery-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .evreg-delivery-option {
+            position: relative;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: flex-start;
+            gap: 12px;
+            min-height: 92px;
+            margin: 0;
+            padding: 16px;
+            background: #fbfdff;
+            border: 1px solid var(--evapp-border);
+            border-radius: 15px;
+            cursor: pointer;
+            transition:
+                border-color .18s ease,
+                box-shadow .18s ease,
+                background-color .18s ease,
+                transform .18s ease;
+        }
+
+        .evreg-delivery-option:hover {
+            border-color: #bfd3e7;
+            background: #ffffff;
+            box-shadow: 0 8px 20px rgba(31, 52, 73, .055);
+            transform: translateY(-1px);
+        }
+
+        .evreg-delivery-checkbox {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            margin: -1px;
+            padding: 0;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        .evreg-delivery-check {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-top: 1px;
+            color: transparent;
+            background: #ffffff;
+            border: 1.5px solid #b9c8d9;
+            border-radius: 7px;
+            transition:
+                color .18s ease,
+                background-color .18s ease,
+                border-color .18s ease,
+                box-shadow .18s ease;
+        }
+
+        .evreg-delivery-check svg {
+            width: 15px;
+            height: 15px;
+            stroke-width: 2.7;
+        }
+
+        .evreg-delivery-checkbox:checked + .evreg-delivery-check {
+            color: #ffffff;
+            background: var(--evapp-primary);
+            border-color: var(--evapp-primary);
+            box-shadow: 0 0 0 4px rgba(50, 121, 189, .10);
+        }
+
+        .evreg-delivery-checkbox:focus-visible + .evreg-delivery-check {
+            outline: 3px solid rgba(50, 121, 189, .22);
+            outline-offset: 3px;
+        }
+
+        .evreg-delivery-option:has(.evreg-delivery-checkbox:checked) {
+            border-color: #bcd7ef;
+            background: #f8fbff;
+        }
+
+        .evreg-delivery-option-copy {
+            display: grid;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .evreg-delivery-option-copy strong {
+            color: var(--evapp-text);
+            font-size: 14px;
+            font-weight: 800;
+            line-height: 1.3;
+        }
+
+        .evreg-delivery-option-copy small {
+            color: var(--evapp-muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .evreg-delivery-note {
+            margin: 12px 0 0;
+            color: var(--evapp-muted);
+            font-size: 11px;
+            line-height: 1.45;
+        }
+
+        .evreg-delivery-result-list {
+            display: grid;
+            gap: 7px;
+            margin-top: 12px;
+        }
+
+        .evreg-delivery-result {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .evreg-delivery-result strong {
+            flex: 0 0 auto;
+        }
+
+        .evreg-delivery-result--sent {
+            color: #166534;
+            background: rgba(21, 128, 61, .08);
+        }
+
+        .evreg-delivery-result--skipped,
+        .evreg-delivery-result--processed {
+            color: #8a4b08;
+            background: var(--evapp-warning-soft);
+        }
+
+        .evreg-delivery-result--error {
+            color: #8b1e17;
+            background: var(--evapp-danger-soft);
+        }
+
         .evreg-btn {
             display: inline-flex;
             align-items: center;
@@ -1863,6 +2406,10 @@ add_shortcode('eventosapp_front_register', function($atts) {
         }
 
         @media (max-width: 680px) {
+            .evreg-delivery-grid {
+                grid-template-columns: 1fr;
+            }
+
             .evreg-shell {
                 padding: 16px;
                 border-radius: 20px;
@@ -1941,6 +2488,8 @@ add_shortcode('eventosapp_front_register', function($atts) {
         var btnLabel = btn ? btn.querySelector('.evreg-submit-label') : null;
         var processing = root.querySelector('.evreg-processing');
         var liveRegion = root.querySelector('.evreg-live-region');
+        var whatsappToggle = form.querySelector('[name="evreg_send_whatsapp"]');
+        var phoneInput = form.querySelector('[name="as_tel"]');
 
         var ajax = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
         var nonce = <?php echo wp_json_encode(wp_create_nonce('eventosapp_evreg_ajax')); ?>;
@@ -1980,6 +2529,23 @@ add_shortcode('eventosapp_front_register', function($atts) {
                 if (hide) {
                     input.value = '';
                 }
+            }
+        }
+
+        function syncDeliveryUI() {
+            if (!phoneInput || !whatsappToggle) {
+                return;
+            }
+
+            var whatsappRequested = !!whatsappToggle.checked;
+
+            if (whatsappRequested) {
+                phoneInput.setAttribute('required', 'required');
+                phoneInput.setAttribute('aria-required', 'true');
+            } else {
+                phoneInput.removeAttribute('required');
+                phoneInput.removeAttribute('aria-required');
+                phoneInput.setCustomValidity('');
             }
         }
 
@@ -2063,7 +2629,7 @@ add_shortcode('eventosapp_front_register', function($atts) {
             return a;
         }
 
-        function showSuccess(tid, updated) {
+        function showSuccess(tid, updated, delivery) {
             removeError();
 
             var current = root.querySelector('.evreg-card-success');
@@ -2105,6 +2671,57 @@ add_shortcode('eventosapp_front_register', function($atts) {
 
                 id.appendChild(strong);
                 copy.appendChild(id);
+            }
+
+            if (delivery && typeof delivery === 'object') {
+                var deliveryList = document.createElement('div');
+                deliveryList.className = 'evreg-delivery-result-list';
+
+                [
+                    ['email', 'Correo'],
+                    ['whatsapp', 'WhatsApp']
+                ].forEach(function(config) {
+                    var key = config[0];
+                    var label = config[1];
+                    var item = delivery[key];
+
+                    if (!item || !item.requested) {
+                        return;
+                    }
+
+                    var status = item.status || 'processed';
+                    var statusLabel = '';
+
+                    if (status === 'sent') {
+                        statusLabel = 'enviado';
+                    } else if (status === 'error') {
+                        statusLabel = 'no enviado';
+                    } else if (status === 'skipped') {
+                        statusLabel = 'omitido';
+                    } else {
+                        statusLabel = 'procesado';
+                    }
+
+                    var row = document.createElement('div');
+                    row.className = 'evreg-delivery-result evreg-delivery-result--' + status;
+
+                    var rowStrong = document.createElement('strong');
+                    rowStrong.textContent = label + ': ' + statusLabel + '.';
+
+                    row.appendChild(rowStrong);
+
+                    if (item.message) {
+                        row.appendChild(
+                            document.createTextNode(' ' + String(item.message))
+                        );
+                    }
+
+                    deliveryList.appendChild(row);
+                });
+
+                if (deliveryList.children.length) {
+                    copy.appendChild(deliveryList);
+                }
             }
 
             var actions = document.createElement('div');
@@ -2186,6 +2803,13 @@ add_shortcode('eventosapp_front_register', function($atts) {
 
             if (
                 ev.target
+                && ev.target.name === 'evreg_send_whatsapp'
+            ) {
+                syncDeliveryUI();
+            }
+
+            if (
+                ev.target
                 && ev.target.classList
                 && ev.target.classList.contains('evreg-invalid')
             ) {
@@ -2206,6 +2830,7 @@ add_shortcode('eventosapp_front_register', function($atts) {
         });
 
         syncModalidadUI();
+        syncDeliveryUI();
 
         // Marca contenedores Elementor como "seguros".
         try {
@@ -2295,7 +2920,15 @@ add_shortcode('eventosapp_front_register', function($atts) {
                         && resp.data.updated
                     );
 
-                    showSuccess(tid, updated);
+                    var delivery = (
+                        resp.data
+                        && resp.data.delivery
+                        && typeof resp.data.delivery === 'object'
+                    )
+                        ? resp.data.delivery
+                        : null;
+
+                    showSuccess(tid, updated, delivery);
                     return;
                 }
 
