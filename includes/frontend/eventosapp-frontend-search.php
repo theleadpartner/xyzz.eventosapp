@@ -2,10 +2,10 @@
 /**
  * Frontend: buscador y gestión rápida de tickets
  * - Shortcode [eventosapp_front_search event_id="123"]
- * - Se integra con el "evento activo" elegido en el dashboard:
- *     - Usa eventosapp_get_active_event() si no se pasa event_id en el shortcode
- *     - Muestra barra superior eventosapp_active_event_bar() si existe
- * - AJAX search + toggle checkin + render de escarapela (basada en metas del eventosapp_event)
+ * - Se integra con el evento activo elegido en el dashboard.
+ * - UI alineada con el Dashboard / Registro Manual / Check-In QR de EventosApp.
+ * - AJAX search + toggle check-in + acompañantes + impresión de escarapela.
+ * - Conserva compatibilidad con EventosApp Android Printer Bridge.
  */
 
 if ( ! defined('ABSPATH') ) exit;
@@ -15,7 +15,6 @@ if ( ! defined('ABSPATH') ) exit;
  */
 if ( ! function_exists('eventosapp_get_today_in_event_tz') ) {
     function eventosapp_get_today_in_event_tz( $event_id ) {
-        // 1) TZ del evento o del sitio
         $event_tz = get_post_meta($event_id, '_eventosapp_zona_horaria', true);
         if ( ! $event_tz ) {
             $event_tz = wp_timezone_string();
@@ -24,15 +23,17 @@ if ( ! function_exists('eventosapp_get_today_in_event_tz') ) {
                 $event_tz = $offset ? timezone_name_from_abbr('', $offset * 3600, 0) ?: 'UTC' : 'UTC';
             }
         }
-        // 2) "Hoy" en esa TZ
+
         try {
             $dt = new DateTime('now', new DateTimeZone($event_tz));
         } catch (Exception $e) {
             $dt = new DateTime('now', wp_timezone());
         }
+
         return $dt->format('Y-m-d');
     }
 }
+
 if ( ! function_exists('eventosapp_is_today_valid_for_event') ) {
     function eventosapp_is_today_valid_for_event( $event_id ) {
         $today = eventosapp_get_today_in_event_tz($event_id);
@@ -46,111 +47,599 @@ if ( ! function_exists('eventosapp_is_today_valid_for_event') ) {
  * Uso: [eventosapp_front_search event_id="123"]
  */
 add_shortcode('eventosapp_front_search', function($atts){
-    if ( function_exists('eventosapp_require_feature') ) eventosapp_require_feature('search');
+    if ( function_exists('eventosapp_require_feature') ) {
+        eventosapp_require_feature('search');
+    }
 
-    $a   = shortcode_atts(['event_id'=>0], $atts);
+    $a   = shortcode_atts(['event_id' => 0], $atts);
     $eid = absint($a['event_id']);
 
-    // 👉 Si no vino por shortcode, usa el evento activo del dashboard (si existe)
     if ( ! $eid && function_exists('eventosapp_get_active_event') ) {
         $eid = (int) eventosapp_get_active_event();
     }
 
-    // 👉 Si sigue sin haber evento, manda al dashboard o muestra aviso
     if ( ! $eid ) {
         $dashboard_url = function_exists('eventosapp_get_dashboard_url')
             ? eventosapp_get_dashboard_url()
             : home_url('/dashboard/');
+
         if ( function_exists('eventosapp_require_active_event') ) {
             eventosapp_require_active_event();
             return '';
         }
-        return '<div style="padding:.8rem;border:1px solid #eee;background:#fffdf2;border-radius:8px;color:#8a6d3b;">
-            Debes escoger un <strong>evento</strong> para gestionar. Ve al <a href="'.esc_url($dashboard_url).'">dashboard</a>, seleccionalo y vuelve aquí.
+
+        return '<div style="max-width:900px;margin:12px auto;padding:14px 16px;background:#fff8e6;border:1px solid #f1dfad;border-left:4px solid #a16207;border-radius:14px;color:#7c4a03;font-family:inherit;line-height:1.5;">
+            Debes escoger un <strong>evento</strong> para gestionar. Ve al <a href="'.esc_url($dashboard_url).'" style="color:#255f96;font-weight:700;">dashboard</a>, selecciónalo y vuelve aquí.
         </div>';
     }
 
-    // Validar permisos sobre el evento (si no es admin)
     if ( $eid && ! eventosapp_user_can_manage_event($eid) && ! current_user_can('manage_options') ) {
-        return '<div style="padding:.8rem;border:1px solid #eee;background:#fff8f8;border-radius:8px;color:#a33;">
-            No tienes permisos sobre este evento.
-        </div>';
+        return '<div style="max-width:900px;margin:12px auto;padding:14px 16px;background:#fff1f1;border:1px solid #f4caca;border-left:4px solid #c53a3a;border-radius:14px;color:#9b2c2c;font-family:inherit;line-height:1.5;">No tienes permisos sobre este evento.</div>';
     }
 
-// Enqueue JS + CSS (estilo WP)
-wp_enqueue_script('jquery');
-wp_register_script('eventosapp-front-search', '', ['jquery'], null, true);
+    $dashboard_url = function_exists('eventosapp_get_dashboard_url')
+        ? eventosapp_get_dashboard_url()
+        : home_url('/');
+    $dashboard_url = remove_query_arg(['evapp', 'evapp_err', 'set'], $dashboard_url);
+    $change_event_url = add_query_arg(['evapp' => 'change_event'], $dashboard_url);
 
-// Variables para el JS
-wp_localize_script('eventosapp-front-search', 'EvFrontSearch', [
-    'ajax_url'           => admin_url('admin-ajax.php'),
-    'search_nonce'       => wp_create_nonce('eventosapp_front_search'),
-    'toggle_nonce'       => wp_create_nonce('eventosapp_toggle_checkin'),
-    'print_nonce'        => wp_create_nonce('eventosapp_render_badge'),
-    'acompanantes_nonce' => wp_create_nonce('eventosapp_registrar_acompanantes'),
-    'event_id'           => $eid,
-    'msgs'               => [
-        'not_allowed' => __('El check-in solo está permitido en las fechas del evento. Hoy no corresponde.', 'eventosapp'),
-        'net_error'   => __('Error de red. Intenta de nuevo.', 'eventosapp')
-    ]
-]);
+    $event_name = get_the_title($eid) ?: ('Evento #' . $eid);
+    $event_modalidad_label = function_exists('eventosapp_get_event_modalidad_label')
+        ? eventosapp_get_event_modalidad_label($eid)
+        : '';
+    $today_iso = eventosapp_get_today_in_event_tz($eid);
+    $today_allowed = eventosapp_is_today_valid_for_event($eid);
+    $today_label = $today_iso ? date_i18n('D, d M Y', strtotime($today_iso)) : '';
 
-// CSS como inline style
-$css = <<<CSS
-.evfs-wrap{max-width:900px;margin:0 auto}
-.evfs-searchbar{display:grid;grid-template-columns:minmax(185px,240px) 1fr;gap:8px;align-items:center}
-.evfs-select{width:100%;padding:.6rem .7rem;font-size:1rem;border:1px solid #dfe3e7;border-radius:10px;background:#fff;color:#111}
-.evfs-input{width:100%;padding:.6rem .7rem;font-size:1.05rem;border:1px solid #dfe3e7;border-radius:10px}
-.evfs-results{margin-top:.6rem}
-.evfs-row{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:.8rem;border:1px solid #eee;border-radius:12px;background:#fff;margin-bottom:8px;box-shadow:0 1px 5px rgba(120,140,160,.07)}
-.evfs-data{flex:1 1 60%;min-width:0;word-break:break-word}
-.evfs-actions{flex:0 0 230px;display:flex;flex-direction:column;align-items:flex-end;gap:8px;position:relative}
-.evfs-btn{display:inline-block;border-radius:8px;border:0;font-size:1rem;font-weight:600;cursor:pointer;padding:.6rem 1rem;box-shadow:0 1px 4px rgba(30,60,100,.07)}
-.evfs-check{background:#3782C4;color:#fff}
-.evfs-check:hover{background:#205483}
-.evfs-check[aria-checked="true"]{background:#20FF00;color:#000}
-.evfs-print{border:2px solid #3782C4;background:#fff;color:#3782C4}
-.evfs-print:hover{background:#205483;color:#fff}
-.evfs-virtual{background:#7c3aed;color:#fff;text-align:center;text-decoration:none}
-.evfs-virtual:hover{background:#5b21b6;color:#fff}
-.evfs-virtual-badge{background:#7c3aed;color:#fff;text-align:center;cursor:default}
-.evfs-virtual-badge.is-checked{background:#6d28d9;color:#fff}
-.evfs-virtual-badge small{display:block;font-size:.75rem;font-weight:500;opacity:.92;line-height:1.15;margin-top:2px}
-.evfs-muted-action{background:#e5e7eb;color:#374151;cursor:not-allowed}
-.evfs-note{position:absolute;bottom:-6px;right:0;transform:translateY(100%);font-size:.9rem;padding:.35rem .55rem;border-radius:6px;background:#ffe9e9;color:#9a2424;border:1px solid #ffd3d3}
-.evfs-note.ok{background:#e9ffe9;color:#1e6f2b;border-color:#c9f2c9}
-.evfs-check[disabled]{opacity:.55;cursor:not-allowed;filter:grayscale(20%)}
-.evfs-acomp-panel{margin-top:8px;background:#eaf3ff;border:1px solid #b3d4f5;border-radius:10px;padding:10px 12px;width:100%}
-.evfs-acomp-label{font-size:.85rem;font-weight:600;color:#1e4a80;margin-bottom:6px}
-.evfs-acomp-row{display:flex;gap:6px;align-items:center}
-.evfs-acomp-input{flex:0 0 70px;border:1px solid #b3d4f5;border-radius:6px;padding:.35rem .5rem;font-size:1rem;font-weight:700;text-align:center;-moz-appearance:textfield}
+    wp_enqueue_script('jquery');
+    wp_register_script('eventosapp-front-search', '', ['jquery'], null, true);
+
+    wp_localize_script('eventosapp-front-search', 'EvFrontSearch', [
+        'ajax_url'           => admin_url('admin-ajax.php'),
+        'search_nonce'       => wp_create_nonce('eventosapp_front_search'),
+        'toggle_nonce'       => wp_create_nonce('eventosapp_toggle_checkin'),
+        'print_nonce'        => wp_create_nonce('eventosapp_render_badge'),
+        'acompanantes_nonce' => wp_create_nonce('eventosapp_registrar_acompanantes'),
+        'event_id'           => $eid,
+        'msgs'               => [
+            'not_allowed'  => __('El check-in solo está permitido en las fechas del evento. Hoy no corresponde.', 'eventosapp'),
+            'net_error'    => __('Error de red. Intenta de nuevo.', 'eventosapp'),
+            'search_error' => __('No fue posible completar la búsqueda. Intenta nuevamente.', 'eventosapp'),
+        ]
+    ]);
+
+    $css = <<<CSS
+.evfs-app{
+  --evapp-primary:#3279bd;
+  --evapp-primary-dark:#255f96;
+  --evapp-primary-soft:#eaf4ff;
+  --evapp-app-bg:#f5f8fc;
+  --evapp-surface:#ffffff;
+  --evapp-border:#dfe7f1;
+  --evapp-text:#182230;
+  --evapp-muted:#64748b;
+  --evapp-success:#16855b;
+  --evapp-success-soft:#ecfdf5;
+  --evapp-warning:#a16207;
+  --evapp-warning-soft:#fff8e6;
+  --evapp-danger:#c53a3a;
+  --evapp-danger-soft:#fff1f1;
+  --evapp-purple:#6d4bc3;
+  --evapp-purple-soft:#f3efff;
+  --evapp-radius:18px;
+  --evapp-radius-lg:26px;
+  width:100%;
+  max-width:1180px;
+  margin:0 auto;
+  color:var(--evapp-text);
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  line-height:1.45;
+  box-sizing:border-box;
+}
+.evfs-app *,
+.evfs-app *::before,
+.evfs-app *::after{box-sizing:border-box}
+.evfs-app a{text-decoration:none}
+.evfs-app .screen-reader-text{
+  position:absolute!important;
+  width:1px!important;
+  height:1px!important;
+  padding:0!important;
+  margin:-1px!important;
+  overflow:hidden!important;
+  clip:rect(0,0,0,0)!important;
+  white-space:nowrap!important;
+  border:0!important;
+}
+.evfs-shell{
+  width:100%;
+  padding:clamp(18px,3vw,36px);
+  background:var(--evapp-app-bg);
+  border:1px solid var(--evapp-border);
+  border-radius:var(--evapp-radius-lg);
+  box-shadow:0 18px 50px rgba(31,65,99,.08);
+}
+.evfs-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:24px;
+  margin-bottom:22px;
+}
+.evfs-heading{min-width:0}
+.evfs-eyebrow{
+  margin:0 0 7px;
+  color:var(--evapp-primary);
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.15em;
+  text-transform:uppercase;
+}
+.evfs-main-title{
+  margin:0;
+  color:var(--evapp-text);
+  font-size:clamp(27px,4vw,42px);
+  font-weight:800;
+  line-height:1.08;
+  letter-spacing:-.035em;
+}
+.evfs-subtitle{
+  max-width:760px;
+  margin:10px 0 0;
+  color:var(--evapp-muted);
+  font-size:15px;
+  line-height:1.6;
+}
+.evfs-btn{
+  min-height:44px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:9px;
+  margin:0;
+  padding:10px 15px;
+  border:1px solid transparent;
+  border-radius:12px;
+  font:inherit;
+  font-size:14px;
+  font-weight:750;
+  line-height:1.15;
+  text-align:center;
+  cursor:pointer;
+  transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+  -webkit-tap-highlight-color:transparent;
+}
+.evfs-btn svg{
+  width:18px;
+  height:18px;
+  flex:0 0 18px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:2;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.evfs-btn:hover:not(:disabled){transform:translateY(-1px)}
+.evfs-btn:focus-visible{outline:3px solid rgba(50,121,189,.22);outline-offset:2px}
+.evfs-btn:disabled{opacity:.55;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+.evfs-btn-secondary{
+  background:var(--evapp-surface);
+  border-color:var(--evapp-border);
+  color:var(--evapp-text)!important;
+  box-shadow:0 5px 15px rgba(31,65,99,.05);
+  white-space:nowrap;
+}
+.evfs-btn-secondary:hover{border-color:#c7d7e8;color:var(--evapp-primary-dark)!important;box-shadow:0 8px 20px rgba(31,65,99,.09)}
+.evfs-btn-primary{
+  background:var(--evapp-primary);
+  border-color:var(--evapp-primary);
+  color:#fff!important;
+  box-shadow:0 9px 20px rgba(50,121,189,.18);
+}
+.evfs-btn-primary:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);box-shadow:0 12px 24px rgba(50,121,189,.24)}
+.evfs-event-context{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:22px;
+  padding:16px 18px;
+  background:var(--evapp-surface);
+  border:1px solid var(--evapp-border);
+  border-radius:var(--evapp-radius);
+  box-shadow:0 8px 24px rgba(31,65,99,.045);
+}
+.evfs-event-main{min-width:0;display:flex;align-items:center;gap:13px}
+.evfs-event-icon{
+  width:44px;
+  height:44px;
+  flex:0 0 44px;
+  display:grid;
+  place-items:center;
+  color:var(--evapp-primary);
+  background:var(--evapp-primary-soft);
+  border-radius:13px;
+}
+.evfs-event-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.evfs-event-copy{min-width:0}
+.evfs-event-kicker{
+  display:block;
+  margin-bottom:3px;
+  color:var(--evapp-muted);
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.09em;
+  text-transform:uppercase;
+}
+.evfs-event-name{
+  display:block;
+  overflow:hidden;
+  color:var(--evapp-text);
+  font-size:15px;
+  font-weight:800;
+  line-height:1.3;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.evfs-event-meta{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}
+.evfs-chip{
+  min-height:30px;
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  padding:6px 10px;
+  border:1px solid var(--evapp-border);
+  border-radius:999px;
+  background:#fff;
+  color:var(--evapp-muted);
+  font-size:12px;
+  font-weight:750;
+  white-space:nowrap;
+}
+.evfs-chip::before{width:7px;height:7px;border-radius:50%;background:#94a3b8;content:""}
+.evfs-chip.is-valid{color:var(--evapp-success);border-color:#cfeadf;background:var(--evapp-success-soft)}
+.evfs-chip.is-valid::before{background:var(--evapp-success)}
+.evfs-chip.is-warning{color:var(--evapp-warning);border-color:#f1dfad;background:var(--evapp-warning-soft)}
+.evfs-chip.is-warning::before{background:#d69e2e}
+.evfs-search-card{
+  padding:18px;
+  background:var(--evapp-surface);
+  border:1px solid var(--evapp-border);
+  border-radius:var(--evapp-radius);
+  box-shadow:0 8px 26px rgba(31,65,99,.05);
+}
+.evfs-search-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.evfs-search-title{margin:0;color:var(--evapp-text);font-size:17px;font-weight:800;line-height:1.3}
+.evfs-search-description{margin:5px 0 0;color:var(--evapp-muted);font-size:13px;line-height:1.5}
+.evfs-searchbar{display:grid;grid-template-columns:minmax(190px,245px) minmax(0,1fr);gap:10px;align-items:center}
+.evfs-select,
+.evfs-input{
+  width:100%;
+  min-height:48px;
+  margin:0;
+  color:var(--evapp-text);
+  background:#fff;
+  border:1px solid var(--evapp-border);
+  border-radius:13px;
+  font:inherit;
+  font-size:15px;
+  outline:none;
+  transition:border-color .16s ease,box-shadow .16s ease;
+}
+.evfs-select{padding:10px 38px 10px 13px}
+.evfs-input{padding:10px 46px 10px 43px}
+.evfs-select:focus,
+.evfs-input:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.13)}
+.evfs-input-wrap{position:relative;min-width:0}
+.evfs-search-icon{
+  position:absolute;
+  top:50%;
+  left:14px;
+  width:20px;
+  height:20px;
+  color:var(--evapp-muted);
+  transform:translateY(-50%);
+  pointer-events:none;
+}
+.evfs-search-icon svg{width:20px;height:20px;display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.evfs-clear{
+  position:absolute;
+  top:50%;
+  right:8px;
+  width:34px;
+  height:34px;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+  border:0;
+  border-radius:9px;
+  color:var(--evapp-muted);
+  background:transparent;
+  font-size:22px;
+  line-height:1;
+  cursor:pointer;
+  transform:translateY(-50%);
+}
+.evfs-clear.is-visible{display:flex}
+.evfs-clear:hover{color:var(--evapp-text);background:var(--evapp-primary-soft)}
+.evfs-search-foot{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  margin-top:10px;
+  color:var(--evapp-muted);
+  font-size:12px;
+  line-height:1.45;
+}
+.evfs-result-count{font-weight:750;white-space:nowrap}
+.evfs-results{margin-top:16px}
+.evfs-state{
+  min-height:180px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  gap:9px;
+  padding:28px 20px;
+  color:var(--evapp-muted);
+  background:rgba(255,255,255,.7);
+  border:1px dashed #cbd8e6;
+  border-radius:var(--evapp-radius);
+  text-align:center;
+}
+.evfs-state-icon{
+  width:46px;
+  height:46px;
+  display:grid;
+  place-items:center;
+  color:var(--evapp-primary);
+  background:var(--evapp-primary-soft);
+  border-radius:14px;
+}
+.evfs-state-icon svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.evfs-state strong{color:var(--evapp-text);font-size:15px}
+.evfs-state span{max-width:520px;font-size:13px;line-height:1.55}
+.evfs-spinner{
+  width:28px;
+  height:28px;
+  border:3px solid #dce8f3;
+  border-top-color:var(--evapp-primary);
+  border-radius:50%;
+  animation:evfsSpin .7s linear infinite;
+}
+@keyframes evfsSpin{to{transform:rotate(360deg)}}
+.evfs-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(220px,255px);
+  gap:18px;
+  align-items:start;
+  margin-bottom:12px;
+  padding:18px;
+  background:var(--evapp-surface);
+  border:1px solid var(--evapp-border);
+  border-radius:var(--evapp-radius);
+  box-shadow:0 8px 24px rgba(31,65,99,.05);
+  transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease;
+}
+.evfs-row:hover{border-color:#c9d9e8;box-shadow:0 12px 30px rgba(31,65,99,.085);transform:translateY(-1px)}
+.evfs-data{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px}
+.evfs-avatar{
+  width:48px;
+  height:48px;
+  display:grid;
+  place-items:center;
+  flex:0 0 48px;
+  color:var(--evapp-primary-dark);
+  background:var(--evapp-primary-soft);
+  border:1px solid #d6e8f8;
+  border-radius:15px;
+  font-size:14px;
+  font-weight:850;
+  letter-spacing:.02em;
+  text-transform:uppercase;
+}
+.evfs-data-main{min-width:0}
+.evfs-person-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-bottom:8px}
+.evfs-person-name{margin:0;color:var(--evapp-text);font-size:17px;font-weight:820;line-height:1.3;word-break:break-word}
+.evfs-mode-badge{
+  display:inline-flex;
+  align-items:center;
+  min-height:25px;
+  padding:4px 8px;
+  border-radius:999px;
+  color:var(--evapp-primary-dark);
+  background:var(--evapp-primary-soft);
+  font-size:11px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.evfs-mode-badge.is-virtual{color:#5b3aa7;background:var(--evapp-purple-soft)}
+.evfs-info-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px}
+.evfs-info-item{min-width:0;color:var(--evapp-muted);font-size:12px;line-height:1.4}
+.evfs-info-item strong{display:block;margin-bottom:2px;color:#475569;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.evfs-info-value{display:block;overflow-wrap:anywhere;color:var(--evapp-text);font-size:13px;font-weight:600}
+.evfs-info-item.is-wide{grid-column:1/-1}
+.evfs-actions{position:relative;display:grid;gap:9px;align-content:start}
+.evfs-actions .evfs-btn{width:100%}
+.evfs-check{background:var(--evapp-primary);border-color:var(--evapp-primary);color:#fff;box-shadow:0 9px 20px rgba(50,121,189,.18)}
+.evfs-check:hover:not(:disabled){background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);box-shadow:0 12px 24px rgba(50,121,189,.23)}
+.evfs-check[aria-checked="true"],
+.evfs-check.is-checked{background:var(--evapp-success);border-color:var(--evapp-success);box-shadow:0 9px 20px rgba(22,133,91,.17)}
+.evfs-check[aria-checked="true"]:hover:not(:disabled),
+.evfs-check.is-checked:hover:not(:disabled){background:#11704d;border-color:#11704d}
+.evfs-print{background:#fff;border-color:#c7d8e8;color:var(--evapp-primary-dark);box-shadow:none}
+.evfs-print:hover:not(:disabled){background:var(--evapp-primary-soft);border-color:#b9d3e9;box-shadow:none}
+.evfs-virtual-badge{
+  min-height:54px;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:center;
+  gap:2px;
+  padding:10px 12px;
+  color:#5b3aa7;
+  background:var(--evapp-purple-soft);
+  border:1px solid #ddd2fb;
+  border-radius:12px;
+  font-size:12px;
+  font-weight:800;
+  line-height:1.25;
+}
+.evfs-virtual-badge small{color:#735db2;font-size:11px;font-weight:650;line-height:1.3}
+.evfs-virtual-badge.is-checked{color:var(--evapp-success);background:var(--evapp-success-soft);border-color:#cfeadf}
+.evfs-virtual-badge.is-checked small{color:#3f7d67}
+.evfs-checkin-status{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  margin-top:10px;
+  color:var(--evapp-muted);
+  font-size:11px;
+  font-weight:750;
+}
+.evfs-checkin-status::before{width:7px;height:7px;border-radius:50%;background:#94a3b8;content:""}
+.evfs-checkin-status.is-checked{color:var(--evapp-success)}
+.evfs-checkin-status.is-checked::before{background:var(--evapp-success)}
+.evfs-checkin-status.is-disabled{color:var(--evapp-warning)}
+.evfs-checkin-status.is-disabled::before{background:#d69e2e}
+.evfs-note{
+  position:absolute;
+  right:0;
+  bottom:-8px;
+  z-index:4;
+  width:min(320px,100%);
+  padding:9px 11px;
+  color:#9b2c2c;
+  background:var(--evapp-danger-soft);
+  border:1px solid #f4caca;
+  border-radius:10px;
+  box-shadow:0 10px 24px rgba(80,30,30,.10);
+  font-size:12px;
+  line-height:1.4;
+  transform:translateY(100%);
+}
+.evfs-note.ok{color:var(--evapp-success);background:var(--evapp-success-soft);border-color:#cfeadf}
+.evfs-acomp-wrapper{margin:-3px 0 12px}
+.evfs-acomp-panel{
+  width:100%;
+  padding:14px;
+  background:var(--evapp-primary-soft);
+  border:1px solid #cce0f3;
+  border-radius:15px;
+}
+.evfs-acomp-label{margin-bottom:9px;color:var(--evapp-primary-dark);font-size:13px;font-weight:800}
+.evfs-acomp-row{display:flex;gap:8px;align-items:center}
+.evfs-acomp-input{
+  flex:0 0 92px;
+  min-height:44px;
+  width:92px;
+  margin:0;
+  padding:8px 10px;
+  color:var(--evapp-text);
+  background:#fff;
+  border:1px solid #bdd4e9;
+  border-radius:11px;
+  font:inherit;
+  font-size:15px;
+  font-weight:800;
+  text-align:center;
+  outline:none;
+  -moz-appearance:textfield;
+}
+.evfs-acomp-input:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 3px rgba(50,121,189,.12)}
 .evfs-acomp-input::-webkit-inner-spin-button,.evfs-acomp-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
-.evfs-acomp-btn{flex:1;background:#3782C4;color:#fff;border:0;border-radius:6px;padding:.35rem .7rem;font-size:.85rem;font-weight:700;cursor:pointer;transition:filter .15s}
-.evfs-acomp-btn:hover:not(:disabled){filter:brightness(1.1)}
+.evfs-acomp-btn{
+  min-height:44px;
+  flex:1;
+  margin:0;
+  padding:9px 14px;
+  color:#fff;
+  background:var(--evapp-primary);
+  border:1px solid var(--evapp-primary);
+  border-radius:11px;
+  font:inherit;
+  font-size:13px;
+  font-weight:800;
+  cursor:pointer;
+  transition:background .16s ease,opacity .16s ease,transform .16s ease;
+}
+.evfs-acomp-btn:hover:not(:disabled){background:var(--evapp-primary-dark);transform:translateY(-1px)}
 .evfs-acomp-btn:disabled{opacity:.55;cursor:not-allowed}
-.evfs-acomp-status{margin-top:5px;font-size:.82rem}
-@media(max-width:600px){
+.evfs-acomp-status{min-height:18px;margin-top:7px;color:var(--evapp-muted);font-size:12px;line-height:1.4}
+.evfs-acomp-status.is-success{color:var(--evapp-success)}
+.evfs-acomp-status.is-error{color:var(--evapp-danger)}
+.evfs-inline-notice{
+  max-width:900px;
+  margin:12px auto;
+  padding:14px 16px;
+  border:1px solid #f1dfad;
+  border-left:4px solid #d69e2e;
+  border-radius:13px;
+  background:var(--evapp-warning-soft,#fff8e6);
+  color:#805900;
+}
+.evfs-inline-notice--error{border-color:#f4caca;border-left-color:#c53a3a;background:#fff1f1;color:#9b2c2c}
+@media(max-width:900px){
+  .evfs-row{grid-template-columns:minmax(0,1fr) 210px}
+  .evfs-info-grid{grid-template-columns:1fr}
+  .evfs-info-item.is-wide{grid-column:auto}
+}
+@media(max-width:767px){
+  .evfs-shell{padding:16px;border-radius:20px}
+  .evfs-header{display:block;margin-bottom:18px}
+  .evfs-header-actions{margin-top:14px}
+  .evfs-header-actions .evfs-btn{width:100%}
+  .evfs-event-context{align-items:flex-start;flex-direction:column;padding:14px}
+  .evfs-event-main{width:100%}
+  .evfs-event-meta{width:100%;justify-content:flex-start}
+  .evfs-event-context>.evfs-btn{width:100%}
+  .evfs-search-heading{display:block}
   .evfs-searchbar{grid-template-columns:1fr}
-  .evfs-row{flex-direction:column}
-  .evfs-actions{flex-direction:row;align-items:stretch;width:100%;justify-content:stretch}
-  .evfs-btn{width:100%}
+  .evfs-search-foot{align-items:flex-start;flex-direction:column;gap:4px}
+  .evfs-row{grid-template-columns:1fr;gap:14px;padding:15px}
+  .evfs-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .evfs-virtual-badge{grid-column:1/-1}
+  .evfs-note{left:0;right:auto;width:100%}
+}
+@media(max-width:520px){
+  .evfs-main-title{font-size:30px}
+  .evfs-search-card{padding:14px}
+  .evfs-data{grid-template-columns:1fr;gap:10px}
+  .evfs-avatar{width:42px;height:42px;display:none}
+  .evfs-info-grid{grid-template-columns:1fr}
+  .evfs-actions{grid-template-columns:1fr}
+  .evfs-virtual-badge{grid-column:auto}
+  .evfs-acomp-row{align-items:stretch;flex-direction:column}
+  .evfs-acomp-input{width:100%;flex-basis:auto}
+  .evfs-acomp-btn{width:100%}
+  .evfs-chip{white-space:normal}
+}
+@media(prefers-reduced-motion:reduce){
+  .evfs-app *{scroll-behavior:auto!important;transition:none!important;animation-duration:.001ms!important;animation-iteration-count:1!important}
 }
 CSS;
 
-wp_register_style('eventosapp-front-search', false, [], null);
-wp_add_inline_style('eventosapp-front-search', $css);
-wp_enqueue_style('eventosapp-front-search');
+    wp_register_style('eventosapp-front-search', false, [], null);
+    wp_add_inline_style('eventosapp-front-search', $css);
+    wp_enqueue_style('eventosapp-front-search');
 
-// JS (sin inyectar CSS desde JS) — versión NOWDOC para evitar interpolación de $ en PHP
-$js = <<<'JS'
+    $js = <<<'JS'
 jQuery(function($){
   var $w = $('#evfs-wrap'),
       $type = $('#evfs-search-type'),
       $in = $('#evfs-input'),
-      $out= $('#evfs-results'),
+      $out = $('#evfs-results'),
+      $clear = $('#evfs-clear'),
+      $count = $('#evfs-result-count'),
       eventId = EvFrontSearch.event_id,
       timer,
-      pendingSearch = null;
+      pendingSearch = null,
+      requestSeq = 0,
+      lastSearchKey = '';
+
+  if(!$w.length) return;
 
   function escHtml(value){
     if(value === null || typeof value === 'undefined') return '';
@@ -159,6 +648,12 @@ jQuery(function($){
 
   function escAttr(value){
     return escHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+
+  function icon(name){
+    if(name === 'check') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>';
+    if(name === 'printer') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9V4h10v5"></path><path d="M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"></path><path d="M7 14h10v6H7z"></path></svg>';
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>';
   }
 
   function searchPlaceholder(type){
@@ -176,77 +671,197 @@ jQuery(function($){
     return ($type.val() || 'cc').toString();
   }
 
+  function getMinLen(type){
+    return (type === 'all' || type === 'name' || type === 'email') ? 3 : 2;
+  }
+
   function updateSearchPlaceholder(){
     $in.attr('placeholder', searchPlaceholder(getSearchType()));
   }
 
+  function updateClear(){
+    $clear.toggleClass('is-visible', $.trim($in.val()).length > 0);
+  }
+
+  function updateCount(value){
+    if(!value){
+      $count.text('');
+      return;
+    }
+    $count.text(value === 1 ? '1 resultado' : value + ' resultados');
+  }
+
+  function stateHtml(kind, title, text){
+    var visual = kind === 'loading'
+      ? '<div class="evfs-spinner" aria-hidden="true"></div>'
+      : '<div class="evfs-state-icon" aria-hidden="true">' + icon('search') + '</div>';
+    return '<div class="evfs-state evfs-state-' + escAttr(kind) + '">' +
+      visual +
+      '<strong>' + escHtml(title) + '</strong>' +
+      '<span>' + escHtml(text) + '</span>' +
+    '</div>';
+  }
+
+  function setBusy(isBusy){
+    $out.attr('aria-busy', isBusy ? 'true' : 'false');
+  }
+
+  function showInitial(){
+    setBusy(false);
+    updateCount(0);
+    $out.html(stateHtml('initial', 'Busca un asistente', 'Selecciona el tipo de búsqueda y escribe los datos del asistente. Los resultados aparecerán automáticamente.'));
+  }
+
+  function showMinChars(minLen){
+    setBusy(false);
+    updateCount(0);
+    $out.html(stateHtml('hint', 'Continúa escribiendo', 'Ingresa al menos ' + minLen + ' caracteres para iniciar la búsqueda.'));
+  }
+
+  function showLoading(){
+    setBusy(true);
+    updateCount(0);
+    $out.html(stateHtml('loading', 'Buscando asistentes…', 'Estamos consultando los tickets del evento activo.'));
+  }
+
+  function showError(){
+    setBusy(false);
+    updateCount(0);
+    $out.html(stateHtml('error', 'No pudimos completar la búsqueda', EvFrontSearch.msgs.search_error || EvFrontSearch.msgs.net_error));
+  }
 
   function btnCheck(status, ticketId, allowed){
-    var isChecked      = (status === 'checked_in');
-    var showAsChecked  = (allowed !== false) && isChecked;
-    var txt            = showAsChecked ? '✓ Checked In' : 'Check In';
-    var disabledAttr   = (allowed === false) ? ' disabled title="Hoy no es un día de check-in"' : '';
-    var ariaAttr       = showAsChecked ? ' aria-checked="true"' : '';
+    var isChecked = (status === 'checked_in');
+    var showAsChecked = (allowed !== false) && isChecked;
+    var txt = showAsChecked ? 'Check-in realizado' : 'Hacer check-in';
+    var disabledAttr = (allowed === false) ? ' disabled title="Hoy no es un día de check-in"' : '';
+    var ariaAttr = ' aria-checked="' + (showAsChecked ? 'true' : 'false') + '"';
+    var checkedClass = showAsChecked ? ' is-checked' : '';
 
-    return '<button class="evfs-btn evfs-check"' + ariaAttr +
-           ' data-ticket-id="'+escAttr(ticketId)+'"' + disabledAttr + '>'+ txt +'</button>';
+    return '<button type="button" class="evfs-btn evfs-check' + checkedClass + '"' + ariaAttr +
+           ' data-ticket-id="' + escAttr(ticketId) + '"' + disabledAttr + '>' +
+           icon('check') + '<span class="evfs-btn-label">' + txt + '</span></button>';
   }
 
   function btnVirtualBadge(it){
     var checked = it.virtual_today_status === 'checked_in' || it.virtual_checked === true;
-    var sub = checked ? '✓ Check-in virtual registrado' : 'Sin check-in virtual';
-    return '<div class="evfs-btn evfs-virtual-badge' + (checked ? ' is-checked' : '') + '" role="status" aria-live="polite">'
-         + 'Asistente Virtual<small>' + escHtml(sub) + '</small>'
-         + '</div>';
+    var sub = checked ? 'Check-in virtual registrado' : 'Sin check-in virtual hoy';
+    return '<div class="evfs-virtual-badge' + (checked ? ' is-checked' : '') + '" role="status">' +
+      '<span>Asistente virtual</span><small>' + escHtml(sub) + '</small></div>';
+  }
+
+  function initials(firstName, lastName){
+    var first = $.trim(firstName || '');
+    var last = $.trim(lastName || '');
+    var out = '';
+    if(first) out += first.charAt(0);
+    if(last) out += last.charAt(0);
+    return out || 'AS';
+  }
+
+  function infoItem(label, value, wide){
+    return '<div class="evfs-info-item' + (wide ? ' is-wide' : '') + '">' +
+      '<strong>' + escHtml(label) + '</strong>' +
+      '<span class="evfs-info-value">' + escHtml(value || '—') + '</span>' +
+    '</div>';
   }
 
   function render(rows){
-    if(!rows.length){ $out.html('<div style="padding:.5rem;color:#666;">No hay resultados.</div>'); return; }
-    var html='';
-    $.each(rows,function(i,it){
+    setBusy(false);
+    rows = $.isArray(rows) ? rows : [];
+    updateCount(rows.length);
+
+    if(!rows.length){
+      $out.html(stateHtml('empty', 'No encontramos coincidencias', 'Revisa el dato ingresado o prueba otro tipo de búsqueda.'));
+      return;
+    }
+
+    var html = '';
+    $.each(rows, function(i, it){
       it = it || {};
       var isVirtual = it.is_virtual === true || it.modalidad === 'virtual';
-      var actions = (isVirtual ? btnVirtualBadge(it) : '')
-        + btnCheck(it.today_status, it.ticket_id, it.today_allowed)
-        + '<button class="evfs-btn evfs-print" data-eventosapp-native-event="1" data-ticket-id="'+escAttr(it.ticket_id)+'" data-event-id="'+escAttr(it.event_id)+'">Imprimir escarapela</button>';
-      html += '<div class="evfs-row">'
-           +   '<div class="evfs-data">'
-           +     '<strong>'+ escHtml((it.first_name||'') +' '+ (it.last_name||'')) +'</strong>'
-           +     ' <span style="color:#888">('+escHtml(it.cc||'—')+')</span><br>'
-           +     'Email: '+ escHtml(it.email||'—') +'<br>'
-           +     'TicketID: '+ escHtml(it.ticket_pub||'—') +'<br>'
-           +     'Evento: '+ escHtml(it.event_name||'—') +'<br>'
-           +     'Localidad: '+ escHtml(it.localidad||'—') +'<br>'
-           +     'Modalidad: '+ escHtml(it.modalidad_label||'Presencial')
-           +   '</div>'
-           +   '<div class="evfs-actions">'
-           +     actions
-           +   '</div>'
-           + '</div>';
+      var fullName = $.trim((it.first_name || '') + ' ' + (it.last_name || '')) || 'Asistente sin nombre';
+      var profile = '';
+      if(it.company || it.cargo){
+        profile = [it.company || '', it.cargo || ''].filter(function(v){ return $.trim(v).length; }).join(' · ');
+      }
+      var checkStatusClass = it.today_allowed === false ? ' is-disabled' : (it.today_status === 'checked_in' ? ' is-checked' : '');
+      var checkStatusText = it.today_allowed === false
+        ? 'Check-in fuera de fecha'
+        : (it.today_status === 'checked_in' ? 'Check-in presencial registrado' : 'Pendiente de check-in presencial');
+      var actions = (isVirtual ? btnVirtualBadge(it) : '') +
+        btnCheck(it.today_status, it.ticket_id, it.today_allowed) +
+        '<button type="button" class="evfs-btn evfs-print" data-eventosapp-native-event="1" data-ticket-id="' + escAttr(it.ticket_id) + '" data-event-id="' + escAttr(it.event_id) + '">' +
+          icon('printer') + '<span>Imprimir escarapela</span></button>';
+
+      html += '<article class="evfs-row" data-ticket-id="' + escAttr(it.ticket_id) + '">' +
+        '<div class="evfs-data">' +
+          '<div class="evfs-avatar" aria-hidden="true">' + escHtml(initials(it.first_name, it.last_name)) + '</div>' +
+          '<div class="evfs-data-main">' +
+            '<div class="evfs-person-head">' +
+              '<h3 class="evfs-person-name">' + escHtml(fullName) + '</h3>' +
+              '<span class="evfs-mode-badge' + (isVirtual ? ' is-virtual' : '') + '">' + escHtml(it.modalidad_label || 'Presencial') + '</span>' +
+            '</div>' +
+            '<div class="evfs-info-grid">' +
+              infoItem('Cédula / ID', it.cc || '—', false) +
+              infoItem('Ticket ID', it.ticket_pub || '—', false) +
+              infoItem('Email', it.email || '—', false) +
+              infoItem('Celular', it.phone || '—', false) +
+              infoItem('Localidad', it.localidad || '—', false) +
+              (profile ? infoItem('Empresa / cargo', profile, false) : '') +
+            '</div>' +
+            '<div class="evfs-checkin-status' + checkStatusClass + '">' + escHtml(checkStatusText) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="evfs-actions">' + actions + '</div>' +
+      '</article>';
     });
+
     $out.html(html);
   }
 
   function showNote($btn, msg, ok){
     var $wrap = $btn.closest('.evfs-actions');
     var $n = $wrap.find('.evfs-note');
-    if(!$n.length){ $n = $('<div class="evfs-note" />').appendTo($wrap); }
+    if(!$n.length){ $n = $('<div class="evfs-note" role="status" />').appendTo($wrap); }
     $n.text(msg).toggleClass('ok', !!ok).stop(true,true).fadeIn(120);
     setTimeout(function(){ $n.fadeOut(180, function(){ $(this).remove(); }); }, 3000);
   }
 
-  function runSearch(){
+  function runSearch(immediate){
     clearTimeout(timer);
-    var q = $in.val().trim();
+    updateClear();
+
+    var q = $.trim($in.val());
     var searchType = getSearchType();
-    var minLen = (searchType === 'all' || searchType === 'name' || searchType === 'email') ? 3 : 2;
-    if(!q || q.length < minLen){
-      if(pendingSearch && pendingSearch.readyState !== 4){ pendingSearch.abort(); }
-      $out.empty();
+    var minLen = getMinLen(searchType);
+
+    if(pendingSearch && pendingSearch.readyState !== 4){
+      pendingSearch.abort();
+    }
+
+    if(!q){
+      lastSearchKey = '';
+      requestSeq++;
+      showInitial();
       return;
     }
+
+    if(q.length < minLen){
+      lastSearchKey = '';
+      requestSeq++;
+      showMinChars(minLen);
+      return;
+    }
+
+    var delay = immediate ? 0 : 350;
     timer = setTimeout(function(){
-      if(pendingSearch && pendingSearch.readyState !== 4){ pendingSearch.abort(); }
+      var key = searchType + '|' + q;
+      if(key === lastSearchKey) return;
+
+      var seq = ++requestSeq;
+      showLoading();
+
       pendingSearch = $.getJSON(EvFrontSearch.ajax_url, {
         action: 'eventosapp_front_search',
         security: EvFrontSearch.search_nonce,
@@ -254,27 +869,64 @@ jQuery(function($){
         search_type: searchType,
         event_id: eventId
       }).done(function(resp){
-        if(resp && resp.success){ render(resp.data||[]); }
-        else { render([]); }
+        if(seq !== requestSeq) return;
+        if(resp && resp.success){
+          lastSearchKey = key;
+          render(resp.data || []);
+        } else {
+          lastSearchKey = '';
+          showError();
+        }
       }).fail(function(xhr, status){
-        if(status !== 'abort'){ render([]); }
+        if(seq !== requestSeq || status === 'abort') return;
+        lastSearchKey = '';
+        showError();
+      }).always(function(){
+        if(seq === requestSeq) pendingSearch = null;
       });
-    }, 350);
+    }, delay);
   }
 
-  $in.on('input', runSearch);
+  $in.on('input', function(){ runSearch(false); });
+
+  $in.on('keydown', function(e){
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      lastSearchKey = '';
+      runSearch(true);
+    }
+    if(e.key === 'Escape' && $in.val()){
+      e.preventDefault();
+      $in.val('');
+      runSearch(true);
+      $in.trigger('focus');
+    }
+  });
 
   $type.on('change', function(){
     updateSearchPlaceholder();
-    $out.empty();
-    runSearch();
+    lastSearchKey = '';
+    runSearch(true);
+  });
+
+  $clear.on('click', function(){
+    $in.val('').trigger('focus');
+    lastSearchKey = '';
+    runSearch(true);
   });
 
   updateSearchPlaceholder();
+  updateClear();
+  showInitial();
 
-// Toggle check-in
-  $(document).on('click','.evfs-check', function(){
+  $(document).on('click', '.evfs-check', function(){
     var $b = $(this), id = $b.data('ticket-id');
+    if($b.prop('disabled') || $b.hasClass('is-loading')) return;
+
+    var wasChecked = $b.attr('aria-checked') === 'true';
+    $b.addClass('is-loading').prop('disabled', true);
+    $b.find('.evfs-btn-label').text('Actualizando…');
+
     $.post(EvFrontSearch.ajax_url, {
       action: 'eventosapp_front_toggle_checkin',
       security: EvFrontSearch.toggle_nonce,
@@ -282,37 +934,51 @@ jQuery(function($){
     }, function(resp){
       if(resp && resp.success){
         var newStatus = resp.data.today_status;
-        $b.attr('aria-checked', newStatus === 'checked_in' ? 'true' : 'false')
-          .text(newStatus === 'checked_in' ? '✓ Checked In' : 'Check In');
+        var isChecked = newStatus === 'checked_in';
+        var $row = $b.closest('.evfs-row');
 
-        // Panel de acompañantes: solo al hacer check-in (no al revertir)
-        if (newStatus === 'checked_in' && resp.data.acompanantes_enabled && resp.data.ticket_id) {
-          var $row = $b.closest('.evfs-row');
-          // Eliminar panel previo si existe para no duplicar
+        $b.attr('aria-checked', isChecked ? 'true' : 'false')
+          .toggleClass('is-checked', isChecked)
+          .find('.evfs-btn-label').text(isChecked ? 'Check-in realizado' : 'Hacer check-in');
+
+        $row.find('.evfs-checkin-status')
+          .removeClass('is-checked is-disabled')
+          .toggleClass('is-checked', isChecked)
+          .text(isChecked ? 'Check-in presencial registrado' : 'Pendiente de check-in presencial');
+
+        showNote($b, isChecked ? 'Check-in registrado correctamente.' : 'Check-in presencial removido.', true);
+
+        if (isChecked && resp.data.acompanantes_enabled && resp.data.ticket_id) {
           $row.next('.evfs-acomp-wrapper').remove();
           var tid = resp.data.ticket_id;
           var $panel = $(
-            '<div class="evfs-acomp-wrapper" style="margin-bottom:8px;">' +
+            '<div class="evfs-acomp-wrapper">' +
               '<div class="evfs-acomp-panel">' +
-                '<div class="evfs-acomp-label">🧑‍🤝‍🧑 Acompañantes sin QR</div>' +
+                '<div class="evfs-acomp-label">Acompañantes sin QR</div>' +
                 '<div class="evfs-acomp-row">' +
-                  '<input type="number" class="evfs-acomp-input" min="0" max="500" step="1" value="0">' +
-                  '<button type="button" class="evfs-acomp-btn" data-ticket-id="' + tid + '">Registrar</button>' +
+                  '<input type="number" class="evfs-acomp-input" min="0" max="500" step="1" value="0" aria-label="Cantidad de acompañantes">' +
+                  '<button type="button" class="evfs-acomp-btn" data-ticket-id="' + escAttr(tid) + '">Registrar acompañantes</button>' +
                 '</div>' +
-                '<div class="evfs-acomp-status"></div>' +
+                '<div class="evfs-acomp-status" role="status" aria-live="polite"></div>' +
               '</div>' +
             '</div>'
           );
           $row.after($panel);
-        } else if (newStatus !== 'checked_in') {
-          // Si se revierte el check-in, ocultar el panel
-          $b.closest('.evfs-row').next('.evfs-acomp-wrapper').remove();
+        } else if (!isChecked) {
+          $row.next('.evfs-acomp-wrapper').remove();
         }
       } else {
+        $b.attr('aria-checked', wasChecked ? 'true' : 'false')
+          .toggleClass('is-checked', wasChecked)
+          .find('.evfs-btn-label').text(wasChecked ? 'Check-in realizado' : 'Hacer check-in');
         var msg = (resp && resp.data && resp.data.message) ? resp.data.message : EvFrontSearch.msgs.not_allowed;
         showNote($b, msg, false);
       }
     }, 'json').fail(function(xhr){
+      $b.attr('aria-checked', wasChecked ? 'true' : 'false')
+        .toggleClass('is-checked', wasChecked)
+        .find('.evfs-btn-label').text(wasChecked ? 'Check-in realizado' : 'Hacer check-in');
+
       var msg = EvFrontSearch.msgs.net_error;
       try {
         if (xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
@@ -323,54 +989,52 @@ jQuery(function($){
         }
       } catch(e){}
       showNote($b, msg, false);
+    }).always(function(){
+      $b.removeClass('is-loading').prop('disabled', false);
     });
   });
 
-  // Registrar acompañantes sin QR (delegado al documento)
   $(document).on('click', '.evfs-acomp-btn', function(){
-    var $btn      = $(this);
-    var tid       = $btn.data('ticket-id');
-    var $panel    = $btn.closest('.evfs-acomp-panel');
-    var $input    = $panel.find('.evfs-acomp-input');
-    var $status   = $panel.find('.evfs-acomp-status');
-    var cantidad  = parseInt($input.val(), 10);
+    var $btn = $(this);
+    var tid = $btn.data('ticket-id');
+    var $panel = $btn.closest('.evfs-acomp-panel');
+    var $input = $panel.find('.evfs-acomp-input');
+    var $status = $panel.find('.evfs-acomp-status');
+    var cantidad = parseInt($input.val(), 10);
+
+    $status.removeClass('is-success is-error');
 
     if (isNaN(cantidad) || cantidad < 0 || cantidad > 500) {
-      $status.html('<span style="color:#9a2424;">❌ Ingresa un número válido (0–500).</span>');
+      $status.addClass('is-error').text('Ingresa un número válido entre 0 y 500.');
       return;
     }
 
     $btn.prop('disabled', true).text('Guardando…');
-    $status.html('<span style="color:#555;">Registrando…</span>');
+    $status.text('Registrando…');
 
     $.post(EvFrontSearch.ajax_url, {
-      action:          'eventosapp_registrar_acompanantes',
+      action: 'eventosapp_registrar_acompanantes',
       companion_nonce: EvFrontSearch.acompanantes_nonce,
-      ticket_id:       tid,
-      cantidad:        cantidad
+      ticket_id: tid,
+      cantidad: cantidad
     }, function(resp){
       if (resp && resp.success) {
-        $status.html('<span style="color:#1e6f2b;">✅ ' + cantidad + ' acompañante(s) registrado(s). Total: ' + (resp.data.total || cantidad) + '</span>');
+        $status.addClass('is-success').text(cantidad + ' acompañante(s) registrado(s). Total: ' + (resp.data.total || cantidad));
         $input.val(0);
-        $btn.text('✓ Guardado');
-        setTimeout(function(){ $btn.prop('disabled', false).text('Registrar'); }, 3000);
+        $btn.text('Guardado');
+        setTimeout(function(){ $btn.prop('disabled', false).text('Registrar acompañantes'); }, 2500);
       } else {
         var msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Error al guardar.';
-        $status.html('<span style="color:#9a2424;">❌ ' + msg + '</span>');
+        $status.addClass('is-error').text(msg);
         $btn.prop('disabled', false).text('Reintentar');
       }
     }, 'json').fail(function(){
-      $status.html('<span style="color:#9a2424;">❌ Error de conexión.</span>');
+      $status.addClass('is-error').text('Error de conexión.');
       $btn.prop('disabled', false).text('Reintentar');
     });
   });
 
-  // Imprimir escarapela.
-  // Antes de abrir la ventana tradicional, emite un evento cancelable para que
-  // EventosApp Android Printer Bridge pueda preparar una URL temporal firmada.
-  // Si el bridge no está activo o el equipo no es Android, se conserva intacto
-  // el comportamiento anterior con window.open().
-  $(document).on('click','.evfs-print', function(){
+  $(document).on('click', '.evfs-print', function(){
     var $button = $(this),
         tid = $button.data('ticket-id'),
         eid = $button.data('event-id');
@@ -388,6 +1052,7 @@ jQuery(function($){
       copies: $button.data('copies') || 1
     };
     var bridgeEvent = null;
+
     try {
       bridgeEvent = new CustomEvent('eventosapp:print-request', {
         detail: detail,
@@ -400,37 +1065,97 @@ jQuery(function($){
       return;
     }
 
-    window.open(url,'_blank');
+    window.open(url, '_blank');
   });
 });
 JS;
 
+    wp_add_inline_script('eventosapp-front-search', $js);
+    wp_enqueue_script('eventosapp-front-search');
 
-wp_add_inline_script('eventosapp-front-search', $js);
-wp_enqueue_script('eventosapp-front-search');
-
-
-    // HTML contenedor
     ob_start();
-
-    // 👉 Barra superior (si el dashboard la expone)
-    if ( function_exists('eventosapp_active_event_bar') ) {
-        eventosapp_active_event_bar();
-    }
     ?>
-    <div id="evfs-wrap" class="evfs-wrap" data-event-id="<?php echo esc_attr($eid); ?>">
-        <div class="evfs-searchbar">
-            <label class="screen-reader-text" for="evfs-search-type">Tipo de búsqueda</label>
-            <select id="evfs-search-type" class="evfs-select" aria-label="Tipo de búsqueda">
-                <option value="name">Nombres y apellidos</option>
-                <option value="cc" selected>Cédula</option>
-                <option value="phone">Celular</option>
-                <option value="email">Correo electrónico</option>
-                <option value="all">Todos los datos</option>
-            </select>
-            <input id="evfs-input" class="evfs-input" type="text" placeholder="Buscar por cédula…" autocomplete="off">
+    <div id="evfs-wrap" class="evfs-app evfs-wrap" data-event-id="<?php echo esc_attr($eid); ?>">
+        <div class="evfs-shell">
+            <header class="evfs-header">
+                <div class="evfs-heading">
+                    <p class="evfs-eyebrow">EVENTOSAPP</p>
+                    <h1 class="evfs-main-title">Búsqueda y Check-In Manual</h1>
+                    <p class="evfs-subtitle">
+                        Encuentra asistentes rápidamente, valida sus datos, gestiona el check-in presencial y vuelve a imprimir su escarapela desde un solo lugar.
+                    </p>
+                </div>
+
+                <div class="evfs-header-actions">
+                    <a href="<?php echo esc_url($dashboard_url); ?>" class="evfs-btn evfs-btn-secondary" aria-label="Volver al dashboard">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                        <span>Volver al dashboard</span>
+                    </a>
+                </div>
+            </header>
+
+            <section class="evfs-event-context" aria-label="Evento activo">
+                <div class="evfs-event-main">
+                    <div class="evfs-event-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M7 3v4M17 3v4M3 9h18"></path></svg>
+                    </div>
+                    <div class="evfs-event-copy">
+                        <span class="evfs-event-kicker">Evento activo</span>
+                        <strong class="evfs-event-name"><?php echo esc_html($event_name); ?></strong>
+                    </div>
+                </div>
+
+                <div class="evfs-event-meta">
+                    <?php if ( $event_modalidad_label ): ?>
+                        <span class="evfs-chip"><?php echo esc_html($event_modalidad_label); ?></span>
+                    <?php endif; ?>
+                    <?php if ( $today_label ): ?>
+                        <span class="evfs-chip <?php echo $today_allowed ? 'is-valid' : 'is-warning'; ?>">
+                            <?php echo esc_html($today_allowed ? 'Check-in habilitado · ' . $today_label : 'Fuera de fecha · ' . $today_label); ?>
+                        </span>
+                    <?php endif; ?>
+                    <a class="evfs-btn evfs-btn-primary" href="<?php echo esc_url($change_event_url); ?>">Cambiar evento</a>
+                </div>
+            </section>
+
+            <section class="evfs-search-card" aria-labelledby="evfs-search-title">
+                <div class="evfs-search-heading">
+                    <div>
+                        <h2 id="evfs-search-title" class="evfs-search-title">Buscar asistente</h2>
+                        <p class="evfs-search-description">Usa el dato más preciso disponible. La cédula y el celular requieren solo 2 caracteres; nombres, email y búsqueda general requieren 3.</p>
+                    </div>
+                </div>
+
+                <div class="evfs-searchbar">
+                    <div>
+                        <label class="screen-reader-text" for="evfs-search-type">Tipo de búsqueda</label>
+                        <select id="evfs-search-type" class="evfs-select" aria-label="Tipo de búsqueda">
+                            <option value="name">Nombres y apellidos</option>
+                            <option value="cc" selected>Cédula</option>
+                            <option value="phone">Celular</option>
+                            <option value="email">Correo electrónico</option>
+                            <option value="all">Todos los datos</option>
+                        </select>
+                    </div>
+
+                    <div class="evfs-input-wrap">
+                        <span class="evfs-search-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+                        </span>
+                        <label class="screen-reader-text" for="evfs-input">Dato del asistente</label>
+                        <input id="evfs-input" class="evfs-input" type="search" placeholder="Buscar por cédula…" autocomplete="off" autocapitalize="off" spellcheck="false">
+                        <button id="evfs-clear" class="evfs-clear" type="button" aria-label="Limpiar búsqueda">×</button>
+                    </div>
+                </div>
+
+                <div class="evfs-search-foot">
+                    <span>Tip: presiona Enter para buscar de inmediato o Esc para limpiar.</span>
+                    <span id="evfs-result-count" class="evfs-result-count" aria-live="polite"></span>
+                </div>
+            </section>
+
+            <div id="evfs-results" class="evfs-results" aria-live="polite" aria-busy="false"></div>
         </div>
-        <div id="evfs-results" class="evfs-results"></div>
     </div>
     <?php
     return ob_get_clean();
@@ -489,7 +1214,6 @@ add_action('wp_ajax_eventosapp_front_search', function(){
     $q_norm   = eventosapp_normalize_text($q);
     $q_digits = eventosapp_search_digits_only($q);
 
-    // No admin: forzar a su evento activo.
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
         $active = (int) eventosapp_get_active_event();
         if ( ! $active || ($event_id && $event_id !== $active) ) {
@@ -539,7 +1263,10 @@ add_action('wp_ajax_eventosapp_front_search', function(){
     }
 
     $min_len = in_array($search_type, ['all', 'name', 'email'], true) ? 3 : 2;
-    if ( $search_value === '' || mb_strlen($search_value) < $min_len ) {
+    $search_length = function_exists('mb_strlen')
+        ? mb_strlen($search_value, 'UTF-8')
+        : strlen($search_value);
+    if ( $search_value === '' || $search_length < $min_len ) {
         wp_send_json_success([]);
     }
 
@@ -595,17 +1322,14 @@ add_action('wp_ajax_eventosapp_front_search', function(){
     $tickets = wp_cache_get($cache_key, 'eventosapp_search');
 
     if ( ! is_array($tickets) ) {
-        // 1) Consulta principal sobre índice segmentado.
         $tickets = $find_ticket_ids([ $search_meta_map[$search_type] ], $like, 30);
 
-        // 2) Fallback para tickets antiguos que aún no hayan sido reindexados con los nuevos metadatos.
-    if ( empty($tickets) && isset($raw_meta_fallback_map[$search_type]) ) {
-        $fallback_value = ($search_type === 'cc' || $search_type === 'phone') ? ($q_digits !== '' ? $q_digits : $q) : $q_norm;
-        $fallback_like  = '%' . $wpdb->esc_like($fallback_value) . '%';
-        $tickets = $find_ticket_ids($raw_meta_fallback_map[$search_type], $fallback_like, 30);
-    }
+        if ( empty($tickets) && isset($raw_meta_fallback_map[$search_type]) ) {
+            $fallback_value = ($search_type === 'cc' || $search_type === 'phone') ? ($q_digits !== '' ? $q_digits : $q) : $q_norm;
+            $fallback_like  = '%' . $wpdb->esc_like($fallback_value) . '%';
+            $tickets = $find_ticket_ids($raw_meta_fallback_map[$search_type], $fallback_like, 30);
+        }
 
-    // 3) Último fallback compatible: índice amplio legado, solo si no se pidió "todos" y no hubo resultados.
         if ( empty($tickets) && $search_type !== 'all' ) {
             $tickets = $find_ticket_ids([ '_evapp_search_blob' ], '%' . $wpdb->esc_like($q_norm) . '%', 30);
         }
@@ -621,7 +1345,7 @@ add_action('wp_ajax_eventosapp_front_search', function(){
     $out = [];
 
     foreach ( $tickets as $tid ) {
-        $ev_id   = (int) get_post_meta($tid, '_eventosapp_ticket_evento_id', true);
+        $ev_id = (int) get_post_meta($tid, '_eventosapp_ticket_evento_id', true);
 
         if ( $ev_id && ! current_user_can('manage_options') ) {
             if ( ! eventosapp_user_can_manage_event($ev_id) ) continue;
@@ -630,6 +1354,9 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $fn         = get_post_meta($tid, '_eventosapp_asistente_nombre', true);
         $ln         = get_post_meta($tid, '_eventosapp_asistente_apellido', true);
         $email      = get_post_meta($tid, '_eventosapp_asistente_email', true);
+        $phone      = get_post_meta($tid, '_eventosapp_asistente_tel', true);
+        $company    = get_post_meta($tid, '_eventosapp_asistente_empresa', true);
+        $cargo      = get_post_meta($tid, '_eventosapp_asistente_cargo', true);
         $cc         = get_post_meta($tid, '_eventosapp_asistente_cc', true);
         $localidad  = get_post_meta($tid, '_eventosapp_asistente_localidad', true);
         $ticketP    = get_post_meta($tid, 'eventosapp_ticketID', true);
@@ -640,7 +1367,6 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         $modalidad_label = function_exists('eventosapp_get_ticket_modalidad_label') ? eventosapp_get_ticket_modalidad_label($tid) : ucfirst($modalidad);
         $virtual_url = ($is_virtual && function_exists('eventosapp_get_virtual_landing_url')) ? eventosapp_get_virtual_landing_url($tid) : '';
 
-        // Estado del día actual según TZ del evento
         $today = eventosapp_get_today_in_event_tz($ev_id);
         $status_arr = get_post_meta($tid, '_eventosapp_checkin_status', true);
         if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
@@ -654,7 +1380,6 @@ add_action('wp_ajax_eventosapp_front_search', function(){
             ? 'checked_in'
             : 'not_checked_in';
 
-        // Si hoy NO es día del evento, ignorar lo guardado para la acción del día actual.
         $today_allowed = eventosapp_is_today_valid_for_event($ev_id);
         if (!$today_allowed) {
             $today_status = 'not_checked_in';
@@ -668,6 +1393,9 @@ add_action('wp_ajax_eventosapp_front_search', function(){
             'first_name'           => $fn,
             'last_name'            => $ln,
             'email'                => $email,
+            'phone'                => $phone,
+            'company'              => $company,
+            'cargo'                => $cargo,
             'cc'                   => $cc,
             'localidad'            => $localidad,
             'ticket_pub'           => $ticketP,
@@ -684,9 +1412,6 @@ add_action('wp_ajax_eventosapp_front_search', function(){
 
     wp_send_json_success( $out );
 });
-
-
-
 
 /**
  * AJAX: Toggle check-in del día actual (con log)
@@ -707,7 +1432,6 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     $evento_id = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
     if ( ! $evento_id ) wp_send_json_error(['message'=>'Ticket sin evento'], 400);
 
-    // 🔒 Forzar evento activo para no-admins
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
         $active = (int) eventosapp_get_active_event();
         if ( ! $active || $evento_id !== $active ) {
@@ -717,16 +1441,13 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
         wp_send_json_error(['message'=>'Sin permisos'], 403);
     }
 
-    // Día actual en TZ del evento y validación contra días definidos
     $today = eventosapp_get_today_in_event_tz($evento_id);
     $days  = function_exists('eventosapp_get_event_days') ? (array) eventosapp_get_event_days($evento_id) : [];
 
     if ( empty($days) || !in_array($today, $days, true) ) {
-        // 200 OK para que llegue a .done() y podamos mostrar el mensaje de negocio
         wp_send_json_error(['message' => 'El check-in solo está permitido en las fechas del evento. Hoy no corresponde.']);
     }
 
-    // Estado actual y toggle
     $status_arr = get_post_meta($ticket_id, '_eventosapp_checkin_status', true);
     if (is_string($status_arr)) $status_arr = @unserialize($status_arr);
     if (!is_array($status_arr)) $status_arr = [];
@@ -736,13 +1457,11 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     $status_arr[$today] = $new;
     update_post_meta($ticket_id, '_eventosapp_checkin_status', $status_arr);
 
-    // Log
     $log = get_post_meta($ticket_id, '_eventosapp_checkin_log', true);
     if (is_string($log)) $log = @unserialize($log);
     if (!is_array($log)) $log = [];
     $user = wp_get_current_user();
 
-    // Marca hora con TZ del evento para coherencia
     try {
         $tz = new DateTimeZone( get_post_meta($evento_id, '_eventosapp_zona_horaria', true) ?: wp_timezone_string() );
     } catch(Exception $e) {
@@ -762,12 +1481,10 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
         'origen'       => 'frontend-search',
     ];
 
-    // Registrar como tipo 'Counter' cuando se activa el check-in manualmente
     if ( $new === 'checked_in' ) {
         $log_entry['qr_type']       = 'counter';
         $log_entry['qr_type_label'] = 'Counter';
 
-        // Actualizar estadísticas de uso por tipo (mismo mecanismo que QR check-in)
         if ( function_exists('eventosapp_update_qr_usage_stats') ) {
             eventosapp_update_qr_usage_stats($evento_id, 'counter');
         }
@@ -776,7 +1493,7 @@ add_action('wp_ajax_eventosapp_front_toggle_checkin', function(){
     $log[] = $log_entry;
     update_post_meta($ticket_id, '_eventosapp_checkin_log', $log);
 
-wp_send_json_success([
+    wp_send_json_success([
         'today_status'         => $new,
         'today_allowed'        => true,
         'message'              => 'Estado actualizado.',
@@ -802,14 +1519,12 @@ function eventosapp_ajax_render_badge() {
 
     if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) wp_die('Ticket inválido', '', 400);
 
-    // Fallback: si no viene o no coincide, toma el del ticket
     $event_from_ticket = (int) get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true);
     if ( ! $event_id || $event_id !== $event_from_ticket ) {
         $event_id = $event_from_ticket;
     }
     if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) wp_die('Evento inválido', '', 400);
 
-    // 🔒 Forzar evento activo para no-admins
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
         $active = (int) eventosapp_get_active_event();
         if ( ! $active || $event_id !== $active ) {
@@ -823,7 +1538,6 @@ function eventosapp_ajax_render_badge() {
     exit;
 }
 
-
 /**
  * Construcción de la escarapela tomando metas del EVENTO.
  *
@@ -834,7 +1548,6 @@ function eventosapp_ajax_render_badge() {
  */
 if ( ! function_exists('eventosapp_get_badge_html_from_event') ) {
 function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_print = true ) {
-    // 1) Cargar la config del evento desde el helper del admin
     if ( ! function_exists('eventosapp_get_badge_settings') ) {
         $cfg = [
             'design' => 'manillas',
@@ -849,7 +1562,6 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
         $cfg = eventosapp_get_badge_settings( $event_id );
     }
 
-    // 2) Orden activo
     $active = [];
     for ($i=1; $i<=5; $i++) {
         $f = $cfg['order'][$i] ?? 'none';
@@ -857,9 +1569,8 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
     }
     if (!$active) $active = ['full_name', 'company', 'qr'];
 
-    // 3) Datos del ticket - TODOS LOS CAMPOS
     $labels = [];
-    
+
     if ($ticket_id && get_post_type($ticket_id)==='eventosapp_ticket') {
         $nombre   = get_post_meta($ticket_id, '_eventosapp_asistente_nombre',  true);
         $apell    = get_post_meta($ticket_id, '_eventosapp_asistente_apellido',true);
@@ -874,7 +1585,6 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
         $localidad= get_post_meta($ticket_id, '_eventosapp_asistente_localidad',true);
         $code     = get_post_meta($ticket_id, 'eventosapp_ticketID',           true);
 
-        // Campos básicos
         $labels['full_name']   = trim($nombre . ' ' . $apell) ?: 'Nombres + Apellidos';
         $labels['nombre']      = $nombre ?: 'Nombre';
         $labels['apellido']    = $apell ?: 'Apellido';
@@ -888,15 +1598,12 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
         $labels['pais']        = $pais    ?: 'País';
         $labels['localidad']   = $localidad ?: 'Localidad';
 
-        // QR: se mantiene disponible para la escarapela manual, incluso si el ticket es virtual.
-        // Esto permite imprimir escarapela cuando un asistente virtual también llega físicamente.
         if ($code && function_exists('eventosapp_get_ticket_qr_url')) {
             $labels['qr'] = eventosapp_get_ticket_qr_url($code);
         } else {
             $labels['qr'] = '';
         }
 
-        // Campos adicionales del evento
         if (function_exists('eventosapp_get_event_extra_fields')) {
             $extra_fields = eventosapp_get_event_extra_fields($event_id);
             if (!empty($extra_fields)) {
@@ -908,7 +1615,6 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
             }
         }
     } else {
-        // Valores por defecto
         $labels = [
             'full_name'   => 'Nombres + Apellidos',
             'nombre'      => 'Nombre',
@@ -924,8 +1630,7 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
             'localidad'   => 'Localidad',
             'qr'          => '',
         ];
-        
-        // Campos adicionales con valores por defecto
+
         if (function_exists('eventosapp_get_event_extra_fields')) {
             $extra_fields = eventosapp_get_event_extra_fields($event_id);
             if (!empty($extra_fields)) {
@@ -937,7 +1642,6 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
         }
     }
 
-    // 4) Dirección flex según diseño
     $flex_dir = ($cfg['design'] === 'escarapelas') ? 'column' : 'row';
 
     ob_start(); ?>
@@ -963,7 +1667,6 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
 <div class="badge">
 <?php
     if ($cfg['design'] === 'escarapelas_split') {
-        // Diseño split 3 izq / 1 der (ORIGINAL)
         $left  = array_slice($active, 0, 3);
         $right = $active[3] ?? null;
 
@@ -994,13 +1697,11 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
         echo "</div>";
 
     } elseif ($cfg['design'] === 'escarapelas_split_4') {
-        // NUEVO DISEÑO: split 4 izq / 1 der
         $left  = array_slice($active, 0, 4);
         $right = $active[4] ?? null;
 
         echo "<div class='left'>";
         foreach ($left as $idx=>$field) {
-            // Tamaños: primero grande, segundo y tercero medianos, cuarto pequeño
             if ($idx === 0) {
                 $fs = $cfg['size_large'];
                 $fw = $cfg['weight_large'];
@@ -1012,7 +1713,7 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
                 $fw = $cfg['weight_small'];
             }
             $m  = $cfg['sep_vertical'];
-            
+
             if ($field === 'qr' && !empty($labels['qr'])) {
                 echo "<div class='slot' style='margin:{$m}px'><img src='".esc_url($labels['qr'])."' width='{$cfg['qr_size']}' height='{$cfg['qr_size']}' alt='QR'></div>";
             } else {
@@ -1035,7 +1736,6 @@ function eventosapp_get_badge_html_from_event( $event_id, $ticket_id = 0, $auto_
         echo "</div>";
 
     } else {
-        // Diseños normales (manillas o escarapelas vertical)
         foreach (array_values($active) as $idx=>$field) {
             $margin = ($cfg['design']==='escarapelas') ? $cfg['sep_vertical'] : $cfg['sep_horizontal'];
             if ($field==='qr' && !empty($labels['qr'])) {
