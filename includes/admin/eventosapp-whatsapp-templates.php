@@ -1790,6 +1790,65 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
 }
 
 /**
+ * Detecta variables numéricas ubicadas en los límites del BODY.
+ * Meta rechaza plantillas cuando el cuerpo inicia o termina directamente
+ * con un parámetro como {{1}}. Centralizar esta validación evita enviar
+ * payloads que sabemos de antemano que serán rechazados.
+ */
+function eventosapp_whatsapp_templates_body_boundary_variable_issue($body_text) {
+    $body_text = trim((string) $body_text);
+    if ( $body_text === '' ) {
+        return '';
+    }
+
+    if ( preg_match('/^\{\{\s*\d+\s*\}\}/u', $body_text) ) {
+        return 'start';
+    }
+
+    if ( preg_match('/\{\{\s*\d+\s*\}\}\s*$/u', $body_text) ) {
+        return 'end';
+    }
+
+    return '';
+}
+
+/**
+ * Migra de forma segura el BODY heredado de Doble Autenticación.
+ * La versión histórica terminaba en {{6}}, patrón que Meta rechaza.
+ * Solo se corrige esta familia funcional y se conserva exactamente el mismo
+ * mapa de variables que consume el motor de envío {{1}} ... {{6}}.
+ */
+function eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template) {
+    $template = is_array($template) ? $template : [];
+    $builder_type = function_exists('eventosapp_whatsapp_templates_builder_type_for_template')
+        ? eventosapp_whatsapp_templates_builder_type_for_template($template, 'standard')
+        : sanitize_key((string)($template['builder_type'] ?? ''));
+    $is_double_auth = $builder_type === 'double_auth_code'
+        || ! empty($template['double_auth_code'])
+        || sanitize_key((string)($template['base_key'] ?? '')) === 'double_auth_code';
+
+    if ( ! $is_double_auth ) {
+        return $template;
+    }
+
+    $body = trim((string)($template['body_text'] ?? ''));
+    if ( $body === '' ) {
+        return $template;
+    }
+
+    if ( preg_match('/^\{\{\s*\d+\s*\}\}/u', $body) ) {
+        $body = "Código de acceso: " . $body;
+    }
+
+    if ( preg_match('/\{\{\s*\d+\s*\}\}\s*$/u', $body) ) {
+        $body .= "\n\nEste código es personal. No lo compartas con otras personas.";
+    }
+
+    $template['body_text'] = $body;
+    return $template;
+}
+
+/**
  * Valida plantilla antes de enviarla a Meta.
  */
 function eventosapp_whatsapp_templates_validate_for_meta($template) {
@@ -1839,6 +1898,13 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
             $body_variables = eventosapp_whatsapp_templates_extract_body_variable_numbers($template['body_text']);
             if ( count($body_variables) > 20 ) {
                 $errors[] = 'El cuerpo de la plantilla tiene demasiadas variables. Usa máximo 20 variables para mantener compatibilidad con Meta.';
+            }
+
+            $boundary_issue = eventosapp_whatsapp_templates_body_boundary_variable_issue($template['body_text']);
+            if ( $boundary_issue === 'start' ) {
+                $errors[] = 'El cuerpo no puede comenzar directamente con una variable. Agrega texto fijo antes del primer parámetro.';
+            } elseif ( $boundary_issue === 'end' ) {
+                $errors[] = 'El cuerpo no puede terminar directamente con una variable. Agrega texto fijo después del último parámetro.';
             }
         }
 
@@ -2415,6 +2481,7 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
     }
 
     $sender_account = eventosapp_whatsapp_templates_resolve_sender_account($template['sender_phone_number_id'] ?? '', $settings);
+    $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
     $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'] ?? '', $template['body_examples'] ?? '');
     $requested_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
     $template['category'] = $requested_category;
@@ -3054,7 +3121,7 @@ if ( ! function_exists('eventosapp_double_auth_template_is_compatible') ) {
         }
 
         $header_format = strtoupper(sanitize_key((string)($template['header_format'] ?? 'NONE')));
-        if ( in_array($header_format, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) ) return false;
+        if ( in_array($header_format, ['VIDEO', 'DOCUMENT'], true) ) return false;
 
         if ( function_exists('eventosapp_whatsapp_get_runtime_body_variable_numbers') ) {
             $variables = eventosapp_whatsapp_get_runtime_body_variable_numbers($template);
@@ -3247,6 +3314,12 @@ function eventosapp_whatsapp_templates_builder_new_standard_template($type) {
     $template['last_checked_at'] = '';
     $template['created_at'] = $now;
     $template['updated_at'] = $now;
+
+    if ( $type === 'double_auth_code' ) {
+        $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
+        $template['header_format'] = 'IMAGE';
+        $template['header_text'] = '';
+    }
 
     if ( $type === 'ticket_presencial' ) {
         $template['base_key'] = 'presencial';
@@ -3731,6 +3804,26 @@ function eventosapp_whatsapp_templates_modality_label($modality) {
 }
 
 /**
+ * Estilos compartidos del builder unificado.
+ *
+ * Se imprimen una sola vez y se usan tanto en plantillas estándar como Flow.
+ * Mantenerlos fuera de un renderer específico evita que el editor Flow pierda
+ * el layout de una sola columna cuando entra por su ruta de compatibilidad.
+ */
+function eventosapp_whatsapp_templates_render_builder_styles() {
+    static $rendered = false;
+    if ( $rendered ) return;
+    $rendered = true;
+    ?>
+    <style>
+        .evapp-utpl-builder{display:flex;flex-direction:column;gap:14px;align-items:stretch}.evapp-utpl-builder-main{display:flex;flex-direction:column;gap:14px}.evapp-utpl-builder .evapp-utpl-card{margin:0;width:100%;box-sizing:border-box}.evapp-utpl-builder-section{padding:18px}.evapp-utpl-section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.evapp-utpl-section-title h2{margin:0;font-size:17px}.evapp-utpl-section-title p{margin:4px 0 0;color:var(--ev-muted);font-size:12px}.evapp-utpl-stepper{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 14px}.evapp-utpl-step{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--ev-border);border-radius:10px;background:#fff;color:#344054;font-weight:800;font-size:12px}.evapp-utpl-step-number{display:inline-flex;align-items:center;justify-content:center;flex:0 0 25px;width:25px;height:25px;border-radius:999px;background:#eaf3ff;color:#1d67a8;font-size:12px}.evapp-utpl-form-grid{display:grid;grid-template-columns:190px minmax(0,1fr);gap:12px 16px;align-items:start}.evapp-utpl-form-grid>label{font-weight:800;padding-top:8px}.evapp-utpl-form-grid input[type=text],.evapp-utpl-form-grid input[type=url],.evapp-utpl-form-grid textarea,.evapp-utpl-form-grid select{width:100%;max-width:none;border:1px solid #cfd9e5;border-radius:8px;padding:8px 10px}.evapp-utpl-form-grid textarea{min-height:130px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.45}.evapp-utpl-inline-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.evapp-utpl-vars{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.evapp-utpl-var{border:1px solid #c8d8e8;background:#f5faff;color:#245d93;border-radius:999px;padding:5px 8px;font-size:11px;font-weight:800;cursor:pointer}.evapp-utpl-media-note{padding:10px 12px;background:#f5f8fc;border:1px solid var(--ev-border);border-radius:9px;font-size:12px;color:var(--ev-muted);margin-top:8px}.evapp-utpl-button-card{border:1px solid var(--ev-border);border-radius:10px;padding:11px;margin-top:8px;background:#fafcfe}.evapp-utpl-preview-pane{position:static;width:100%;margin:0}.evapp-utpl-preview-pane>.evapp-utpl-card{width:100%}.evapp-utpl-preview-layout{display:grid;grid-template-columns:minmax(280px,430px) minmax(0,1fr);gap:18px;align-items:start}.evapp-utpl-phone{background:#e9edef;border-radius:24px;padding:14px;border:7px solid #263238;box-shadow:0 12px 30px rgba(16,24,40,.14);max-width:430px}.evapp-utpl-phone-top{text-align:center;font-size:11px;color:#667085;margin:0 0 10px}.evapp-utpl-bubble{background:#fff;border-radius:10px;padding:11px;box-shadow:0 1px 2px rgba(16,24,40,.08)}.evapp-utpl-bubble-header{font-weight:800;margin-bottom:7px}.evapp-utpl-bubble-body{white-space:pre-wrap;line-height:1.45;font-size:13px;min-height:90px}.evapp-utpl-bubble-footer{font-size:11px;color:#8a94a1;margin-top:8px}.evapp-utpl-preview-button{text-align:center;color:#1476d4;border-top:1px solid #edf0f2;padding:8px 4px;margin:8px -11px -8px;font-weight:700;font-size:12px}.evapp-utpl-meta-box{margin-top:12px;background:#fff;border:1px solid var(--ev-border);border-radius:11px;padding:12px}.evapp-utpl-meta-box pre{white-space:pre-wrap;max-height:300px;overflow:auto;background:#f8fafc;padding:9px;border-radius:7px;font-size:11px}.evapp-utpl-sticky-actions{position:sticky;bottom:0;z-index:10;display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:rgba(255,255,255,.95);backdrop-filter:blur(8px);border:1px solid var(--ev-border);border-radius:12px;padding:11px 12px;box-shadow:0 -5px 22px rgba(16,24,40,.08)}
+        @media(max-width:1050px){.evapp-utpl-preview-layout{grid-template-columns:1fr}.evapp-utpl-stepper{grid-template-columns:1fr 1fr}.evapp-utpl-phone{max-width:430px}}
+        @media(max-width:782px){.evapp-utpl-form-grid{grid-template-columns:1fr}.evapp-utpl-form-grid>label{padding-top:0}.evapp-utpl-inline-grid{grid-template-columns:1fr}.evapp-utpl-builder-section{padding:14px}.evapp-utpl-sticky-actions{position:static}.evapp-utpl-stepper{grid-template-columns:1fr}.evapp-utpl-step{padding:9px 10px}}
+    </style>
+    <?php
+}
+
+/**
  * Render formulario de edición/creación.
  */
 function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
@@ -3760,6 +3853,9 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
         'sender_phone_number_id'=>'','waba_id'=>'','meta_status'=>'LOCAL','meta_category'=>'','meta_template_id'=>'','archived'=>'0',
     ]);
     $template['builder_type'] = $builder_type;
+    if ( $builder_type === 'double_auth_code' ) {
+        $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
+    }
     $template['category'] = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
     $template['button_count'] = (string)eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
     $template['button_mode'] = sanitize_key((string)($template['button_mode'] ?? 'none'));
@@ -3777,12 +3873,8 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
     if ( $functional_button_lock === 'double_auth' ) { $template['button_mode']='none'; $template['button_count']='0'; }
     $status = eventosapp_whatsapp_templates_normalize_meta_status($template['meta_status'] ?? 'LOCAL');
     $payload = ['waba_id'=>$template_waba_id,'name'=>$template['name'],'language'=>$template['language'],'category'=>$template['category'],'components'=>eventosapp_whatsapp_templates_build_meta_components($template)];
+    eventosapp_whatsapp_templates_render_builder_styles();
     ?>
-    <style>
-        .evapp-utpl-builder{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:18px;align-items:start}.evapp-utpl-builder-main{display:flex;flex-direction:column;gap:14px}.evapp-utpl-builder .evapp-utpl-card{margin:0}.evapp-utpl-builder-section{padding:18px}.evapp-utpl-section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.evapp-utpl-section-title h2{margin:0;font-size:17px}.evapp-utpl-section-title p{margin:4px 0 0;color:var(--ev-muted);font-size:12px}.evapp-utpl-form-grid{display:grid;grid-template-columns:190px minmax(0,1fr);gap:12px 16px;align-items:start}.evapp-utpl-form-grid>label{font-weight:800;padding-top:8px}.evapp-utpl-form-grid input[type=text],.evapp-utpl-form-grid input[type=url],.evapp-utpl-form-grid textarea,.evapp-utpl-form-grid select{width:100%;max-width:none;border:1px solid #cfd9e5;border-radius:8px;padding:8px 10px}.evapp-utpl-form-grid textarea{min-height:130px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.45}.evapp-utpl-inline-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.evapp-utpl-vars{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.evapp-utpl-var{border:1px solid #c8d8e8;background:#f5faff;color:#245d93;border-radius:999px;padding:5px 8px;font-size:11px;font-weight:800;cursor:pointer}.evapp-utpl-media-note{padding:10px 12px;background:#f5f8fc;border:1px solid var(--ev-border);border-radius:9px;font-size:12px;color:var(--ev-muted);margin-top:8px}.evapp-utpl-button-card{border:1px solid var(--ev-border);border-radius:10px;padding:11px;margin-top:8px;background:#fafcfe}.evapp-utpl-preview-pane{position:sticky;top:42px}.evapp-utpl-phone{background:#e9edef;border-radius:24px;padding:14px;border:7px solid #263238;box-shadow:0 12px 30px rgba(16,24,40,.14)}.evapp-utpl-phone-top{text-align:center;font-size:11px;color:#667085;margin:0 0 10px}.evapp-utpl-bubble{background:#fff;border-radius:10px;padding:11px;box-shadow:0 1px 2px rgba(16,24,40,.08)}.evapp-utpl-bubble-header{font-weight:800;margin-bottom:7px}.evapp-utpl-bubble-body{white-space:pre-wrap;line-height:1.45;font-size:13px;min-height:90px}.evapp-utpl-bubble-footer{font-size:11px;color:#8a94a1;margin-top:8px}.evapp-utpl-preview-button{text-align:center;color:#1476d4;border-top:1px solid #edf0f2;padding:8px 4px;margin:8px -11px -8px;font-weight:700;font-size:12px}.evapp-utpl-meta-box{margin-top:12px;background:#fff;border:1px solid var(--ev-border);border-radius:11px;padding:12px}.evapp-utpl-meta-box pre{white-space:pre-wrap;max-height:300px;overflow:auto;background:#f8fafc;padding:9px;border-radius:7px;font-size:11px}.evapp-utpl-sticky-actions{position:sticky;bottom:0;z-index:10;display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:rgba(255,255,255,.95);backdrop-filter:blur(8px);border:1px solid var(--ev-border);border-radius:12px;padding:11px 12px;box-shadow:0 -5px 22px rgba(16,24,40,.08)}
-        @media(max-width:1150px){.evapp-utpl-builder{grid-template-columns:1fr}.evapp-utpl-preview-pane{position:static}.evapp-utpl-phone{max-width:430px}}
-        @media(max-width:782px){.evapp-utpl-form-grid{grid-template-columns:1fr}.evapp-utpl-form-grid>label{padding-top:0}.evapp-utpl-inline-grid{grid-template-columns:1fr}.evapp-utpl-builder-section{padding:14px}.evapp-utpl-sticky-actions{position:static}}
-    </style>
 
     <?php if ( $is_new ) : ?>
         <div class="evapp-utpl-card"><div class="evapp-utpl-card-body">
@@ -3804,6 +3896,13 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
         <input type="hidden" name="template[base_key]" value="<?php echo esc_attr($template['base_key']); ?>">
         <?php if($builder_type==='attendance_confirmation'): ?><input type="hidden" name="template[attendance_confirmation]" value="1"><?php endif; ?>
         <?php if($builder_type==='double_auth_code'): ?><input type="hidden" name="template[double_auth_code]" value="1"><?php endif; ?>
+
+        <div class="evapp-utpl-stepper" aria-label="Pasos del constructor">
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">1</span><span>Identidad y cuenta</span></div>
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">2</span><span>Contenido</span></div>
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">3</span><span>Botones y acciones</span></div>
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">4</span><span>Revisar y validar</span></div>
+        </div>
 
         <div class="evapp-utpl-builder">
             <div class="evapp-utpl-builder-main">
@@ -3846,7 +3945,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 <?php if ( in_array($builder_type, ['marketing','utility_custom'], true) ) : ?>
                 <div class="evapp-utpl-card"><div class="evapp-utpl-builder-section">
                     <details <?php echo trim((string)($template['advanced_components_json'] ?? '')) !== '' ? 'open' : ''; ?>>
-                        <summary style="cursor:pointer;font-weight:800">Modo avanzado · Componentes Meta JSON</summary>
+                        <summary style="cursor:pointer;font-weight:800">3.1 Opcional · Componentes Meta JSON avanzados</summary>
                         <p class="evapp-utpl-help">Opcional. Si lo completas, este arreglo JSON reemplaza los componentes generados por los controles visuales al enviar a Meta. Úsalo para estructuras especiales o nuevas de Meta. Déjalo vacío para usar el builder visual.</p>
                         <textarea name="template[advanced_components_json]" style="width:100%;min-height:220px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder='[{"type":"BODY","text":"Hola {{1}}","example":{"body_text":[["María"]]}}]'><?php echo esc_textarea($template['advanced_components_json'] ?? ''); ?></textarea>
                         <div class="evapp-utpl-media-note">EventosApp valida que el nivel superior sea un arreglo JSON y que cada componente incluya <code>type</code>. La validación específica de componentes especiales sigue a cargo de Meta.</div>
@@ -3854,21 +3953,21 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                 </div></div>
                 <?php endif; ?>
 
-                <div class="evapp-utpl-sticky-actions">
-                    <button class="evapp-utpl-btn primary" type="submit">Guardar plantilla</button>
-                    <a class="evapp-utpl-btn" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_templates')); ?>">Cancelar</a>
-                    <?php if(!$is_new): ?><span class="evapp-utpl-help">Guardar no envía automáticamente a Meta.</span><?php endif; ?>
-                </div>
             </div>
 
             <aside class="evapp-utpl-preview-pane">
                 <div class="evapp-utpl-card"><div class="evapp-utpl-card-body">
-                    <div class="evapp-utpl-section-title"><div><h2>Vista previa</h2><p>Aproximación visual del mensaje.</p></div></div>
+                    <div class="evapp-utpl-section-title"><div><h2>4. Vista previa y validación</h2><p>Revisa el mensaje, el payload y la información efectiva antes de guardarlo o enviarlo a Meta.</p></div></div>
                     <div class="evapp-utpl-phone"><div class="evapp-utpl-phone-top">WhatsApp</div><div class="evapp-utpl-bubble"><div class="evapp-utpl-bubble-header" id="evapp-preview-header"></div><div class="evapp-utpl-bubble-body" id="evapp-preview-body"></div><div class="evapp-utpl-bubble-footer" id="evapp-preview-footer"></div><div id="evapp-preview-buttons"></div></div></div>
                     <div class="evapp-utpl-meta-box"><strong>Payload técnico</strong><pre><?php echo esc_html(wp_json_encode($payload, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)); ?></pre></div>
                     <?php if(!$is_new): eventosapp_whatsapp_templates_render_meta_diagnostics($template,true); endif; ?>
                 </div></div>
             </aside>
+            <div class="evapp-utpl-sticky-actions">
+                <button class="evapp-utpl-btn primary" type="submit">Guardar plantilla</button>
+                <a class="evapp-utpl-btn" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_templates')); ?>">Cancelar</a>
+                <?php if(!$is_new): ?><span class="evapp-utpl-help">Guardar no envía automáticamente a Meta.</span><?php endif; ?>
+            </div>
         </div>
     </form>
 
@@ -3931,10 +4030,17 @@ function eventosapp_whatsapp_templates_render_unified_flow_builder($template_id 
     $phone_accounts = eventosapp_whatsapp_flow_templates_get_phone_accounts($settings);
     $flows = function_exists('eventosapp_whatsapp_flows_get_all_for_select') ? eventosapp_whatsapp_flows_get_all_for_select() : [];
     $status = eventosapp_whatsapp_templates_unified_flow_status($template['meta_status'] ?? 'local_draft');
+    eventosapp_whatsapp_templates_render_builder_styles();
     ?>
     <?php if($is_new): ?><div class="evapp-utpl-card"><div class="evapp-utpl-card-body"><label><strong>Tipo de plantilla</strong></label><select id="evapp-flow-type-switch" style="min-width:320px;margin-left:8px"><option value="flow">Plantilla para WhatsApp Flow</option><?php foreach(eventosapp_whatsapp_templates_builder_presets() as $type=>$preset): if($type==='flow')continue; ?><option value="<?php echo esc_attr($type); ?>"><?php echo esc_html($preset['label']); ?></option><?php endforeach; ?></select></div></div><?php endif; ?>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">
         <?php wp_nonce_field('eventosapp_whatsapp_flow_template_save'); ?><input type="hidden" name="action" value="eventosapp_whatsapp_flow_template_save"><input type="hidden" name="template_id" value="<?php echo esc_attr($is_new?'':$template_id); ?>"><input type="hidden" name="save_mode" value="save">
+        <div class="evapp-utpl-stepper" aria-label="Pasos del constructor Flow">
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">1</span><span>Identidad y cuenta</span></div>
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">2</span><span>Contenido</span></div>
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">3</span><span>Flow de destino</span></div>
+            <div class="evapp-utpl-step"><span class="evapp-utpl-step-number">4</span><span>Revisar y validar</span></div>
+        </div>
         <div class="evapp-utpl-builder">
             <div class="evapp-utpl-builder-main">
                 <div class="evapp-utpl-card"><div class="evapp-utpl-builder-section"><div class="evapp-utpl-section-title"><div><h2>1. Identidad y cuenta</h2><p>Plantilla aprobable por Meta que abre un Flow.</p></div><span class="evapp-utpl-status <?php echo esc_attr($status); ?>"><?php echo esc_html($status); ?></span></div><div class="evapp-utpl-form-grid">
@@ -3956,9 +4062,9 @@ function eventosapp_whatsapp_templates_render_unified_flow_builder($template_id 
                     <label>Meta Flow ID</label><div><input type="text" name="meta_flow_id" value="<?php echo esc_attr($template['meta_flow_id']); ?>"></div>
                     <label>Pantalla inicial</label><div><input type="text" name="navigate_screen" value="<?php echo esc_attr($template['navigate_screen']); ?>" placeholder="SURVEY"></div>
                 </div></div>
-                <div class="evapp-utpl-sticky-actions"><button class="evapp-utpl-btn primary" type="submit">Guardar plantilla Flow</button><a class="evapp-utpl-btn" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_templates')); ?>">Cancelar</a><span class="evapp-utpl-help">Guardar no publica ni envía a aprobación.</span></div>
             </div>
-            <aside class="evapp-utpl-preview-pane"><div class="evapp-utpl-card"><div class="evapp-utpl-card-body"><h2 style="margin-top:0">Resumen</h2><p><strong><?php echo esc_html($template['display_name'] ?: 'Nueva plantilla Flow'); ?></strong></p><p class="evapp-utpl-help">Flow: <?php echo esc_html($template['meta_flow_id'] ?: 'sin Meta Flow ID'); ?><br>Pantalla: <?php echo esc_html($template['navigate_screen'] ?: 'SURVEY'); ?><br>WABA efectivo: <?php echo esc_html(eventosapp_whatsapp_flow_templates_get_template_waba_id($template,$settings) ?: 'sin resolver'); ?></p><div class="evapp-utpl-meta-box"><pre><?php echo esc_html(wp_json_encode(eventosapp_whatsapp_flow_templates_build_meta_payload($template),JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)); ?></pre></div></div></div></aside>
+            <aside class="evapp-utpl-preview-pane"><div class="evapp-utpl-card"><div class="evapp-utpl-card-body"><h2 style="margin-top:0">4. Vista previa y validación</h2><p class="evapp-utpl-help">Revisa el Flow, WABA y payload antes de guardar o enviar a Meta.</p><p><strong><?php echo esc_html($template['display_name'] ?: 'Nueva plantilla Flow'); ?></strong></p><p class="evapp-utpl-help">Flow: <?php echo esc_html($template['meta_flow_id'] ?: 'sin Meta Flow ID'); ?><br>Pantalla: <?php echo esc_html($template['navigate_screen'] ?: 'SURVEY'); ?><br>WABA efectivo: <?php echo esc_html(eventosapp_whatsapp_flow_templates_get_template_waba_id($template,$settings) ?: 'sin resolver'); ?></p><div class="evapp-utpl-meta-box"><pre><?php echo esc_html(wp_json_encode(eventosapp_whatsapp_flow_templates_build_meta_payload($template),JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)); ?></pre></div></div></div></aside>
+            <div class="evapp-utpl-sticky-actions"><button class="evapp-utpl-btn primary" type="submit">Guardar plantilla Flow</button><a class="evapp-utpl-btn" href="<?php echo esc_url(admin_url('admin.php?page=eventosapp_whatsapp_templates')); ?>">Cancelar</a><span class="evapp-utpl-help">Guardar no publica ni envía a aprobación.</span></div>
         </div>
     </form>
     <?php if(!$is_new): ?><div class="evapp-utpl-card" style="margin-top:16px"><div class="evapp-utpl-card-body"><div class="evapp-utpl-actions">

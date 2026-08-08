@@ -5331,6 +5331,46 @@ if ( ! function_exists('eventosapp_whatsapp_render_event_satisfaction_flow_sende
     }
 }
 
+/**
+ * Resuelve la imagen dinámica usada por las plantillas de Doble Autenticación.
+ *
+ * Prioridad:
+ * 1. Imagen específica de Doble Autenticación del evento.
+ * 2. Imagen de Confirmación de asistencia del mismo evento.
+ * 3. Cabezote de la landing WhatsApp.
+ * 4. Cabezote del correo del evento.
+ * 5. Imagen predeterminada del sistema.
+ *
+ * La prioridad conserva la solicitud de usar Confirmación como respaldo sin
+ * obligar a duplicar archivos cuando ambas comunicaciones comparten diseño.
+ */
+if ( ! function_exists('eventosapp_double_auth_get_event_whatsapp_image') ) {
+    function eventosapp_double_auth_get_event_whatsapp_image($event_id) {
+        $event_id = absint($event_id);
+        if ( ! $event_id ) {
+            return '';
+        }
+
+        $candidates = [
+            get_post_meta($event_id, '_eventosapp_double_auth_whatsapp_image', true),
+            get_post_meta($event_id, '_eventosapp_attendance_confirmation_whatsapp_image', true),
+            get_post_meta($event_id, '_eventosapp_whatsapp_landing_header_img', true),
+            get_post_meta($event_id, '_eventosapp_email_header_img', true),
+        ];
+
+        foreach ( $candidates as $candidate ) {
+            $candidate = esc_url_raw((string) $candidate);
+            if ( $candidate !== '' ) {
+                return $candidate;
+            }
+        }
+
+        return function_exists('eventosapp_whatsapp_system_default_header_image')
+            ? esc_url_raw((string) eventosapp_whatsapp_system_default_header_image())
+            : '';
+    }
+}
+
 add_action('add_meta_boxes', function() {
     foreach ( eventosapp_whatsapp_active_event_post_types() as $screen ) {
         add_meta_box(
@@ -5375,6 +5415,12 @@ function eventosapp_whatsapp_render_event_visuals_metabox($post) {
             'label'       => 'Imagen para mensajes WhatsApp de modalidad virtual',
             'description' => 'Se usará como imagen del mensaje para tickets virtuales. El botón o enlace del ticket virtual dirigirá a la landing virtual existente del evento.',
             'effective'   => $visuals['virtual_message_image'],
+        ],
+        'eventosapp_double_auth_whatsapp_image' => [
+            'meta'        => '_eventosapp_double_auth_whatsapp_image',
+            'label'       => 'Imagen para Código de Doble Autenticación',
+            'description' => 'Imagen dinámica que se enviará en el encabezado de la plantilla de Doble Autenticación. Recomendado: JPG o PNG horizontal y liviano. Si la dejas vacía, EventosApp usará primero la imagen de Confirmación de asistencia del evento y después los respaldos visuales generales.',
+            'effective'   => function_exists('eventosapp_double_auth_get_event_whatsapp_image') ? eventosapp_double_auth_get_event_whatsapp_image($event_id) : '',
         ],
     ];
 
@@ -5620,6 +5666,7 @@ function eventosapp_whatsapp_save_event_visuals_metabox($post_id, $post = null, 
         'eventosapp_whatsapp_landing_header_img' => '_eventosapp_whatsapp_landing_header_img',
         'eventosapp_whatsapp_qr_header_img' => '_eventosapp_whatsapp_qr_header_img',
         'eventosapp_whatsapp_virtual_message_img' => '_eventosapp_whatsapp_virtual_message_img',
+        'eventosapp_double_auth_whatsapp_image' => '_eventosapp_double_auth_whatsapp_image',
         'eventosapp_whatsapp_satisfaction_flow_header_img' => '_eventosapp_whatsapp_satisfaction_flow_header_img',
     ];
 
@@ -6119,6 +6166,91 @@ function eventosapp_whatsapp_extract_message_id($decoded) {
     return '';
 }
 
+/**
+ * Identifica una plantilla funcional de Doble Autenticación sin depender del
+ * orden de carga del módulo especializado.
+ */
+if ( ! function_exists('eventosapp_whatsapp_template_is_double_auth_runtime') ) {
+    function eventosapp_whatsapp_template_is_double_auth_runtime($template) {
+        if ( ! is_array($template) ) {
+            return false;
+        }
+
+        return ! empty($template['double_auth_code'])
+            || sanitize_key((string)($template['builder_type'] ?? '')) === 'double_auth_code'
+            || sanitize_key((string)($template['base_key'] ?? '')) === 'double_auth_code';
+    }
+}
+
+/**
+ * Resuelve el componente HEADER de imagen para un envío de Doble Autenticación.
+ *
+ * El núcleo histórico de Doble Autenticación construye el BODY y llama al
+ * builder central. Para conservar ese núcleo sin duplicarlo, este builder
+ * reconoce únicamente esa llamada, recupera el ticket desde el stack inmediato
+ * y agrega la imagen del evento cuando la plantilla aprobada usa HEADER IMAGE.
+ * La inspección se limita a pocas tramas y solo se ejecuta para plantillas que
+ * realmente estén marcadas como Doble Autenticación.
+ */
+if ( ! function_exists('eventosapp_whatsapp_double_auth_runtime_header_component') ) {
+    function eventosapp_whatsapp_double_auth_runtime_header_component($template_name) {
+        $template_name = sanitize_key((string)$template_name);
+        if ( $template_name === '' || ! function_exists('eventosapp_whatsapp_templates_get_settings') ) {
+            return [];
+        }
+
+        $settings = eventosapp_whatsapp_templates_get_settings();
+        $templates = is_array($settings['templates'] ?? null) ? $settings['templates'] : [];
+        $canonical = null;
+
+        foreach ( $templates as $template_key => $candidate ) {
+            if ( ! is_array($candidate) ) {
+                continue;
+            }
+            $candidate_name = sanitize_key((string)($candidate['name'] ?? ''));
+            if ( $candidate_name === $template_name && eventosapp_whatsapp_template_is_double_auth_runtime($candidate) ) {
+                $canonical = $candidate;
+                break;
+            }
+        }
+
+        if ( ! is_array($canonical) || strtoupper(sanitize_key((string)($canonical['header_format'] ?? 'NONE'))) !== 'IMAGE' ) {
+            return [];
+        }
+
+        $ticket_id = 0;
+        foreach ( debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, 6) as $frame ) {
+            if ( ($frame['function'] ?? '') !== 'eventosapp_send_auth_code_whatsapp' ) {
+                continue;
+            }
+            $ticket_id = absint($frame['args'][0] ?? 0);
+            break;
+        }
+
+        if ( ! $ticket_id || get_post_type($ticket_id) !== 'eventosapp_ticket' ) {
+            return [];
+        }
+
+        $event_id = absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true));
+        $image_url = function_exists('eventosapp_double_auth_get_event_whatsapp_image')
+            ? eventosapp_double_auth_get_event_whatsapp_image($event_id)
+            : '';
+        $image_url = esc_url_raw((string)$image_url);
+
+        if ( $image_url === '' ) {
+            return [];
+        }
+
+        return [
+            'type' => 'header',
+            'parameters' => [[
+                'type' => 'image',
+                'image' => [ 'link' => $image_url ],
+            ]],
+        ];
+    }
+}
+
 function eventosapp_whatsapp_build_template_payload($template_name, $language_code = 'en_US', $components = []) {
     $template_name = sanitize_key((string) $template_name);
     $language_code = sanitize_text_field((string) $language_code);
@@ -6128,6 +6260,21 @@ function eventosapp_whatsapp_build_template_payload($template_name, $language_co
     }
     if ( $language_code === '' ) {
         $language_code = 'en_US';
+    }
+
+    $components = is_array($components) ? array_values($components) : [];
+    $double_auth_header = eventosapp_whatsapp_double_auth_runtime_header_component($template_name);
+    if ( ! empty($double_auth_header) ) {
+        $has_header = false;
+        foreach ( $components as $component ) {
+            if ( is_array($component) && strtolower((string)($component['type'] ?? '')) === 'header' ) {
+                $has_header = true;
+                break;
+            }
+        }
+        if ( ! $has_header ) {
+            array_unshift($components, $double_auth_header);
+        }
     }
 
     $template = [
@@ -6234,6 +6381,19 @@ function eventosapp_whatsapp_prepare_runtime_template($template, $fallback_id = 
     $template['sender_phone_label'] = sanitize_text_field((string)($template['sender_phone_label'] ?? ''));
     $template['waba_id'] = eventosapp_whatsapp_sanitize_waba_id($template['waba_id'] ?? '');
     $template['button_count'] = (string) eventosapp_whatsapp_runtime_template_button_count($template);
+
+    // El núcleo histórico de Doble Autenticación rechazaba cualquier multimedia
+    // antes de llegar al builder central. Conservamos el HEADER IMAGE canónico
+    // en el inventario/Meta, pero en la copia runtime se marca como NONE para
+    // superar esa guarda antigua. El builder central agrega después la imagen
+    // dinámica del evento exclusivamente para ese envío.
+    if ( eventosapp_whatsapp_template_is_double_auth_runtime($template) ) {
+        $original_header_format = strtoupper(sanitize_key((string)($template['header_format'] ?? 'NONE')));
+        if ( $original_header_format === 'IMAGE' ) {
+            $template['_eventosapp_runtime_header_format'] = 'IMAGE';
+            $template['header_format'] = 'NONE';
+        }
+    }
 
     if ( $template['button_count'] === '1' ) {
         $template['button_2_text'] = '';
