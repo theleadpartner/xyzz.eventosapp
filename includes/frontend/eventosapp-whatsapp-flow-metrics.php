@@ -389,27 +389,62 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_counts') ) {
         $flow_post_id = absint($flow_post_id);
         if ( ! $event_id || ! $flow_post_id || ! eventosapp_whatsapp_flow_metrics_require_dependencies() ) {
             return [
-                'sent'      => 0,
-                'read'      => 0,
-                'answered'  => 0,
-                'read_rate' => 0,
-                'answer_rate' => 0,
+                'sent'          => 0,
+                'delivered'     => 0,
+                'read'          => 0,
+                'answered'      => 0,
+                'delivery_rate' => 0,
+                'read_rate'     => 0,
+                'answer_rate'   => 0,
             ];
         }
 
         $sends_table = eventosapp_whatsapp_flows_sends_table_name();
         $responses_table = eventosapp_whatsapp_flows_responses_table_name();
 
-        $sent_where = "event_id = %d AND flow_post_id = %d AND status NOT LIKE 'failed%%' AND (wa_message_id <> '' OR status IN ('sent_request','webhook_sent','webhook_delivered','webhook_read','delivered','read'))";
-        $sent = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$sends_table} WHERE {$sent_where}", $event_id, $flow_post_id));
+        /*
+         * Un solo recorrido de la tabla de envíos obtiene enviados, entregados y leídos.
+         * "Leído" cuenta también como entregado porque Meta solo puede marcar lectura
+         * después de que el mensaje haya sido entregado.
+         */
+        $send_metrics = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT
+                    SUM(
+                        CASE
+                            WHEN status NOT LIKE 'failed%%'
+                             AND (wa_message_id <> '' OR status IN ('sent_request','webhook_sent','webhook_delivered','webhook_read','delivered','read'))
+                            THEN 1 ELSE 0
+                        END
+                    ) AS sent,
+                    SUM(
+                        CASE
+                            WHEN status NOT LIKE 'failed%%'
+                             AND (
+                                 delivery_status IN ('delivered','read')
+                                 OR status IN ('webhook_delivered','webhook_read','delivered','read')
+                             )
+                            THEN 1 ELSE 0
+                        END
+                    ) AS delivered,
+                    SUM(
+                        CASE
+                            WHEN status NOT LIKE 'failed%%'
+                             AND (delivery_status = 'read' OR status IN ('webhook_read','read'))
+                            THEN 1 ELSE 0
+                        END
+                    ) AS read
+                 FROM {$sends_table}
+                 WHERE event_id = %d AND flow_post_id = %d",
+                $event_id,
+                $flow_post_id
+            ),
+            ARRAY_A
+        );
 
-        $read = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$sends_table}
-             WHERE event_id = %d AND flow_post_id = %d
-             AND (delivery_status = 'read' OR status = 'webhook_read')",
-            $event_id,
-            $flow_post_id
-        ));
+        $sent = absint($send_metrics['sent'] ?? 0);
+        $delivered = absint($send_metrics['delivered'] ?? 0);
+        $read = absint($send_metrics['read'] ?? 0);
 
         $answered = (int) $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*)
@@ -422,11 +457,13 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_counts') ) {
         ));
 
         return [
-            'sent'        => $sent,
-            'read'        => $read,
-            'answered'    => $answered,
-            'read_rate'   => $sent > 0 ? round(($read / $sent) * 100, 2) : 0,
-            'answer_rate' => $sent > 0 ? round(($answered / $sent) * 100, 2) : 0,
+            'sent'          => $sent,
+            'delivered'     => $delivered,
+            'read'          => $read,
+            'answered'      => $answered,
+            'delivery_rate' => $sent > 0 ? round(($delivered / $sent) * 100, 2) : 0,
+            'read_rate'     => $sent > 0 ? round(($read / $sent) * 100, 2) : 0,
+            'answer_rate'   => $sent > 0 ? round(($answered / $sent) * 100, 2) : 0,
         ];
     }
 }
@@ -489,7 +526,7 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_build_payload') ) {
                 'flow_id'  => $flow_post_id,
                 'flow_title' => $flow_post_id ? eventosapp_whatsapp_flow_metrics_get_flow_title($flow_post_id) : '',
                 'flows'    => $flows,
-                'counts'   => ['sent'=>0, 'read'=>0, 'answered'=>0, 'read_rate'=>0, 'answer_rate'=>0],
+                'counts'   => ['sent'=>0, 'delivered'=>0, 'read'=>0, 'answered'=>0, 'delivery_rate'=>0, 'read_rate'=>0, 'answer_rate'=>0],
                 'questions'=> [],
                 'message'  => $message,
                 'performance' => ['cached' => false, 'processed_responses' => 0, 'batch_size' => 0],
@@ -1246,8 +1283,37 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
 
     $flows = eventosapp_whatsapp_flow_metrics_get_event_flows($active_event);
     $default_flow_id = ! empty($flows[0]['id']) ? absint($flows[0]['id']) : 0;
+    $default_flow = ! empty($flows[0]) && is_array($flows[0]) ? $flows[0] : [];
     $nonce = wp_create_nonce('eventosapp_whatsapp_flow_metrics_data');
     $export_url = eventosapp_whatsapp_flow_metrics_get_export_url($active_event, $default_flow_id);
+
+    $dashboard_url = function_exists('eventosapp_get_dashboard_url')
+        ? eventosapp_get_dashboard_url()
+        : home_url('/');
+    $dashboard_url = remove_query_arg(['evapp', 'evapp_err', 'set'], $dashboard_url);
+    $change_event_url = add_query_arg(['evapp' => 'change_event'], $dashboard_url);
+
+    $event_title = get_the_title($active_event);
+    if ( ! is_string($event_title) || trim($event_title) === '' ) {
+        $event_title = 'Evento #' . absint($active_event);
+    }
+
+    $event_modalidad_label = function_exists('eventosapp_get_event_modalidad_label')
+        ? eventosapp_get_event_modalidad_label($active_event)
+        : '';
+
+    $last_activity = sanitize_text_field((string)($default_flow['last_activity'] ?? ''));
+    $last_activity_label = '';
+    if ( $last_activity !== '' ) {
+        $activity_timestamp = strtotime($last_activity);
+        if ( $activity_timestamp ) {
+            $last_activity_label = date_i18n(
+                get_option('date_format') . ' · ' . get_option('time_format'),
+                $activity_timestamp
+            );
+        }
+    }
+
     // Plantilla RAW para JavaScript. No se usa wp_nonce_url() porque transforma & en &amp;
     // y eso rompe la verificación del nonce cuando JS actualiza el href del botón.
     $export_url_template = add_query_arg([
@@ -1263,82 +1329,864 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
     ob_start();
     ?>
     <style>
-        .evapp-flow-metrics-wrap{max-width:1120px;margin:0 auto;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;}
-        .evapp-flow-metrics-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px;}
-        .evapp-flow-metrics-title{font-size:1.35rem;font-weight:900;letter-spacing:.2px;margin:0;color:#0b1020;}
-        .evapp-flow-metrics-subtitle{margin:5px 0 0;color:#64748b;font-size:.95rem;}
-        .evapp-flow-metrics-toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:0 0 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:14px;}
-        .evapp-flow-metrics-toolbar label{display:flex;flex-direction:column;gap:5px;font-weight:800;color:#334155;font-size:.88rem;}
-        .evapp-flow-metrics-toolbar select{min-height:38px;min-width:300px;border:1px solid #cbd5e1;border-radius:10px;padding:6px 10px;background:#fff;}
-        .evapp-flow-metrics-flow-static{font-weight:900;color:#1e293b;background:#fff;border:1px solid #e2e8f0;border-radius:999px;padding:9px 13px;}
-        .evapp-flow-metrics-download{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border-radius:10px;background:#3454f4;color:#fff!important;text-decoration:none;font-weight:900;font-size:.9rem;box-shadow:0 7px 18px rgba(52,84,244,.22);}
-        .evapp-flow-metrics-download:hover{background:#203bc4;color:#fff!important;text-decoration:none;}
-        .evapp-flow-metrics-download.is-disabled{opacity:.55;pointer-events:none;box-shadow:none;}
-        .evapp-flow-metrics-status{font-size:.88rem;color:#64748b;margin-left:auto;}
-        .evapp-flow-metrics-status.is-loading{color:#b45309;}
-        .evapp-flow-metrics-status.is-error{color:#b91c1c;font-weight:800;}
-        .evapp-flow-metrics-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px;}
-        .evapp-flow-metrics-kpi{background:#0b1020;color:#eaf1ff;border-radius:16px;padding:16px;box-shadow:0 8px 22px rgba(15,23,42,.12);}
-        .evapp-flow-metrics-kpi span{display:block;color:#a9b6d3;font-size:.9rem;font-weight:800;margin-bottom:6px;}
-        .evapp-flow-metrics-kpi strong{display:block;font-size:2.35rem;line-height:1;font-weight:950;}
-        .evapp-flow-metrics-kpi small{display:block;margin-top:7px;color:#cfe0ff;}
-        .evapp-flow-metrics-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;}
-        .evapp-flow-metrics-card{grid-column:span 12;background:#0b1020;color:#eaf1ff;border-radius:16px;padding:16px;box-shadow:0 8px 22px rgba(15,23,42,.12);}
-        @media(min-width:850px){.evapp-flow-metrics-card{grid-column:span 6;}}
-        .evapp-flow-metrics-card h3{margin:0 0 4px;color:#cfe0ff;font-size:1rem;line-height:1.35;}
-        .evapp-flow-metrics-card .evapp-flow-metrics-question-meta{color:#a9b6d3;font-size:.86rem;margin-bottom:10px;}
-        .evapp-flow-metrics-chart-box{position:relative;min-height:280px;margin:8px 0 12px;}
-        .evapp-flow-metrics-table{width:100%;border-collapse:separate;border-spacing:0;margin-top:8px;}
-        .evapp-flow-metrics-table th,.evapp-flow-metrics-table td{padding:8px 9px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;font-size:.9rem;}
-        .evapp-flow-metrics-table th{color:#cfe0ff;background:#111d3d;}
-        .evapp-flow-metrics-table td:nth-child(2),.evapp-flow-metrics-table td:nth-child(3){font-weight:800;white-space:nowrap;}
-        .evapp-flow-metrics-empty{background:#fff7ed;border:1px solid #fed7aa;color:#7c2d12;border-radius:16px;padding:15px;margin-top:12px;}
-        .evapp-flow-metrics-note{color:#64748b;font-size:.86rem;margin-top:10px;}
-        @media(max-width:720px){.evapp-flow-metrics-head{display:block}.evapp-flow-metrics-kpis{grid-template-columns:1fr}.evapp-flow-metrics-toolbar select{min-width:100%;}.evapp-flow-metrics-status{width:100%;margin-left:0}.evapp-flow-metrics-chart-box{min-height:240px;}}
+        .evapp-flow-metrics-app{
+            --evapp-primary:#3279bd;
+            --evapp-primary-dark:#255f96;
+            --evapp-primary-soft:#eaf4ff;
+            --evapp-app-bg:#f5f8fc;
+            --evapp-surface:#ffffff;
+            --evapp-border:#dfe7f1;
+            --evapp-text:#182230;
+            --evapp-muted:#64748b;
+            --evapp-success:#16855b;
+            --evapp-success-soft:#ecfdf5;
+            --evapp-warning:#a16207;
+            --evapp-warning-soft:#fff8e6;
+            --evapp-danger:#c53a3a;
+            --evapp-danger-soft:#fff1f1;
+            --evapp-purple:#6d4bc3;
+            --evapp-purple-soft:#f3efff;
+            --evapp-radius:18px;
+            --evapp-radius-lg:26px;
+            width:100%;
+            max-width:1180px;
+            margin:0 auto;
+            color:var(--evapp-text);
+            font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+            line-height:1.45;
+            box-sizing:border-box;
+        }
+        .evapp-flow-metrics-app *,
+        .evapp-flow-metrics-app *::before,
+        .evapp-flow-metrics-app *::after{box-sizing:border-box}
+        .evapp-flow-metrics-app a{text-decoration:none}
+        .evapp-flow-metrics-app button,
+        .evapp-flow-metrics-app select{font:inherit}
+        .evapp-flow-metrics-app [hidden]{display:none!important}
+        .evapp-flow-metrics-app .screen-reader-text{
+            position:absolute!important;
+            width:1px!important;
+            height:1px!important;
+            padding:0!important;
+            margin:-1px!important;
+            overflow:hidden!important;
+            clip:rect(0,0,0,0)!important;
+            white-space:nowrap!important;
+            border:0!important;
+        }
+
+        .evapp-flow-metrics-shell{
+            width:100%;
+            padding:clamp(18px,3vw,36px);
+            background:var(--evapp-app-bg);
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius-lg);
+            box-shadow:0 18px 50px rgba(31,65,99,.08);
+        }
+
+        .evapp-flow-metrics-header{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:24px;
+            margin-bottom:22px;
+        }
+        .evapp-flow-metrics-heading{min-width:0}
+        .evapp-flow-metrics-eyebrow{
+            margin:0 0 7px;
+            color:var(--evapp-primary);
+            font-size:12px;
+            font-weight:800;
+            letter-spacing:.15em;
+            text-transform:uppercase;
+        }
+        .evapp-flow-metrics-title{
+            margin:0;
+            color:var(--evapp-text);
+            font-size:clamp(27px,4vw,42px);
+            font-weight:800;
+            line-height:1.08;
+            letter-spacing:-.035em;
+        }
+        .evapp-flow-metrics-subtitle{
+            max-width:760px;
+            margin:10px 0 0;
+            color:var(--evapp-muted);
+            font-size:15px;
+            line-height:1.6;
+        }
+        .evapp-flow-metrics-header-actions{flex:0 0 auto}
+
+        .evapp-flow-metrics-btn{
+            min-height:44px;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:9px;
+            margin:0;
+            padding:10px 15px;
+            border:1px solid transparent;
+            border-radius:12px;
+            background:#fff;
+            color:var(--evapp-text);
+            font:inherit;
+            font-size:14px;
+            font-weight:750;
+            line-height:1.15;
+            text-align:center;
+            cursor:pointer;
+            transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+            -webkit-tap-highlight-color:transparent;
+        }
+        .evapp-flow-metrics-btn svg{
+            width:18px;
+            height:18px;
+            flex:0 0 18px;
+            fill:none;
+            stroke:currentColor;
+            stroke-width:2;
+            stroke-linecap:round;
+            stroke-linejoin:round;
+        }
+        .evapp-flow-metrics-btn:hover:not(:disabled):not(.is-disabled){transform:translateY(-1px)}
+        .evapp-flow-metrics-btn:focus-visible{
+            outline:3px solid rgba(50,121,189,.22);
+            outline-offset:2px;
+        }
+        .evapp-flow-metrics-btn:disabled,
+        .evapp-flow-metrics-btn.is-disabled{
+            opacity:.55;
+            cursor:not-allowed;
+            pointer-events:none;
+            transform:none!important;
+            box-shadow:none!important;
+        }
+        .evapp-flow-metrics-btn-secondary{
+            background:var(--evapp-surface);
+            border-color:var(--evapp-border);
+            color:var(--evapp-text)!important;
+            box-shadow:0 5px 15px rgba(31,65,99,.05);
+            white-space:nowrap;
+        }
+        .evapp-flow-metrics-btn-secondary:hover:not(:disabled){
+            border-color:#c7d7e8;
+            color:var(--evapp-primary-dark)!important;
+            box-shadow:0 8px 20px rgba(31,65,99,.09);
+        }
+        .evapp-flow-metrics-btn-primary{
+            background:var(--evapp-primary);
+            border-color:var(--evapp-primary);
+            color:#fff!important;
+            box-shadow:0 9px 20px rgba(50,121,189,.18);
+        }
+        .evapp-flow-metrics-btn-primary:hover:not(:disabled){
+            background:var(--evapp-primary-dark);
+            border-color:var(--evapp-primary-dark);
+            color:#fff!important;
+            box-shadow:0 12px 24px rgba(50,121,189,.24);
+        }
+
+        .evapp-flow-metrics-event-context{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:16px;
+            margin-bottom:22px;
+            padding:16px 18px;
+            background:var(--evapp-surface);
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius);
+            box-shadow:0 8px 24px rgba(31,65,99,.045);
+        }
+        .evapp-flow-metrics-event-main{
+            min-width:0;
+            display:flex;
+            align-items:center;
+            gap:13px;
+        }
+        .evapp-flow-metrics-event-icon{
+            width:44px;
+            height:44px;
+            flex:0 0 44px;
+            display:grid;
+            place-items:center;
+            color:var(--evapp-primary);
+            background:var(--evapp-primary-soft);
+            border-radius:13px;
+        }
+        .evapp-flow-metrics-event-icon svg{
+            width:22px;
+            height:22px;
+            fill:none;
+            stroke:currentColor;
+            stroke-width:1.9;
+            stroke-linecap:round;
+            stroke-linejoin:round;
+        }
+        .evapp-flow-metrics-event-copy{min-width:0}
+        .evapp-flow-metrics-event-kicker{
+            display:block;
+            margin-bottom:3px;
+            color:var(--evapp-muted);
+            font-size:11px;
+            font-weight:800;
+            letter-spacing:.09em;
+            text-transform:uppercase;
+        }
+        .evapp-flow-metrics-event-name{
+            display:block;
+            overflow:hidden;
+            color:var(--evapp-text);
+            font-size:15px;
+            font-weight:800;
+            line-height:1.3;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        .evapp-flow-metrics-event-flow{
+            display:block;
+            margin-top:3px;
+            overflow:hidden;
+            color:var(--evapp-muted);
+            font-size:12px;
+            line-height:1.4;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        .evapp-flow-metrics-event-meta{
+            display:flex;
+            align-items:center;
+            justify-content:flex-end;
+            flex-wrap:wrap;
+            gap:8px;
+        }
+        .evapp-flow-metrics-chip{
+            min-height:30px;
+            display:inline-flex;
+            align-items:center;
+            gap:7px;
+            padding:6px 10px;
+            border:1px solid var(--evapp-border);
+            border-radius:999px;
+            background:#fff;
+            color:var(--evapp-muted);
+            font-size:12px;
+            font-weight:750;
+            white-space:nowrap;
+        }
+        .evapp-flow-metrics-chip::before{
+            width:7px;
+            height:7px;
+            border-radius:50%;
+            background:#94a3b8;
+            content:"";
+        }
+        .evapp-flow-metrics-chip.is-active{
+            color:var(--evapp-success);
+            border-color:#cfeadf;
+            background:var(--evapp-success-soft);
+        }
+        .evapp-flow-metrics-chip.is-active::before{background:var(--evapp-success)}
+
+        .evapp-flow-metrics-toolbar{
+            display:flex;
+            align-items:flex-end;
+            justify-content:space-between;
+            gap:18px;
+            margin-bottom:18px;
+            padding:18px;
+            background:var(--evapp-surface);
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius);
+            box-shadow:0 8px 26px rgba(31,65,99,.05);
+        }
+        .evapp-flow-metrics-toolbar-main{min-width:0;flex:1 1 auto}
+        .evapp-flow-metrics-field-label{
+            display:block;
+            margin:0 0 6px;
+            color:var(--evapp-muted);
+            font-size:11px;
+            font-weight:800;
+            letter-spacing:.08em;
+            text-transform:uppercase;
+        }
+        .evapp-flow-metrics-flow-static{
+            display:inline-flex;
+            align-items:center;
+            min-height:42px;
+            max-width:100%;
+            padding:9px 12px;
+            border:1px solid var(--evapp-border);
+            border-radius:12px;
+            background:#f8fafc;
+            color:var(--evapp-text);
+            font-size:14px;
+            font-weight:800;
+            line-height:1.35;
+        }
+        .evapp-flow-metrics-select{
+            width:min(100%,460px);
+            min-height:44px;
+            margin:0;
+            padding:9px 38px 9px 12px;
+            border:1px solid var(--evapp-border);
+            border-radius:12px;
+            background:#fff;
+            color:var(--evapp-text);
+            font-size:14px;
+            font-weight:700;
+            outline:none;
+            transition:border-color .16s ease,box-shadow .16s ease;
+        }
+        .evapp-flow-metrics-select:focus{
+            border-color:var(--evapp-primary);
+            box-shadow:0 0 0 3px rgba(50,121,189,.14);
+        }
+        .evapp-flow-metrics-toolbar-actions{
+            display:flex;
+            align-items:center;
+            justify-content:flex-end;
+            flex-wrap:wrap;
+            gap:9px;
+            flex:0 0 auto;
+        }
+        .evapp-flow-metrics-status{
+            min-height:30px;
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding:6px 10px;
+            border:1px solid var(--evapp-border);
+            border-radius:999px;
+            background:#f8fafc;
+            color:var(--evapp-muted);
+            font-size:12px;
+            font-weight:750;
+            line-height:1.2;
+        }
+        .evapp-flow-metrics-status::before{
+            width:7px;
+            height:7px;
+            flex:0 0 7px;
+            border-radius:50%;
+            background:#94a3b8;
+            content:"";
+        }
+        .evapp-flow-metrics-status.is-loading{
+            color:var(--evapp-warning);
+            border-color:#f1dfad;
+            background:var(--evapp-warning-soft);
+        }
+        .evapp-flow-metrics-status.is-loading::before{
+            background:#d69e2e;
+            animation:evapp-flow-metrics-pulse 1s ease-in-out infinite;
+        }
+        .evapp-flow-metrics-status.is-ok{
+            color:var(--evapp-success);
+            border-color:#cfeadf;
+            background:var(--evapp-success-soft);
+        }
+        .evapp-flow-metrics-status.is-ok::before{background:var(--evapp-success)}
+        .evapp-flow-metrics-status.is-error{
+            color:var(--evapp-danger);
+            border-color:#f2cccc;
+            background:var(--evapp-danger-soft);
+        }
+        .evapp-flow-metrics-status.is-error::before{background:var(--evapp-danger)}
+        @keyframes evapp-flow-metrics-pulse{
+            0%,100%{opacity:.35}
+            50%{opacity:1}
+        }
+
+        .evapp-flow-metrics-kpis{
+            display:grid;
+            grid-template-columns:repeat(4,minmax(0,1fr));
+            gap:14px;
+            margin-bottom:24px;
+        }
+        .evapp-flow-metrics-kpi{
+            position:relative;
+            min-width:0;
+            overflow:hidden;
+            padding:17px;
+            background:var(--evapp-surface);
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius);
+            box-shadow:0 8px 24px rgba(31,65,99,.045);
+        }
+        .evapp-flow-metrics-kpi-head{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            margin-bottom:15px;
+        }
+        .evapp-flow-metrics-kpi-icon{
+            width:38px;
+            height:38px;
+            flex:0 0 38px;
+            display:grid;
+            place-items:center;
+            border-radius:11px;
+            color:var(--evapp-primary);
+            background:var(--evapp-primary-soft);
+        }
+        .evapp-flow-metrics-kpi-icon.is-success{
+            color:var(--evapp-success);
+            background:var(--evapp-success-soft);
+        }
+        .evapp-flow-metrics-kpi-icon.is-purple{
+            color:var(--evapp-purple);
+            background:var(--evapp-purple-soft);
+        }
+        .evapp-flow-metrics-kpi-icon svg{
+            width:19px;
+            height:19px;
+            fill:none;
+            stroke:currentColor;
+            stroke-width:2;
+            stroke-linecap:round;
+            stroke-linejoin:round;
+        }
+        .evapp-flow-metrics-kpi-label{
+            display:block;
+            color:var(--evapp-muted);
+            font-size:12px;
+            font-weight:800;
+            line-height:1.35;
+        }
+        .evapp-flow-metrics-kpi strong{
+            display:block;
+            margin:0;
+            color:var(--evapp-text);
+            font-size:clamp(28px,3.4vw,38px);
+            line-height:1;
+            font-weight:850;
+            letter-spacing:-.04em;
+        }
+        .evapp-flow-metrics-kpi small{
+            display:block;
+            margin-top:8px;
+            color:var(--evapp-muted);
+            font-size:12px;
+            line-height:1.4;
+        }
+        .evapp-flow-metrics-kpi small b{color:var(--evapp-text);font-weight:800}
+        .evapp-flow-metrics-kpi-progress{
+            height:5px;
+            margin-top:12px;
+            overflow:hidden;
+            border-radius:999px;
+            background:#edf2f7;
+        }
+        .evapp-flow-metrics-kpi-progress span{
+            display:block;
+            width:0;
+            height:100%;
+            border-radius:inherit;
+            background:var(--evapp-primary);
+            transition:width .28s ease;
+        }
+        .evapp-flow-metrics-kpi-progress.is-success span{background:var(--evapp-success)}
+        .evapp-flow-metrics-kpi-progress.is-purple span{background:var(--evapp-purple)}
+
+        .evapp-flow-metrics-section-head{
+            display:flex;
+            align-items:flex-end;
+            justify-content:space-between;
+            gap:18px;
+            margin-bottom:14px;
+        }
+        .evapp-flow-metrics-section-title{
+            margin:0;
+            color:var(--evapp-text);
+            font-size:19px;
+            font-weight:850;
+            line-height:1.25;
+            letter-spacing:-.015em;
+        }
+        .evapp-flow-metrics-section-copy{
+            margin:5px 0 0;
+            color:var(--evapp-muted);
+            font-size:13px;
+            line-height:1.5;
+        }
+
+        .evapp-flow-metrics-grid{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:14px;
+        }
+        .evapp-flow-metrics-card{
+            min-width:0;
+            padding:18px;
+            background:var(--evapp-surface);
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius);
+            box-shadow:0 8px 26px rgba(31,65,99,.05);
+        }
+        .evapp-flow-metrics-card.is-full{grid-column:1/-1}
+        .evapp-flow-metrics-card h3{
+            margin:0;
+            color:var(--evapp-text);
+            font-size:16px;
+            font-weight:850;
+            line-height:1.4;
+        }
+        .evapp-flow-metrics-question-meta{
+            display:flex;
+            align-items:center;
+            flex-wrap:wrap;
+            gap:8px;
+            margin-top:7px;
+            color:var(--evapp-muted);
+            font-size:12px;
+            line-height:1.4;
+        }
+        .evapp-flow-metrics-question-meta span{
+            display:inline-flex;
+            align-items:center;
+            min-height:26px;
+            padding:4px 8px;
+            border:1px solid var(--evapp-border);
+            border-radius:999px;
+            background:#f8fafc;
+            font-weight:700;
+        }
+        .evapp-flow-metrics-chart-box{
+            position:relative;
+            min-height:285px;
+            margin:16px 0 12px;
+            padding:8px 0;
+        }
+        .evapp-flow-metrics-chart-empty{
+            min-height:230px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:20px;
+            border:1px dashed var(--evapp-border);
+            border-radius:14px;
+            background:#f8fafc;
+            color:var(--evapp-muted);
+            font-size:13px;
+            line-height:1.5;
+            text-align:center;
+        }
+        .evapp-flow-metrics-table-wrap{
+            width:100%;
+            overflow-x:auto;
+            margin-top:8px;
+            border:1px solid var(--evapp-border);
+            border-radius:13px;
+            -webkit-overflow-scrolling:touch;
+        }
+        .evapp-flow-metrics-table{
+            width:100%;
+            min-width:420px;
+            border-collapse:collapse;
+            margin:0;
+            background:#fff;
+        }
+        .evapp-flow-metrics-table th,
+        .evapp-flow-metrics-table td{
+            padding:10px 11px;
+            border-bottom:1px solid var(--evapp-border);
+            color:var(--evapp-text);
+            font-size:13px;
+            line-height:1.35;
+            text-align:left;
+            vertical-align:middle;
+        }
+        .evapp-flow-metrics-table th{
+            background:#f8fafc;
+            color:#475569;
+            font-size:11px;
+            font-weight:850;
+            letter-spacing:.05em;
+            text-transform:uppercase;
+        }
+        .evapp-flow-metrics-table tbody tr:last-child td{border-bottom:0}
+        .evapp-flow-metrics-table td:nth-child(2),
+        .evapp-flow-metrics-table td:nth-child(3){
+            font-weight:800;
+            white-space:nowrap;
+        }
+
+        .evapp-flow-metrics-empty{
+            display:flex;
+            align-items:flex-start;
+            gap:13px;
+            padding:17px;
+            background:var(--evapp-warning-soft);
+            border:1px solid #f1dfad;
+            border-radius:var(--evapp-radius);
+            color:#7c4a03;
+        }
+        .evapp-flow-metrics-empty-icon{
+            width:38px;
+            height:38px;
+            flex:0 0 38px;
+            display:grid;
+            place-items:center;
+            border-radius:11px;
+            background:#fff2c9;
+            color:var(--evapp-warning);
+        }
+        .evapp-flow-metrics-empty-icon svg{
+            width:19px;
+            height:19px;
+            fill:none;
+            stroke:currentColor;
+            stroke-width:2;
+            stroke-linecap:round;
+            stroke-linejoin:round;
+        }
+        .evapp-flow-metrics-empty h3{
+            margin:0 0 4px;
+            color:#7c4a03;
+            font-size:15px;
+            font-weight:850;
+        }
+        .evapp-flow-metrics-empty p{
+            margin:0;
+            color:#8a5b12;
+            font-size:13px;
+            line-height:1.55;
+        }
+
+        .evapp-flow-metrics-note{
+            display:flex;
+            align-items:flex-start;
+            gap:10px;
+            margin-top:16px;
+            padding:12px 14px;
+            border:1px solid var(--evapp-border);
+            border-radius:14px;
+            background:rgba(255,255,255,.65);
+            color:var(--evapp-muted);
+            font-size:12px;
+            line-height:1.55;
+        }
+        .evapp-flow-metrics-note svg{
+            width:17px;
+            height:17px;
+            flex:0 0 17px;
+            margin-top:1px;
+            fill:none;
+            stroke:var(--evapp-primary);
+            stroke-width:2;
+            stroke-linecap:round;
+            stroke-linejoin:round;
+        }
+
+        @media(max-width:980px){
+            .evapp-flow-metrics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+        }
+        @media(max-width:820px){
+            .evapp-flow-metrics-grid{grid-template-columns:1fr}
+            .evapp-flow-metrics-card.is-full{grid-column:auto}
+            .evapp-flow-metrics-toolbar{align-items:stretch;flex-direction:column}
+            .evapp-flow-metrics-toolbar-actions{justify-content:flex-start}
+        }
+        @media(max-width:767px){
+            .evapp-flow-metrics-shell{padding:16px;border-radius:20px}
+            .evapp-flow-metrics-header{display:block;margin-bottom:18px}
+            .evapp-flow-metrics-header-actions{margin-top:14px}
+            .evapp-flow-metrics-header-actions .evapp-flow-metrics-btn{width:100%}
+            .evapp-flow-metrics-event-context{align-items:flex-start;flex-direction:column;padding:14px}
+            .evapp-flow-metrics-event-main{width:100%}
+            .evapp-flow-metrics-event-meta{width:100%;justify-content:flex-start}
+            .evapp-flow-metrics-event-context>.evapp-flow-metrics-event-meta>.evapp-flow-metrics-btn{width:100%}
+            .evapp-flow-metrics-toolbar{padding:14px}
+            .evapp-flow-metrics-toolbar-actions{width:100%}
+            .evapp-flow-metrics-toolbar-actions .evapp-flow-metrics-btn{flex:1 1 180px}
+            .evapp-flow-metrics-status{width:100%;justify-content:center}
+            .evapp-flow-metrics-section-head{display:block}
+            .evapp-flow-metrics-chart-box{min-height:255px}
+        }
+        @media(max-width:540px){
+            .evapp-flow-metrics-kpis{grid-template-columns:1fr}
+            .evapp-flow-metrics-toolbar-actions .evapp-flow-metrics-btn{width:100%;flex-basis:100%}
+            .evapp-flow-metrics-flow-static{width:100%}
+            .evapp-flow-metrics-select{width:100%}
+            .evapp-flow-metrics-card{padding:15px}
+            .evapp-flow-metrics-chart-box{min-height:235px}
+            .evapp-flow-metrics-event-flow{white-space:normal}
+        }
+        @media(prefers-reduced-motion:reduce){
+            .evapp-flow-metrics-app *,
+            .evapp-flow-metrics-app *::before,
+            .evapp-flow-metrics-app *::after{
+                scroll-behavior:auto!important;
+                animation-duration:.01ms!important;
+                animation-iteration-count:1!important;
+                transition-duration:.01ms!important;
+            }
+        }
     </style>
 
-    <div class="evapp-flow-metrics-wrap" data-evapp-flow-metrics-root data-event-id="<?php echo esc_attr($active_event); ?>" data-default-flow-id="<?php echo esc_attr($default_flow_id); ?>">
-        <div class="evapp-flow-metrics-head">
-            <div>
-                <h2 class="evapp-flow-metrics-title">Métricas de Encuestas</h2>
-                <p class="evapp-flow-metrics-subtitle">Evento activo: <strong><?php echo esc_html(get_the_title($active_event)); ?></strong></p>
-            </div>
-        </div>
+    <div
+        class="evapp-flow-metrics-app"
+        data-evapp-flow-metrics-root
+        data-event-id="<?php echo esc_attr($active_event); ?>"
+        data-default-flow-id="<?php echo esc_attr($default_flow_id); ?>"
+    >
+        <div class="evapp-flow-metrics-shell">
+            <header class="evapp-flow-metrics-header">
+                <div class="evapp-flow-metrics-heading">
+                    <p class="evapp-flow-metrics-eyebrow">EVENTOSAPP</p>
+                    <h1 class="evapp-flow-metrics-title">Métricas de Encuestas</h1>
+                    <p class="evapp-flow-metrics-subtitle">
+                        Analiza el alcance y las respuestas de la encuesta de satisfacción enviada por WhatsApp Flow para el evento activo.
+                    </p>
+                </div>
 
-        <?php if ( empty($flows) ) : ?>
-            <div class="evapp-flow-metrics-empty">Todavía no hay encuestas enviadas, respondidas o configuradas para este evento.</div>
-        <?php else : ?>
-            <div class="evapp-flow-metrics-toolbar">
-                <?php if ( count($flows) > 1 ) : ?>
-                    <label for="evappFlowMetricsFlow">Encuesta a revisar
-                        <select id="evappFlowMetricsFlow">
-                            <?php foreach ( $flows as $flow ) : ?>
-                                <option value="<?php echo esc_attr(absint($flow['id'])); ?>" <?php selected(absint($flow['id']), $default_flow_id); ?>>
-                                    <?php echo esc_html($flow['title']); ?><?php echo ! empty($flow['last_activity']) ? ' — último movimiento ' . esc_html($flow['last_activity']) : ''; ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </label>
-                <?php else : ?>
-                    <div>
-                        <div style="font-size:.88rem;font-weight:800;color:#334155;margin-bottom:5px;">Encuesta a revisar</div>
-                        <div class="evapp-flow-metrics-flow-static"><?php echo esc_html($flows[0]['title']); ?></div>
-                        <input type="hidden" id="evappFlowMetricsFlow" value="<?php echo esc_attr($default_flow_id); ?>">
+                <div class="evapp-flow-metrics-header-actions">
+                    <a href="<?php echo esc_url($dashboard_url); ?>" class="evapp-flow-metrics-btn evapp-flow-metrics-btn-secondary" aria-label="Volver al dashboard">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                        <span>Volver al dashboard</span>
+                    </a>
+                </div>
+            </header>
+
+            <section class="evapp-flow-metrics-event-context" aria-label="Evento activo">
+                <div class="evapp-flow-metrics-event-main">
+                    <div class="evapp-flow-metrics-event-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M8 2v4M16 2v4M3 9h18"></path></svg>
                     </div>
-                <?php endif; ?>
-                <a class="evapp-flow-metrics-download<?php echo $default_flow_id ? '' : ' is-disabled'; ?>" id="evappFlowMetricsCsvDownload" href="<?php echo esc_url($export_url); ?>">Descargar resultados CSV</a>
-                <div class="evapp-flow-metrics-status" id="evappFlowMetricsStatus">Preparando métricas…</div>
-            </div>
+                    <div class="evapp-flow-metrics-event-copy">
+                        <span class="evapp-flow-metrics-event-kicker">Evento activo</span>
+                        <span class="evapp-flow-metrics-event-name"><?php echo esc_html($event_title); ?></span>
+                        <?php if ( ! empty($default_flow['title']) ) : ?>
+                            <span class="evapp-flow-metrics-event-flow">Encuesta: <?php echo esc_html($default_flow['title']); ?></span>
+                        <?php endif; ?>
+                    </div>
+                </div>
 
-            <div class="evapp-flow-metrics-kpis" aria-label="Indicadores de encuestas">
-                <div class="evapp-flow-metrics-kpi"><span>Mensajes / encuestas enviadas</span><strong id="evappFlowMetricSent">0</strong><small>Solicitudes aceptadas por Meta</small></div>
-                <div class="evapp-flow-metrics-kpi"><span>Encuestas leídas</span><strong id="evappFlowMetricRead">0</strong><small><span id="evappFlowMetricReadRate">0%</span> sobre enviadas</small></div>
-                <div class="evapp-flow-metrics-kpi"><span>Encuestas respondidas</span><strong id="evappFlowMetricAnswered">0</strong><small><span id="evappFlowMetricAnswerRate">0%</span> sobre enviadas</small></div>
-            </div>
+                <div class="evapp-flow-metrics-event-meta">
+                    <?php if ( $event_modalidad_label !== '' ) : ?>
+                        <span class="evapp-flow-metrics-chip is-active"><?php echo esc_html($event_modalidad_label); ?></span>
+                    <?php endif; ?>
+                    <?php if ( $last_activity_label !== '' ) : ?>
+                        <span class="evapp-flow-metrics-chip">Última actividad · <?php echo esc_html($last_activity_label); ?></span>
+                    <?php endif; ?>
+                    <a class="evapp-flow-metrics-btn evapp-flow-metrics-btn-primary" href="<?php echo esc_url($change_event_url); ?>">Cambiar evento</a>
+                </div>
+            </section>
 
-            <div class="evapp-flow-metrics-grid" id="evappFlowMetricsCharts"></div>
-            <div class="evapp-flow-metrics-note">Los gráficos se calculan por lotes desde la tabla de respuestas para no cargar todos los tickets ni metadatos del evento en memoria.</div>
-        <?php endif; ?>
+            <?php if ( empty($flows) ) : ?>
+                <div class="evapp-flow-metrics-empty" role="status">
+                    <div class="evapp-flow-metrics-empty-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"></path><path d="M8 10h8M8 14h5"></path></svg>
+                    </div>
+                    <div>
+                        <h3>No hay una encuesta disponible para analizar</h3>
+                        <p>Configura la encuesta de satisfacción por WhatsApp Flow en “Diseño WhatsApp y Landing” del evento. Cuando existan envíos o respuestas, las métricas aparecerán aquí automáticamente.</p>
+                    </div>
+                </div>
+            <?php else : ?>
+                <section class="evapp-flow-metrics-toolbar" aria-label="Controles de métricas">
+                    <div class="evapp-flow-metrics-toolbar-main">
+                        <span class="evapp-flow-metrics-field-label">Encuesta analizada</span>
+                        <?php if ( count($flows) > 1 ) : ?>
+                            <label class="screen-reader-text" for="evappFlowMetricsFlow">Encuesta a revisar</label>
+                            <select class="evapp-flow-metrics-select" id="evappFlowMetricsFlow">
+                                <?php foreach ( $flows as $flow ) : ?>
+                                    <option value="<?php echo esc_attr(absint($flow['id'])); ?>" <?php selected(absint($flow['id']), $default_flow_id); ?>>
+                                        <?php echo esc_html($flow['title']); ?><?php echo ! empty($flow['last_activity']) ? ' — último movimiento ' . esc_html($flow['last_activity']) : ''; ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        <?php else : ?>
+                            <div class="evapp-flow-metrics-flow-static"><?php echo esc_html($flows[0]['title']); ?></div>
+                            <input type="hidden" id="evappFlowMetricsFlow" value="<?php echo esc_attr($default_flow_id); ?>">
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="evapp-flow-metrics-toolbar-actions">
+                        <button type="button" class="evapp-flow-metrics-btn evapp-flow-metrics-btn-secondary" id="evappFlowMetricsRefresh">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"></path><path d="M4 18v-5h5"></path><path d="M6.1 9a7 7 0 0 1 11.7-2.6L20 11M4 13l2.2 4.6A7 7 0 0 0 18 15"></path></svg>
+                            <span>Actualizar</span>
+                        </button>
+                        <a
+                            class="evapp-flow-metrics-btn evapp-flow-metrics-btn-primary<?php echo $default_flow_id ? '' : ' is-disabled'; ?>"
+                            id="evappFlowMetricsCsvDownload"
+                            href="<?php echo esc_url($export_url); ?>"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>
+                            <span>Descargar CSV</span>
+                        </a>
+                        <div class="evapp-flow-metrics-status is-loading" id="evappFlowMetricsStatus" role="status" aria-live="polite">Preparando métricas…</div>
+                    </div>
+                </section>
+
+                <section class="evapp-flow-metrics-kpis" aria-label="Indicadores de encuestas">
+                    <article class="evapp-flow-metrics-kpi">
+                        <div class="evapp-flow-metrics-kpi-head">
+                            <span class="evapp-flow-metrics-kpi-label">Encuestas enviadas</span>
+                            <span class="evapp-flow-metrics-kpi-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>
+                            </span>
+                        </div>
+                        <strong id="evappFlowMetricSent">0</strong>
+                        <small>Solicitudes aceptadas para envío por Meta.</small>
+                    </article>
+
+                    <article class="evapp-flow-metrics-kpi">
+                        <div class="evapp-flow-metrics-kpi-head">
+                            <span class="evapp-flow-metrics-kpi-label">Encuestas entregadas</span>
+                            <span class="evapp-flow-metrics-kpi-icon is-success" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="m3 12 4 4 7-8"></path><path d="m10 15 3 3 8-10"></path></svg>
+                            </span>
+                        </div>
+                        <strong id="evappFlowMetricDelivered">0</strong>
+                        <small><b id="evappFlowMetricDeliveryRate">0%</b> sobre enviadas.</small>
+                        <div class="evapp-flow-metrics-kpi-progress is-success" aria-hidden="true"><span id="evappFlowMetricDeliveryBar"></span></div>
+                    </article>
+
+                    <article class="evapp-flow-metrics-kpi">
+                        <div class="evapp-flow-metrics-kpi-head">
+                            <span class="evapp-flow-metrics-kpi-label">Encuestas leídas</span>
+                            <span class="evapp-flow-metrics-kpi-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
+                            </span>
+                        </div>
+                        <strong id="evappFlowMetricRead">0</strong>
+                        <small><b id="evappFlowMetricReadRate">0%</b> sobre enviadas.</small>
+                        <div class="evapp-flow-metrics-kpi-progress" aria-hidden="true"><span id="evappFlowMetricReadBar"></span></div>
+                    </article>
+
+                    <article class="evapp-flow-metrics-kpi">
+                        <div class="evapp-flow-metrics-kpi-head">
+                            <span class="evapp-flow-metrics-kpi-label">Encuestas respondidas</span>
+                            <span class="evapp-flow-metrics-kpi-icon is-purple" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="M4 5h16v13H8l-4 3Z"></path><path d="m8 11 2 2 5-5"></path></svg>
+                            </span>
+                        </div>
+                        <strong id="evappFlowMetricAnswered">0</strong>
+                        <small><b id="evappFlowMetricAnswerRate">0%</b> sobre enviadas.</small>
+                        <div class="evapp-flow-metrics-kpi-progress is-purple" aria-hidden="true"><span id="evappFlowMetricAnswerBar"></span></div>
+                    </article>
+                </section>
+
+                <section aria-labelledby="evappFlowMetricsQuestionsTitle">
+                    <div class="evapp-flow-metrics-section-head">
+                        <div>
+                            <h2 class="evapp-flow-metrics-section-title" id="evappFlowMetricsQuestionsTitle">Resultados por pregunta</h2>
+                            <p class="evapp-flow-metrics-section-copy">Las preguntas de selección se representan visualmente y conservan su tabla de valores para una lectura precisa.</p>
+                        </div>
+                    </div>
+
+                    <div class="evapp-flow-metrics-grid" id="evappFlowMetricsCharts"></div>
+                </section>
+
+                <div class="evapp-flow-metrics-note">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 10v6M12 7h.01"></path></svg>
+                    <span>El cálculo procesa las respuestas por lotes y usa una caché corta que se invalida cuando cambia la actividad del Flow. No se cargan todos los tickets ni sus metadatos en memoria.</span>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
 
     <?php if ( ! empty($flows) ) : ?>
@@ -1351,16 +2199,31 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
         const nonce = <?php echo wp_json_encode($nonce); ?>;
         const rawExportUrlTemplate = <?php echo wp_json_encode($export_url_template); ?>;
         const exportUrlTemplate = decodeHtmlEntities(rawExportUrlTemplate);
+
         const flowInput = document.getElementById('evappFlowMetricsFlow');
         const csvDownload = document.getElementById('evappFlowMetricsCsvDownload');
+        const refreshBtn = document.getElementById('evappFlowMetricsRefresh');
         const statusEl = document.getElementById('evappFlowMetricsStatus');
         const chartsWrap = document.getElementById('evappFlowMetricsCharts');
+
         const sentEl = document.getElementById('evappFlowMetricSent');
+        const deliveredEl = document.getElementById('evappFlowMetricDelivered');
         const readEl = document.getElementById('evappFlowMetricRead');
         const answeredEl = document.getElementById('evappFlowMetricAnswered');
+
+        const deliveryRateEl = document.getElementById('evappFlowMetricDeliveryRate');
         const readRateEl = document.getElementById('evappFlowMetricReadRate');
         const answerRateEl = document.getElementById('evappFlowMetricAnswerRate');
+
+        const deliveryBarEl = document.getElementById('evappFlowMetricDeliveryBar');
+        const readBarEl = document.getElementById('evappFlowMetricReadBar');
+        const answerBarEl = document.getElementById('evappFlowMetricAnswerBar');
+
+        const chartPalette = ['#3279bd','#16855b','#6d4bc3','#d97706','#0f9aa8','#d45b69','#52677c','#255f96','#4f8f6e','#8066c7','#b7791f','#3d8792'];
+
         let chartInstances = [];
+        let activeController = null;
+        let requestSerial = 0;
 
         function numberFormat(value){
             const n = Number(value || 0);
@@ -1370,6 +2233,12 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
         function percentFormat(value){
             const n = Number(value || 0);
             return n.toLocaleString('es-CO', { maximumFractionDigits: 2 }) + '%';
+        }
+
+        function normalizedPercent(value){
+            const n = Number(value || 0);
+            if (!Number.isFinite(n)) return 0;
+            return Math.max(0, Math.min(100, n));
         }
 
         function escapeHtml(value){
@@ -1395,43 +2264,93 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
             if (!statusEl) return;
             statusEl.textContent = message || '';
             statusEl.classList.toggle('is-loading', state === 'loading');
+            statusEl.classList.toggle('is-ok', state === 'ok');
             statusEl.classList.toggle('is-error', state === 'error');
+        }
+
+        function setLoading(isLoading){
+            root.classList.toggle('is-loading', !!isLoading);
+            if (refreshBtn) {
+                refreshBtn.disabled = !!isLoading;
+                const label = refreshBtn.querySelector('span');
+                if (label) label.textContent = isLoading ? 'Actualizando…' : 'Actualizar';
+            }
         }
 
         function updateDownloadLink(flowId){
             if (!csvDownload) return;
             flowId = flowId || (flowInput ? flowInput.value : root.getAttribute('data-default-flow-id'));
+
             if (!flowId || !exportUrlTemplate) {
                 csvDownload.setAttribute('href', '#');
                 csvDownload.classList.add('is-disabled');
+                csvDownload.setAttribute('aria-disabled', 'true');
                 return;
             }
+
             csvDownload.setAttribute('href', exportUrlTemplate.replace('__EVAPP_FLOW_ID__', encodeURIComponent(flowId)));
             csvDownload.classList.remove('is-disabled');
+            csvDownload.removeAttribute('aria-disabled');
+        }
+
+        function setRateBar(element, value){
+            if (!element) return;
+            element.style.width = normalizedPercent(value) + '%';
         }
 
         function renderKpis(counts){
             counts = counts || {};
-            sentEl.textContent = numberFormat(counts.sent);
-            readEl.textContent = numberFormat(counts.read);
-            answeredEl.textContent = numberFormat(counts.answered);
-            readRateEl.textContent = percentFormat(counts.read_rate);
-            answerRateEl.textContent = percentFormat(counts.answer_rate);
+
+            if (sentEl) sentEl.textContent = numberFormat(counts.sent);
+            if (deliveredEl) deliveredEl.textContent = numberFormat(counts.delivered);
+            if (readEl) readEl.textContent = numberFormat(counts.read);
+            if (answeredEl) answeredEl.textContent = numberFormat(counts.answered);
+
+            if (deliveryRateEl) deliveryRateEl.textContent = percentFormat(counts.delivery_rate);
+            if (readRateEl) readRateEl.textContent = percentFormat(counts.read_rate);
+            if (answerRateEl) answerRateEl.textContent = percentFormat(counts.answer_rate);
+
+            setRateBar(deliveryBarEl, counts.delivery_rate);
+            setRateBar(readBarEl, counts.read_rate);
+            setRateBar(answerBarEl, counts.answer_rate);
         }
 
         function renderEmpty(message){
             destroyCharts();
-            chartsWrap.innerHTML = '<div class="evapp-flow-metrics-card" style="grid-column:span 12;"><h3>Sin respuestas para graficar</h3><p style="color:#a9b6d3;margin:0;">'+escapeHtml(message || 'Todavía no hay respuestas con preguntas de selección para esta encuesta.')+'</p></div>';
+            if (!chartsWrap) return;
+
+            chartsWrap.innerHTML =
+                '<div class="evapp-flow-metrics-card is-full">'+
+                    '<div class="evapp-flow-metrics-empty" role="status">'+
+                        '<div class="evapp-flow-metrics-empty-icon" aria-hidden="true">'+
+                            '<svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"></path><path d="M8 10h8M8 14h5"></path></svg>'+
+                        '</div>'+
+                        '<div><h3>Sin respuestas para graficar</h3><p>'+
+                            escapeHtml(message || 'Todavía no hay respuestas con preguntas de selección para esta encuesta.')+
+                        '</p></div>'+
+                    '</div>'+
+                '</div>';
         }
 
-        function renderCharts(questions){
+        function chartColors(length){
+            const colors = [];
+            for (let i = 0; i < length; i++) {
+                colors.push(chartPalette[i % chartPalette.length]);
+            }
+            return colors;
+        }
+
+        function renderCharts(questions, emptyMessage){
             destroyCharts();
+            if (!chartsWrap) return;
             chartsWrap.innerHTML = '';
 
             if (!Array.isArray(questions) || !questions.length) {
-                renderEmpty('Esta encuesta todavía no tiene respuestas de selección para graficar.');
+                renderEmpty(emptyMessage || 'Esta encuesta todavía no tiene respuestas de selección para graficar.');
                 return;
             }
+
+            const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
             questions.forEach(function(question, index){
                 const options = Array.isArray(question.options) ? question.options : [];
@@ -1442,89 +2361,220 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
 
                 let rows = '';
                 options.forEach(function(item){
-                    rows += '<tr><td>'+escapeHtml(item.label || 'Sin etiqueta')+'</td><td>'+numberFormat(item.count)+'</td><td>'+percentFormat(item.percent)+'</td></tr>';
+                    rows += '<tr>'+
+                        '<td>'+escapeHtml(item.label || 'Sin etiqueta')+'</td>'+
+                        '<td>'+numberFormat(item.count)+'</td>'+
+                        '<td>'+percentFormat(item.percent)+'</td>'+
+                    '</tr>';
                 });
+
                 if (!rows) {
                     rows = '<tr><td colspan="3">Sin opciones registradas.</td></tr>';
                 }
 
-                const card = document.createElement('div');
+                const card = document.createElement('article');
                 card.className = 'evapp-flow-metrics-card';
-                card.innerHTML = '<h3>'+escapeHtml(question.label || 'Pregunta')+'</h3>'+
-                    '<div class="evapp-flow-metrics-question-meta">Respuestas válidas: '+numberFormat(question.answered_responses)+' · Selecciones graficadas: '+numberFormat(question.selection_total)+'</div>'+
-                    '<div class="evapp-flow-metrics-chart-box"><canvas id="'+escapeHtml(canvasId)+'"></canvas></div>'+
-                    '<table class="evapp-flow-metrics-table"><thead><tr><th>Opción</th><th>Número</th><th>Porcentaje</th></tr></thead><tbody>'+rows+'</tbody></table>';
+                card.innerHTML =
+                    '<h3>'+escapeHtml(question.label || 'Pregunta')+'</h3>'+
+                    '<div class="evapp-flow-metrics-question-meta">'+
+                        '<span>Respuestas válidas: '+numberFormat(question.answered_responses)+'</span>'+
+                        '<span>Selecciones: '+numberFormat(question.selection_total)+'</span>'+
+                    '</div>'+
+                    '<div class="evapp-flow-metrics-chart-box"><canvas id="'+escapeHtml(canvasId)+'" aria-label="Gráfico de '+escapeHtml(question.label || 'pregunta')+'"></canvas></div>'+
+                    '<div class="evapp-flow-metrics-table-wrap">'+
+                        '<table class="evapp-flow-metrics-table">'+
+                            '<thead><tr><th scope="col">Opción</th><th scope="col">Número</th><th scope="col">Porcentaje</th></tr></thead>'+
+                            '<tbody>'+rows+'</tbody>'+
+                        '</table>'+
+                    '</div>';
+
                 chartsWrap.appendChild(card);
 
-                if (window.Chart && total > 0) {
-                    const ctx = document.getElementById(canvasId);
-                    const chart = new Chart(ctx, {
-                        type: 'pie',
-                        data: {
-                            labels: labels,
-                            datasets: [{ data: values }]
+                const chartBox = card.querySelector('.evapp-flow-metrics-chart-box');
+
+                if (total <= 0) {
+                    if (chartBox) {
+                        chartBox.innerHTML = '<div class="evapp-flow-metrics-chart-empty">Sin respuestas para esta pregunta.</div>';
+                    }
+                    return;
+                }
+
+                if (!window.Chart) {
+                    if (chartBox) {
+                        chartBox.innerHTML = '<div class="evapp-flow-metrics-chart-empty">El gráfico no pudo cargarse. La tabla inferior conserva todos los resultados.</div>';
+                    }
+                    return;
+                }
+
+                const ctx = document.getElementById(canvasId);
+                if (!ctx) return;
+
+                const useBar = labels.length > 7;
+                const colors = chartColors(labels.length);
+
+                const config = {
+                    type: useBar ? 'bar' : 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: values,
+                            backgroundColor: colors,
+                            borderColor: '#ffffff',
+                            borderWidth: useBar ? 0 : 2,
+                            borderRadius: useBar ? 6 : 0,
+                            maxBarThickness: useBar ? 34 : undefined
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: useBar ? 'y' : 'x',
+                        animation: {
+                            duration: prefersReducedMotion ? 0 : 260
                         },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: { position: 'bottom', labels: { color: '#eaf1ff' } },
-                                tooltip: {
-                                    callbacks: {
-                                        label: function(context){
-                                            const raw = Number(context.parsed || 0);
-                                            const pct = total > 0 ? (raw / total) * 100 : 0;
-                                            return ' ' + context.label + ': ' + numberFormat(raw) + ' (' + pct.toLocaleString('es-CO', { maximumFractionDigits: 2 }) + '%)';
-                                        }
+                        cutout: useBar ? undefined : '62%',
+                        plugins: {
+                            legend: {
+                                display: !useBar,
+                                position: 'bottom',
+                                labels: {
+                                    color: '#475569',
+                                    boxWidth: 11,
+                                    boxHeight: 11,
+                                    padding: 14,
+                                    usePointStyle: true,
+                                    pointStyle: 'circle',
+                                    font: { size: 11, weight: '600' }
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context){
+                                        const raw = Number(context.parsed && typeof context.parsed === 'object'
+                                            ? (useBar ? context.parsed.x : context.parsed.y)
+                                            : context.parsed || 0);
+                                        const pct = total > 0 ? (raw / total) * 100 : 0;
+                                        return ' ' + context.label + ': ' + numberFormat(raw) + ' (' + pct.toLocaleString('es-CO', { maximumFractionDigits: 2 }) + '%)';
                                     }
                                 }
                             }
-                        }
-                    });
+                        },
+                        scales: useBar ? {
+                            x: {
+                                beginAtZero: true,
+                                grid: { color: '#edf2f7' },
+                                border: { display: false },
+                                ticks: { color: '#64748b', precision: 0 }
+                            },
+                            y: {
+                                grid: { display: false },
+                                border: { display: false },
+                                ticks: {
+                                    color: '#475569',
+                                    font: { size: 11, weight: '600' }
+                                }
+                            }
+                        } : undefined
+                    }
+                };
+
+                try {
+                    const chart = new Chart(ctx, config);
                     chartInstances.push(chart);
-                } else if (total <= 0) {
-                    const box = card.querySelector('.evapp-flow-metrics-chart-box');
-                    if (box) box.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:220px;color:#a9b6d3;text-align:center;">Sin respuestas para esta pregunta.</div>';
+                } catch (error) {
+                    if (chartBox) {
+                        chartBox.innerHTML = '<div class="evapp-flow-metrics-chart-empty">No fue posible dibujar este gráfico. La tabla inferior conserva todos los resultados.</div>';
+                    }
                 }
             });
         }
 
-        function fetchData(){
+        function parseJsonResponse(resp){
+            return resp.text().then(function(text){
+                let json = null;
+                try {
+                    json = JSON.parse(text);
+                } catch (e) {
+                    throw new Error('El servidor devolvió una respuesta inválida. Recarga la página e intenta nuevamente.');
+                }
+
+                if (!resp.ok || !json || !json.success) {
+                    const message = json && json.data && json.data.error
+                        ? json.data.error
+                        : 'No se pudieron cargar las métricas.';
+                    throw new Error(message);
+                }
+
+                return json.data || {};
+            });
+        }
+
+        function fetchData(options){
+            options = options || {};
             const flowId = flowInput ? flowInput.value : root.getAttribute('data-default-flow-id');
+
             updateDownloadLink(flowId);
+
             if (!flowId) {
                 renderKpis({});
-                renderEmpty('No hay encuesta seleccionada.');
+                renderEmpty('No hay una encuesta configurada para el evento activo.');
+                setStatus('Sin encuesta configurada', 'error');
                 return;
             }
 
-            setStatus('Cargando métricas…', 'loading');
+            if (activeController && typeof activeController.abort === 'function') {
+                activeController.abort();
+            }
+
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            activeController = controller;
+            const serial = ++requestSerial;
+
+            setLoading(true);
+            setStatus(options.manual ? 'Actualizando métricas…' : 'Cargando métricas…', 'loading');
+
             const body = new FormData();
             body.append('action', 'eventosapp_whatsapp_flow_metrics_data');
             body.append('security', nonce);
             body.append('flow_id', flowId);
 
-            fetch(ajaxUrl, { method:'POST', credentials:'same-origin', body: body })
-                .then(function(resp){
-                    return resp.json().then(function(json){
-                        if (!resp.ok || !json || !json.success) {
-                            const message = json && json.data && json.data.error ? json.data.error : 'No se pudieron cargar las métricas.';
-                            throw new Error(message);
-                        }
-                        return json.data;
-                    });
-                })
+            const requestOptions = {
+                method:'POST',
+                credentials:'same-origin',
+                body:body
+            };
+            if (controller) requestOptions.signal = controller.signal;
+
+            fetch(ajaxUrl, requestOptions)
+                .then(parseJsonResponse)
                 .then(function(data){
+                    if (serial !== requestSerial) return;
+
                     renderKpis(data.counts || {});
-                    renderCharts(data.questions || []);
+                    renderCharts(data.questions || [], data.message || '');
+
                     const perf = data.performance || {};
-                    const suffix = perf.cached ? ' · cache' : ' · actualizado';
-                    setStatus('Métricas cargadas' + suffix, 'ok');
+                    const processed = Number(perf.processed_responses || 0);
+                    let statusText = perf.cached ? 'Métricas cargadas · caché vigente' : 'Métricas actualizadas';
+                    if (!perf.cached && processed > 0) {
+                        statusText += ' · ' + numberFormat(processed) + ' respuestas procesadas';
+                    }
+                    setStatus(statusText, 'ok');
                 })
                 .catch(function(error){
+                    if (error && error.name === 'AbortError') return;
+                    if (serial !== requestSerial) return;
+
                     renderKpis({});
-                    renderEmpty(error.message || 'Error al cargar métricas.');
-                    setStatus(error.message || 'Error al cargar métricas.', 'error');
+                    renderEmpty(error && error.message ? error.message : 'Error al cargar métricas.');
+                    setStatus(error && error.message ? error.message : 'Error al cargar métricas.', 'error');
+                })
+                .finally(function(){
+                    if (serial !== requestSerial) return;
+                    setLoading(false);
+                    if (activeController === controller) {
+                        activeController = null;
+                    }
                 });
         }
 
@@ -1535,6 +2585,19 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
             });
         }
 
+        if (refreshBtn && refreshBtn.addEventListener) {
+            refreshBtn.addEventListener('click', function(){
+                fetchData({manual:true});
+            });
+        }
+
+        window.addEventListener('pagehide', function(){
+            if (activeController && typeof activeController.abort === 'function') {
+                activeController.abort();
+            }
+            destroyCharts();
+        }, {once:true});
+
         updateDownloadLink(flowInput ? flowInput.value : root.getAttribute('data-default-flow-id'));
         fetchData();
     })();
@@ -1543,3 +2606,4 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
     <?php
     return ob_get_clean();
 });
+
