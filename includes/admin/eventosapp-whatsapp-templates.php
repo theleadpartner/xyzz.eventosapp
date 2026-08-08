@@ -418,6 +418,13 @@ function eventosapp_whatsapp_templates_classify_api_error($result) {
         is_scalar($result['technical_message'] ?? null) ? (string)$result['technical_message'] : '',
     ])));
 
+    if ( $error['subcode'] === 2388299
+        || strpos($haystack, 'parameters at the beginning or at the end') !== false
+        || strpos($haystack, 'variables cannot be at the beginning or end') !== false
+        || strpos($haystack, 'parámetros al principio ni al final') !== false
+        || strpos($haystack, 'variables no pueden estar al principio ni al final') !== false ) {
+        return 'body_variable_boundary';
+    }
     if ( $error['subcode'] === 2388003 || strpos($haystack, 'only be edited if rejected') !== false || strpos($haystack, 'can only be edited if rejected') !== false || strpos($haystack, 'solo se pueden editar si se rechazaron') !== false ) {
         return 'template_edit_locked';
     }
@@ -456,6 +463,7 @@ function eventosapp_whatsapp_templates_error_message($error_type, $error, $http_
     $messages = [
         'template_duplicate'  => 'Meta no creó la plantilla porque ya existe otra con el mismo nombre técnico e idioma dentro de ese WABA. Usa un nombre técnico diferente para crear una nueva versión o sincroniza el registro existente.',
         'template_edit_locked'=> 'Meta rechazó la actualización porque la plantilla remota no está en estado Rechazada. Las plantillas aprobadas, activas o en revisión deben conservarse; crea una nueva versión con otro nombre técnico.',
+        'body_variable_boundary'=> 'Meta rechazó el BODY porque una variable quedó como primer o último contenido significativo. EventosApp protege las plantillas de Doble Autenticación corrigiendo automáticamente ese límite; para otras plantillas agrega texto fijo antes de la primera variable y después de la última.',
         'authentication'      => 'Meta rechazó la solicitud por un problema con el Access Token. Revisa que el token esté vigente y pertenezca al WABA seleccionado.',
         'permission'          => 'Meta rechazó la solicitud por permisos insuficientes. Revisa los permisos de administración de WhatsApp y de plantillas para el WABA seleccionado.',
         'rate_limit'          => 'Meta aplicó un límite temporal de solicitudes. Espera unos minutos antes de volver a intentar.',
@@ -1577,6 +1585,107 @@ function eventosapp_whatsapp_templates_body_examples_to_array($body_text, $examp
 }
 
 /**
+ * Detecta de forma estable si una plantilla pertenece al flujo funcional de
+ * Doble Autenticación. Se revisan las marcas persistentes usadas por las
+ * versiones actuales y anteriores para que una plantilla ya creada también
+ * quede protegida aunque todavía no se haya vuelto a guardar desde el builder.
+ */
+function eventosapp_whatsapp_templates_is_double_auth_template($template) {
+    $template = is_array($template) ? $template : [];
+
+    $builder_type = sanitize_key((string)($template['builder_type'] ?? ''));
+    $base_key = sanitize_key((string)($template['base_key'] ?? ''));
+    $id = sanitize_key((string)($template['id'] ?? ''));
+
+    return $builder_type === 'double_auth_code'
+        || $base_key === 'double_auth_code'
+        || $id === 'double_auth_code'
+        || ! empty($template['double_auth_code']);
+}
+
+/**
+ * Detecta si la primera o la última variable del BODY queda realmente en un
+ * límite del mensaje para los criterios de Meta.
+ *
+ * No basta con comprobar espacios: una variable seguida únicamente por punto,
+ * asteriscos, emojis u otros signos sigue sin tener texto fijo después. Por eso
+ * se exige al menos una letra o un número antes de la primera variable y después
+ * de la última. Así se bloquea también el caso {{6}}., que el validador anterior
+ * podía dejar pasar.
+ *
+ * @return string[] Valores posibles: start, end.
+ */
+function eventosapp_whatsapp_templates_body_boundary_variable_issues($body_text) {
+    $body_text = (string) $body_text;
+    if ( trim($body_text) === '' ) {
+        return [];
+    }
+
+    preg_match_all('/\{\{\s*\d+\s*\}\}/u', $body_text, $matches, PREG_OFFSET_CAPTURE);
+    $variables = isset($matches[0]) && is_array($matches[0]) ? $matches[0] : [];
+    if ( empty($variables) ) {
+        return [];
+    }
+
+    $issues = [];
+    $first = reset($variables);
+    $last = end($variables);
+
+    $first_token = is_array($first) ? (string)($first[0] ?? '') : '';
+    $first_offset = is_array($first) ? (int)($first[1] ?? 0) : 0;
+    $prefix = substr($body_text, 0, max(0, $first_offset));
+    if ( ! preg_match('/[\p{L}\p{N}]/u', (string) $prefix) ) {
+        $issues[] = 'start';
+    }
+
+    $last_token = is_array($last) ? (string)($last[0] ?? '') : '';
+    $last_offset = is_array($last) ? (int)($last[1] ?? 0) : 0;
+    $suffix_offset = max(0, $last_offset + strlen($last_token));
+    $suffix = substr($body_text, $suffix_offset);
+    if ( ! preg_match('/[\p{L}\p{N}]/u', (string) $suffix) ) {
+        $issues[] = 'end';
+    }
+
+    return array_values(array_unique($issues));
+}
+
+/**
+ * Corrige exclusivamente el BODY de las plantillas de Doble Autenticación
+ * antes de guardarlas o enviarlas a Meta.
+ *
+ * El motor de envío de códigos consume {{1}}..{{6}} y este ajuste NO cambia,
+ * elimina ni reordena ninguna variable. Solo agrega texto fijo cuando la primera
+ * o la última variable queda en el límite del BODY, evitando el error de Meta
+ * código 100 / subcódigo 2388299 sin romper la compatibilidad del envío actual.
+ */
+function eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template) {
+    $template = is_array($template) ? $template : [];
+    if ( ! eventosapp_whatsapp_templates_is_double_auth_template($template) ) {
+        return $template;
+    }
+
+    $body = trim((string)($template['body_text'] ?? ''));
+    if ( $body === '' ) {
+        return $template;
+    }
+
+    $issues = eventosapp_whatsapp_templates_body_boundary_variable_issues($body);
+
+    if ( in_array('start', $issues, true) ) {
+        $body = 'Código de acceso: ' . ltrim($body);
+    }
+
+    // Se vuelve a calcular porque al corregir el inicio cambian los offsets.
+    $issues = eventosapp_whatsapp_templates_body_boundary_variable_issues($body);
+    if ( in_array('end', $issues, true) ) {
+        $body = rtrim($body) . "\n\nEste mensaje contiene información de seguridad para validar tu ingreso al evento.";
+    }
+
+    $template['body_text'] = $body;
+    return $template;
+}
+
+/**
  * Normaliza plantilla desde POST o array.
  */
 function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) {
@@ -1770,6 +1879,10 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         }
     }
 
+    // Doble Autenticación conserva exactamente {{1}}..{{6}}, pero nunca deja
+    // una variable como primer o último contenido significativo del BODY.
+    $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
+
     $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'], $template['body_examples']);
     $template['body_text_meta'] = sanitize_textarea_field($prepared_body['text'] ?? $template['body_text']);
     $template['body_variable_map'] = eventosapp_whatsapp_templates_sanitize_body_variable_map($prepared_body['variable_numbers'] ?? []);
@@ -1794,6 +1907,7 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
  */
 function eventosapp_whatsapp_templates_validate_for_meta($template) {
     $template = is_array($template) ? $template : [];
+    $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
     $errors = [];
 
     $category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
@@ -1839,6 +1953,14 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
             $body_variables = eventosapp_whatsapp_templates_extract_body_variable_numbers($template['body_text']);
             if ( count($body_variables) > 20 ) {
                 $errors[] = 'El cuerpo de la plantilla tiene demasiadas variables. Usa máximo 20 variables para mantener compatibilidad con Meta.';
+            }
+
+            $boundary_issues = eventosapp_whatsapp_templates_body_boundary_variable_issues($template['body_text']);
+            if ( in_array('start', $boundary_issues, true) ) {
+                $errors[] = 'El cuerpo no puede comenzar con una variable aunque esté rodeada únicamente por signos, formato o emojis. Agrega texto fijo antes del primer parámetro.';
+            }
+            if ( in_array('end', $boundary_issues, true) ) {
+                $errors[] = 'El cuerpo no puede terminar con una variable aunque tenga punto, formato, espacios o emojis después. Agrega texto fijo después del último parámetro.';
             }
         }
 
@@ -1920,6 +2042,7 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
  */
 function eventosapp_whatsapp_templates_build_meta_components($template) {
     $template = is_array($template) ? $template : [];
+    $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
     $components = [];
 
     /*
@@ -2404,6 +2527,12 @@ function eventosapp_whatsapp_templates_submit_to_meta($template_id) {
 
     $template = $settings['templates'][$template_id];
     $before = $template;
+
+    // Autocorrección de compatibilidad para registros de Doble Autenticación
+    // creados antes de esta versión. Esto permite reenviarlos sin obligar al
+    // administrador a abrir y guardar primero el editor.
+    $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
+
     $waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
     if ( $waba_id === '' ) {
         return [
@@ -3270,6 +3399,7 @@ function eventosapp_whatsapp_templates_builder_new_standard_template($type) {
         $template['title'] = 'Nuevo Código de Doble Autenticación';
         $template['button_mode'] = 'none';
         $template['button_count'] = '0';
+        $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
     }
 
     return $template;
@@ -3760,6 +3890,9 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
         'sender_phone_number_id'=>'','waba_id'=>'','meta_status'=>'LOCAL','meta_category'=>'','meta_template_id'=>'','archived'=>'0',
     ]);
     $template['builder_type'] = $builder_type;
+    if ( $builder_type === 'double_auth_code' ) {
+        $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
+    }
     $template['category'] = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
     $template['button_count'] = (string)eventosapp_whatsapp_templates_normalize_button_count($template['button_count'] ?? '', $template);
     $template['button_mode'] = sanitize_key((string)($template['button_mode'] ?? 'none'));
@@ -3824,7 +3957,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                         <label>Encabezado</label><div><select name="template[header_format]" id="evapp-utpl-header-format"><option value="NONE" <?php selected($template['header_format'],'NONE'); ?>>Sin encabezado</option><option value="TEXT" <?php selected($template['header_format'],'TEXT'); ?>>Texto</option><option value="IMAGE" <?php selected($template['header_format'],'IMAGE'); ?>>Imagen</option><option value="VIDEO" <?php selected($template['header_format'],'VIDEO'); ?>>Video MP4</option><option value="DOCUMENT" <?php selected($template['header_format'],'DOCUMENT'); ?>>Documento PDF</option></select></div>
                         <label class="evapp-header-text-row">Texto del encabezado</label><div class="evapp-header-text-row"><input type="text" name="template[header_text]" value="<?php echo esc_attr($template['header_text']); ?>"></div>
                         <label class="evapp-header-image-row">Muestra para Meta</label><div class="evapp-header-image-row"><input type="file" name="header_sample_file" accept="image/jpeg,image/png,video/mp4,application/pdf"><input type="text" name="template[header_sample_handle]" value="<?php echo esc_attr($template['header_sample_handle']); ?>" placeholder="Header Sample Handle" style="margin-top:8px"><div class="evapp-utpl-media-note">Para encabezado multimedia, sube JPG/PNG, MP4 o PDF según el tipo seleccionado. EventosApp conserva el Resumable Upload existente y guarda el handle devuelto por Meta.<?php if($template['header_sample_file_name']): ?><br><strong>Actual:</strong> <?php echo esc_html($template['header_sample_file_name']); ?><?php endif; ?></div></div>
-                        <label>Cuerpo del mensaje</label><div><textarea name="template[body_text]" id="evapp-utpl-body" required><?php echo esc_textarea($template['body_text']); ?></textarea><div class="evapp-utpl-vars"><?php foreach($variables as $num=>$label): ?><button type="button" class="evapp-utpl-var" data-var="{{<?php echo esc_attr($num); ?>}}">{{<?php echo esc_html($num); ?>}} · <?php echo esc_html($label); ?></button><?php endforeach; ?></div><p class="evapp-utpl-help">Los presets funcionales ya traen el mapa esperado por su módulo. En Marketing/Utility personalizada puedes usar solo las variables que necesites.</p></div>
+                        <label>Cuerpo del mensaje</label><div><textarea name="template[body_text]" id="evapp-utpl-body" required><?php echo esc_textarea($template['body_text']); ?></textarea><div class="evapp-utpl-vars"><?php foreach($variables as $num=>$label): ?><button type="button" class="evapp-utpl-var" data-var="{{<?php echo esc_attr($num); ?>}}">{{<?php echo esc_html($num); ?>}} · <?php echo esc_html($label); ?></button><?php endforeach; ?></div><p class="evapp-utpl-help">Los presets funcionales ya traen el mapa esperado por su módulo. En Marketing/Utility personalizada puedes usar solo las variables que necesites.<?php if($builder_type==='double_auth_code'): ?> EventosApp mantiene {{1}}..{{6}} y agrega automáticamente texto fijo si una variable queda al principio o al final, para cumplir la validación de Meta sin cambiar el mapa usado al enviar el código.<?php endif; ?></p></div>
                         <label>Ejemplos de variables</label><div><textarea name="template[body_examples]" id="evapp-utpl-examples" required><?php echo esc_textarea($template['body_examples']); ?></textarea><p class="evapp-utpl-help">Un ejemplo por línea. El motor normaliza la numeración antes de construir el payload para Meta.</p></div>
                         <label>Footer</label><div><input type="text" name="template[footer_text]" id="evapp-utpl-footer" value="<?php echo esc_attr($template['footer_text']); ?>"></div>
                     </div>
