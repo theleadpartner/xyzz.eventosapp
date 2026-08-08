@@ -125,15 +125,15 @@ function eventosapp_whatsapp_templates_default_button_variable_example() {
 /**
  * Categorías soportadas por este módulo para plantillas de tickets.
  *
- * Se mantienen Utility y Marketing porque son las dos categorías que aplican
- * para comunicaciones de eventos con botones, enlaces, imágenes y recordatorios.
- * Authentication no se expone aquí para evitar que una plantilla de ticket viaje
- * con una categoría que Meta restringe a códigos de verificación.
+ * Utility y Marketing conservan el builder general. Authentication se expone
+ * únicamente para el flujo especializado de Doble Autenticación/OTP, cuya
+ * estructura es distinta y se normaliza antes de enviarla a Meta.
  */
 function eventosapp_whatsapp_templates_supported_categories() {
     return [
-        'UTILITY'   => 'Utility',
-        'MARKETING' => 'Marketing',
+        'UTILITY'        => 'Utility',
+        'MARKETING'      => 'Marketing',
+        'AUTHENTICATION' => 'Authentication',
     ];
 }
 
@@ -199,6 +199,10 @@ function eventosapp_whatsapp_templates_category_status_message($requested_catego
         return 'Categoría confirmada por Meta: ' . eventosapp_whatsapp_templates_category_label($remote_category) . '.';
     }
 
+    if ( $requested_category === 'AUTHENTICATION' || $remote_category === 'AUTHENTICATION' ) {
+        return 'Meta reporta categoría ' . eventosapp_whatsapp_templates_category_label($remote_category) . ' aunque EventosApp solicitó ' . eventosapp_whatsapp_templates_category_label($requested_category) . '. Para códigos OTP usa exclusivamente Authentication con BODY administrado por Meta y botón OTP.';
+    }
+
     return 'Meta reporta categoría ' . eventosapp_whatsapp_templates_category_label($remote_category) . ' aunque EventosApp la tenía marcada como ' . eventosapp_whatsapp_templates_category_label($requested_category) . '. Revisa el contenido; si incluye promociones, premios, sorteos, ofertas o llamados comerciales, déjala como Marketing antes de reenviarla.';
 }
 
@@ -246,6 +250,10 @@ function eventosapp_whatsapp_templates_category_advice($template) {
     $template = is_array($template) ? $template : [];
     $category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
     $signals = eventosapp_whatsapp_templates_detect_marketing_signals($template);
+
+    if ( $category === 'AUTHENTICATION' ) {
+        return 'Plantilla Authentication: úsala exclusivamente para códigos de verificación/OTP. Meta controla el texto del BODY y requiere un botón OTP; EventosApp usa COPY_CODE para Doble Autenticación.';
+    }
 
     if ( $category === 'UTILITY' && ! empty($signals) ) {
         return 'Aviso de categoría: el texto tiene señales de Marketing (' . implode(', ', $signals) . '). Meta podría reclasificarla como Marketing aunque la envíes como Utility.';
@@ -922,7 +930,7 @@ function eventosapp_whatsapp_templates_detect_button_count($template) {
 
 /**
  * Normaliza la cantidad de botones configurada. Se admite 0 para plantillas
- * sin botones (por ejemplo doble autenticación o avisos informativos).
+ * sin botones genéricos (por ejemplo Authentication usa su botón OTP especial).
  */
 function eventosapp_whatsapp_templates_normalize_button_count($value, $fallback_template = []) {
     $count = is_numeric($value) ? (int)$value : -1;
@@ -1171,6 +1179,52 @@ function eventosapp_whatsapp_templates_get_settings() {
     foreach ( $settings['templates'] as $template_id => $template ) {
         if ( ! is_array($template) ) {
             continue;
+        }
+
+        // Migra automáticamente SOLO plantillas de Doble Autenticación que aún
+        // no están aprobadas/activas. Las Utility históricas ya aprobadas se
+        // conservan intactas para no interrumpir eventos existentes.
+        if ( eventosapp_whatsapp_templates_is_double_auth_template($template) ) {
+            $current_double_auth_status = eventosapp_whatsapp_templates_normalize_meta_status($template['meta_status'] ?? 'LOCAL');
+            if ( ! in_array($current_double_auth_status, ['APPROVED', 'ACTIVE'], true) ) {
+                $previous_double_auth_category = eventosapp_whatsapp_templates_normalize_meta_category($template['category'] ?? '');
+                $previous_double_auth_meta_category = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
+                $authentication_template = eventosapp_whatsapp_templates_normalize_authentication_template($template);
+
+                // Cambiar de Utility a Authentication no es una simple corrección
+                // de BODY: es otra tipología de Meta. Se desvincula la plantilla
+                // remota rechazada y se usa un nombre nuevo para evitar que el
+                // preflight vuelva a enlazar el registro Utility anterior.
+                $is_authentication_transition = $previous_double_auth_category !== 'AUTHENTICATION'
+                    || ($previous_double_auth_meta_category !== '' && $previous_double_auth_meta_category !== 'AUTHENTICATION');
+                if ( $is_authentication_transition ) {
+                    $old_remote_id = sanitize_text_field((string)($template['meta_template_id'] ?? ''));
+                    $old_name = eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '');
+                    $authentication_template['name'] = 'eventosapp_codigo_doble_auth_auth_' . wp_date('Ymd_His') . '_' . substr(md5((string)$template_id . '|' . $old_name), 0, 6);
+                    $authentication_template['meta_template_id'] = '';
+                    $authentication_template['meta_status'] = 'LOCAL';
+                    $authentication_template['meta_category'] = '';
+                    $authentication_template['meta_rejected_reason'] = '';
+                    $authentication_template['meta_remote_name'] = '';
+                    $authentication_template['meta_remote_language'] = '';
+                    $authentication_template['meta_quality_score'] = '';
+                    $authentication_template['meta_link_source'] = '';
+                    $authentication_template['meta_category_mismatch'] = '0';
+                    $authentication_template['last_submitted_at'] = '';
+                    $authentication_template['last_checked_at'] = '';
+                    $authentication_template['last_api_response'] = [];
+                    $authentication_template['last_meta_result'] = [];
+                    $authentication_template['meta_identity_reset_at'] = current_time('mysql');
+                    $authentication_template['meta_identity_reset_reason'] = 'Migración automática de Doble Autenticación desde ' . ($previous_double_auth_category ?: 'Utility') . ' al formato oficial Authentication OTP.';
+                    $authentication_template['last_api_message'] = 'La versión anterior' . ($old_name !== '' ? ' “' . $old_name . '”' : '') . ($old_remote_id !== '' ? ' (Meta ID ' . $old_remote_id . ')' : '') . ' quedó desvinculada. El próximo envío creará una plantilla Authentication OTP nueva.';
+                }
+
+                if ( maybe_serialize($authentication_template) !== maybe_serialize($template) ) {
+                    $settings['templates'][$template_id] = $authentication_template;
+                    $template = $authentication_template;
+                    $changed = true;
+                }
+            }
         }
 
         $normalized_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
@@ -1596,12 +1650,136 @@ function eventosapp_whatsapp_templates_is_double_auth_template($template) {
     $builder_type = sanitize_key((string)($template['builder_type'] ?? ''));
     $base_key = sanitize_key((string)($template['base_key'] ?? ''));
     $id = sanitize_key((string)($template['id'] ?? ''));
+    $name = eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '');
 
     return $builder_type === 'double_auth_code'
         || $base_key === 'double_auth_code'
         || $id === 'double_auth_code'
-        || ! empty($template['double_auth_code']);
+        || ! empty($template['double_auth_code'])
+        || strpos($name, 'eventosapp_codigo_doble_auth') === 0;
 }
+
+/**
+ * Normaliza la plantilla funcional de Doble Autenticación al formato especial
+ * AUTHENTICATION de Meta. Estas plantillas NO usan un BODY libre como Utility:
+ * Meta genera el texto de autenticación y EventosApp únicamente entrega el OTP
+ * en {{1}} durante el envío. El botón OTP COPY_CODE también recibe ese mismo OTP.
+ */
+function eventosapp_whatsapp_templates_normalize_authentication_template($template) {
+    $template = is_array($template) ? $template : [];
+    if ( ! eventosapp_whatsapp_templates_is_double_auth_template($template) ) {
+        return $template;
+    }
+
+    $template['double_auth_code'] = '1';
+    $template['builder_type'] = 'double_auth_code';
+    $template['base_key'] = 'double_auth_code';
+    $template['category'] = 'AUTHENTICATION';
+    $template['header_format'] = 'NONE';
+    $template['header_text'] = '';
+    $template['header_sample_handle'] = '';
+    $template['header_sample_file_name'] = '';
+    $template['header_sample_file_type'] = '';
+    $template['header_sample_file_size'] = 0;
+    $template['header_sample_uploaded_at'] = '';
+    $template['advanced_components_json'] = '';
+
+    // Representación local mínima para que el runtime conserve el mapa del OTP.
+    // Este texto NO se envía como text del componente BODY al crear la plantilla.
+    $template['body_text'] = '{{1}}';
+    $template['body_examples'] = '48271';
+    $template['body_text_meta'] = '{{1}}';
+    $template['body_variable_map'] = [1];
+    $template['body_variable_signature'] = md5('{{1}}');
+
+    // Authentication usa componentes especiales; no se mezclan footer ni botones
+    // genéricos del builder estándar.
+    $template['footer_text'] = '';
+    $template['button_mode'] = 'none';
+    $template['button_count'] = '0';
+    foreach ( [1, 2] as $button_number ) {
+        $template['button_' . $button_number . '_text'] = '';
+        $template['button_' . $button_number . '_url'] = '';
+        $template['button_' . $button_number . '_example'] = '';
+        $template['button_' . $button_number . '_phone_number'] = '';
+        $template['button_' . $button_number . '_type'] = 'URL';
+    }
+
+    $template['authentication_otp_type'] = 'COPY_CODE';
+    $template['authentication_button_text'] = sanitize_text_field((string)($template['authentication_button_text'] ?? 'Copiar código'));
+    if ( $template['authentication_button_text'] === '' ) {
+        $template['authentication_button_text'] = 'Copiar código';
+    }
+    $template['authentication_add_security_recommendation'] = '1';
+
+    // Se deja sin aviso de expiración porque los códigos de EventosApp pueden
+    // emitirse con antelación al evento. Si en el futuro el backend aplica TTL,
+    // este campo admite 1..90 minutos y build_meta_components lo agregará.
+    $expiration = absint($template['authentication_code_expiration_minutes'] ?? 0);
+    $template['authentication_code_expiration_minutes'] = ($expiration >= 1 && $expiration <= 90) ? (string)$expiration : '';
+
+    return $template;
+}
+
+/**
+ * Plantilla base oficial de Doble Autenticación.
+ *
+ * Se declara aquí, antes de cargar el metabox histórico, para que cualquier
+ * instalación nueva cree desde el principio una plantilla AUTHENTICATION y no
+ * vuelva a generar la versión Utility de seis variables que Meta puede rechazar.
+ */
+if ( ! function_exists('eventosapp_double_auth_whatsapp_template_defaults') ) {
+    function eventosapp_double_auth_whatsapp_template_defaults() {
+        $now = current_time('mysql');
+        return [
+            'id'                                    => 'double_auth_code',
+            'double_auth_code'                      => '1',
+            'builder_type'                          => 'double_auth_code',
+            'base_key'                              => 'double_auth_code',
+            'is_default'                            => '1',
+            'name'                                  => 'eventosapp_codigo_doble_auth_v2',
+            'language'                              => 'es',
+            'category'                              => 'AUTHENTICATION',
+            'modality'                              => 'custom',
+            'title'                                 => 'Código de acceso · Doble Autenticación',
+            'header_format'                         => 'NONE',
+            'header_text'                           => '',
+            'header_sample_handle'                  => '',
+            'body_text'                             => '{{1}}',
+            'body_examples'                         => '48271',
+            'body_text_meta'                        => '{{1}}',
+            'body_variable_map'                     => [1],
+            'body_variable_signature'               => md5('{{1}}'),
+            'footer_text'                           => '',
+            'button_mode'                           => 'none',
+            'button_count'                          => '0',
+            'button_1_text'                         => '',
+            'button_1_url'                          => '',
+            'button_1_example'                      => '',
+            'button_2_text'                         => '',
+            'button_2_url'                          => '',
+            'button_2_example'                      => '',
+            'authentication_otp_type'               => 'COPY_CODE',
+            'authentication_button_text'            => 'Copiar código',
+            'authentication_add_security_recommendation' => '1',
+            'authentication_code_expiration_minutes'=> '',
+            'sender_phone_number_id'                => '',
+            'sender_phone_label'                    => 'Número por defecto',
+            'waba_id'                               => '',
+            'meta_template_id'                      => '',
+            'meta_status'                           => 'LOCAL',
+            'meta_category'                         => '',
+            'meta_rejected_reason'                  => '',
+            'last_api_message'                      => '',
+            'last_api_response'                     => [],
+            'last_submitted_at'                     => '',
+            'last_checked_at'                       => '',
+            'created_at'                            => $now,
+            'updated_at'                            => $now,
+        ];
+    }
+}
+
 
 /**
  * Detecta si la primera o la última variable del BODY queda realmente en un
@@ -1664,25 +1842,10 @@ function eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($temp
         return $template;
     }
 
-    $body = trim((string)($template['body_text'] ?? ''));
-    if ( $body === '' ) {
-        return $template;
-    }
-
-    $issues = eventosapp_whatsapp_templates_body_boundary_variable_issues($body);
-
-    if ( in_array('start', $issues, true) ) {
-        $body = 'Código de acceso: ' . ltrim($body);
-    }
-
-    // Se vuelve a calcular porque al corregir el inicio cambian los offsets.
-    $issues = eventosapp_whatsapp_templates_body_boundary_variable_issues($body);
-    if ( in_array('end', $issues, true) ) {
-        $body = rtrim($body) . "\n\nEste mensaje contiene información de seguridad para validar tu ingreso al evento.";
-    }
-
-    $template['body_text'] = $body;
-    return $template;
+    // Compatibilidad con llamadas antiguas: el nombre del helper se conserva,
+    // pero desde esta versión la normalización correcta es la estructura oficial
+    // AUTHENTICATION de Meta, no agregar texto alrededor de {{1}}..{{6}}.
+    return eventosapp_whatsapp_templates_normalize_authentication_template($template);
 }
 
 /**
@@ -1793,6 +1956,10 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         'id'                   => $id,
         'attendance_confirmation' => ! empty($existing['attendance_confirmation']) ? '1' : (! empty($raw['attendance_confirmation']) ? '1' : ''),
         'double_auth_code'       => ! empty($existing['double_auth_code']) ? '1' : (! empty($raw['double_auth_code']) ? '1' : ''),
+        'authentication_otp_type' => 'COPY_CODE',
+        'authentication_button_text' => sanitize_text_field((string)($raw['authentication_button_text'] ?? ($existing['authentication_button_text'] ?? 'Copiar código'))),
+        'authentication_add_security_recommendation' => '1',
+        'authentication_code_expiration_minutes' => sanitize_text_field((string)($raw['authentication_code_expiration_minutes'] ?? ($existing['authentication_code_expiration_minutes'] ?? ''))),
         'builder_type'           => sanitize_key((string)($raw['builder_type'] ?? ($existing['builder_type'] ?? ''))),
         'advanced_components_json' => sanitize_textarea_field((string)($raw['advanced_components_json'] ?? ($existing['advanced_components_json'] ?? ''))),
         'archived'               => ! empty($raw['archived']) || ! empty($existing['archived']) ? '1' : '0',
@@ -1879,8 +2046,9 @@ function eventosapp_whatsapp_templates_normalize_template($raw, $existing = []) 
         }
     }
 
-    // Doble Autenticación conserva exactamente {{1}}..{{6}}, pero nunca deja
-    // una variable como primer o último contenido significativo del BODY.
+    // Doble Autenticación usa la tipología AUTHENTICATION oficial de Meta.
+    // El helper conserva compatibilidad con registros históricos y fuerza el
+    // mapa local a un único OTP {{1}} sin alterar otros tipos de plantilla.
     $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
 
     $prepared_body = eventosapp_whatsapp_templates_prepare_body_for_meta($template['body_text'], $template['body_examples']);
@@ -1912,7 +2080,7 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
 
     $category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
     if ( ! isset(eventosapp_whatsapp_templates_supported_categories()[$category]) ) {
-        $errors[] = 'La categoría de la plantilla no es compatible con este módulo. Usa Utility o Marketing.';
+        $errors[] = 'La categoría de la plantilla no es compatible con este módulo. Usa Utility, Marketing o Authentication.';
     }
 
     $name = eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '');
@@ -1924,6 +2092,34 @@ function eventosapp_whatsapp_templates_validate_for_meta($template) {
 
     if ( empty($template['language']) ) {
         $errors[] = 'Falta el idioma de la plantilla.';
+    }
+
+    $is_double_auth = eventosapp_whatsapp_templates_is_double_auth_template($template);
+    if ( $category === 'AUTHENTICATION' && ! $is_double_auth ) {
+        $errors[] = 'La categoría Authentication se administra desde el preset Doble Autenticación para garantizar la estructura OTP exigida por Meta.';
+        return array_values(array_unique($errors));
+    }
+
+    if ( $is_double_auth ) {
+        if ( $category !== 'AUTHENTICATION' ) {
+            $errors[] = 'La plantilla de Doble Autenticación debe enviarse a Meta con categoría AUTHENTICATION.';
+        }
+        if ( strtoupper((string)($template['header_format'] ?? 'NONE')) !== 'NONE' ) {
+            $errors[] = 'Las plantillas Authentication de Doble Autenticación no deben usar encabezado multimedia o de texto.';
+        }
+        if ( strtoupper(sanitize_key((string)($template['authentication_otp_type'] ?? 'COPY_CODE'))) !== 'COPY_CODE' ) {
+            $errors[] = 'Doble Autenticación debe usar el botón OTP COPY_CODE.';
+        }
+        $button_text = trim((string)($template['authentication_button_text'] ?? 'Copiar código'));
+        $button_length = function_exists('mb_strlen') ? mb_strlen($button_text, 'UTF-8') : strlen($button_text);
+        if ( $button_text === '' || $button_length > 25 ) {
+            $errors[] = 'El texto del botón OTP debe tener entre 1 y 25 caracteres.';
+        }
+        $expiration = absint($template['authentication_code_expiration_minutes'] ?? 0);
+        if ( $expiration !== 0 && ($expiration < 1 || $expiration > 90) ) {
+            $errors[] = 'La expiración visible del código Authentication debe estar entre 1 y 90 minutos, o quedar vacía.';
+        }
+        return array_values(array_unique($errors));
     }
 
     $advanced_components_json = trim((string)($template['advanced_components_json'] ?? ''));
@@ -2045,6 +2241,38 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
     $template = eventosapp_whatsapp_templates_normalize_double_auth_body_for_meta($template);
     $components = [];
 
+    // Meta trata los códigos OTP como una tipología especial. Authentication no
+    // acepta el BODY libre usado por Utility: se declara BODY sin text y Meta
+    // genera el contenido localizado. COPY_CODE crea el botón OTP nativo.
+    if ( eventosapp_whatsapp_templates_is_double_auth_template($template) ) {
+        $body = [
+            'type' => 'BODY',
+            'add_security_recommendation' => ! empty($template['authentication_add_security_recommendation']),
+        ];
+        $components[] = $body;
+
+        $expiration = absint($template['authentication_code_expiration_minutes'] ?? 0);
+        if ( $expiration >= 1 && $expiration <= 90 ) {
+            $components[] = [
+                'type' => 'FOOTER',
+                'code_expiration_minutes' => $expiration,
+            ];
+        }
+
+        $button_text = sanitize_text_field((string)($template['authentication_button_text'] ?? 'Copiar código'));
+        if ( $button_text === '' ) $button_text = 'Copiar código';
+        $components[] = [
+            'type' => 'BUTTONS',
+            'buttons' => [[
+                'type' => 'OTP',
+                'otp_type' => 'COPY_CODE',
+                'text' => $button_text,
+            ]],
+        ];
+
+        return $components;
+    }
+
     /*
      * Modo avanzado para estructuras oficiales de Meta que no necesitan un
      * control visual específico en EventosApp (por ejemplo catálogo, ubicación
@@ -2133,6 +2361,129 @@ function eventosapp_whatsapp_templates_build_meta_components($template) {
 
     return $components;
 }
+
+/**
+ * Localiza una plantilla de Doble Autenticación Authentication por nombre e idioma.
+ *
+ * El envío histórico vive en eventosapp-doble-auth.php y fue diseñado cuando el
+ * código se modelaba como Utility. Esta capa permite que ese motor estable siga
+ * funcionando sin reescribirlo: solo identifica plantillas OTP administradas por
+ * este módulo y deja intactas todas las demás plantillas y mensajes.
+ */
+function eventosapp_whatsapp_templates_find_runtime_authentication_template($name, $language = '') {
+    $name = eventosapp_whatsapp_templates_sanitize_template_name($name);
+    $language = sanitize_text_field((string)$language);
+    if ( $name === '' ) return null;
+
+    $settings = eventosapp_whatsapp_templates_get_settings();
+    foreach ( (array)($settings['templates'] ?? []) as $template ) {
+        if ( ! is_array($template) || ! eventosapp_whatsapp_templates_is_double_auth_template($template) ) continue;
+        if ( eventosapp_whatsapp_templates_sanitize_template_name($template['name'] ?? '') !== $name ) continue;
+        if ( $language !== '' && sanitize_text_field((string)($template['language'] ?? '')) !== $language ) continue;
+
+        $remote_category = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
+        $local_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+        $effective_category = $remote_category !== '' ? $remote_category : $local_category;
+        if ( $effective_category !== 'AUTHENTICATION' ) continue;
+
+        $status = eventosapp_whatsapp_templates_normalize_meta_status($template['meta_status'] ?? 'LOCAL');
+        if ( ! in_array($status, ['APPROVED', 'ACTIVE'], true) ) continue;
+
+        return $template;
+    }
+
+    return null;
+}
+
+/**
+ * Compatibilidad runtime para Authentication OTP COPY_CODE.
+ *
+ * Meta crea el botón como type=OTP/otp_type=COPY_CODE, pero al ENVIAR una
+ * plantilla el valor dinámico del botón viaja como componente type=button,
+ * sub_type=url, index=0. El motor histórico de Doble Autenticación ya entrega
+ * el OTP al BODY; aquí se duplica exclusivamente ese mismo OTP hacia el botón.
+ *
+ * Se usa el filtro HTTP nativo de WordPress para no tocar el motor estable de
+ * tickets/doble autenticación. El alcance está restringido a POST /messages,
+ * type=template y a una plantilla local de Doble Autenticación Authentication
+ * aprobada. Utility, Marketing, Flow y cualquier otra petición quedan intactas.
+ */
+function eventosapp_whatsapp_templates_authentication_runtime_http_args($args, $url) {
+    $args = is_array($args) ? $args : [];
+    $url = (string)$url;
+
+    if ( stripos($url, 'graph.facebook.com/') === false || ! preg_match('#/messages(?:\?.*)?$#i', $url) ) {
+        return $args;
+    }
+    if ( strtoupper((string)($args['method'] ?? 'GET')) !== 'POST' || ! isset($args['body']) ) {
+        return $args;
+    }
+
+    $body_was_array = is_array($args['body']);
+    $payload = $body_was_array ? $args['body'] : json_decode((string)$args['body'], true);
+    if ( ! is_array($payload) || sanitize_key((string)($payload['type'] ?? '')) !== 'template' ) {
+        return $args;
+    }
+
+    $template_payload = isset($payload['template']) && is_array($payload['template']) ? $payload['template'] : [];
+    $template_name = eventosapp_whatsapp_templates_sanitize_template_name($template_payload['name'] ?? '');
+    $language = sanitize_text_field((string)($template_payload['language']['code'] ?? ''));
+    if ( $template_name === '' ) return $args;
+
+    $authentication_template = eventosapp_whatsapp_templates_find_runtime_authentication_template($template_name, $language);
+    if ( ! is_array($authentication_template) ) return $args;
+
+    $components = isset($template_payload['components']) && is_array($template_payload['components'])
+        ? array_values($template_payload['components'])
+        : [];
+
+    $otp = '';
+    $has_copy_code_runtime_button = false;
+    foreach ( $components as $component ) {
+        if ( ! is_array($component) ) continue;
+        $type = strtolower(sanitize_key((string)($component['type'] ?? '')));
+        if ( $type === 'body' && $otp === '' ) {
+            $parameters = isset($component['parameters']) && is_array($component['parameters']) ? $component['parameters'] : [];
+            if ( isset($parameters[0]['text']) && is_scalar($parameters[0]['text']) ) {
+                $candidate = trim((string)$parameters[0]['text']);
+                if ( preg_match('/^\d{5}$/', $candidate) ) $otp = $candidate;
+            }
+        }
+        if ( $type === 'button'
+            && strtolower(sanitize_key((string)($component['sub_type'] ?? ''))) === 'url'
+            && (string)($component['index'] ?? '') === '0' ) {
+            $has_copy_code_runtime_button = true;
+        }
+    }
+
+    if ( $otp === '' || $has_copy_code_runtime_button ) return $args;
+
+    $components[] = [
+        'type' => 'button',
+        'sub_type' => 'url',
+        'index' => '0',
+        'parameters' => [[
+            'type' => 'text',
+            'text' => $otp,
+        ]],
+    ];
+
+    $payload['template']['components'] = $components;
+    $args['body'] = $body_was_array
+        ? $payload
+        : wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+    if ( function_exists('eventosapp_whatsapp_log') ) {
+        eventosapp_whatsapp_log('Authentication OTP: agregado parámetro runtime para COPY_CODE', [
+            'template' => $template_name,
+            'language' => $language,
+            'has_otp' => true,
+        ]);
+    }
+
+    return $args;
+}
+add_filter('http_request_args', 'eventosapp_whatsapp_templates_authentication_runtime_http_args', 20, 2);
 
 /**
  * Petición común a Meta Graph API para plantillas.
@@ -3164,11 +3515,10 @@ if ( ! function_exists('eventosapp_double_auth_template_is_compatible') ) {
 
         $builder_type = sanitize_key((string)($template['builder_type'] ?? ''));
         $base_key = sanitize_key((string)($template['base_key'] ?? ''));
-        $category = function_exists('eventosapp_whatsapp_templates_sanitize_category')
-            ? eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY')
-            : strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY')));
+        $local_category = eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY');
+        $remote_category = eventosapp_whatsapp_templates_normalize_meta_category($template['meta_category'] ?? '');
+        $effective_category = $remote_category !== '' ? $remote_category : $local_category;
 
-        if ( $category === 'MARKETING' ) return false;
         if ( ! empty($template['attendance_confirmation']) ) return false;
         if ( in_array($builder_type, ['marketing', 'attendance_confirmation', 'utility_custom', 'flow'], true) ) return false;
         if ( in_array($base_key, ['marketing', 'attendance_confirmation', 'utility_custom', 'flow'], true) ) return false;
@@ -3184,6 +3534,18 @@ if ( ! function_exists('eventosapp_double_auth_template_is_compatible') ) {
 
         $header_format = strtoupper(sanitize_key((string)($template['header_format'] ?? 'NONE')));
         if ( in_array($header_format, ['IMAGE', 'VIDEO', 'DOCUMENT'], true) ) return false;
+
+        // Nuevo formato oficial: Authentication + OTP. No depende del BODY libre
+        // ni de {{2}}..{{6}} porque Meta genera el texto y solo recibe el código.
+        if ( $effective_category === 'AUTHENTICATION' ) {
+            return eventosapp_whatsapp_templates_is_double_auth_template($template)
+                || $builder_type === 'double_auth_code'
+                || $base_key === 'double_auth_code';
+        }
+
+        // Compatibilidad hacia atrás: una Utility histórica ya aprobada puede
+        // seguir utilizándose para no interrumpir eventos que ya estaban activos.
+        if ( $effective_category !== 'UTILITY' ) return false;
 
         if ( function_exists('eventosapp_whatsapp_get_runtime_body_variable_numbers') ) {
             $variables = eventosapp_whatsapp_get_runtime_body_variable_numbers($template);
@@ -3205,6 +3567,39 @@ if ( ! function_exists('eventosapp_double_auth_template_is_compatible') ) {
         return true;
     }
 }
+
+/**
+ * Actualiza la ayuda visual del metabox histórico de Doble Autenticación.
+ *
+ * El archivo del metabox se conserva sin cambios para minimizar superficie de
+ * riesgo. Su texto original describe la antigua Utility {{1}}..{{6}}; cuando
+ * se edita un evento, esta mejora aclara que el formato recomendado actual es
+ * Authentication OTP y que la Utility anterior solo queda como compatibilidad.
+ */
+add_action('admin_footer', function() {
+    if ( ! is_admin() ) return;
+    $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+    if ( ! $screen || $screen->post_type !== 'eventosapp_event' || $screen->base !== 'post' ) return;
+    ?>
+    <script>
+    document.addEventListener('DOMContentLoaded', function(){
+        var varsBox = document.querySelector('.evapp-da-delivery .evapp-da-vars');
+        if ( varsBox ) {
+            varsBox.innerHTML = '<strong>Authentication OTP (recomendado por Meta):</strong><br>' +
+                '<code>{{1}}</code> Código OTP · botón nativo “Copiar código”.<br>' +
+                '<span style="display:block;margin-top:5px;color:#646970">Meta genera el BODY de Authentication. Las plantillas Utility antiguas ya aprobadas con {{1}}…{{6}} siguen siendo compatibles únicamente para no interrumpir eventos existentes.</span>';
+        }
+        var select = document.getElementById('evapp-da-whatsapp-template');
+        if ( select ) {
+            var help = select.nextElementSibling;
+            if ( help && help.classList.contains('evapp-da-help') ) {
+                help.textContent = 'Se priorizan plantillas Authentication OTP aprobadas y compatibles con el número emisor. Las Utility antiguas aprobadas se mantienen como compatibilidad.';
+            }
+        }
+    });
+    </script>
+    <?php
+}, 998);
 
 add_action('admin_footer', function() {
     $page = isset($_GET['page']) ? sanitize_key((string)wp_unslash($_GET['page'])) : '';
@@ -3261,8 +3656,8 @@ function eventosapp_whatsapp_templates_builder_presets() {
             'label' => 'Enviar Código de Doble Autenticación',
             'short' => 'Doble autenticación',
             'engine' => 'standard',
-            'category' => 'UTILITY',
-            'description' => 'Código de acceso compatible con el check-in de doble autenticación.',
+            'category' => 'AUTHENTICATION',
+            'description' => 'Código OTP con tipología Authentication y botón nativo para copiar el código.',
             'icon' => '🔐',
         ],
         'flow' => [
@@ -3411,7 +3806,7 @@ function eventosapp_whatsapp_templates_builder_variable_help($type) {
         return [1=>'Nombre', 2=>'Evento', 3=>'Fecha', 4=>'Hora', 5=>'Lugar'];
     }
     if ( $type === 'double_auth_code' ) {
-        return [1=>'Código', 2=>'Nombre', 3=>'Evento', 4=>'Fecha de validez', 5=>'Ticket', 6=>'Organizador'];
+        return [1=>'Código OTP'];
     }
     if ( in_array($type, ['ticket_presencial', 'ticket_virtual'], true) ) {
         return [1=>'Nombre', 2=>'Evento', 3=>'Fecha', 4=>'Hora', 5=>'Lugar / plataforma', 6=>'Enlace del ticket', 7=>'Organizador', 8=>'Modalidad'];
@@ -3903,7 +4298,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
     $sender_phone = eventosapp_whatsapp_templates_sanitize_phone_number_id($template['sender_phone_number_id'] ?? '') ?: $default_sender_phone;
     $template_waba_id = eventosapp_whatsapp_templates_get_template_waba_id($template, $settings);
     $variables = eventosapp_whatsapp_templates_builder_variable_help($builder_type);
-    $fixed_category = $builder_type === 'marketing' ? 'MARKETING' : (in_array($builder_type, ['ticket_presencial','ticket_virtual','attendance_confirmation','double_auth_code','utility_custom'], true) ? 'UTILITY' : '');
+    $fixed_category = $builder_type === 'marketing' ? 'MARKETING' : ($builder_type === 'double_auth_code' ? 'AUTHENTICATION' : (in_array($builder_type, ['ticket_presencial','ticket_virtual','attendance_confirmation','utility_custom'], true) ? 'UTILITY' : ''));
     if ( $fixed_category !== '' ) $template['category'] = $fixed_category;
     $functional_button_lock = $builder_type === 'attendance_confirmation' ? 'attendance' : ($builder_type === 'double_auth_code' ? 'double_auth' : '');
     if ( $functional_button_lock === 'attendance' ) { $template['button_mode']='quick_reply'; $template['button_count']='2'; }
@@ -3937,6 +4332,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
         <input type="hidden" name="template[base_key]" value="<?php echo esc_attr($template['base_key']); ?>">
         <?php if($builder_type==='attendance_confirmation'): ?><input type="hidden" name="template[attendance_confirmation]" value="1"><?php endif; ?>
         <?php if($builder_type==='double_auth_code'): ?><input type="hidden" name="template[double_auth_code]" value="1"><?php endif; ?>
+        <?php if($builder_type==='double_auth_code'): ?><input type="hidden" name="template[authentication_otp_type]" value="COPY_CODE"><input type="hidden" name="template[authentication_button_text]" value="Copiar código"><input type="hidden" name="template[authentication_add_security_recommendation]" value="1"><?php endif; ?>
 
         <div class="evapp-utpl-builder">
             <div class="evapp-utpl-builder-main">
@@ -3947,7 +4343,7 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                         <label>Nombre técnico Meta</label><div><input type="text" name="template[name]" value="<?php echo esc_attr($template['name']); ?>" required pattern="[a-z0-9_]+"><p class="evapp-utpl-help">Minúsculas, números y guion bajo. Cambiarlo en una plantilla vinculada crea una identidad remota nueva.</p></div>
                         <label>Número emisor</label><div><select name="template[sender_phone_number_id]" id="evapp-utpl-sender"><option value="">Número por defecto</option><?php foreach($phone_accounts as $phone_id=>$account): ?><option value="<?php echo esc_attr($phone_id); ?>" <?php selected($sender_phone,$phone_id); ?>><?php echo esc_html($account['label'] ?? $phone_id); ?></option><?php endforeach; ?></select></div>
                         <label>WABA ID</label><div><input type="text" name="template[waba_id]" value="<?php echo esc_attr($template['waba_id'] ?? ''); ?>" placeholder="Se resuelve automáticamente cuando el número lo conoce"><p class="evapp-utpl-help">Déjalo vacío si el número emisor ya está vinculado a su WABA.</p></div>
-                        <label>Idioma / categoría</label><div class="evapp-utpl-inline-grid"><select name="template[language]"><option value="es" <?php selected($template['language'],'es'); ?>>Español · es</option><option value="es_CO" <?php selected($template['language'],'es_CO'); ?>>Español Colombia · es_CO</option><option value="en_US" <?php selected($template['language'],'en_US'); ?>>English US · en_US</option><option value="pt_BR" <?php selected($template['language'],'pt_BR'); ?>>Português Brasil · pt_BR</option></select><?php if($fixed_category!==''): ?><input type="hidden" name="template[category]" value="<?php echo esc_attr($fixed_category); ?>"><input type="text" value="<?php echo esc_attr($fixed_category); ?>" readonly><?php else: ?><select name="template[category]"><option value="UTILITY" <?php selected($template['category'],'UTILITY'); ?>>Utility</option><option value="MARKETING" <?php selected($template['category'],'MARKETING'); ?>>Marketing</option></select><?php endif; ?></div></div>
+                        <label>Idioma / categoría</label><div class="evapp-utpl-inline-grid"><select name="template[language]"><option value="es" <?php selected($template['language'],'es'); ?>>Español · es</option><option value="es_CO" <?php selected($template['language'],'es_CO'); ?>>Español Colombia · es_CO</option><option value="en_US" <?php selected($template['language'],'en_US'); ?>>English US · en_US</option><option value="pt_BR" <?php selected($template['language'],'pt_BR'); ?>>Português Brasil · pt_BR</option></select><?php if($fixed_category!==''): ?><input type="hidden" name="template[category]" value="<?php echo esc_attr($fixed_category); ?>"><input type="text" value="<?php echo esc_attr($fixed_category); ?>" readonly><?php else: ?><select name="template[category]"><option value="UTILITY" <?php selected($template['category'],'UTILITY'); ?>>Utility</option><option value="MARKETING" <?php selected($template['category'],'MARKETING'); ?>>Marketing</option><option value="AUTHENTICATION" <?php selected($template['category'],'AUTHENTICATION'); ?>>Authentication</option></select><?php endif; ?></div></div>
                     </div>
                 </div></div>
 
@@ -3957,17 +4353,17 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
                         <label>Encabezado</label><div><select name="template[header_format]" id="evapp-utpl-header-format"><option value="NONE" <?php selected($template['header_format'],'NONE'); ?>>Sin encabezado</option><option value="TEXT" <?php selected($template['header_format'],'TEXT'); ?>>Texto</option><option value="IMAGE" <?php selected($template['header_format'],'IMAGE'); ?>>Imagen</option><option value="VIDEO" <?php selected($template['header_format'],'VIDEO'); ?>>Video MP4</option><option value="DOCUMENT" <?php selected($template['header_format'],'DOCUMENT'); ?>>Documento PDF</option></select></div>
                         <label class="evapp-header-text-row">Texto del encabezado</label><div class="evapp-header-text-row"><input type="text" name="template[header_text]" value="<?php echo esc_attr($template['header_text']); ?>"></div>
                         <label class="evapp-header-image-row">Muestra para Meta</label><div class="evapp-header-image-row"><input type="file" name="header_sample_file" accept="image/jpeg,image/png,video/mp4,application/pdf"><input type="text" name="template[header_sample_handle]" value="<?php echo esc_attr($template['header_sample_handle']); ?>" placeholder="Header Sample Handle" style="margin-top:8px"><div class="evapp-utpl-media-note">Para encabezado multimedia, sube JPG/PNG, MP4 o PDF según el tipo seleccionado. EventosApp conserva el Resumable Upload existente y guarda el handle devuelto por Meta.<?php if($template['header_sample_file_name']): ?><br><strong>Actual:</strong> <?php echo esc_html($template['header_sample_file_name']); ?><?php endif; ?></div></div>
-                        <label>Cuerpo del mensaje</label><div><textarea name="template[body_text]" id="evapp-utpl-body" required><?php echo esc_textarea($template['body_text']); ?></textarea><div class="evapp-utpl-vars"><?php foreach($variables as $num=>$label): ?><button type="button" class="evapp-utpl-var" data-var="{{<?php echo esc_attr($num); ?>}}">{{<?php echo esc_html($num); ?>}} · <?php echo esc_html($label); ?></button><?php endforeach; ?></div><p class="evapp-utpl-help">Los presets funcionales ya traen el mapa esperado por su módulo. En Marketing/Utility personalizada puedes usar solo las variables que necesites.<?php if($builder_type==='double_auth_code'): ?> EventosApp mantiene {{1}}..{{6}} y agrega automáticamente texto fijo si una variable queda al principio o al final, para cumplir la validación de Meta sin cambiar el mapa usado al enviar el código.<?php endif; ?></p></div>
-                        <label>Ejemplos de variables</label><div><textarea name="template[body_examples]" id="evapp-utpl-examples" required><?php echo esc_textarea($template['body_examples']); ?></textarea><p class="evapp-utpl-help">Un ejemplo por línea. El motor normaliza la numeración antes de construir el payload para Meta.</p></div>
-                        <label>Footer</label><div><input type="text" name="template[footer_text]" id="evapp-utpl-footer" value="<?php echo esc_attr($template['footer_text']); ?>"></div>
+                        <label>Cuerpo del mensaje</label><div><textarea name="template[body_text]" id="evapp-utpl-body" required <?php echo $builder_type==='double_auth_code'?'readonly':''; ?>><?php echo esc_textarea($template['body_text']); ?></textarea><?php if($builder_type!=='double_auth_code'): ?><div class="evapp-utpl-vars"><?php foreach($variables as $num=>$label): ?><button type="button" class="evapp-utpl-var" data-var="{{<?php echo esc_attr($num); ?>}}">{{<?php echo esc_html($num); ?>}} · <?php echo esc_html($label); ?></button><?php endforeach; ?></div><?php endif; ?><p class="evapp-utpl-help"><?php if($builder_type==='double_auth_code'): ?>Authentication no permite un BODY libre. Meta genera el texto localizado y EventosApp solo envía <strong>{{1}}</strong> como código OTP. El contenido de nombre, evento, fecha, ticket y organizador ya no forma parte de esta plantilla.<?php else: ?>Los presets funcionales ya traen el mapa esperado por su módulo. En Marketing/Utility personalizada puedes usar solo las variables que necesites.<?php endif; ?></p></div>
+                        <label>Ejemplos de variables</label><div><textarea name="template[body_examples]" id="evapp-utpl-examples" required <?php echo $builder_type==='double_auth_code'?'readonly':''; ?>><?php echo esc_textarea($template['body_examples']); ?></textarea><p class="evapp-utpl-help"><?php echo $builder_type==='double_auth_code'?'Ejemplo local del único OTP. Meta no recibe body_text de ejemplo en la creación Authentication.':'Un ejemplo por línea. El motor normaliza la numeración antes de construir el payload para Meta.'; ?></p></div>
+                        <label>Footer</label><div><input type="text" name="template[footer_text]" id="evapp-utpl-footer" value="<?php echo esc_attr($template['footer_text']); ?>" <?php echo $builder_type==='double_auth_code'?'readonly':''; ?>><p class="evapp-utpl-help"><?php if($builder_type==='double_auth_code'): ?>Sin footer de expiración: EventosApp no anuncia un TTL que el backend actual no aplique.<?php endif; ?></p></div>
                     </div>
                 </div></div>
 
                 <div class="evapp-utpl-card"><div class="evapp-utpl-builder-section">
                     <div class="evapp-utpl-section-title"><div><h2>3. Botones</h2><p>El preset propone una estructura, pero puedes dejarla sin botones, usar enlaces o respuestas rápidas.</p></div></div>
                     <div class="evapp-utpl-form-grid">
-                        <label>Tipo de botones</label><div><?php if($functional_button_lock==='attendance'): ?><input type="hidden" name="template[button_mode]" value="quick_reply"><select id="evapp-utpl-button-mode" disabled><option>Respuestas rápidas · requerido por Confirmación</option></select><?php elseif($functional_button_lock==='double_auth'): ?><input type="hidden" name="template[button_mode]" value="none"><select id="evapp-utpl-button-mode" disabled><option>Sin botones · requerido por Doble Autenticación</option></select><?php else: ?><select name="template[button_mode]" id="evapp-utpl-button-mode"><option value="none" <?php selected($template['button_mode'],'none'); ?>>Sin botones</option><option value="url" <?php selected($template['button_mode'],'url'); ?>>Botones URL</option><option value="quick_reply" <?php selected($template['button_mode'],'quick_reply'); ?>>Respuestas rápidas</option><option value="phone_number" <?php selected($template['button_mode'],'phone_number'); ?>>Llamar por teléfono</option><option value="mixed" <?php selected($template['button_mode'],'mixed'); ?>>Mixtos (por botón)</option></select><?php endif; ?></div>
-                        <label>Cantidad</label><div><?php if($functional_button_lock==='attendance'): ?><input type="hidden" name="template[button_count]" value="2"><select id="evapp-utpl-button-count" disabled><option>2 botones</option></select><?php elseif($functional_button_lock==='double_auth'): ?><input type="hidden" name="template[button_count]" value="0"><select id="evapp-utpl-button-count" disabled><option>0 botones</option></select><?php else: ?><select name="template[button_count]" id="evapp-utpl-button-count"><option value="0" <?php selected((int)$template['button_count'],0); ?>>0</option><option value="1" <?php selected((int)$template['button_count'],1); ?>>1</option><option value="2" <?php selected((int)$template['button_count'],2); ?>>2</option></select><?php endif; ?></div>
+                        <label>Tipo de botones</label><div><?php if($functional_button_lock==='attendance'): ?><input type="hidden" name="template[button_mode]" value="quick_reply"><select id="evapp-utpl-button-mode" disabled><option>Respuestas rápidas · requerido por Confirmación</option></select><?php elseif($functional_button_lock==='double_auth'): ?><input type="hidden" name="template[button_mode]" value="none"><select id="evapp-utpl-button-mode" disabled><option>OTP · Copiar código · administrado por Meta</option></select><?php else: ?><select name="template[button_mode]" id="evapp-utpl-button-mode"><option value="none" <?php selected($template['button_mode'],'none'); ?>>Sin botones</option><option value="url" <?php selected($template['button_mode'],'url'); ?>>Botones URL</option><option value="quick_reply" <?php selected($template['button_mode'],'quick_reply'); ?>>Respuestas rápidas</option><option value="phone_number" <?php selected($template['button_mode'],'phone_number'); ?>>Llamar por teléfono</option><option value="mixed" <?php selected($template['button_mode'],'mixed'); ?>>Mixtos (por botón)</option></select><?php endif; ?></div>
+                        <label>Cantidad</label><div><?php if($functional_button_lock==='attendance'): ?><input type="hidden" name="template[button_count]" value="2"><select id="evapp-utpl-button-count" disabled><option>2 botones</option></select><?php elseif($functional_button_lock==='double_auth'): ?><input type="hidden" name="template[button_count]" value="0"><select id="evapp-utpl-button-count" disabled><option>1 botón OTP especial</option></select><?php else: ?><select name="template[button_count]" id="evapp-utpl-button-count"><option value="0" <?php selected((int)$template['button_count'],0); ?>>0</option><option value="1" <?php selected((int)$template['button_count'],1); ?>>1</option><option value="2" <?php selected((int)$template['button_count'],2); ?>>2</option></select><?php endif; ?></div>
                         <label>Configuración</label><div>
                             <?php for($i=1;$i<=2;$i++): ?>
                             <div class="evapp-utpl-button-card" data-button-card="<?php echo $i; ?>"><strong>Botón <?php echo $i; ?></strong><select class="evapp-button-type" name="template[button_<?php echo $i; ?>_type]" style="margin-bottom:7px"><option value="URL" <?php selected(eventosapp_whatsapp_templates_get_button_type($template,$i),'URL'); ?>>URL</option><option value="QUICK_REPLY" <?php selected(eventosapp_whatsapp_templates_get_button_type($template,$i),'QUICK_REPLY'); ?>>Respuesta rápida</option><option value="PHONE_NUMBER" <?php selected(eventosapp_whatsapp_templates_get_button_type($template,$i),'PHONE_NUMBER'); ?>>Llamar</option></select><input type="text" name="template[button_<?php echo $i; ?>_text]" value="<?php echo esc_attr($template['button_'.$i.'_text']); ?>" placeholder="Texto del botón"><div class="evapp-button-url-fields" style="margin-top:7px"><input type="text" name="template[button_<?php echo $i; ?>_url]" value="<?php echo esc_attr($template['button_'.$i.'_url']); ?>" placeholder="https://.../{{1}}"><input type="text" name="template[button_<?php echo $i; ?>_example]" value="<?php echo esc_attr($template['button_'.$i.'_example']); ?>" placeholder="Valor de ejemplo para {{1}}" style="margin-top:7px"></div><div class="evapp-button-phone-fields" style="margin-top:7px"><input type="text" name="template[button_<?php echo $i; ?>_phone_number]" value="<?php echo esc_attr($template['button_'.$i.'_phone_number'] ?? ''); ?>" placeholder="+573001234567"></div></div>
@@ -4035,8 +4431,14 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
         function updatePreview(){
             const hType=$('#evapp-utpl-header-format').val(),h=$('input[name="template[header_text]"]').val()||'';
             $('#evapp-preview-header').text(hType==='TEXT'?h:(['IMAGE','VIDEO','DOCUMENT'].includes(hType)?'[ '+hType+' de encabezado ]':''));
+            if(buttonLock==='double_auth'){
+                $('#evapp-preview-body').text('{{1}} es tu código de verificación.\n\nPor tu seguridad, no compartas este código.');
+                $('#evapp-preview-footer').text('');
+                $('#evapp-preview-buttons').html('<div class="evapp-utpl-preview-button">Copiar código</div>');
+                return;
+            }
             $('#evapp-preview-body').text($('#evapp-utpl-body').val()||'');$('#evapp-preview-footer').text($('#evapp-utpl-footer').val()||'');
-            const mode=buttonLock==='attendance'?'quick_reply':(buttonLock==='double_auth'?'none':$('#evapp-utpl-button-mode').val()),count=buttonLock==='attendance'?2:(buttonLock==='double_auth'?0:parseInt($('#evapp-utpl-button-count').val()||0,10));let html='';
+            const mode=buttonLock==='attendance'?'quick_reply':$('#evapp-utpl-button-mode').val(),count=buttonLock==='attendance'?2:parseInt($('#evapp-utpl-button-count').val()||0,10);let html='';
             if(mode!=='none'){for(let i=1;i<=count;i++){const txt=$('input[name="template[button_'+i+'_text]"]').val()||('Botón '+i);html+='<div class="evapp-utpl-preview-button">'+$('<div>').text(txt).html()+'</div>';}}$('#evapp-preview-buttons').html(html);
         }
         $('#evapp-utpl-header-format').on('change',function(){toggleHeader();updatePreview();});$('#evapp-utpl-button-mode,#evapp-utpl-button-count,.evapp-button-type').on('change',toggleButtons);$('#evapp-utpl-builder-form').on('input','input,textarea,select',updatePreview);toggleHeader();toggleButtons();updatePreview();
@@ -4159,7 +4561,7 @@ add_action('admin_post_eventosapp_whatsapp_templates_archive', function() {
 function eventosapp_whatsapp_templates_unified_export_standard_payload($template) {
     $template = is_array($template) ? $template : [];
     $keys = [
-        'builder_type','base_key','attendance_confirmation','double_auth_code','advanced_components_json','title','name','language','category','modality',
+        'builder_type','base_key','attendance_confirmation','double_auth_code','authentication_otp_type','authentication_button_text','authentication_add_security_recommendation','authentication_code_expiration_minutes','advanced_components_json','title','name','language','category','modality',
         'header_format','header_text','header_sample_handle','header_sample_file_name','header_sample_file_type','header_sample_file_size','header_sample_uploaded_at',
         'body_text','body_examples','footer_text','button_mode','button_count','button_1_text','button_1_type','button_1_url','button_1_example','button_1_phone_number','button_2_text','button_2_type','button_2_url','button_2_example','button_2_phone_number',
     ];
