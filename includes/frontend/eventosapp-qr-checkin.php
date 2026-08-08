@@ -711,21 +711,19 @@ if (!function_exists('eventosapp_update_qr_usage_stats')) {
         update_post_meta($event_id, '_eventosapp_qr_usage_stats', $stats);
     }
 }
-
 // === Shortcode: Validador de Localidad (solo lectura) ===
 // Uso: [eventosapp_qr_localidad]
 add_shortcode('eventosapp_qr_localidad', function($atts){
-// 🔒 Requiere permiso para "qr" (redirige con mensaje si no puede)
-if ( function_exists('eventosapp_require_feature') ) {
-    eventosapp_require_feature('qr');
-}
+    // El dashboard y la protección de URL manejan este módulo como feature independiente.
+    if ( function_exists('eventosapp_require_feature') ) {
+        eventosapp_require_feature('qr_localidad');
+    }
 
-
-    // Debe existir un evento activo
+    // Debe existir un evento activo.
     $active_event = function_exists('eventosapp_get_active_event') ? eventosapp_get_active_event() : 0;
     if ( ! $active_event ) {
         ob_start();
-        if (function_exists('eventosapp_require_active_event')) {
+        if ( function_exists('eventosapp_require_active_event') ) {
             eventosapp_require_active_event();
         } else {
             echo '<p>Debes seleccionar un evento activo.</p>';
@@ -733,335 +731,1213 @@ if ( function_exists('eventosapp_require_feature') ) {
         return ob_get_clean();
     }
 
-    // Registrar jsQR para fallback
-    add_action('wp_enqueue_scripts', function(){
-        if (!wp_script_is('jsqr', 'registered')) {
-            wp_register_script('jsqr', 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', [], null, true);
-        }
-    });
+    // Registrar jsQR como fallback. El script se carga bajo demanda desde JS únicamente
+    // cuando BarcodeDetector no está disponible en el navegador.
+    if ( ! wp_script_is('jsqr', 'registered') ) {
+        wp_register_script('jsqr', 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', [], null, true);
+    }
 
-    // Nonce para AJAX
-    $nonce = wp_create_nonce('eventosapp_qr_localidad');
+    $nonce         = wp_create_nonce('eventosapp_qr_localidad');
+    $dashboard_url = function_exists('eventosapp_get_dashboard_url')
+        ? eventosapp_get_dashboard_url()
+        : home_url('/');
+    $event_name    = get_the_title($active_event);
 
     ob_start(); ?>
     <style>
-    .evapp-qr-shell { max-width: 520px; margin: 0 auto; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    .evapp-qr-card { background:#0b1020; color:#eaf1ff; border-radius:16px; padding:18px; box-shadow:0 8px 24px rgba(0,0,0,.15); }
-    .evapp-qr-title { display:flex; align-items:center; gap:.6rem; margin:0 0 10px 0; font-weight:700; font-size:1.05rem; letter-spacing:.2px; }
-    .evapp-qr-title svg { opacity:.9 }
-
-    /* Botón principal verde para este shortcode */
-    .evapp-qr-localidad .evapp-qr-btn { background:#22c55e !important; color:#fff; }
-    .evapp-qr-localidad .evapp-qr-btn:hover { background:#16a34a !important; }
-    .evapp-qr-localidad .evapp-qr-btn:active { background:#15803d !important; }
-    .evapp-qr-localidad .evapp-qr-btn.is-live { background:#e04f5f !important; }
-
-    /* Botón secundario (Escanear otro QR) – mismo color que el principal */
-    .evapp-qr-localidad .evapp-qr-btn-secondary{
-      margin-top:12px; width:100%;
-      background:#22c55e!important;
-      color:#fff; border:0; border-radius:10px; padding:.7rem 1rem; font-weight:800; cursor:pointer;
-      transition: filter .15s ease;
+    .evapp-qr-localidad-app {
+      --evapp-primary:#3279bd;
+      --evapp-primary-dark:#255f96;
+      --evapp-primary-soft:#eaf4ff;
+      --evapp-app-bg:#f5f8fc;
+      --evapp-surface:#ffffff;
+      --evapp-border:#dfe7f1;
+      --evapp-text:#182230;
+      --evapp-muted:#64748b;
+      --evapp-success:#16855b;
+      --evapp-success-soft:#ecfdf5;
+      --evapp-warning:#a16207;
+      --evapp-warning-soft:#fff8e6;
+      --evapp-danger:#c53a3a;
+      --evapp-danger-soft:#fff1f1;
+      --evapp-radius:18px;
+      --evapp-radius-lg:26px;
+      width:100%;
+      max-width:1180px;
+      margin:0 auto;
+      color:var(--evapp-text);
+      font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+      box-sizing:border-box;
     }
-    .evapp-qr-localidad .evapp-qr-btn-secondary:hover{ filter:brightness(1.05); }
+    .evapp-qr-localidad-app *,
+    .evapp-qr-localidad-app *::before,
+    .evapp-qr-localidad-app *::after { box-sizing:border-box; }
 
-    .evapp-qr-btn {
-      display:flex; align-items:center; justify-content:center; gap:.5rem; border:0; border-radius:12px; padding:.9rem 1.1rem; font-weight:700; cursor:pointer; width:100%; transition: filter .15s ease, background .15s ease; color:#fff;
+    .evapp-qr-localidad-app .evqrl-shell {
+      width:100%;
+      padding:clamp(18px,3vw,36px);
+      background:var(--evapp-app-bg);
+      border:1px solid var(--evapp-border);
+      border-radius:var(--evapp-radius-lg);
+      box-shadow:0 18px 50px rgba(31,65,99,.08);
+    }
+    .evapp-qr-localidad-app .evqrl-header {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:24px;
+      margin-bottom:22px;
+    }
+    .evapp-qr-localidad-app .evqrl-heading { min-width:0; }
+    .evapp-qr-localidad-app .evqrl-eyebrow {
+      margin:0 0 7px;
+      color:var(--evapp-primary);
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:.15em;
+      text-transform:uppercase;
+    }
+    .evapp-qr-localidad-app .evqrl-title {
+      margin:0;
+      color:var(--evapp-text);
+      font-size:clamp(27px,4vw,42px);
+      line-height:1.08;
+      letter-spacing:-.035em;
+      font-weight:800;
+    }
+    .evapp-qr-localidad-app .evqrl-subtitle {
+      max-width:760px;
+      margin:10px 0 0;
+      color:var(--evapp-muted);
+      font-size:15px;
+      line-height:1.6;
     }
 
-    .evapp-qr-video-wrap { position:relative; margin-top:12px; border-radius:14px; overflow:hidden; background:#0a0f1d; aspect-ratio:3/4; }
-    .evapp-qr-video { width:100%; height:100%; object-fit:cover; display:none; }
-    .evapp-qr-frame { position:absolute; inset:0; pointer-events:none; display:none; }
-    .evapp-qr-frame .mask { position:absolute; inset:0; backdrop-filter:none; background: radial-gradient(ellipse 60% 40% at 50% 50%, rgba(255,255,255,0) 62%, rgba(10,15,29,.55) 64%); }
-    .evapp-qr-corner { position:absolute; width:44px; height:44px; border:4px solid #4f7cff; border-radius:10px; }
-    .evapp-qr-corner.tl { top:16px; left:16px; border-right:0; border-bottom:0; }
-    .evapp-qr-corner.tr { top:16px; right:16px; border-left:0; border-bottom:0; }
-    .evapp-qr-corner.bl { bottom:16px; left:16px; border-right:0; border-top:0; }
-    .evapp-qr-corner.br { bottom:16px; right:16px; border-left:0; border-top:0; }
-
-    .evapp-qr-result { margin-top:14px; background:#0a0f1d; border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:14px; }
-    .evapp-qr-grid { display:grid; grid-template-columns: 1fr; gap:.2rem .8rem; margin-top:.4rem; }
-    .evapp-qr-grid div b { color:#a7b8ff; font-weight:600; }
-    .evapp-qr-help { color:#a9b6d3; font-size:.9rem; margin-top:.6rem; opacity:.8 }
-
-    .evapp-loc-badge {
-      display:inline-block; margin:6px 0 10px; padding:8px 12px;
-      border-radius:12px; background:#ffd166; color:#1a202c;
-      font-weight:900; font-size:1.4rem; letter-spacing:.5px; text-transform:uppercase;
+    .evapp-qr-localidad-app .evqrl-btn {
+      min-height:44px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:9px;
+      border:1px solid transparent;
+      border-radius:12px;
+      padding:10px 15px;
+      font:inherit;
+      font-size:14px;
+      font-weight:750;
+      line-height:1.1;
+      text-decoration:none!important;
+      cursor:pointer;
+      transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .evapp-qr-localidad-app .evqrl-btn svg {
+      width:18px;
+      height:18px;
+      flex:0 0 18px;
+      fill:none;
+      stroke:currentColor;
+      stroke-width:2;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+    .evapp-qr-localidad-app .evqrl-btn:hover:not(:disabled) {
+      transform:translateY(-1px);
+      text-decoration:none!important;
+    }
+    .evapp-qr-localidad-app .evqrl-btn:focus-visible,
+    .evapp-qr-localidad-app .evqrl-scan-btn:focus-visible,
+    .evapp-qr-localidad-app .evqrl-scan-again:focus-visible {
+      outline:3px solid rgba(50,121,189,.22);
+      outline-offset:2px;
+    }
+    .evapp-qr-localidad-app .evqrl-btn-secondary {
+      background:var(--evapp-surface);
+      border-color:var(--evapp-border);
+      color:var(--evapp-text);
+      box-shadow:0 5px 15px rgba(31,65,99,.05);
+      white-space:nowrap;
+    }
+    .evapp-qr-localidad-app .evqrl-btn-secondary:hover {
+      border-color:#c7d7e8;
+      color:var(--evapp-primary-dark);
+      box-shadow:0 8px 20px rgba(31,65,99,.09);
     }
 
-    .evapp-qr-ok   { color:#7CFF8D; font-weight:800; }
-    .evapp-qr-bad  { color:#ff6b6b; font-weight:700; }
-    .evapp-qr-warn { color:#ffd166; font-weight:700; }
+    .evapp-qr-localidad-app .evqrl-event-context {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:22px;
+      padding:16px 18px;
+      background:var(--evapp-surface);
+      border:1px solid var(--evapp-border);
+      border-radius:var(--evapp-radius);
+      box-shadow:0 8px 24px rgba(31,65,99,.045);
+    }
+    .evapp-qr-localidad-app .evqrl-event-main {
+      min-width:0;
+      display:flex;
+      align-items:center;
+      gap:13px;
+    }
+    .evapp-qr-localidad-app .evqrl-event-icon {
+      width:44px;
+      height:44px;
+      flex:0 0 44px;
+      display:grid;
+      place-items:center;
+      color:var(--evapp-primary);
+      background:var(--evapp-primary-soft);
+      border-radius:13px;
+    }
+    .evapp-qr-localidad-app .evqrl-event-icon svg {
+      width:22px;
+      height:22px;
+      fill:none;
+      stroke:currentColor;
+      stroke-width:1.9;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+    .evapp-qr-localidad-app .evqrl-event-copy { min-width:0; }
+    .evapp-qr-localidad-app .evqrl-event-kicker {
+      display:block;
+      margin-bottom:3px;
+      color:var(--evapp-muted);
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:.09em;
+      text-transform:uppercase;
+    }
+    .evapp-qr-localidad-app .evqrl-event-name {
+      display:block;
+      overflow:hidden;
+      color:var(--evapp-text);
+      font-size:15px;
+      font-weight:800;
+      line-height:1.3;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .evapp-qr-localidad-app .evqrl-event-meta {
+      display:flex;
+      align-items:center;
+      justify-content:flex-end;
+      flex-wrap:wrap;
+      gap:8px;
+    }
+    .evapp-qr-localidad-app .evqrl-chip {
+      min-height:30px;
+      display:inline-flex;
+      align-items:center;
+      gap:7px;
+      padding:6px 10px;
+      border:1px solid var(--evapp-border);
+      border-radius:999px;
+      background:#fff;
+      color:var(--evapp-muted);
+      font-size:12px;
+      font-weight:750;
+      white-space:nowrap;
+    }
+    .evapp-qr-localidad-app .evqrl-chip::before {
+      width:7px;
+      height:7px;
+      border-radius:50%;
+      background:var(--evapp-primary);
+      content:"";
+    }
+    .evapp-qr-localidad-app .evqrl-chip.is-readonly {
+      color:var(--evapp-primary-dark);
+      border-color:#cfe3f6;
+      background:var(--evapp-primary-soft);
+    }
+    .evapp-qr-localidad-app .evqrl-chip.is-safe {
+      color:var(--evapp-success);
+      border-color:#cfeadf;
+      background:var(--evapp-success-soft);
+    }
+    .evapp-qr-localidad-app .evqrl-chip.is-safe::before { background:var(--evapp-success); }
 
-    @media (min-width:480px){
-      .evapp-qr-grid { grid-template-columns: auto 1fr; }
-      .evapp-qr-grid div { display:contents; }
-      .evapp-qr-grid b { text-align:right; }
+    .evapp-qr-localidad-app .evqrl-layout {
+      display:grid;
+      grid-template-columns:minmax(0,1.18fr) minmax(320px,.82fr);
+      gap:20px;
+      align-items:start;
+    }
+    .evapp-qr-localidad-app .evqrl-panel {
+      min-width:0;
+      background:var(--evapp-surface);
+      border:1px solid var(--evapp-border);
+      border-radius:var(--evapp-radius);
+      box-shadow:0 8px 26px rgba(31,65,99,.05);
+    }
+    .evapp-qr-localidad-app .evqrl-scanner-panel { padding:18px; }
+    .evapp-qr-localidad-app .evqrl-result-panel {
+      position:sticky;
+      top:18px;
+      padding:18px;
+    }
+    body.admin-bar .evapp-qr-localidad-app .evqrl-result-panel { top:50px; }
+    .evapp-qr-localidad-app .evqrl-panel-head {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:14px;
+      margin-bottom:15px;
+    }
+    .evapp-qr-localidad-app .evqrl-panel-title {
+      margin:0;
+      color:var(--evapp-text);
+      font-size:17px;
+      font-weight:800;
+      line-height:1.3;
+    }
+    .evapp-qr-localidad-app .evqrl-panel-desc {
+      margin:5px 0 0;
+      color:var(--evapp-muted);
+      font-size:13px;
+      line-height:1.5;
+    }
+    .evapp-qr-localidad-app .evqrl-camera-state {
+      min-height:30px;
+      display:inline-flex;
+      align-items:center;
+      gap:7px;
+      flex:0 0 auto;
+      padding:6px 10px;
+      border:1px solid var(--evapp-border);
+      border-radius:999px;
+      background:#f8fafc;
+      color:var(--evapp-muted);
+      font-size:12px;
+      font-weight:800;
+      white-space:nowrap;
+    }
+    .evapp-qr-localidad-app .evqrl-camera-state::before {
+      width:7px;
+      height:7px;
+      border-radius:50%;
+      background:#94a3b8;
+      content:"";
+    }
+    .evapp-qr-localidad-app .evqrl-camera-state.is-live {
+      color:var(--evapp-success);
+      background:var(--evapp-success-soft);
+      border-color:#cfeadf;
+    }
+    .evapp-qr-localidad-app .evqrl-camera-state.is-live::before {
+      background:var(--evapp-success);
+      box-shadow:0 0 0 4px rgba(22,133,91,.10);
+    }
+    .evapp-qr-localidad-app .evqrl-camera-state.is-busy {
+      color:var(--evapp-primary-dark);
+      background:var(--evapp-primary-soft);
+      border-color:#cfe3f6;
+    }
+    .evapp-qr-localidad-app .evqrl-camera-state.is-busy::before {
+      background:var(--evapp-primary);
+      animation:evqrlPulse 1s ease-in-out infinite;
     }
 
-    .evapp-qr-video-wrap.is-immersive{
+    .evapp-qr-localidad-app .evqrl-scan-btn,
+    .evapp-qr-localidad-app .evqrl-scan-again {
+      width:100%;
+      min-height:48px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:9px;
+      margin:0;
+      border:1px solid transparent;
+      border-radius:12px;
+      padding:12px 16px;
+      background:var(--evapp-primary);
+      color:#fff;
+      font:inherit;
+      font-size:14px;
+      font-weight:800;
+      line-height:1.2;
+      cursor:pointer;
+      box-shadow:0 9px 20px rgba(50,121,189,.18);
+      transition:transform .16s ease,box-shadow .16s ease,background .16s ease,opacity .16s ease,border-color .16s ease,color .16s ease;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .evapp-qr-localidad-app .evqrl-scan-btn:hover:not(:disabled) {
+      transform:translateY(-1px);
+      background:var(--evapp-primary-dark);
+      box-shadow:0 12px 24px rgba(50,121,189,.24);
+    }
+    .evapp-qr-localidad-app .evqrl-scan-btn:disabled,
+    .evapp-qr-localidad-app .evqrl-scan-again:disabled {
+      opacity:.56;
+      cursor:not-allowed;
+      transform:none;
+      box-shadow:none;
+    }
+    .evapp-qr-localidad-app .evqrl-scan-btn.is-live {
+      background:var(--evapp-danger);
+      box-shadow:0 9px 20px rgba(197,58,58,.17);
+    }
+    .evapp-qr-localidad-app .evqrl-scan-btn.is-live:hover:not(:disabled) { background:#a92f2f; }
+    .evapp-qr-localidad-app .evqrl-scan-btn svg,
+    .evapp-qr-localidad-app .evqrl-scan-again svg {
+      width:19px;
+      height:19px;
+      flex:0 0 19px;
+      fill:none;
+      stroke:currentColor;
+      stroke-width:2;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+    .evapp-qr-localidad-app .evqrl-scan-again {
+      margin-top:14px;
+      background:#fff;
+      border-color:var(--evapp-border);
+      color:var(--evapp-primary-dark);
+      box-shadow:none;
+    }
+    .evapp-qr-localidad-app .evqrl-scan-again:hover:not(:disabled) {
+      transform:translateY(-1px);
+      background:var(--evapp-primary-soft);
+      border-color:#c4dbee;
+      box-shadow:none;
+    }
+
+    .evapp-qr-localidad-app .evqrl-video-wrap {
+      position:relative;
+      width:100%;
+      margin-top:14px;
+      overflow:hidden;
+      aspect-ratio:4/3;
+      min-height:300px;
+      background:radial-gradient(circle at 50% 50%,rgba(50,121,189,.12),transparent 55%),#101827;
+      border:1px solid #d6e1ec;
+      border-radius:16px;
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.03);
+    }
+    .evapp-qr-localidad-app .evqrl-video {
+      width:100%;
+      height:100%;
+      display:none;
+      object-fit:cover;
+      background:#0f172a;
+    }
+    .evapp-qr-localidad-app .evqrl-camera-placeholder {
+      position:absolute;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      flex-direction:column;
+      gap:10px;
+      padding:24px;
+      color:#c8d3df;
+      text-align:center;
+      pointer-events:none;
+    }
+    .evapp-qr-localidad-app .evqrl-camera-placeholder svg {
+      width:42px;
+      height:42px;
+      fill:none;
+      stroke:#6f8ca8;
+      stroke-width:1.6;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+    .evapp-qr-localidad-app .evqrl-camera-placeholder strong { color:#f8fafc; font-size:14px; }
+    .evapp-qr-localidad-app .evqrl-camera-placeholder span {
+      max-width:310px;
+      color:#94a3b8;
+      font-size:12px;
+      line-height:1.5;
+    }
+    .evapp-qr-localidad-app .evqrl-video-wrap.has-camera .evqrl-camera-placeholder { display:none; }
+    .evapp-qr-localidad-app .evqrl-frame {
+      position:absolute;
+      inset:0;
+      display:none;
+      pointer-events:none;
+    }
+    .evapp-qr-localidad-app .evqrl-frame .mask {
+      position:absolute;
+      inset:0;
+      background:radial-gradient(ellipse 54% 54% at 50% 50%,rgba(0,0,0,0) 58%,rgba(7,14,24,.48) 61%);
+    }
+    .evapp-qr-localidad-app .evqrl-corner {
+      position:absolute;
+      width:56px;
+      height:56px;
+      border:4px solid #6fb8f4;
+      border-radius:11px;
+      filter:drop-shadow(0 2px 5px rgba(0,0,0,.26));
+    }
+    .evapp-qr-localidad-app .evqrl-corner.tl { top:20px;left:20px;border-right:0;border-bottom:0; }
+    .evapp-qr-localidad-app .evqrl-corner.tr { top:20px;right:20px;border-left:0;border-bottom:0; }
+    .evapp-qr-localidad-app .evqrl-corner.bl { bottom:20px;left:20px;border-right:0;border-top:0; }
+    .evapp-qr-localidad-app .evqrl-corner.br { bottom:20px;right:20px;border-left:0;border-top:0; }
+    .evapp-qr-localidad-app .evqrl-video-wrap.is-immersive {
+      height:min(calc(100vh - var(--evapp-offset,72px)),760px);
+      height:min(calc(100dvh - var(--evapp-offset,72px)),760px);
+      min-height:420px;
       aspect-ratio:auto;
-      height: calc(100vh - var(--evapp-offset, 56px));
-      width: 100%;
+    }
+
+    .evapp-qr-localidad-app .evqrl-scan-guide {
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:8px;
+      margin-top:12px;
+    }
+    .evapp-qr-localidad-app .evqrl-guide-item {
+      display:flex;
+      align-items:center;
+      gap:7px;
+      min-width:0;
+      padding:9px 10px;
+      border:1px solid var(--evapp-border);
+      border-radius:11px;
+      background:#fbfdff;
+      color:var(--evapp-muted);
+      font-size:11px;
+      font-weight:700;
+      line-height:1.35;
+    }
+    .evapp-qr-localidad-app .evqrl-guide-item svg {
+      width:15px;
+      height:15px;
+      flex:0 0 15px;
+      fill:none;
+      stroke:var(--evapp-primary);
+      stroke-width:1.8;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+
+    .evapp-qr-localidad-app .evqrl-result {
+      min-height:190px;
+      margin:0;
+      padding:0;
+      background:transparent;
+      border:0;
+      color:var(--evapp-text);
+    }
+    .evapp-qr-localidad-app .evqrl-help {
+      display:flex;
+      align-items:flex-start;
+      gap:10px;
+      margin:0;
+      padding:14px;
+      border:1px solid #dbe7f2;
+      border-radius:13px;
+      background:#f8fbfe;
+      color:var(--evapp-muted);
+      font-size:13px;
+      line-height:1.55;
+    }
+    .evapp-qr-localidad-app .evqrl-help::before {
+      width:20px;
+      height:20px;
+      flex:0 0 20px;
+      display:grid;
+      place-items:center;
+      border-radius:50%;
+      background:var(--evapp-primary-soft);
+      color:var(--evapp-primary);
+      content:"i";
+      font-size:12px;
+      font-weight:900;
+    }
+    .evapp-qr-localidad-app .evqrl-state {
+      display:flex;
+      align-items:flex-start;
+      gap:12px;
+      padding:15px;
+      border:1px solid var(--evapp-border);
+      border-radius:14px;
+      background:#fff;
+    }
+    .evapp-qr-localidad-app .evqrl-state-icon {
+      width:38px;
+      height:38px;
+      flex:0 0 38px;
+      display:grid;
+      place-items:center;
+      border-radius:12px;
+      font-size:18px;
+      font-weight:900;
+    }
+    .evapp-qr-localidad-app .evqrl-state-copy { min-width:0; }
+    .evapp-qr-localidad-app .evqrl-state-title {
+      margin:0;
+      color:var(--evapp-text);
+      font-size:15px;
+      font-weight:850;
+      line-height:1.35;
+    }
+    .evapp-qr-localidad-app .evqrl-state-text {
+      margin:4px 0 0;
+      color:var(--evapp-muted);
+      font-size:13px;
+      line-height:1.5;
+      overflow-wrap:anywhere;
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-success {
+      border-color:#cde8dc;
+      background:var(--evapp-success-soft);
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-success .evqrl-state-icon {
+      background:#d7f5e7;
+      color:var(--evapp-success);
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-warning {
+      border-color:#efdda7;
+      background:var(--evapp-warning-soft);
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-warning .evqrl-state-icon {
+      background:#ffedbd;
+      color:var(--evapp-warning);
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-danger {
+      border-color:#f0caca;
+      background:var(--evapp-danger-soft);
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-danger .evqrl-state-icon {
+      background:#ffdede;
+      color:var(--evapp-danger);
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-info {
+      border-color:#cfe3f6;
+      background:var(--evapp-primary-soft);
+    }
+    .evapp-qr-localidad-app .evqrl-state.is-info .evqrl-state-icon {
+      background:#d7eafc;
+      color:var(--evapp-primary);
+    }
+
+    .evapp-qr-localidad-app .evqrl-locality-card {
+      margin-top:14px;
+      padding:18px;
+      border:1px solid #bedaf1;
+      border-radius:16px;
+      background:linear-gradient(135deg,#f4f9ff 0%,var(--evapp-primary-soft) 100%);
+      text-align:center;
+    }
+    .evapp-qr-localidad-app .evqrl-locality-label {
+      display:block;
+      margin-bottom:7px;
+      color:var(--evapp-muted);
+      font-size:11px;
+      font-weight:850;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+    }
+    .evapp-qr-localidad-app .evqrl-locality-value {
+      display:block;
+      color:var(--evapp-primary-dark);
+      font-size:clamp(24px,4vw,38px);
+      font-weight:900;
+      line-height:1.08;
+      letter-spacing:-.025em;
+      overflow-wrap:anywhere;
+      text-transform:uppercase;
+    }
+    .evapp-qr-localidad-app .evqrl-locality-card.is-missing {
+      border-color:#efdda7;
+      background:var(--evapp-warning-soft);
+    }
+    .evapp-qr-localidad-app .evqrl-locality-card.is-missing .evqrl-locality-value { color:var(--evapp-warning); }
+
+    .evapp-qr-localidad-app .evqrl-grid {
+      display:grid;
+      grid-template-columns:minmax(105px,.42fr) minmax(0,1fr);
+      gap:0;
+      margin-top:14px;
+      overflow:hidden;
+      border:1px solid var(--evapp-border);
+      border-radius:14px;
+      background:#fff;
+    }
+    .evapp-qr-localidad-app .evqrl-grid > div {
+      min-width:0;
+      padding:10px 12px;
+      border-bottom:1px solid #edf2f7;
+      color:var(--evapp-text);
+      font-size:13px;
+      line-height:1.4;
+      overflow-wrap:anywhere;
+    }
+    .evapp-qr-localidad-app .evqrl-grid > div:nth-last-child(-n+2) { border-bottom:0; }
+    .evapp-qr-localidad-app .evqrl-grid > div:nth-child(odd) {
+      background:#f8fafc;
+      color:var(--evapp-muted);
+    }
+    .evapp-qr-localidad-app .evqrl-grid b { color:inherit; font-weight:800; }
+
+    @keyframes evqrlPulse { 0%,100%{opacity:.45} 50%{opacity:1} }
+
+    @media (max-width:900px) {
+      .evapp-qr-localidad-app .evqrl-layout { grid-template-columns:1fr; }
+      .evapp-qr-localidad-app .evqrl-result-panel { position:static; top:auto; }
+      .evapp-qr-localidad-app .evqrl-video-wrap { aspect-ratio:16/11; }
+    }
+    @media (max-width:680px) {
+      .evapp-qr-localidad-app .evqrl-shell { padding:16px; border-radius:20px; }
+      .evapp-qr-localidad-app .evqrl-header { flex-direction:column; gap:15px; }
+      .evapp-qr-localidad-app .evqrl-header-actions,
+      .evapp-qr-localidad-app .evqrl-header-actions .evqrl-btn { width:100%; }
+      .evapp-qr-localidad-app .evqrl-event-context {
+        align-items:flex-start;
+        flex-direction:column;
+      }
+      .evapp-qr-localidad-app .evqrl-event-meta { width:100%; justify-content:flex-start; }
+      .evapp-qr-localidad-app .evqrl-panel-head { flex-direction:column; }
+      .evapp-qr-localidad-app .evqrl-camera-state { align-self:flex-start; }
+      .evapp-qr-localidad-app .evqrl-scanner-panel,
+      .evapp-qr-localidad-app .evqrl-result-panel { padding:14px; }
+      .evapp-qr-localidad-app .evqrl-video-wrap {
+        min-height:360px;
+        aspect-ratio:3/4;
+        border-radius:14px;
+      }
+      .evapp-qr-localidad-app .evqrl-video-wrap.is-immersive {
+        height:calc(100vh - var(--evapp-offset,62px));
+        height:calc(100dvh - var(--evapp-offset,62px));
+        min-height:420px;
+        max-height:none;
+      }
+      .evapp-qr-localidad-app .evqrl-scan-guide { grid-template-columns:1fr; }
+      .evapp-qr-localidad-app .evqrl-grid { grid-template-columns:1fr; }
+      .evapp-qr-localidad-app .evqrl-grid > div { border-bottom:0; }
+      .evapp-qr-localidad-app .evqrl-grid > div:nth-child(odd) {
+        padding-bottom:4px;
+        font-size:11px;
+        text-transform:uppercase;
+        letter-spacing:.055em;
+      }
+      .evapp-qr-localidad-app .evqrl-grid > div:nth-child(even) {
+        padding-top:4px;
+        padding-bottom:11px;
+        border-bottom:1px solid #edf2f7;
+      }
+      .evapp-qr-localidad-app .evqrl-grid > div:last-child { border-bottom:0; }
+    }
+    @media (max-width:420px) {
+      .evapp-qr-localidad-app .evqrl-shell { padding:13px; }
+      .evapp-qr-localidad-app .evqrl-title { font-size:28px; }
+      .evapp-qr-localidad-app .evqrl-event-main { align-items:flex-start; }
+      .evapp-qr-localidad-app .evqrl-event-name { white-space:normal; }
+      .evapp-qr-localidad-app .evqrl-locality-card { padding:15px 12px; }
+    }
+    @media (prefers-reduced-motion:reduce) {
+      .evapp-qr-localidad-app *,
+      .evapp-qr-localidad-app *::before,
+      .evapp-qr-localidad-app *::after {
+        scroll-behavior:auto!important;
+        transition:none!important;
+        animation-duration:.001ms!important;
+        animation-iteration-count:1!important;
+      }
     }
     </style>
 
-    <div class="evapp-qr-shell evapp-qr-localidad" data-event="<?php echo esc_attr($active_event); ?>">
-      <div class="evapp-qr-card">
-        <div class="evapp-qr-title">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z" stroke="#a7b8ff"/></svg>
-          Lector de QR – Validador de Localidad (solo lectura)
-        </div>
-
-        <button class="evapp-qr-btn" id="evappStartScanLoc">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/><rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/></svg>
-          Activar cámara y escanear
-        </button>
-
-        <div class="evapp-qr-video-wrap">
-          <video id="evappVideoLoc" class="evapp-qr-video" playsinline></video>
-          <div class="evapp-qr-frame" id="evappFrameLoc">
-            <div class="mask"></div>
-            <div class="evapp-qr-corner tl"></div>
-            <div class="evapp-qr-corner tr"></div>
-            <div class="evapp-qr-corner bl"></div>
-            <div class="evapp-qr-corner br"></div>
+    <div class="evapp-qr-localidad evapp-qr-localidad-app" data-event="<?php echo esc_attr($active_event); ?>" data-event-name="<?php echo esc_attr($event_name); ?>">
+      <div class="evqrl-shell">
+        <header class="evqrl-header">
+          <div class="evqrl-heading">
+            <p class="evqrl-eyebrow">EVENTOSAPP</p>
+            <h1 class="evqrl-title">Validador de Localidad</h1>
+            <p class="evqrl-subtitle">Escanea el QR y confirma visualmente la localidad o tipo de acceso del asistente. Este módulo es solo lectura y no modifica el estado de check-in.</p>
           </div>
-          <canvas id="evappCanvasLoc" style="display:none;"></canvas>
-        </div>
+          <div class="evqrl-header-actions">
+            <a href="<?php echo esc_url($dashboard_url); ?>" class="evqrl-btn evqrl-btn-secondary" aria-label="Volver al dashboard">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+              <span>Volver al dashboard</span>
+            </a>
+          </div>
+        </header>
 
-        <div class="evapp-qr-result" id="evappResultLoc">
-          <div class="evapp-qr-help">Tip: escanea el QR para ver la localidad del asistente de forma destacada.</div>
+        <section class="evqrl-event-context" aria-label="Evento activo">
+          <div class="evqrl-event-main">
+            <div class="evqrl-event-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"></rect><path d="M8 3v4M16 3v4M4 10h16"></path></svg>
+            </div>
+            <div class="evqrl-event-copy">
+              <span class="evqrl-event-kicker">Evento activo</span>
+              <span class="evqrl-event-name"><?php echo esc_html($event_name); ?></span>
+            </div>
+          </div>
+          <div class="evqrl-event-meta">
+            <span class="evqrl-chip is-readonly">Solo lectura</span>
+            <span class="evqrl-chip is-safe">No modifica check-in</span>
+          </div>
+        </section>
+
+        <div class="evqrl-layout">
+          <section class="evqrl-panel evqrl-scanner-panel" aria-label="Lector de código QR">
+            <div class="evqrl-panel-head">
+              <div>
+                <h2 class="evqrl-panel-title">Lector QR</h2>
+                <p class="evqrl-panel-desc">Usa preferiblemente la cámara trasera y mantén el código centrado.</p>
+              </div>
+              <div class="evqrl-camera-state" id="evqrlCameraState" aria-live="polite">Cámara inactiva</div>
+            </div>
+
+            <button class="evqrl-scan-btn" id="evappStartScanLoc" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4"></path><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>
+              <span>Activar cámara y escanear</span>
+            </button>
+
+            <div class="evqrl-video-wrap" id="evqrlVideoWrap">
+              <div class="evqrl-camera-placeholder" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 7h4l2-2h6l2 2h4v12H3z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                <strong>La cámara está apagada</strong>
+                <span>Al activarla, el navegador puede solicitar permiso para utilizar la cámara.</span>
+              </div>
+              <video id="evappVideoLoc" class="evqrl-video" playsinline muted></video>
+              <div class="evqrl-frame" id="evappFrameLoc" aria-hidden="true">
+                <div class="mask"></div>
+                <div class="evqrl-corner tl"></div>
+                <div class="evqrl-corner tr"></div>
+                <div class="evqrl-corner bl"></div>
+                <div class="evqrl-corner br"></div>
+              </div>
+              <canvas id="evappCanvasLoc" style="display:none;"></canvas>
+            </div>
+
+            <div class="evqrl-scan-guide" aria-label="Consejos de lectura">
+              <div class="evqrl-guide-item"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"></path></svg>Centra el QR</div>
+              <div class="evqrl-guide-item"><svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"></path></svg>Evita reflejos</div>
+              <div class="evqrl-guide-item"><svg viewBox="0 0 24 24"><path d="M5 12h14M9 8l-4 4 4 4"></path></svg>Acerca si no lee</div>
+            </div>
+          </section>
+
+          <section class="evqrl-panel evqrl-result-panel" aria-label="Resultado de la validación">
+            <div class="evqrl-panel-head">
+              <div>
+                <h2 class="evqrl-panel-title">Localidad del asistente</h2>
+                <p class="evqrl-panel-desc">La localidad aparecerá destacada junto con los datos básicos del ticket.</p>
+              </div>
+            </div>
+            <div class="evqrl-result" id="evappResultLoc" aria-live="polite" aria-atomic="false">
+              <div class="evqrl-help">Activa la cámara y coloca el QR dentro del marco. La consulta es únicamente informativa.</div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
 
 <script>
 (function(){
+  const wrap = document.querySelector('.evapp-qr-localidad-app');
+  if (!wrap || wrap.dataset.evqrlReady === '1') return;
+  wrap.dataset.evqrlReady = '1';
+
   const ajaxURL   = "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
   const ajaxNonce = "<?php echo esc_js( $nonce ); ?>";
-  const wrap      = document.querySelector('.evapp-qr-localidad');
-  const eventID   = parseInt(wrap?.dataset.event || '0', 10) || 0;
+  const eventID   = parseInt(wrap.dataset.event || '0', 10) || 0;
 
-  const btn   = document.getElementById('evappStartScanLoc');
-  const video = document.getElementById('evappVideoLoc');
-  const frame = document.getElementById('evappFrameLoc');
-  const cvs   = document.getElementById('evappCanvasLoc');
-  const ctx   = cvs.getContext('2d');
-  const out   = document.getElementById('evappResultLoc');
-  const vwrap = video.closest('.evapp-qr-video-wrap') || video.parentElement;
+  const btn         = wrap.querySelector('#evappStartScanLoc');
+  const video       = wrap.querySelector('#evappVideoLoc');
+  const frame       = wrap.querySelector('#evappFrameLoc');
+  const cvs         = wrap.querySelector('#evappCanvasLoc');
+  const out         = wrap.querySelector('#evappResultLoc');
+  const vwrap       = wrap.querySelector('#evqrlVideoWrap');
+  const cameraState = wrap.querySelector('#evqrlCameraState');
+  const ctx         = cvs ? cvs.getContext('2d', {willReadFrequently:true}) : null;
+
+  if (!btn || !video || !frame || !cvs || !ctx || !out || !vwrap) return;
 
   let stream = null;
   let running = false;
-  let lastScan = "";
-  let lastAt   = 0;
-  let manualStop = false;
-  let barcodeDetector = ('BarcodeDetector' in window) ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
+  let rafId = 0;
+  let lastScan = '';
+  let lastAt = 0;
+  let lastDetectionAt = 0;
+  let jsQrPromise = null;
 
-  // === helpers scroll con compensación y css var
+  const DETECTION_INTERVAL = 110;
+  const MAX_SCAN_WIDTH = 960;
+
+  let barcodeDetector = null;
+  try {
+    if ('BarcodeDetector' in window) {
+      barcodeDetector = new window.BarcodeDetector({formats:['qr_code']});
+    }
+  } catch (e) {
+    barcodeDetector = null;
+  }
+
+  function escapeHtml(value){
+    return String(value ?? '')
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#039;');
+  }
+
+  function safeValue(value, fallback='-'){
+    const text = String(value ?? '').trim();
+    return text ? escapeHtml(text) : fallback;
+  }
+
   function getOffsetCompensation(){
     const adminBar = document.getElementById('wpadminbar');
-    const adminH = adminBar ? adminBar.offsetHeight : 0;
-    return adminH + 10;
+    return (adminBar ? adminBar.offsetHeight : 0) + 12;
   }
+
   function smoothScrollTo(el){
     if (!el) return;
     const offset = getOffsetCompensation();
     try { el.style.setProperty('--evapp-offset', offset + 'px'); } catch(e){}
     const y = el.getBoundingClientRect().top + window.pageYOffset - offset;
-    window.scrollTo({ top: y, behavior: 'smooth' });
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    window.scrollTo({top:y, behavior});
+  }
+
+  function setCameraState(label, state){
+    if (!cameraState) return;
+    cameraState.textContent = label;
+    cameraState.classList.remove('is-live','is-busy');
+    if (state === 'live') cameraState.classList.add('is-live');
+    if (state === 'busy') cameraState.classList.add('is-busy');
   }
 
   function setLiveUI(on){
     if (on) {
       btn.classList.add('is-live');
-      btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 6h12v12H6z" stroke="white"/></svg> Detener cámara`;
+      btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z"></path></svg><span>Detener cámara</span>';
+      setCameraState('Cámara activa','live');
     } else {
       btn.classList.remove('is-live');
-      btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/><rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/></svg> Activar cámara y escanear`;
+      btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4"></path><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg><span>Activar cámara y escanear</span>';
+      setCameraState('Cámara inactiva','');
     }
   }
 
   function beep(){
-    try { const a=new Audio(); a.src='data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAWGlinZwAAAA8AAAACAAACcQAA'; a.play().catch(()=>{});} catch(e){}
+    try {
+      const a = new Audio();
+      a.src = 'data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAWGlinZwAAAA8AAAACAAACcQAA';
+      a.play().catch(()=>{});
+    } catch(e){}
     if (navigator.vibrate) navigator.vibrate(60);
   }
 
   function setOutput(html){ out.innerHTML = html; }
-  function row(label, value){ return `<div><b>${label}:</b></div><div>${value || '-'}</div>`; }
+
+  function renderState(type, title, text){
+    const icon = type === 'success' ? '✓' : (type === 'warning' ? '!' : (type === 'danger' ? '×' : 'i'));
+    return '<div class="evqrl-state is-' + type + '">' +
+      '<div class="evqrl-state-icon" aria-hidden="true">' + icon + '</div>' +
+      '<div class="evqrl-state-copy"><p class="evqrl-state-title">' + escapeHtml(title) + '</p>' +
+      (text ? '<p class="evqrl-state-text">' + escapeHtml(text) + '</p>' : '') +
+      '</div></div>';
+  }
+
+  function row(label, value){
+    return '<div><b>' + escapeHtml(label) + ':</b></div><div>' + safeValue(value) + '</div>';
+  }
+
+  function normalizeRaw(raw){
+    let s = String(raw || '').trim();
+    if (s.startsWith('http://') || s.startsWith('https://')) return s;
+    if (s.includes('/')) s = s.split('/').pop();
+    return s.replace(/\.(png|jpg|jpeg|pdf)$/i,'').replace(/-tn$/i,'').replace(/^#/,'');
+  }
+
+  function configureCanvas(){
+    const sourceW = video.videoWidth || 1280;
+    const sourceH = video.videoHeight || 720;
+    const scale = Math.min(1, MAX_SCAN_WIDTH / sourceW);
+    cvs.width = Math.max(320, Math.round(sourceW * scale));
+    cvs.height = Math.max(240, Math.round(sourceH * scale));
+  }
 
   function stop(){
     running = false;
-    if (stream) stream.getTracks().forEach(t=>t.stop());
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    if (stream) stream.getTracks().forEach(track=>track.stop());
     stream = null;
+    try { video.pause(); } catch(e){}
+    video.srcObject = null;
     video.style.display = 'none';
     frame.style.display = 'none';
-    vwrap?.classList.remove('is-immersive');
+    vwrap.classList.remove('is-immersive','has-camera');
     setLiveUI(false);
   }
 
   async function ensureJsQR(){
-    if ('BarcodeDetector' in window) return false;
-    if (!window.jsQR) {
-      await new Promise((resolve)=>{
-        const s = document.createElement('script');
-        s.src = (window.jsqr_src || 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js');
-        s.onload = resolve;
-        document.head.appendChild(s);
-      });
+    if (barcodeDetector) return false;
+    if (window.jsQR) return true;
+    if (jsQrPromise) return jsQrPromise;
+
+    jsQrPromise = new Promise((resolve, reject)=>{
+      const existing = document.querySelector('script[data-evapp-jsqr="1"],script[src*="/jsqr@1.4.0/dist/jsQR.js"]');
+      if (existing) {
+        if (window.jsQR) {
+          resolve(true);
+          return;
+        }
+        existing.addEventListener('load', ()=>resolve(true), {once:true});
+        existing.addEventListener('error', ()=>reject(new Error('No fue posible cargar el lector QR alterno.')), {once:true});
+        return;
+      }
+
+      const s = document.createElement('script');
+      s.src = (window.jsqr_src || 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js');
+      s.async = true;
+      s.dataset.evappJsqr = '1';
+      s.onload = ()=>resolve(true);
+      s.onerror = ()=>reject(new Error('No fue posible cargar el lector QR alterno.'));
+      document.head.appendChild(s);
+    }).catch(err=>{
+      jsQrPromise = null;
+      throw err;
+    });
+
+    return jsQrPromise;
+  }
+
+  function cameraErrorMessage(err){
+    const name = err && err.name ? String(err.name) : '';
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+      return 'El navegador no tiene permiso para usar la cámara. Habilita el permiso de cámara para este sitio y vuelve a intentar.';
     }
-    return true;
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      return 'No se encontró una cámara disponible en este dispositivo.';
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return 'Este navegador no permite acceder a la cámara desde esta página. Verifica que el sitio use HTTPS y que el navegador esté actualizado.';
+    }
+    return 'No se pudo acceder a la cámara. Revisa los permisos del navegador y vuelve a intentar.';
   }
 
   async function start(){
-    if (!eventID){
-      setOutput('<div class="evapp-qr-bad">No hay evento activo.</div>');
+    if (!eventID) {
+      setOutput(renderState('danger','No hay evento activo','Regresa al dashboard y selecciona el evento que vas a gestionar.'));
       smoothScrollTo(out);
-      return;
+      return false;
     }
-    try{
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal:'environment' } }, audio:false });
-    }catch(e){
-      setOutput('<div class="evapp-qr-bad">No se pudo acceder a la cámara.</div>');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setOutput(renderState('danger','Cámara no disponible','El navegador no ofrece acceso a la cámara en este contexto. Verifica HTTPS y permisos.'));
       smoothScrollTo(out);
-      return;
+      return false;
     }
-    video.srcObject = stream;
-    await video.play();
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},
+        audio:false
+      });
+    } catch(e) {
+      setOutput(renderState('danger','No se pudo activar la cámara',cameraErrorMessage(e)));
+      smoothScrollTo(out);
+      return false;
+    }
+
+    try {
+      video.srcObject = stream;
+      await video.play();
+    } catch(e) {
+      stop();
+      setOutput(renderState('danger','No se pudo iniciar el visor','El navegador bloqueó la reproducción de la cámara. Vuelve a intentar.'));
+      smoothScrollTo(out);
+      return false;
+    }
+
+    configureCanvas();
     video.style.display = 'block';
     frame.style.display = 'block';
+    vwrap.classList.add('has-camera','is-immersive');
+    smoothScrollTo(vwrap);
 
-    // Modo inmersivo + scroll al visor (ahora aquí)
-    if (vwrap){
-      vwrap.classList.add('is-immersive');
-      smoothScrollTo(vwrap);
-    }
-
-    cvs.width  = video.videoWidth  || 640;
-    cvs.height = video.videoHeight || 480;
+    const oldAgain = out.querySelector('#evappScanAgainLoc');
+    if (oldAgain) oldAgain.remove();
 
     running = true;
-    manualStop = false;
+    lastDetectionAt = 0;
     setLiveUI(true);
-
-    // eliminar botón secundario si existía
-    const again = document.getElementById('evappScanAgainLoc');
-    if (again) again.remove();
-
-    tick();
+    rafId = requestAnimationFrame(tick);
+    return true;
   }
 
-  async function tick(){
+  async function tick(timestamp){
     if (!running) return;
-    ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
 
-    if (barcodeDetector) {
-      try {
-        const bitmap = await createImageBitmap(cvs);
-        const codes  = await barcodeDetector.detect(bitmap);
-        if (codes && codes.length){
-          const data = (codes[0].rawValue || '').trim();
-          onScan(data);
-          return;
-        }
-      } catch(e){}
-    } else if (window.jsQR) {
-      const img  = ctx.getImageData(0,0,cvs.width,cvs.height);
-      const code = window.jsQR(img.data, img.width, img.height);
-      if (code && code.data) {
-        onScan(String(code.data||'').trim());
-        return;
-      }
+    if ((timestamp - lastDetectionAt) < DETECTION_INTERVAL) {
+      rafId = requestAnimationFrame(tick);
+      return;
     }
-    requestAnimationFrame(tick);
+    lastDetectionAt = timestamp;
+
+    try {
+      ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
+
+      if (barcodeDetector) {
+        let bitmap = null;
+        try {
+          bitmap = await createImageBitmap(cvs);
+          const codes = await barcodeDetector.detect(bitmap);
+          if (codes && codes.length && running) {
+            const data = normalizeRaw(codes[0].rawValue || '');
+            if (data) {
+              onScan(data);
+              return;
+            }
+          }
+        } catch(e) {
+        } finally {
+          if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+        }
+      } else if (window.jsQR) {
+        const img = ctx.getImageData(0,0,cvs.width,cvs.height);
+        const code = window.jsQR(img.data, img.width, img.height);
+        if (code && code.data && running) {
+          const data = normalizeRaw(code.data);
+          if (data) {
+            onScan(data);
+            return;
+          }
+        }
+      }
+    } catch(e) {}
+
+    if (running) rafId = requestAnimationFrame(tick);
   }
 
   function injectScanAgainButton(){
-    if (document.getElementById('evappScanAgainLoc')) return;
+    const old = out.querySelector('#evappScanAgainLoc');
+    if (old) old.remove();
+
     const againBtn = document.createElement('button');
     againBtn.id = 'evappScanAgainLoc';
     againBtn.type = 'button';
-    againBtn.className = 'evapp-qr-btn-secondary';
-    againBtn.textContent = 'Escanear otro QR';
+    againBtn.className = 'evqrl-scan-again';
+    againBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.34 5.66M20 5v6h-6"></path></svg><span>Escanear otro QR</span>';
     out.appendChild(againBtn);
 
     againBtn.addEventListener('click', async ()=>{
-      // Reactivar cámara; start() hará el scroll correcto
-      await ensureJsQR();
-      await start();
-      setOutput('<div class="evapp-qr-help">Tip: escanea el QR para ver la localidad del asistente.</div>');
+      againBtn.disabled = true;
+      setCameraState('Preparando cámara','busy');
+      try {
+        await ensureJsQR();
+        const started = await start();
+        if (started) {
+          setOutput('<div class="evqrl-help">Cámara activa. Centra el QR dentro del marco y evita reflejos.</div>');
+        } else {
+          injectScanAgainButton();
+        }
+      } catch(e) {
+        setCameraState('Cámara inactiva','');
+        setOutput(renderState('danger','No se pudo preparar el lector',e && e.message ? e.message : 'Vuelve a intentar.'));
+        injectScanAgainButton();
+        smoothScrollTo(out);
+      }
     });
   }
 
   function onScan(data){
     const now = Date.now();
-    if (data === lastScan && (now - lastAt) < 2500){
-      requestAnimationFrame(tick);
+    if (data === lastScan && (now - lastAt) < 2500) {
+      if (running) rafId = requestAnimationFrame(tick);
       return;
     }
-    lastScan = data; lastAt = now;
+
+    lastScan = data;
+    lastAt = now;
     beep();
-
-    manualStop = true;
     stop();
-
-    setOutput('<div class="evapp-qr-help">Procesando: '+ data +'…</div>');
+    setCameraState('Procesando','busy');
+    setOutput(renderState('info','Validando QR','Estamos consultando la localidad del asistente.'));
     smoothScrollTo(out);
 
     const fd = new FormData();
     fd.append('action','eventosapp_qr_localidad_lookup');
-    fd.append('security', ajaxNonce);
-    fd.append('event_id', String(eventID));
-    fd.append('scanned',  data);
+    fd.append('security',ajaxNonce);
+    fd.append('event_id',String(eventID));
+    fd.append('scanned',data);
 
-    fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
+    fetch(ajaxURL,{method:'POST',body:fd,credentials:'same-origin'})
       .then(r=>r.json())
       .then(resp=>{
-        if (!resp || !resp.success){
+        setCameraState('Cámara inactiva','');
+
+        if (!resp || !resp.success) {
           const msg = (resp && resp.data && resp.data.error) ? resp.data.error : 'Error desconocido';
-          setOutput('<div class="evapp-qr-bad">'+ msg +'</div>');
+          setOutput(renderState('danger','No se pudo validar el QR',msg));
           injectScanAgainButton();
           smoothScrollTo(out);
           return;
         }
-        const d = resp.data || {};
-        const locText = d.localidad || '—';
 
-        let html = `
-          <div class="evapp-loc-badge">${locText}</div>
-          <div class="evapp-qr-grid">
-            ${row('Localidad', d.localidad)}
-            ${row('Nombre', d.full_name)}
-            ${row('Evento', d.event_name)}
-            ${row('Empresa', d.company)}
-            ${row('Cargo', d.designation)}
-          </div>
-        `;
+        const d = resp.data || {};
+        const locality = String(d.localidad ?? '').trim();
+        const hasLocality = locality !== '';
+
+        let html = renderState(
+          hasLocality ? 'success' : 'warning',
+          hasLocality ? 'QR validado' : 'QR válido sin localidad',
+          hasLocality ? 'La localidad del asistente se muestra a continuación.' : 'El ticket pertenece al evento activo, pero no tiene una localidad registrada.'
+        );
+
+        html += '<div class="evqrl-locality-card' + (hasLocality ? '' : ' is-missing') + '">' +
+          '<span class="evqrl-locality-label">Localidad</span>' +
+          '<span class="evqrl-locality-value">' + safeValue(d.localidad,'Sin localidad') + '</span>' +
+          '</div>';
+
+        html += '<div class="evqrl-grid">' +
+          row('Localidad',d.localidad) +
+          row('Nombre',d.full_name) +
+          row('Evento',d.event_name) +
+          row('Empresa',d.company) +
+          row('Cargo',d.designation) +
+          '</div>';
+
         setOutput(html);
         injectScanAgainButton();
         smoothScrollTo(out);
       })
       .catch(()=>{
-        setOutput('<div class="evapp-qr-bad">No se pudo obtener la información del asistente.</div>');
+        setCameraState('Cámara inactiva','');
+        setOutput(renderState('danger','Error de conexión','No se pudo obtener la información del asistente. Comprueba la conexión e intenta nuevamente.'));
         injectScanAgainButton();
         smoothScrollTo(out);
       });
   }
 
-  // Toggle cámara
   btn.addEventListener('click', async ()=>{
     if (stream && stream.active) {
-      manualStop = true;
       stop();
-      setOutput('<div class="evapp-qr-help">Cámara detenida. Haz clic para activar y escanear.</div>');
-      smoothScrollTo(out);
+      setOutput('<div class="evqrl-help">Cámara detenida. Puedes volver a activarla cuando estés listo para el siguiente escaneo.</div>');
       return;
     }
-    await ensureJsQR();
-    await start();
-    setOutput('<div class="evapp-qr-help">Tip: escanea el QR para ver la localidad del asistente.</div>');
+
+    btn.disabled = true;
+    setCameraState('Preparando cámara','busy');
+    try {
+      await ensureJsQR();
+      const started = await start();
+      if (started) {
+        setOutput('<div class="evqrl-help">Cámara activa. Centra el QR dentro del marco; la lectura se detendrá automáticamente al detectar un código.</div>');
+      }
+    } catch(e) {
+      setCameraState('Cámara inactiva','');
+      setOutput(renderState('danger','No se pudo preparar el lector',e && e.message ? e.message : 'Vuelve a intentar.'));
+      smoothScrollTo(out);
+    } finally {
+      btn.disabled = false;
+    }
   });
+
+  window.addEventListener('pagehide',stop,{passive:true});
 })();
 </script>
     <?php
@@ -1069,24 +1945,31 @@ if ( function_exists('eventosapp_require_feature') ) {
 });
 
 
-
-
-
 // === AJAX: Obtener datos del ticket (solo lectura) para mostrar localidad en grande ===
 add_action('wp_ajax_eventosapp_qr_localidad_lookup', function(){
-// 🔒 Seguridad por rol (feature: qr)
-if ( ! is_user_logged_in() ) {
-    wp_send_json_error(['error' => 'Debes iniciar sesión.'], 401);
-}
-if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
-    wp_send_json_error(['error' => 'Permisos insuficientes para Check-In con QR.'], 403);
-}
+    if ( ! is_user_logged_in() ) {
+        wp_send_json_error(['error' => 'Debes iniciar sesión.'], 401);
+    }
+
+    // El permiso debe corresponder a la tarjeta/página independiente de Validador de Localidad.
+    $can_localidad = current_user_can('manage_options');
+    if ( ! $can_localidad ) {
+        if ( function_exists('eventosapp_user_can_access_frontend_feature') ) {
+            $can_localidad = eventosapp_user_can_access_frontend_feature('qr_localidad');
+        } elseif ( function_exists('eventosapp_role_can') ) {
+            $can_localidad = eventosapp_role_can('qr_localidad');
+        }
+    }
+    if ( ! $can_localidad ) {
+        wp_send_json_error(['error' => 'Permisos insuficientes para Validador de Localidad.'], 403);
+    }
+
     check_ajax_referer('eventosapp_qr_localidad','security');
 
     $scanned  = isset($_POST['scanned'])  ? sanitize_text_field( wp_unslash($_POST['scanned']) ) : '';
     $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
 
-    // 🔒 Forzar evento ACTIVO para no-admins
+    // Forzar el evento activo para no administradores.
     if ( ! current_user_can('manage_options') && function_exists('eventosapp_get_active_event') ) {
         $active = (int) eventosapp_get_active_event();
         if ( ! $active || $event_id !== $active ) {
@@ -1094,30 +1977,33 @@ if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('qr') ) {
         }
     }
 
-
-    if ( ! $scanned || ! $event_id ) wp_send_json_error(['error'=>'Datos incompletos']);
+    if ( ! $scanned || ! $event_id ) {
+        wp_send_json_error(['error' => 'Datos incompletos']);
+    }
 
     $lookup = eventosapp_qr_find_ticket_by_scanned_code($scanned, $event_id);
     if ( empty($lookup['found']) || empty($lookup['ticket_id']) ) {
-        wp_send_json_error(['error' => !empty($lookup['error']) ? $lookup['error'] : 'Ticket no encontrado para este evento.']);
+        wp_send_json_error([
+            'error' => ! empty($lookup['error']) ? $lookup['error'] : 'Ticket no encontrado para este evento.'
+        ]);
     }
 
     $ticket_post_id = absint($lookup['ticket_id']);
 
-    // Seguridad extra (una sola vez)
+    // Seguridad extra: el ticket debe pertenecer al evento solicitado.
     $ticket_event = (int) get_post_meta($ticket_post_id, '_eventosapp_ticket_evento_id', true);
     if ( $ticket_event !== (int) $event_id ) {
-        wp_send_json_error(['error'=>'El ticket no pertenece al evento activo']);
+        wp_send_json_error(['error' => 'El ticket no pertenece al evento activo']);
     }
 
     update_meta_cache('post', [$ticket_post_id]);
 
-    // SOLO LECTURA: no se modifica estado alguno ni se valida contra fechas.
+    // SOLO LECTURA: no se modifica estado de check-in y no se valida la fecha del evento.
     $first = get_post_meta($ticket_post_id, '_eventosapp_asistente_nombre', true);
     $last  = get_post_meta($ticket_post_id, '_eventosapp_asistente_apellido', true);
     $comp  = get_post_meta($ticket_post_id, '_eventosapp_asistente_empresa', true);
     $role  = get_post_meta($ticket_post_id, '_eventosapp_asistente_cargo', true);
-$loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
+    $loc   = get_post_meta($ticket_post_id, '_eventosapp_asistente_localidad', true);
 
     wp_send_json_success([
         'full_name'   => trim($first.' '.$last),
