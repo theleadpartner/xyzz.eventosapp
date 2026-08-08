@@ -327,19 +327,50 @@ add_shortcode('eventosapp_front_search', function($atts){
   transition:border-color .16s ease,box-shadow .16s ease;
 }
 .evfs-select{padding:10px 38px 10px 13px}
-.evfs-input{padding:10px 46px 10px 43px}
-.evfs-select:focus,
-.evfs-input:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.13)}
+
+/*
+ * El input de búsqueda necesita una regla más específica porque algunos themes
+ * (incluido Elementor/Hello y estilos globales de formularios) declaran
+ * input[type="search"] con mayor especificidad y pueden sobrescribir el padding.
+ * El padding izquierdo reservado evita que el texto se monte sobre la lupa.
+ */
+.evfs-input{padding:10px 46px 10px 46px}
+
+.evfs-app input.evfs-input[type="search"]{
+  padding:10px 46px 10px 46px!important;
+  -webkit-appearance:none;
+  appearance:none;
+}
+
+.evfs-app input.evfs-input[type="search"]::-webkit-search-decoration,
+.evfs-app input.evfs-input[type="search"]::-webkit-search-cancel-button,
+.evfs-app input.evfs-input[type="search"]::-webkit-search-results-button,
+.evfs-app input.evfs-input[type="search"]::-webkit-search-results-decoration{
+  -webkit-appearance:none;
+  appearance:none;
+}
+
 .evfs-input-wrap{position:relative;min-width:0}
+
 .evfs-search-icon{
   position:absolute;
+  z-index:2;
   top:50%;
-  left:14px;
+  left:15px;
   width:20px;
   height:20px;
   color:var(--evapp-muted);
   transform:translateY(-50%);
   pointer-events:none;
+}
+
+.evfs-clear{
+  position:absolute;
+  z-index:3;
+  top:50%;
+  right:8px;
+  width:34px;
+  height:34px;
 }
 .evfs-search-icon svg{width:20px;height:20px;display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .evfs-clear{
