@@ -66,6 +66,8 @@ function eventosapp_whatsapp_flow_templates_default_item() {
         'meta_status'            => 'local_draft',
         'meta_template_id'       => '',
         'last_meta_response'     => [],
+        'archived'               => '0',
+        'archived_at'            => '',
         'created_at'             => '',
         'updated_at'             => '',
     ];
@@ -235,7 +237,30 @@ function eventosapp_whatsapp_flow_templates_upload_error_message($error_code) {
 }
 
 function eventosapp_whatsapp_flow_templates_notice_redirect($args = []) {
-    $args = wp_parse_args($args, ['page' => 'eventosapp_whatsapp_flow_templates']);
+    // Desde 2026-08 el editor visible de Flow vive dentro del centro unificado
+    // Plantillas WhatsApp. Conservamos esta función para todos los handlers
+    // históricos, pero sus redirecciones terminan en la nueva sección única.
+    $args = is_array($args) ? $args : [];
+    $template_id = sanitize_key((string)($args['template_id'] ?? ''));
+    unset($args['page']);
+    $args = array_merge([
+        'page'   => 'eventosapp_whatsapp_templates',
+        'engine' => 'flow',
+    ], $args);
+    if ( $template_id !== '' ) {
+        $args['view'] = 'edit';
+        $args['builder_type'] = 'flow';
+        $args['template_id'] = $template_id;
+    }
+    if ( isset($args['flow_tpl_notice']) && ! isset($args['evapp_wa_tpl_level']) ) {
+        $level = sanitize_key((string)$args['flow_tpl_notice']);
+        $args['evapp_wa_tpl_level'] = in_array($level, ['success','warning','error','info'], true) ? $level : 'info';
+        $args['evapp_wa_tpl_ok'] = in_array($level, ['success','info'], true) ? '1' : '0';
+    }
+    if ( isset($args['flow_tpl_message']) && ! isset($args['evapp_wa_tpl_msg']) ) {
+        $args['evapp_wa_tpl_msg'] = rawurldecode((string)$args['flow_tpl_message']);
+    }
+    unset($args['flow_tpl_notice'], $args['flow_tpl_message']);
     wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
     exit;
 }
@@ -929,7 +954,7 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_save', function() {
     }
 
     if ( $save_mode !== 'save_as_new' && ! empty($existing) ) {
-        foreach ( ['meta_status', 'meta_template_id', 'last_meta_response', 'meta_category'] as $keep_key ) {
+        foreach ( ['meta_status', 'meta_template_id', 'last_meta_response', 'meta_category', 'archived', 'archived_at'] as $keep_key ) {
             if ( isset($existing[$keep_key]) && ( $keep_key !== 'last_meta_response' || $upload_message === '' ) ) {
                 $item[$keep_key] = $existing[$keep_key];
             }
@@ -973,6 +998,8 @@ add_action('admin_post_eventosapp_whatsapp_flow_template_duplicate', function() 
     $copy['id'] = $new_id;
     $copy['display_name'] = trim((string)($copy['display_name'] ?: $copy['name'])) . ' (copia)';
     $copy['name'] = eventosapp_whatsapp_flow_templates_template_name(($copy['name'] ?: 'eventosapp_flow') . '_copy_' . substr($new_id, -6));
+    $copy['archived'] = '0';
+    $copy['archived_at'] = '';
     $copy['meta_status'] = 'local_draft';
     $copy['meta_template_id'] = '';
     $copy['meta_category'] = '';

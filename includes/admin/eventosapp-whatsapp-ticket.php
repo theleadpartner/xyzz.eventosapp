@@ -4588,6 +4588,31 @@ if ( ! function_exists('eventosapp_whatsapp_template_matches_modality') ) {
         $template_modality = sanitize_key((string)($template['modality'] ?? 'custom'));
         $base_key = sanitize_key((string)($template['base_key'] ?? ''));
 
+        // Una plantilla archivada deja de ofrecerse como opción nueva, pero una
+        // asignación explícita existente sigue resolviéndose por su ID para no
+        // interrumpir configuraciones históricas.
+        if ( ! empty($template['archived']) ) {
+            return false;
+        }
+
+        /*
+         * El selector de plantillas de ticket no debe mezclar los nuevos tipos
+         * especializados del builder unificado. Las plantillas históricas
+         * personalizadas siguen siendo compatibles porque, si no tienen estas
+         * marcas, conservan el comportamiento anterior de modality=custom.
+         */
+        $builder_type = sanitize_key((string)($template['builder_type'] ?? ''));
+        $specialized_types = ['marketing', 'attendance_confirmation', 'double_auth_code', 'utility_custom', 'flow'];
+        $is_marketing = strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY'))) === 'MARKETING';
+        $is_specialized = ! empty($template['attendance_confirmation'])
+            || ! empty($template['double_auth_code'])
+            || in_array($builder_type, $specialized_types, true)
+            || in_array($base_key, ['attendance_confirmation', 'double_auth_code', 'marketing', 'utility_custom', 'flow'], true);
+
+        if ( $is_marketing || $is_specialized ) {
+            return false;
+        }
+
         if ( $template_modality === $modality || $base_key === $modality ) {
             return true;
         }
@@ -6305,6 +6330,45 @@ function eventosapp_whatsapp_get_ticket_public_code($ticket_id) {
 }
 
 /**
+ * Determina si una plantilla puede entrar al fallback automático de envío de tickets.
+ *
+ * Las plantillas elegidas explícitamente en el metabox del evento se conservan tal
+ * como funcionaban antes. Esta guarda solo evita que el fallback automático tome
+ * por accidente plantillas especializadas creadas por el builder unificado
+ * (Marketing, confirmación de asistencia, doble autenticación u otras Utility
+ * genéricas) cuando el evento no tiene una plantilla de ticket válida seleccionada.
+ */
+function eventosapp_whatsapp_template_is_ticket_fallback_candidate($template) {
+    if ( ! is_array($template) ) {
+        return false;
+    }
+
+    if ( ! empty($template['archived']) ) {
+        return false;
+    }
+
+    if ( ! empty($template['attendance_confirmation']) || ! empty($template['double_auth_code']) ) {
+        return false;
+    }
+
+    $builder_type = sanitize_key((string)($template['builder_type'] ?? ''));
+    if ( in_array($builder_type, ['marketing', 'attendance_confirmation', 'double_auth_code', 'utility_custom', 'flow'], true) ) {
+        return false;
+    }
+
+    $base_key = sanitize_key((string)($template['base_key'] ?? ''));
+    if ( in_array($base_key, ['attendance_confirmation', 'double_auth_code', 'marketing', 'utility_custom', 'flow'], true) ) {
+        return false;
+    }
+
+    $category = function_exists('eventosapp_whatsapp_templates_sanitize_category')
+        ? eventosapp_whatsapp_templates_sanitize_category($template['category'] ?? 'UTILITY')
+        : strtoupper(sanitize_key((string)($template['category'] ?? 'UTILITY')));
+
+    return $category !== 'MARKETING';
+}
+
+/**
  * Busca la plantilla aprobada más adecuada para el ticket.
  */
 function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $event_id = 0) {
@@ -6386,6 +6450,10 @@ function eventosapp_whatsapp_find_approved_template_for_ticket($ticket_id, $even
 
         $template = eventosapp_whatsapp_prepare_runtime_template($template, $template_id);
         if ( empty($template) || ! eventosapp_whatsapp_is_template_approved($template) || ! eventosapp_whatsapp_template_matches_sender($template, $sender_phone_number_id, true) ) {
+            continue;
+        }
+
+        if ( ! eventosapp_whatsapp_template_is_ticket_fallback_candidate($template) ) {
             continue;
         }
 
