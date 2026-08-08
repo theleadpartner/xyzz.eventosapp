@@ -5,22 +5,18 @@
  * Shortcode: [eventosapp_face_checkin]
  *
  * Flujo:
- *  1. Staff abre el módulo → se activa la cámara del dispositivo.
- *  2. Via AJAX se cargan los CPT eventosapp_asistente del evento activo que tienen foto.
- *  3. face-api.js compara el rostro en vivo contra los descriptores cargados.
- *     Los descriptores se cachean en IndexedDB del navegador para cargas posteriores instantáneas.
- *  4. Al encontrar coincidencia se extrae la cédula del asistente reconocido.
- *  5. Otro AJAX busca el ticket (cedula + evento activo) y ejecuta el check-in
- *     usando la misma lógica que el check-in por QR.
+ *  1. Staff abre el módulo y se valida el evento activo/permisos.
+ *  2. Se cargan los modelos locales de face-api.js.
+ *  3. Via AJAX se cargan los CPT eventosapp_asistente del evento activo que tienen foto.
+ *  4. Los descriptores se cachean en IndexedDB y se agrupan por cédula para construir
+ *     un único FaceMatcher reutilizable durante toda la sesión.
+ *  5. Al encontrar coincidencia se extrae la cédula del asistente reconocido.
+ *  6. Otro AJAX busca el ticket (cédula + evento activo) y ejecuta el check-in
+ *     usando la misma lógica operativa que el check-in por QR.
  *
- * Dependencias externas (CDN):
- *  - face-api.js  (TensorFlow.js, sin costo, 100% cliente)
- *    https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js
- *
- * Modelos face-api.js (deben estar accesibles en /wp-content/plugins/eventosapp/assets/face-models/):
- *  - ssd_mobilenetv1_model-weights_manifest.json  + shards
- *  - face_landmark_68_model-weights_manifest.json + shards
- *  - face_recognition_model-weights_manifest.json + shards
+ * Dependencias locales:
+ *  - face-api.js: includes/assets/js/face-api.min.js
+ *  - modelos: includes/assets/face-models/
  *
  * @package EventosApp
  */
@@ -28,22 +24,87 @@
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 // ============================================================
+// 0. HELPERS COMPARTIDOS DEL MÓDULO
+// ============================================================
+
+/**
+ * Logger de diagnóstico. El archivo ya lo invocaba en el flujo AJAX; se define
+ * de forma protegida para evitar un fatal cuando WP_DEBUG está activo o cuando
+ * el check-in llega a esos puntos de ejecución.
+ */
+if ( ! function_exists( 'eventosapp_face_checkin_debug_log' ) ) {
+    function eventosapp_face_checkin_debug_log( $message, $context = [] ) {
+        if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
+            return;
+        }
+
+        $suffix = '';
+        if ( ! empty( $context ) ) {
+            $suffix = ' | ' . ( function_exists( 'wp_json_encode' ) ? wp_json_encode( $context ) : json_encode( $context ) );
+        }
+
+        error_log( 'EVENTOSAPP FACE CHECKIN | ' . sanitize_text_field( (string) $message ) . $suffix );
+    }
+}
+
+/**
+ * Devuelve el contexto de fecha del evento usando la zona horaria configurada.
+ * Se usa en la UI para no cargar modelos/cámara cuando hoy no es un día válido.
+ */
+if ( ! function_exists( 'eventosapp_face_checkin_day_context' ) ) {
+    function eventosapp_face_checkin_day_context( $event_id ) {
+        $event_id = absint( $event_id );
+        $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
+
+        if ( ! $event_tz ) {
+            $event_tz = wp_timezone_string();
+            if ( ! $event_tz || $event_tz === 'UTC' ) {
+                $offset   = get_option( 'gmt_offset' );
+                $event_tz = $offset ? ( timezone_name_from_abbr( '', $offset * 3600, 0 ) ?: 'UTC' ) : 'UTC';
+            }
+        }
+
+        try {
+            $dt = new DateTime( 'now', new DateTimeZone( $event_tz ) );
+        } catch ( Exception $e ) {
+            $dt = new DateTime( 'now', wp_timezone() );
+        }
+
+        $today = $dt->format( 'Y-m-d' );
+        $days  = function_exists( 'eventosapp_get_event_days' )
+            ? (array) eventosapp_get_event_days( $event_id )
+            : [];
+
+        return [
+            'today' => $today,
+            'label' => date_i18n( 'D, d M Y', strtotime( $today ) ),
+            'valid' => ! empty( $days ) && in_array( $today, $days, true ),
+        ];
+    }
+}
+
+// ============================================================
 // 1. SHORTCODE PRINCIPAL
 // ============================================================
 
 add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
 
-    // 🔒 Verificar sesión
+    // Mantiene el acceso directo alineado con la feature visible en el dashboard.
+    if ( function_exists( 'eventosapp_require_feature' ) ) {
+        eventosapp_require_feature( 'face_checkin' );
+    }
+
+    // Fallback de sesión para instalaciones donde no exista el helper anterior.
     if ( ! is_user_logged_in() ) {
-        return '<p style="color:red;">Debes iniciar sesión para usar este módulo.</p>';
+        return '<p style="color:#b42318;">Debes iniciar sesión para usar este módulo.</p>';
     }
 
-    // 🔒 Verificar rol permitido (reutiliza la función del módulo QR)
+    // Reutiliza la capacidad operativa del Check-In QR.
     if ( function_exists( 'eventosapp_current_user_can_checkin' ) && ! eventosapp_current_user_can_checkin() ) {
-        return '<p style="color:red;">No tienes permisos para realizar check-in.</p>';
+        return '<p style="color:#b42318;">No tienes permisos para realizar check-in.</p>';
     }
 
-    // Debe existir evento activo
+    // Debe existir evento activo.
     $active_event = function_exists( 'eventosapp_get_active_event' ) ? eventosapp_get_active_event() : 0;
     if ( ! $active_event ) {
         ob_start();
@@ -55,369 +116,954 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
         return ob_get_clean();
     }
 
-    // Nonces para las dos llamadas AJAX
     $nonce_load    = wp_create_nonce( 'evapp_face_load_asistentes' );
     $nonce_checkin = wp_create_nonce( 'evapp_face_checkin_process' );
 
-    // URL de modelos face-api.js (local)
-    $models_url = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
+    $models_url    = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/face-models' );
+    $face_api_url  = esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/js/face-api.min.js' );
+    $dashboard_url = function_exists( 'eventosapp_get_dashboard_url' )
+        ? eventosapp_get_dashboard_url()
+        : home_url( '/' );
 
-    $event_name = esc_js( get_the_title( $active_event ) );
-    $event_id   = (int) $active_event;
-    $ajax_url   = esc_js( admin_url( 'admin-ajax.php' ) );
+    $event_id      = (int) $active_event;
+    $event_name    = get_the_title( $active_event );
+    $ajax_url      = admin_url( 'admin-ajax.php' );
+    $day_context   = eventosapp_face_checkin_day_context( $event_id );
+    $day_is_valid  = ! empty( $day_context['valid'] );
+    $instance_id   = function_exists( 'wp_unique_id' )
+        ? wp_unique_id( 'evapp-face-checkin-' )
+        : 'evapp-face-checkin-' . $event_id;
 
     ob_start(); ?>
-<!-- face-api.js local -->
-<script src="<?php echo esc_url( EVENTOSAPP_PLUGIN_URL . 'includes/assets/js/face-api.min.js' ); ?>"></script>
+    <?php if ( $day_is_valid ) : ?>
+        <script src="<?php echo esc_url( $face_api_url ); ?>"></script>
+    <?php endif; ?>
 
     <style>
-    /* ── Contenedor general ─────────────────────────────────────── */
-    .evapp-face-shell {
-        max-width: 560px;
-        margin: 0 auto;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    .evapp-face-checkin-app {
+      --evapp-primary:#3279bd;
+      --evapp-primary-dark:#255f96;
+      --evapp-primary-soft:#eaf4ff;
+      --evapp-app-bg:#f5f8fc;
+      --evapp-surface:#ffffff;
+      --evapp-border:#dfe7f1;
+      --evapp-text:#182230;
+      --evapp-muted:#64748b;
+      --evapp-success:#16855b;
+      --evapp-success-soft:#ecfdf5;
+      --evapp-warning:#a16207;
+      --evapp-warning-soft:#fff8e6;
+      --evapp-danger:#c53a3a;
+      --evapp-danger-soft:#fff1f1;
+      --evapp-radius:18px;
+      --evapp-radius-lg:26px;
+      width:100%;
+      max-width:1180px;
+      margin:0 auto;
+      color:var(--evapp-text);
+      font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+      line-height:1.45;
     }
-    .evapp-face-card {
-        background: #0b1020;
-        color: #eaf1ff;
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    .evapp-face-checkin-app,
+    .evapp-face-checkin-app *,
+    .evapp-face-checkin-app *::before,
+    .evapp-face-checkin-app *::after { box-sizing:border-box; }
+    .evapp-face-checkin-app a { text-decoration:none; }
+    .evapp-face-checkin-app [hidden] { display:none!important; }
+
+    .evapp-face-checkin-app .evfc-shell {
+      width:100%;
+      padding:clamp(18px,3vw,36px);
+      background:var(--evapp-app-bg);
+      border:1px solid var(--evapp-border);
+      border-radius:var(--evapp-radius-lg);
+      box-shadow:0 18px 50px rgba(31,65,99,.08);
     }
-    .evapp-face-title {
-        display: flex;
-        align-items: center;
-        gap: .6rem;
-        margin: 0 0 14px 0;
-        font-weight: 700;
-        font-size: 1.05rem;
-        letter-spacing: .2px;
+    .evapp-face-checkin-app .evfc-header {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:24px;
+      margin-bottom:22px;
     }
-    /* ── Cámara ─────────────────────────────────────────────────── */
-    .evapp-face-cam-wrap {
-        position: relative;
-        width: 100%;
-        border-radius: 12px;
-        overflow: hidden;
-        background: #000;
-        aspect-ratio: 4/3;
-        display: none; /* oculto hasta activar */
+    .evapp-face-checkin-app .evfc-heading { min-width:0; }
+    .evapp-face-checkin-app .evfc-eyebrow {
+      margin:0 0 7px;
+      color:var(--evapp-primary);
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:.15em;
+      text-transform:uppercase;
     }
-    .evapp-face-cam-wrap.is-active { display: block; }
-    #evapp-face-video {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
+    .evapp-face-checkin-app .evfc-title {
+      margin:0;
+      color:var(--evapp-text);
+      font-size:clamp(27px,4vw,42px);
+      font-weight:800;
+      line-height:1.08;
+      letter-spacing:-.035em;
     }
-    #evapp-face-canvas {
-        position: absolute;
-        top: 0; left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
+    .evapp-face-checkin-app .evfc-subtitle {
+      max-width:760px;
+      margin:10px 0 0;
+      color:var(--evapp-muted);
+      font-size:15px;
+      line-height:1.6;
     }
-    /* Marco guía */
-    .evapp-face-guide {
-        position: absolute;
-        top: 50%; left: 50%;
-        transform: translate(-50%, -50%);
-        width: 55%;
-        aspect-ratio: 3/4;
-        border: 3px dashed rgba(79,124,255,.7);
-        border-radius: 50% 50% 46% 46% / 42% 42% 58% 58%;
-        pointer-events: none;
+    .evapp-face-checkin-app .evfc-header-actions { flex:0 0 auto; }
+    .evapp-face-checkin-app .evfc-btn {
+      min-height:44px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:9px;
+      border:1px solid transparent;
+      border-radius:12px;
+      padding:10px 15px;
+      font:inherit;
+      font-size:14px;
+      font-weight:750;
+      line-height:1.1;
+      cursor:pointer;
+      transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+      -webkit-tap-highlight-color:transparent;
     }
-    /* Overlay de estado sobre la cámara */
-    .evapp-face-overlay {
-        position: absolute;
-        bottom: 10px; left: 0; right: 0;
-        text-align: center;
-        font-size: .8rem;
-        color: #eaf1ff;
-        text-shadow: 0 1px 4px #000;
-        pointer-events: none;
+    .evapp-face-checkin-app .evfc-btn svg {
+      width:18px;
+      height:18px;
+      flex:0 0 18px;
+      fill:none;
+      stroke:currentColor;
+      stroke-width:2;
+      stroke-linecap:round;
+      stroke-linejoin:round;
     }
-    /* ── Botones ─────────────────────────────────────────────────── */
-    .evapp-face-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: .5rem;
-        border: 0;
-        border-radius: 12px;
-        padding: .9rem 1.1rem;
-        font-weight: 700;
-        cursor: pointer;
-        width: 100%;
-        background: #4f7cff;
-        color: #fff;
-        transition: filter .15s ease;
-        font-size: 1rem;
-        margin-top: 14px;
+    .evapp-face-checkin-app .evfc-btn:hover:not(:disabled) { transform:translateY(-1px); }
+    .evapp-face-checkin-app .evfc-btn:focus-visible { outline:3px solid rgba(50,121,189,.22); outline-offset:2px; }
+    .evapp-face-checkin-app .evfc-btn:disabled { opacity:.55; cursor:not-allowed; transform:none; box-shadow:none; }
+    .evapp-face-checkin-app .evfc-btn-secondary {
+      background:var(--evapp-surface);
+      border-color:var(--evapp-border);
+      color:var(--evapp-text);
+      box-shadow:0 5px 15px rgba(31,65,99,.05);
+      white-space:nowrap;
     }
-    .evapp-face-btn:hover { filter: brightness(.92); }
-    .evapp-face-btn.is-live { background: #e04f5f; }
-    .evapp-face-btn:disabled { opacity: .6; cursor: not-allowed; }
-    /* Botón limpiar caché */
-    .evapp-face-btn-cache {
-        display: inline-flex;
-        align-items: center;
-        gap: .3rem;
-        border: 1px solid rgba(255,255,255,.2);
-        border-radius: 8px;
-        padding: .35rem .75rem;
-        font-size: .75rem;
-        font-weight: 600;
-        cursor: pointer;
-        background: transparent;
-        color: rgba(234,241,255,.6);
-        transition: all .15s ease;
-        margin-top: 8px;
+    .evapp-face-checkin-app .evfc-btn-secondary:hover:not(:disabled) {
+      border-color:#c7d7e8;
+      color:var(--evapp-primary-dark);
+      box-shadow:0 8px 20px rgba(31,65,99,.09);
     }
-    .evapp-face-btn-cache:hover {
-        border-color: rgba(255,255,255,.45);
-        color: #eaf1ff;
+
+    .evapp-face-checkin-app .evfc-event-context {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:22px;
+      padding:16px 18px;
+      background:var(--evapp-surface);
+      border:1px solid var(--evapp-border);
+      border-radius:var(--evapp-radius);
+      box-shadow:0 8px 24px rgba(31,65,99,.045);
     }
-    /* ── Ficha del asistente reconocido ──────────────────────────── */
-    .evapp-face-result {
-        margin-top: 14px;
-        border-radius: 12px;
-        padding: 14px 16px;
-        background: #13203a;
-        display: none;
+    .evapp-face-checkin-app .evfc-event-main {
+      min-width:0;
+      display:flex;
+      align-items:center;
+      gap:13px;
     }
-    .evapp-face-result.is-ok   { border-left: 4px solid #2ecc71; }
-    .evapp-face-result.is-warn { border-left: 4px solid #f39c12; }
-    .evapp-face-result.is-err  { border-left: 4px solid #e74c3c; }
-    .evapp-face-result-name {
-        font-weight: 700;
-        font-size: 1.1rem;
-        margin-bottom: 4px;
+    .evapp-face-checkin-app .evfc-event-icon {
+      width:44px;
+      height:44px;
+      flex:0 0 44px;
+      display:grid;
+      place-items:center;
+      color:var(--evapp-primary);
+      background:var(--evapp-primary-soft);
+      border-radius:13px;
     }
-    .evapp-face-result-meta {
-        font-size: .82rem;
-        opacity: .75;
-        line-height: 1.5;
+    .evapp-face-checkin-app .evfc-event-icon svg {
+      width:22px;
+      height:22px;
+      fill:none;
+      stroke:currentColor;
+      stroke-width:1.9;
+      stroke-linecap:round;
+      stroke-linejoin:round;
     }
-    /* ── Estado / loader ─────────────────────────────────────────── */
-    .evapp-face-status {
-        margin-top: 10px;
-        font-size: .82rem;
-        opacity: .65;
-        text-align: center;
-        min-height: 1.2em;
+    .evapp-face-checkin-app .evfc-event-copy { min-width:0; }
+    .evapp-face-checkin-app .evfc-event-kicker {
+      display:block;
+      margin-bottom:3px;
+      color:var(--evapp-muted);
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:.09em;
+      text-transform:uppercase;
     }
-    .evapp-face-spinner {
-        display: inline-block;
-        width: 14px; height: 14px;
-        border: 2px solid rgba(255,255,255,.3);
-        border-top-color: #fff;
-        border-radius: 50%;
-        animation: evapp-spin .7s linear infinite;
-        vertical-align: middle;
-        margin-right: 4px;
+    .evapp-face-checkin-app .evfc-event-name {
+      display:block;
+      overflow:hidden;
+      color:var(--evapp-text);
+      font-size:15px;
+      font-weight:800;
+      line-height:1.3;
+      text-overflow:ellipsis;
+      white-space:nowrap;
     }
-    @keyframes evapp-spin { to { transform: rotate(360deg); } }
-    /* ── Badge de progreso de carga ─────────────────────────────── */
-    .evapp-face-progress-wrap {
-        margin-top: 10px;
-        background: rgba(255,255,255,.08);
-        border-radius: 8px;
-        height: 6px;
-        overflow: hidden;
-        display: none;
+    .evapp-face-checkin-app .evfc-event-meta {
+      display:flex;
+      align-items:center;
+      justify-content:flex-end;
+      flex-wrap:wrap;
+      gap:8px;
     }
-    .evapp-face-progress-bar {
-        height: 100%;
-        background: #4f7cff;
-        transition: width .3s ease;
-        border-radius: 8px;
+    .evapp-face-checkin-app .evfc-chip {
+      min-height:30px;
+      display:inline-flex;
+      align-items:center;
+      gap:7px;
+      padding:6px 10px;
+      border:1px solid var(--evapp-border);
+      border-radius:999px;
+      background:#fff;
+      color:var(--evapp-muted);
+      font-size:12px;
+      font-weight:750;
+      white-space:nowrap;
     }
-    /* ── Contador ───────────────────────────────────────────────── */
-    .evapp-face-counter {
-        display: flex;
-        gap: 12px;
-        margin-top: 12px;
+    .evapp-face-checkin-app .evfc-chip::before {
+      width:7px;
+      height:7px;
+      border-radius:50%;
+      background:#94a3b8;
+      content:"";
     }
-    .evapp-face-counter-item {
-        flex: 1;
-        background: rgba(255,255,255,.05);
-        border-radius: 10px;
-        padding: 8px 10px;
-        text-align: center;
-        font-size: .78rem;
+    .evapp-face-checkin-app .evfc-chip.is-valid {
+      color:var(--evapp-success);
+      border-color:#cfeadf;
+      background:var(--evapp-success-soft);
     }
-    .evapp-face-counter-num {
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: #4f7cff;
-        display: block;
+    .evapp-face-checkin-app .evfc-chip.is-valid::before { background:var(--evapp-success); }
+    .evapp-face-checkin-app .evfc-chip.is-warning {
+      color:var(--evapp-warning);
+      border-color:#f1dfad;
+      background:var(--evapp-warning-soft);
     }
-    /* ── Badge caché ─────────────────────────────────────────────── */
-    .evapp-face-cache-badge {
-        display: inline-block;
-        background: rgba(46,204,113,.15);
-        color: #2ecc71;
-        border-radius: 6px;
-        padding: 2px 8px;
-        font-size: .7rem;
-        font-weight: 600;
-        margin-left: 6px;
-        vertical-align: middle;
+    .evapp-face-checkin-app .evfc-chip.is-warning::before { background:#d69e2e; }
+    .evapp-face-checkin-app .evfc-chip.is-cache {
+      display:none;
+      color:var(--evapp-success);
+      border-color:#cfeadf;
+      background:var(--evapp-success-soft);
+    }
+    .evapp-face-checkin-app .evfc-chip.is-cache::before { background:var(--evapp-success); }
+    .evapp-face-checkin-app .evfc-chip.is-cache.is-visible { display:inline-flex; }
+
+    .evapp-face-checkin-app .evfc-layout {
+      display:grid;
+      grid-template-columns:minmax(0,1.18fr) minmax(320px,.82fr);
+      gap:20px;
+      align-items:start;
+    }
+    .evapp-face-checkin-app .evfc-panel {
+      min-width:0;
+      background:var(--evapp-surface);
+      border:1px solid var(--evapp-border);
+      border-radius:var(--evapp-radius);
+      box-shadow:0 8px 26px rgba(31,65,99,.05);
+    }
+    .evapp-face-checkin-app .evfc-scanner-panel { padding:18px; }
+    .evapp-face-checkin-app .evfc-result-panel { position:sticky; top:18px; padding:18px; }
+    body.admin-bar .evapp-face-checkin-app .evfc-result-panel { top:50px; }
+    .evapp-face-checkin-app .evfc-panel-head {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:14px;
+      margin-bottom:15px;
+    }
+    .evapp-face-checkin-app .evfc-panel-title {
+      margin:0;
+      color:var(--evapp-text);
+      font-size:17px;
+      font-weight:800;
+      line-height:1.3;
+    }
+    .evapp-face-checkin-app .evfc-panel-desc {
+      margin:5px 0 0;
+      color:var(--evapp-muted);
+      font-size:13px;
+      line-height:1.5;
+    }
+    .evapp-face-checkin-app .evfc-camera-state {
+      min-height:30px;
+      display:inline-flex;
+      align-items:center;
+      gap:7px;
+      flex:0 0 auto;
+      padding:6px 10px;
+      border:1px solid var(--evapp-border);
+      border-radius:999px;
+      background:#f8fafc;
+      color:var(--evapp-muted);
+      font-size:12px;
+      font-weight:800;
+      white-space:nowrap;
+    }
+    .evapp-face-checkin-app .evfc-camera-state::before {
+      width:7px;
+      height:7px;
+      border-radius:50%;
+      background:#94a3b8;
+      content:"";
+    }
+    .evapp-face-checkin-app .evfc-camera-state.is-live {
+      color:var(--evapp-success);
+      background:var(--evapp-success-soft);
+      border-color:#cfeadf;
+    }
+    .evapp-face-checkin-app .evfc-camera-state.is-live::before {
+      background:var(--evapp-success);
+      box-shadow:0 0 0 4px rgba(22,133,91,.10);
+    }
+    .evapp-face-checkin-app .evfc-camera-state.is-busy {
+      color:var(--evapp-primary-dark);
+      background:var(--evapp-primary-soft);
+      border-color:#cfe3f6;
+    }
+    .evapp-face-checkin-app .evfc-camera-state.is-busy::before {
+      background:var(--evapp-primary);
+      animation:evfcPulse 1s ease-in-out infinite;
+    }
+
+    .evapp-face-checkin-app .evapp-face-btn {
+      width:100%;
+      min-height:48px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:9px;
+      margin:0;
+      border:1px solid transparent;
+      border-radius:12px;
+      padding:12px 16px;
+      background:var(--evapp-primary);
+      color:#fff;
+      font:inherit;
+      font-size:14px;
+      font-weight:800;
+      line-height:1.2;
+      cursor:pointer;
+      box-shadow:0 9px 20px rgba(50,121,189,.18);
+      transition:transform .16s ease,box-shadow .16s ease,background .16s ease,opacity .16s ease;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .evapp-face-checkin-app .evapp-face-btn:hover:not(:disabled) {
+      transform:translateY(-1px);
+      background:var(--evapp-primary-dark);
+      box-shadow:0 12px 24px rgba(50,121,189,.24);
+    }
+    .evapp-face-checkin-app .evapp-face-btn:focus-visible,
+    .evapp-face-checkin-app .evapp-face-btn-cache:focus-visible {
+      outline:3px solid rgba(50,121,189,.22);
+      outline-offset:2px;
+    }
+    .evapp-face-checkin-app .evapp-face-btn:disabled {
+      opacity:.56;
+      cursor:not-allowed;
+      transform:none;
+      box-shadow:none;
+    }
+    .evapp-face-checkin-app .evapp-face-btn.is-live {
+      background:var(--evapp-danger);
+      box-shadow:0 9px 20px rgba(197,58,58,.17);
+    }
+    .evapp-face-checkin-app .evapp-face-btn.is-live:hover:not(:disabled) { background:#a92f2f; }
+    .evapp-face-checkin-app .evapp-face-btn svg {
+      width:19px;
+      height:19px;
+      flex:0 0 19px;
+      fill:none;
+      stroke:currentColor;
+      stroke-width:2;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+
+    .evapp-face-checkin-app .evfc-camera-wrap {
+      position:relative;
+      width:100%;
+      margin-top:14px;
+      overflow:hidden;
+      aspect-ratio:4/3;
+      min-height:300px;
+      background:radial-gradient(circle at 50% 50%,rgba(50,121,189,.12),transparent 55%),#101827;
+      border:1px solid #d6e1ec;
+      border-radius:16px;
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.03);
+    }
+    .evapp-face-checkin-app .evfc-camera-placeholder {
+      position:absolute;
+      inset:0;
+      z-index:1;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      flex-direction:column;
+      gap:10px;
+      padding:24px;
+      color:#c8d3df;
+      text-align:center;
+      pointer-events:none;
+    }
+    .evapp-face-checkin-app .evfc-camera-placeholder svg {
+      width:46px;
+      height:46px;
+      fill:none;
+      stroke:#6f8ca8;
+      stroke-width:1.6;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+    .evapp-face-checkin-app .evfc-camera-placeholder strong { color:#f8fafc; font-size:14px; }
+    .evapp-face-checkin-app .evfc-camera-placeholder span {
+      max-width:320px;
+      color:#94a3b8;
+      font-size:12px;
+      line-height:1.5;
+    }
+    .evapp-face-checkin-app .evfc-camera-wrap.is-active .evfc-camera-placeholder { display:none; }
+    .evapp-face-checkin-app #evapp-face-video,
+    .evapp-face-checkin-app #evapp-face-canvas {
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+    }
+    .evapp-face-checkin-app #evapp-face-video {
+      display:none;
+      object-fit:cover;
+      background:#0f172a;
+    }
+    .evapp-face-checkin-app .evfc-camera-wrap.is-active #evapp-face-video { display:block; }
+    .evapp-face-checkin-app #evapp-face-canvas { z-index:2; pointer-events:none; }
+    .evapp-face-checkin-app .evapp-face-guide {
+      position:absolute;
+      z-index:3;
+      top:50%;
+      left:50%;
+      display:none;
+      width:min(56%,260px);
+      aspect-ratio:3/4;
+      border:3px dashed rgba(111,184,244,.88);
+      border-radius:50% 50% 46% 46% / 42% 42% 58% 58%;
+      filter:drop-shadow(0 2px 5px rgba(0,0,0,.26));
+      transform:translate(-50%,-50%);
+      pointer-events:none;
+    }
+    .evapp-face-checkin-app .evfc-camera-wrap.is-active .evapp-face-guide { display:block; }
+    .evapp-face-checkin-app .evapp-face-overlay {
+      position:absolute;
+      z-index:4;
+      left:16px;
+      right:16px;
+      bottom:14px;
+      display:none;
+      padding:8px 12px;
+      border:1px solid rgba(255,255,255,.14);
+      border-radius:999px;
+      background:rgba(8,15,27,.72);
+      color:#f8fafc;
+      font-size:12px;
+      font-weight:750;
+      line-height:1.35;
+      text-align:center;
+      text-shadow:0 1px 3px #000;
+      backdrop-filter:blur(8px);
+      pointer-events:none;
+    }
+    .evapp-face-checkin-app .evfc-camera-wrap.is-active .evapp-face-overlay { display:block; }
+
+    .evapp-face-checkin-app .evfc-progress {
+      display:none;
+      margin-top:12px;
+      overflow:hidden;
+      height:7px;
+      background:#e8eef5;
+      border-radius:999px;
+    }
+    .evapp-face-checkin-app .evfc-progress.is-visible { display:block; }
+    .evapp-face-checkin-app .evfc-progress-bar {
+      width:0;
+      height:100%;
+      background:linear-gradient(90deg,var(--evapp-primary),#5ca8e8);
+      border-radius:999px;
+      transition:width .25s ease;
+    }
+    .evapp-face-checkin-app .evfc-status-row {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      min-height:34px;
+      margin-top:10px;
+    }
+    .evapp-face-checkin-app .evapp-face-status {
+      min-width:0;
+      color:var(--evapp-muted);
+      font-size:12px;
+      line-height:1.45;
+    }
+    .evapp-face-checkin-app .evapp-face-spinner {
+      display:inline-block;
+      width:14px;
+      height:14px;
+      margin-right:6px;
+      border:2px solid #c8d5e2;
+      border-top-color:var(--evapp-primary);
+      border-radius:50%;
+      animation:evfcSpin .7s linear infinite;
+      vertical-align:-2px;
+    }
+    .evapp-face-checkin-app .evapp-face-btn-cache {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:7px;
+      min-height:36px;
+      border:1px solid var(--evapp-border);
+      border-radius:10px;
+      padding:8px 11px;
+      background:#fff;
+      color:var(--evapp-primary-dark);
+      font:inherit;
+      font-size:12px;
+      font-weight:800;
+      cursor:pointer;
+      transition:background .16s ease,border-color .16s ease,color .16s ease;
+      white-space:nowrap;
+    }
+    .evapp-face-checkin-app .evapp-face-btn-cache:hover:not(:disabled) {
+      background:var(--evapp-primary-soft);
+      border-color:#c4dbee;
+    }
+    .evapp-face-checkin-app .evapp-face-btn-cache:disabled { opacity:.55; cursor:not-allowed; }
+
+    .evapp-face-checkin-app .evfc-guide {
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:8px;
+      margin-top:12px;
+    }
+    .evapp-face-checkin-app .evfc-guide-item {
+      display:flex;
+      align-items:center;
+      gap:7px;
+      min-width:0;
+      padding:9px 10px;
+      border:1px solid var(--evapp-border);
+      border-radius:11px;
+      background:#fbfdff;
+      color:var(--evapp-muted);
+      font-size:11px;
+      font-weight:700;
+      line-height:1.35;
+    }
+    .evapp-face-checkin-app .evfc-guide-item svg {
+      width:15px;
+      height:15px;
+      flex:0 0 15px;
+      fill:none;
+      stroke:var(--evapp-primary);
+      stroke-width:1.8;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+
+    .evapp-face-checkin-app .evfc-result-empty {
+      display:flex;
+      align-items:flex-start;
+      gap:10px;
+      min-height:130px;
+      padding:14px;
+      border:1px solid #dbe7f2;
+      border-radius:13px;
+      background:#f8fbfe;
+      color:var(--evapp-muted);
+      font-size:13px;
+      line-height:1.55;
+    }
+    .evapp-face-checkin-app .evfc-result-empty svg {
+      width:20px;
+      height:20px;
+      flex:0 0 20px;
+      margin-top:1px;
+      fill:none;
+      stroke:var(--evapp-primary);
+      stroke-width:1.8;
+      stroke-linecap:round;
+      stroke-linejoin:round;
+    }
+    .evapp-face-checkin-app .evapp-face-result {
+      display:none;
+      padding:16px;
+      border:1px solid var(--evapp-border);
+      border-left-width:4px;
+      border-radius:14px;
+      background:#fff;
+    }
+    .evapp-face-checkin-app .evapp-face-result.is-visible { display:block; }
+    .evapp-face-checkin-app .evapp-face-result.is-ok { border-left-color:var(--evapp-success); background:var(--evapp-success-soft); }
+    .evapp-face-checkin-app .evapp-face-result.is-warn { border-left-color:#d69e2e; background:var(--evapp-warning-soft); }
+    .evapp-face-checkin-app .evapp-face-result.is-err { border-left-color:var(--evapp-danger); background:var(--evapp-danger-soft); }
+    .evapp-face-checkin-app .evapp-face-result-name {
+      margin:0 0 7px;
+      color:var(--evapp-text);
+      font-size:16px;
+      font-weight:850;
+      line-height:1.3;
+    }
+    .evapp-face-checkin-app .evapp-face-result-meta {
+      color:#415064;
+      font-size:13px;
+      line-height:1.65;
+      overflow-wrap:anywhere;
+    }
+
+    .evapp-face-checkin-app .evfc-stats {
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:9px;
+      margin-top:14px;
+    }
+    .evapp-face-checkin-app .evfc-stat {
+      min-width:0;
+      padding:12px 10px;
+      border:1px solid var(--evapp-border);
+      border-radius:12px;
+      background:#fbfdff;
+      text-align:center;
+    }
+    .evapp-face-checkin-app .evfc-stat-number {
+      display:block;
+      color:var(--evapp-primary-dark);
+      font-size:22px;
+      font-weight:850;
+      line-height:1.1;
+    }
+    .evapp-face-checkin-app .evfc-stat-label {
+      display:block;
+      margin-top:4px;
+      color:var(--evapp-muted);
+      font-size:10px;
+      font-weight:750;
+      line-height:1.3;
+    }
+
+    .evapp-face-checkin-app .evfc-note {
+      margin-top:14px;
+      padding:12px 13px;
+      border:1px solid #dbe7f2;
+      border-radius:12px;
+      background:#f8fbfe;
+      color:var(--evapp-muted);
+      font-size:11px;
+      line-height:1.5;
+    }
+
+    @keyframes evfcSpin { to { transform:rotate(360deg); } }
+    @keyframes evfcPulse { 0%,100% { opacity:.45; } 50% { opacity:1; } }
+
+    @media (max-width:900px) {
+      .evapp-face-checkin-app .evfc-layout { grid-template-columns:1fr; }
+      .evapp-face-checkin-app .evfc-result-panel { position:static; top:auto; }
+      .evapp-face-checkin-app .evfc-camera-wrap { aspect-ratio:16/11; }
+    }
+    @media (max-width:680px) {
+      .evapp-face-checkin-app .evfc-shell { padding:16px; border-radius:20px; }
+      .evapp-face-checkin-app .evfc-header { flex-direction:column; gap:15px; }
+      .evapp-face-checkin-app .evfc-header-actions,
+      .evapp-face-checkin-app .evfc-header-actions .evfc-btn { width:100%; }
+      .evapp-face-checkin-app .evfc-event-context { align-items:flex-start; flex-direction:column; }
+      .evapp-face-checkin-app .evfc-event-meta { width:100%; justify-content:flex-start; }
+      .evapp-face-checkin-app .evfc-panel-head { flex-direction:column; }
+      .evapp-face-checkin-app .evfc-camera-state { align-self:flex-start; }
+      .evapp-face-checkin-app .evfc-scanner-panel,
+      .evapp-face-checkin-app .evfc-result-panel { padding:14px; }
+      .evapp-face-checkin-app .evfc-camera-wrap { min-height:360px; aspect-ratio:3/4; border-radius:14px; }
+      .evapp-face-checkin-app .evfc-guide { grid-template-columns:1fr; }
+      .evapp-face-checkin-app .evfc-status-row { align-items:flex-start; flex-direction:column; }
+      .evapp-face-checkin-app .evapp-face-btn-cache { width:100%; }
+    }
+    @media (max-width:420px) {
+      .evapp-face-checkin-app .evfc-shell { padding:13px; }
+      .evapp-face-checkin-app .evfc-title { font-size:28px; }
+      .evapp-face-checkin-app .evfc-event-main { align-items:flex-start; }
+      .evapp-face-checkin-app .evfc-event-name { white-space:normal; }
+      .evapp-face-checkin-app .evfc-stats { grid-template-columns:1fr; }
+      .evapp-face-checkin-app .evfc-stat { display:flex; align-items:center; justify-content:space-between; text-align:left; }
+      .evapp-face-checkin-app .evfc-stat-label { margin:0; font-size:11px; }
+    }
+    @media (prefers-reduced-motion:reduce) {
+      .evapp-face-checkin-app *,
+      .evapp-face-checkin-app *::before,
+      .evapp-face-checkin-app *::after {
+        scroll-behavior:auto!important;
+        transition:none!important;
+        animation-duration:.001ms!important;
+        animation-iteration-count:1!important;
+      }
     }
     </style>
 
-    <div class="evapp-face-shell">
-        <div class="evapp-face-card">
+    <div
+      class="evapp-face-checkin-app"
+      id="<?php echo esc_attr( $instance_id ); ?>"
+      data-event="<?php echo esc_attr( $event_id ); ?>"
+      data-day-valid="<?php echo $day_is_valid ? '1' : '0'; ?>"
+    >
+      <div class="evfc-shell">
+        <header class="evfc-header">
+          <div class="evfc-heading">
+            <p class="evfc-eyebrow">EVENTOSAPP</p>
+            <h1 class="evfc-title">Check-In Facial</h1>
+            <p class="evfc-subtitle">Identifica al asistente mediante reconocimiento facial y registra su ingreso en el evento activo sin cambiar la lógica actual de validación del ticket.</p>
+          </div>
+          <div class="evfc-header-actions">
+            <a href="<?php echo esc_url( $dashboard_url ); ?>" class="evfc-btn evfc-btn-secondary" aria-label="Volver al dashboard">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+              <span>Volver al dashboard</span>
+            </a>
+          </div>
+        </header>
 
-            <!-- Título -->
-            <div class="evapp-face-title">
-                <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round"
-                          d="M15 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM5 20a7 7 0 0 1 14 0"/>
-                    <rect x="2" y="2" width="20" height="20" rx="5" stroke-width="1.5"/>
-                </svg>
-                Check-In Reconocimiento Facial
+        <section class="evfc-event-context" aria-label="Evento activo">
+          <div class="evfc-event-main">
+            <div class="evfc-event-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"></rect><path d="M8 3v4M16 3v4M4 10h16"></path></svg>
+            </div>
+            <div class="evfc-event-copy">
+              <span class="evfc-event-kicker">Evento activo</span>
+              <span class="evfc-event-name"><?php echo esc_html( $event_name ); ?></span>
+            </div>
+          </div>
+          <div class="evfc-event-meta">
+            <span class="evfc-chip <?php echo $day_is_valid ? 'is-valid' : 'is-warning'; ?>"><?php echo esc_html( $day_context['label'] ); ?></span>
+            <span class="evfc-chip <?php echo $day_is_valid ? 'is-valid' : 'is-warning'; ?>"><?php echo $day_is_valid ? 'Check-in habilitado hoy' : 'Fuera de fecha del evento'; ?></span>
+          </div>
+        </section>
+
+        <div class="evfc-layout">
+          <section class="evfc-panel evfc-scanner-panel" aria-label="Lector facial">
+            <div class="evfc-panel-head">
+              <div>
+                <h2 class="evfc-panel-title">Lector de reconocimiento facial</h2>
+                <p class="evfc-panel-desc">Usa la cámara frontal, mantén el rostro centrado y procura iluminación uniforme.</p>
+              </div>
+              <div class="evfc-camera-state" id="evapp-face-camera-state" aria-live="polite">Cámara inactiva</div>
             </div>
 
-            <!-- Sub-info evento -->
-            <div style="font-size:.8rem;opacity:.55;margin-bottom:12px;">
-                Evento: <strong><?php echo esc_html( get_the_title( $active_event ) ); ?></strong>
-            </div>
-
-            <!-- Barra de progreso de carga de modelos -->
-            <div class="evapp-face-progress-wrap" id="evapp-face-progress-wrap">
-                <div class="evapp-face-progress-bar" id="evapp-face-progress-bar" style="width:0%"></div>
-            </div>
-
-            <!-- Cámara -->
-            <div class="evapp-face-cam-wrap" id="evapp-face-cam-wrap">
-                <video id="evapp-face-video" autoplay muted playsinline></video>
-                <canvas id="evapp-face-canvas"></canvas>
-                <div class="evapp-face-guide"></div>
-                <div class="evapp-face-overlay" id="evapp-face-cam-label">Posiciona el rostro en el óvalo</div>
-            </div>
-
-            <!-- Botón activar/detener cámara -->
-            <button class="evapp-face-btn" id="evapp-face-toggle-btn" disabled>
-                <span id="evapp-face-btn-icon">
-                    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 20a7 7 0 0 1 14 0"/>
-                    </svg>
-                </span>
-                <span id="evapp-face-btn-label">Cargando modelos…</span>
+            <button class="evapp-face-btn" id="evapp-face-toggle-btn" type="button" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8V6a2 2 0 0 1 2-2h2M3 16v2a2 2 0 0 0 2 2h2M21 8V6a2 2 0 0 0-2-2h-2M21 16v2a2 2 0 0 1-2 2h-2"></path><circle cx="12" cy="10" r="3"></circle><path d="M8 18c.8-2.3 2.2-3.5 4-3.5s3.2 1.2 4 3.5"></path></svg>
+              <span id="evapp-face-btn-label"><?php echo $day_is_valid ? 'Cargando modelos…' : 'Check-in no disponible hoy'; ?></span>
             </button>
 
-            <!-- Botón limpiar caché (se muestra solo cuando hay caché activo) -->
-            <div style="text-align:center;display:none;" id="evapp-face-cache-row">
-                <button class="evapp-face-btn-cache" id="evapp-face-clear-cache">
-                    🔄 Forzar recarga de perfiles
-                </button>
+            <div class="evfc-camera-wrap" id="evapp-face-cam-wrap">
+              <div class="evfc-camera-placeholder" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 8V6a2 2 0 0 1 2-2h2M3 16v2a2 2 0 0 0 2 2h2M21 8V6a2 2 0 0 0-2-2h-2M21 16v2a2 2 0 0 1-2 2h-2"></path><circle cx="12" cy="10" r="3"></circle><path d="M8 18c.8-2.3 2.2-3.5 4-3.5s3.2 1.2 4 3.5"></path></svg>
+                <strong><?php echo $day_is_valid ? 'La cámara está apagada' : 'Check-in fuera de fecha'; ?></strong>
+                <span><?php echo $day_is_valid ? 'Cuando los perfiles estén listos podrás activar la cámara para iniciar el reconocimiento.' : 'El reconocimiento no se inicia porque hoy no corresponde a una fecha habilitada del evento.'; ?></span>
+              </div>
+              <video id="evapp-face-video" autoplay muted playsinline></video>
+              <canvas id="evapp-face-canvas"></canvas>
+              <div class="evapp-face-guide" aria-hidden="true"></div>
+              <div class="evapp-face-overlay" id="evapp-face-cam-label">Posiciona el rostro dentro del óvalo</div>
             </div>
 
-            <!-- Estado / log -->
-            <div class="evapp-face-status" id="evapp-face-status">Iniciando sistema de reconocimiento facial…</div>
-
-            <!-- Ficha de resultado -->
-            <div class="evapp-face-result" id="evapp-face-result">
-                <div class="evapp-face-result-name" id="evapp-face-result-name"></div>
-                <div class="evapp-face-result-meta" id="evapp-face-result-meta"></div>
+            <div class="evfc-progress" id="evapp-face-progress-wrap" aria-hidden="true">
+              <div class="evfc-progress-bar" id="evapp-face-progress-bar"></div>
             </div>
 
-            <!-- Contadores -->
-            <div class="evapp-face-counter">
-                <div class="evapp-face-counter-item">
-                    <span class="evapp-face-counter-num" id="evapp-face-db-count">0</span>
-                    Perfiles cargados
-                </div>
-                <div class="evapp-face-counter-item">
-                    <span class="evapp-face-counter-num" id="evapp-face-checkin-count">0</span>
-                    Check-ins hoy
-                </div>
+            <div class="evfc-status-row">
+              <div class="evapp-face-status" id="evapp-face-status" aria-live="polite">
+                <?php echo $day_is_valid ? 'Iniciando sistema de reconocimiento facial…' : 'El check-in solo está permitido en las fechas del evento.'; ?>
+              </div>
+              <button class="evapp-face-btn-cache" id="evapp-face-clear-cache" type="button" hidden>
+                <span aria-hidden="true">↻</span>
+                <span>Forzar recarga de perfiles</span>
+              </button>
             </div>
 
-        </div><!-- .evapp-face-card -->
-    </div><!-- .evapp-face-shell -->
+            <div class="evfc-guide" aria-label="Consejos para reconocimiento facial">
+              <div class="evfc-guide-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>Buena iluminación</div>
+              <div class="evfc-guide-item"><svg viewBox="0 0 24 24"><path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"></path></svg>Rostro centrado</div>
+              <div class="evfc-guide-item"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M7 17c1.1-2.2 2.8-3.5 5-3.5 1.2 0 2.3.4 3.2 1"></path><circle cx="12" cy="9" r="3"></circle></svg>Evita cubrir el rostro</div>
+            </div>
+          </section>
+
+          <section class="evfc-panel evfc-result-panel" aria-label="Resultado del reconocimiento">
+            <div class="evfc-panel-head">
+              <div>
+                <h2 class="evfc-panel-title">Resultado del check-in</h2>
+                <p class="evfc-panel-desc">Aquí verás la identificación, validación y datos del asistente.</p>
+              </div>
+              <span class="evfc-chip is-cache" id="evapp-face-cache-badge">Caché local</span>
+            </div>
+
+            <div class="evfc-result-empty" id="evapp-face-result-empty">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4M12 16h.01"></path></svg>
+              <span>Activa la cámara cuando el sistema indique que los perfiles están listos. El resultado de cada reconocimiento aparecerá en este panel.</span>
+            </div>
+
+            <div class="evapp-face-result" id="evapp-face-result" aria-live="polite" aria-atomic="false">
+              <div class="evapp-face-result-name" id="evapp-face-result-name"></div>
+              <div class="evapp-face-result-meta" id="evapp-face-result-meta"></div>
+            </div>
+
+            <div class="evfc-stats" aria-label="Estado de la sesión facial">
+              <div class="evfc-stat">
+                <span class="evfc-stat-number" id="evapp-face-db-count">0</span>
+                <span class="evfc-stat-label">Perfiles disponibles</span>
+              </div>
+              <div class="evfc-stat">
+                <span class="evfc-stat-number" id="evapp-face-reference-count">0</span>
+                <span class="evfc-stat-label">Referencias faciales</span>
+              </div>
+              <div class="evfc-stat">
+                <span class="evfc-stat-number" id="evapp-face-checkin-count">0</span>
+                <span class="evfc-stat-label">Check-ins de esta sesión</span>
+              </div>
+            </div>
+
+            <div class="evfc-note">Los descriptores faciales se procesan en el navegador y se reutilizan mediante IndexedDB. La validación final del ingreso continúa realizándose en el servidor sobre el ticket del evento activo.</div>
+          </section>
+        </div>
+      </div>
+    </div>
 
     <script>
     (function () {
         'use strict';
 
-        /* ── Configuración ──────────────────────────────────────────── */
-        const AJAX_URL     = '<?php echo $ajax_url; ?>';
-        const EVENT_ID     = <?php echo $event_id; ?>;
-        const NONCE_LOAD   = '<?php echo esc_js( $nonce_load ); ?>';
-        const NONCE_CI     = '<?php echo esc_js( $nonce_checkin ); ?>';
-        const MODELS_URL   = '<?php echo esc_js( $models_url ); ?>';
+        const root = document.getElementById('<?php echo esc_js( $instance_id ); ?>');
+        if (!root || root.dataset.evappFaceReady === '1') return;
+        root.dataset.evappFaceReady = '1';
 
-        /* Umbral de distancia facial (menor = más estricto)
-           0.55 es conservador; sube a 0.6 si hay falsos negativos */
+        const AJAX_URL   = '<?php echo esc_js( $ajax_url ); ?>';
+        const EVENT_ID   = <?php echo (int) $event_id; ?>;
+        const NONCE_LOAD = '<?php echo esc_js( $nonce_load ); ?>';
+        const NONCE_CI   = '<?php echo esc_js( $nonce_checkin ); ?>';
+        const MODELS_URL = '<?php echo esc_js( $models_url ); ?>';
+        const DAY_VALID  = root.dataset.dayValid === '1';
+
+        // Menor distancia = coincidencia más estricta.
         const MATCH_THRESHOLD = 0.55;
-
-        /* Milisegundos mínimos entre detecciones para evitar spam */
         const DETECT_INTERVAL_MS = 1200;
-
-        /* IndexedDB: nombre y versión de la base de datos de caché */
         const IDB_NAME    = 'EvappFaceCache';
         const IDB_VERSION = 1;
         const IDB_STORE   = 'descriptors';
 
-        /* ── Estado ──────────────────────────────────────────────────── */
-        let faceDB        = [];   // [{ cedula, nombre, descriptor: Float32Array }]
-        let isLive        = false;
-        let stream        = null;
-        let detectTimer   = null;
-        let lastCedula    = null; // evita re-checkin inmediato de la misma persona
-        let lastCedulaTs  = 0;
-        let checkinCount  = 0;
-        let isProcessing  = false;
-        let activeCacheKey = null; // clave de caché actualmente usada
+        let faceDB         = [];
+        let faceMatcher    = null;
+        let profileNames   = new Map();
+        let isLive         = false;
+        let stream         = null;
+        let detectTimer    = null;
+        let lastCedula     = null;
+        let lastCedulaTs   = 0;
+        let checkinCount   = 0;
+        let isProcessing   = false;
+        let activeCacheKey = null;
+        let detectorOptions = null;
 
-        /* ── DOM ─────────────────────────────────────────────────────── */
-        const video        = document.getElementById('evapp-face-video');
-        const canvas       = document.getElementById('evapp-face-canvas');
-        const camWrap      = document.getElementById('evapp-face-cam-wrap');
-        const toggleBtn    = document.getElementById('evapp-face-toggle-btn');
-        const btnLabel     = document.getElementById('evapp-face-btn-label');
-        const statusEl     = document.getElementById('evapp-face-status');
-        const resultEl     = document.getElementById('evapp-face-result');
-        const resultName   = document.getElementById('evapp-face-result-name');
-        const resultMeta   = document.getElementById('evapp-face-result-meta');
-        const camLabel     = document.getElementById('evapp-face-cam-label');
-        const dbCount      = document.getElementById('evapp-face-db-count');
-        const ciCount      = document.getElementById('evapp-face-checkin-count');
-        const progWrap     = document.getElementById('evapp-face-progress-wrap');
-        const progBar      = document.getElementById('evapp-face-progress-bar');
-        const cacheRow     = document.getElementById('evapp-face-cache-row');
-        const clearCacheBtn = document.getElementById('evapp-face-clear-cache');
+        const video         = root.querySelector('#evapp-face-video');
+        const canvas        = root.querySelector('#evapp-face-canvas');
+        const camWrap       = root.querySelector('#evapp-face-cam-wrap');
+        const toggleBtn     = root.querySelector('#evapp-face-toggle-btn');
+        const btnLabel      = root.querySelector('#evapp-face-btn-label');
+        const statusEl      = root.querySelector('#evapp-face-status');
+        const resultEl      = root.querySelector('#evapp-face-result');
+        const resultEmpty   = root.querySelector('#evapp-face-result-empty');
+        const resultName    = root.querySelector('#evapp-face-result-name');
+        const resultMeta    = root.querySelector('#evapp-face-result-meta');
+        const camLabel      = root.querySelector('#evapp-face-cam-label');
+        const cameraState   = root.querySelector('#evapp-face-camera-state');
+        const dbCount       = root.querySelector('#evapp-face-db-count');
+        const referenceCount= root.querySelector('#evapp-face-reference-count');
+        const ciCount       = root.querySelector('#evapp-face-checkin-count');
+        const progWrap      = root.querySelector('#evapp-face-progress-wrap');
+        const progBar       = root.querySelector('#evapp-face-progress-bar');
+        const clearCacheBtn = root.querySelector('#evapp-face-clear-cache');
+        const cacheBadge    = root.querySelector('#evapp-face-cache-badge');
 
-        /* ── Helpers UI ──────────────────────────────────────────────── */
-        function setStatus(msg, spin) {
-            statusEl.innerHTML = spin
-                ? '<span class="evapp-face-spinner"></span>' + msg
-                : msg;
+        if (!video || !canvas || !camWrap || !toggleBtn || !btnLabel || !statusEl) return;
+
+        function setStatus(message, spin) {
+            statusEl.textContent = '';
+            if (spin) {
+                const spinner = document.createElement('span');
+                spinner.className = 'evapp-face-spinner';
+                spinner.setAttribute('aria-hidden', 'true');
+                statusEl.appendChild(spinner);
+            }
+            statusEl.appendChild(document.createTextNode(String(message || '')));
+        }
+
+        function setCameraState(label, state) {
+            if (!cameraState) return;
+            cameraState.textContent = label;
+            cameraState.classList.remove('is-live', 'is-busy');
+            if (state === 'live') cameraState.classList.add('is-live');
+            if (state === 'busy') cameraState.classList.add('is-busy');
         }
 
         function showResult(type, name, meta) {
-            resultEl.className = 'evapp-face-result is-' + type;
-            resultEl.style.display = 'block';
+            if (resultEmpty) resultEmpty.hidden = true;
+            resultEl.className = 'evapp-face-result is-visible is-' + type;
             resultName.textContent = name;
-            resultMeta.innerHTML   = meta;
+            resultMeta.innerHTML = meta;
+        }
+
+        function clearResult() {
+            resultEl.className = 'evapp-face-result';
+            resultName.textContent = '';
+            resultMeta.textContent = '';
+            if (resultEmpty) resultEmpty.hidden = false;
         }
 
         function setProgress(pct) {
-            progWrap.style.display = 'block';
-            progBar.style.width    = pct + '%';
-            if (pct >= 100) {
-                setTimeout(function() { progWrap.style.display = 'none'; }, 800);
+            const safePct = Math.max(0, Math.min(100, Number(pct) || 0));
+            progWrap.classList.add('is-visible');
+            progBar.style.width = safePct + '%';
+            if (safePct >= 100) {
+                window.setTimeout(function () {
+                    progWrap.classList.remove('is-visible');
+                }, 800);
             }
         }
 
-        /* ── IndexedDB helpers ───────────────────────────────────────── */
+        function setCacheIndicator(isCached) {
+            if (cacheBadge) cacheBadge.classList.toggle('is-visible', !!isCached);
+            if (clearCacheBtn) clearCacheBtn.hidden = !activeCacheKey;
+        }
+
+        function cameraErrorMessage(error) {
+            const name = error && error.name ? String(error.name) : '';
+            if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+                return 'El navegador no tiene permiso para usar la cámara. Habilita el permiso para este sitio y vuelve a intentar.';
+            }
+            if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+                return 'No se encontró una cámara disponible en este dispositivo.';
+            }
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                return 'Este navegador no permite acceder a la cámara desde esta página. Verifica HTTPS y que el navegador esté actualizado.';
+            }
+            return 'No se pudo acceder a la cámara. Revisa permisos del navegador y vuelve a intentar.';
+        }
+
         function openCacheDB() {
-            return new Promise(function(resolve, reject) {
+            return new Promise(function(resolve) {
                 if (!window.indexedDB) { resolve(null); return; }
                 const req = indexedDB.open(IDB_NAME, IDB_VERSION);
                 req.onupgradeneeded = function(e) {
@@ -427,7 +1073,7 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
                     }
                 };
                 req.onsuccess = function(e) { resolve(e.target.result); };
-                req.onerror   = function()  { resolve(null); }; // falla silenciosamente
+                req.onerror   = function()  { resolve(null); };
             });
         }
 
@@ -443,7 +1089,9 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
                     };
                     req.onerror = function() { resolve(null); };
                 });
-            } catch(e) { return null; }
+            } catch (e) {
+                return null;
+            }
         }
 
         async function saveCachedDescriptors(cacheKey, data) {
@@ -453,14 +1101,14 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
                 return new Promise(function(resolve) {
                     const tx = db.transaction(IDB_STORE, 'readwrite');
                     tx.objectStore(IDB_STORE).put({
-                        key:       cacheKey,
-                        data:      data,
+                        key: cacheKey,
+                        data: data,
                         timestamp: Date.now()
                     });
                     tx.oncomplete = function() { resolve(); };
                     tx.onerror    = function() { resolve(); };
                 });
-            } catch(e) {}
+            } catch (e) {}
         }
 
         async function deleteCachedDescriptors(cacheKey) {
@@ -473,13 +1121,78 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
                     tx.oncomplete = function() { resolve(); };
                     tx.onerror    = function() { resolve(); };
                 });
-            } catch(e) {}
+            } catch (e) {}
         }
 
-        /* ── 1. Cargar modelos face-api.js ───────────────────────────── */
+        /**
+         * Agrupa las múltiples fotos del mismo asistente y construye el matcher
+         * una sola vez. Antes se reconstruía en cada detección de cámara.
+         */
+        function rebuildMatcher() {
+            faceMatcher  = null;
+            profileNames = new Map();
+
+            if (!window.faceapi || !Array.isArray(faceDB) || faceDB.length === 0) {
+                dbCount.textContent = '0';
+                referenceCount.textContent = '0';
+                return 0;
+            }
+
+            const grouped = new Map();
+            faceDB.forEach(function(item) {
+                const cedula = String(item.cedula || '').trim();
+                if (!cedula || !(item.descriptor instanceof Float32Array)) return;
+
+                if (!grouped.has(cedula)) {
+                    grouped.set(cedula, { descriptors: [], nombre: String(item.nombre || cedula) });
+                }
+                grouped.get(cedula).descriptors.push(item.descriptor);
+            });
+
+            const labeled = [];
+            grouped.forEach(function(value, cedula) {
+                if (!value.descriptors.length) return;
+                labeled.push(new faceapi.LabeledFaceDescriptors(cedula, value.descriptors));
+                profileNames.set(cedula, value.nombre || cedula);
+            });
+
+            if (labeled.length) {
+                faceMatcher = new faceapi.FaceMatcher(labeled, MATCH_THRESHOLD);
+            }
+
+            dbCount.textContent = String(labeled.length);
+            referenceCount.textContent = String(faceDB.length);
+            return labeled.length;
+        }
+
+        function setReadyState() {
+            const profiles = rebuildMatcher();
+            if (!profiles || !faceMatcher) {
+                toggleBtn.disabled = true;
+                btnLabel.textContent = 'Sin perfiles disponibles';
+                setCameraState('Sin perfiles', '');
+                return false;
+            }
+
+            toggleBtn.disabled = !DAY_VALID;
+            btnLabel.textContent = DAY_VALID ? 'Activar cámara' : 'Check-in no disponible hoy';
+            setCameraState(DAY_VALID ? 'Cámara inactiva' : 'Fuera de fecha', '');
+            return DAY_VALID;
+        }
+
         async function loadModels() {
-            setStatus('Cargando modelos de reconocimiento facial (puede tomar unos segundos)…', true);
+            if (!DAY_VALID) return;
+            if (!window.faceapi || !faceapi.nets) {
+                setStatus('No fue posible cargar la librería local de reconocimiento facial.', false);
+                btnLabel.textContent = 'Reconocimiento no disponible';
+                setCameraState('Error de carga', '');
+                return;
+            }
+
+            setStatus('Cargando modelos de reconocimiento facial…', true);
+            setCameraState('Preparando', 'busy');
             setProgress(5);
+
             try {
                 await faceapi.nets.ssdMobilenetv1.loadFromUri(MODELS_URL);
                 setProgress(40);
@@ -487,155 +1200,167 @@ add_shortcode( 'eventosapp_face_checkin', function ( $atts ) {
                 setProgress(70);
                 await faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_URL);
                 setProgress(90);
+                detectorOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
                 setStatus('Modelos cargados. Cargando perfiles de asistentes…', true);
                 await loadAsistentes(false);
                 setProgress(100);
             } catch (e) {
-                setStatus('❌ Error cargando modelos: ' + e.message);
+                setStatus('Error cargando los modelos de reconocimiento facial.', false);
+                btnLabel.textContent = 'Reconocimiento no disponible';
+                setCameraState('Error de carga', '');
                 console.error('[FaceCheckin] Error modelos:', e);
             }
         }
 
-        /* ── 2. Cargar asistentes del evento con caché IndexedDB ──────── */
         async function loadAsistentes(forceReload) {
             try {
-                // Paso 1: obtener lista del servidor (solo metadatos, rápido)
                 const res = await fetch(AJAX_URL, {
                     method: 'POST',
+                    credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: new URLSearchParams({
-                        action:   'evapp_get_asistentes_face_data',
+                        action: 'evapp_get_asistentes_face_data',
                         security: NONCE_LOAD,
-                        event_id: EVENT_ID
+                        event_id: String(EVENT_ID),
+                        force_refresh: forceReload ? '1' : '0'
                     })
                 });
                 const data = await res.json();
 
-                if (!data.success || !data.data.asistentes || !data.data.asistentes.length) {
-                    setStatus('⚠️ No se encontraron asistentes con foto registrada para este evento.');
-                    enableButton();
+                if (!data.success || !data.data || !Array.isArray(data.data.asistentes) || !data.data.asistentes.length) {
+                    faceDB = [];
+                    rebuildMatcher();
+                    setStatus('No se encontraron asistentes con foto registrada para este evento.', false);
+                    btnLabel.textContent = 'Sin perfiles disponibles';
+                    toggleBtn.disabled = true;
+                    setCameraState('Sin perfiles', '');
                     return;
                 }
 
-                const lista     = data.data.asistentes;
-                const total     = data.data.total;
-                const cacheVer  = data.data.cache_version; // hash de versión retornado por PHP
-
-                // Clave única: evento + versión (cambia si se agregan/quitan/actualizan fotos)
+                const lista    = data.data.asistentes;
+                const total    = Number(data.data.total) || lista.length;
+                const cacheVer = String(data.data.cache_version || 'v1');
                 const cacheKey = 'evapp_e' + EVENT_ID + '_' + cacheVer;
                 activeCacheKey = cacheKey;
 
-                // Paso 2: intentar cargar desde caché (si no es recarga forzada)
                 if (!forceReload) {
                     const cached = await getCachedDescriptors(cacheKey);
                     if (cached && cached.length > 0) {
                         faceDB = cached.map(function(c) {
                             return {
-                                cedula:     c.cedula,
-                                nombre:     c.nombre,
+                                cedula: c.cedula,
+                                nombre: c.nombre,
                                 descriptor: new Float32Array(c.descriptor)
                             };
                         });
-                        dbCount.textContent = faceDB.length;
-                        setStatus(
-                            '✅ ' + faceDB.length + ' perfiles cargados ' +
-                            '<span class="evapp-face-cache-badge">⚡ caché</span>'
-                        );
-                        cacheRow.style.display = 'block';
-                        enableButton();
-                        return;
+
+                        const profiles = rebuildMatcher();
+                        setCacheIndicator(true);
+                        if (profiles > 0) {
+                            setStatus(profiles + ' perfiles cargados desde caché local.', false);
+                            setReadyState();
+                            return;
+                        }
                     }
                 }
 
-                // Paso 3: caché miss o recarga forzada → procesar imágenes
-                setStatus('Procesando ' + total + ' fotos del evento…', true);
-                faceDB = []; // limpiar antes de reprocesar
+                setCacheIndicator(false);
+                setStatus('Procesando ' + total + ' perfiles del evento…', true);
+                faceDB = [];
 
-let procesados = 0;
-                for (const a of lista) {
-                    // Usar todas las fotos disponibles; fallback a foto_url única por compatibilidad
-                    const photoUrls = (a.foto_urls && a.foto_urls.length) ? a.foto_urls : [a.foto_url];
+                let procesados = 0;
+                for (const asistente of lista) {
+                    const photoUrls = (Array.isArray(asistente.foto_urls) && asistente.foto_urls.length)
+                        ? asistente.foto_urls
+                        : [asistente.foto_url];
 
                     for (const photoUrl of photoUrls) {
+                        if (!photoUrl) continue;
                         try {
                             const img = await faceapi.fetchImage(photoUrl);
                             const detection = await faceapi
-                                .detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+                                .detectSingleFace(img, detectorOptions || new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
                                 .withFaceLandmarks()
                                 .withFaceDescriptor();
 
                             if (detection) {
                                 faceDB.push({
-                                    cedula:     a.cedula,
-                                    nombre:     a.nombre,
+                                    cedula: asistente.cedula,
+                                    nombre: asistente.nombre,
                                     descriptor: detection.descriptor
                                 });
                             }
                         } catch (imgErr) {
-                            console.warn('[FaceCheckin] No se pudo procesar foto de:', a.nombre, '|', photoUrl, imgErr.message);
+                            console.warn('[FaceCheckin] No se pudo procesar foto de:', asistente.nombre, '|', photoUrl, imgErr && imgErr.message ? imgErr.message : imgErr);
                         }
                     }
 
                     procesados++;
-                    const pct = Math.round((procesados / total) * 100);
+                    const pct = Math.round((procesados / Math.max(total, 1)) * 100);
                     setProgress(90 + (pct * 0.1));
                     setStatus('Procesando ' + procesados + '/' + total + ' perfiles…', true);
                 }
 
-                // Paso 4: guardar en caché si hubo descriptores válidos
                 if (faceDB.length > 0) {
                     await saveCachedDescriptors(cacheKey, faceDB.map(function(f) {
                         return {
-                            cedula:     f.cedula,
-                            nombre:     f.nombre,
-                            descriptor: Array.from(f.descriptor) // Float32Array → Array para IDB
+                            cedula: f.cedula,
+                            nombre: f.nombre,
+                            descriptor: Array.from(f.descriptor)
                         };
                     }));
-                    cacheRow.style.display = 'block';
+                    setCacheIndicator(true);
                 }
 
-                dbCount.textContent = faceDB.length;
-
-                if (faceDB.length === 0) {
-                    setStatus('⚠️ Ninguna foto procesada. Verifica que las fotos tengan rostros detectables.');
+                const profiles = rebuildMatcher();
+                if (profiles === 0) {
+                    setStatus('Ninguna foto produjo un rostro utilizable. Verifica las fotos registradas.', false);
+                    btnLabel.textContent = 'Sin perfiles disponibles';
+                    toggleBtn.disabled = true;
+                    setCameraState('Sin perfiles', '');
                 } else {
-                    setStatus('✅ ' + faceDB.length + ' perfiles cargados. Listo para reconocimiento facial.');
+                    setStatus(profiles + ' perfiles y ' + faceDB.length + ' referencias faciales listos.', false);
+                    setReadyState();
                 }
-
-                enableButton();
 
             } catch (e) {
-                setStatus('❌ Error cargando asistentes: ' + e.message);
+                setStatus('Error cargando perfiles de asistentes.', false);
+                btnLabel.textContent = 'Error cargando perfiles';
+                toggleBtn.disabled = true;
+                setCameraState('Error de carga', '');
                 console.error('[FaceCheckin] Error asistentes:', e);
-                enableButton();
             }
         }
 
-        function enableButton() {
-            toggleBtn.disabled = false;
-            btnLabel.textContent = 'Activar Cámara';
+        if (clearCacheBtn) {
+            clearCacheBtn.addEventListener('click', async function() {
+                if (isLive) {
+                    setStatus('Detén la cámara antes de recargar los perfiles.', false);
+                    return;
+                }
+
+                clearCacheBtn.disabled = true;
+                if (activeCacheKey) {
+                    await deleteCachedDescriptors(activeCacheKey);
+                }
+
+                faceDB = [];
+                faceMatcher = null;
+                profileNames = new Map();
+                dbCount.textContent = '0';
+                referenceCount.textContent = '0';
+                setCacheIndicator(false);
+                toggleBtn.disabled = true;
+                btnLabel.textContent = 'Recargando perfiles…';
+                setCameraState('Actualizando', 'busy');
+                setStatus('Recargando perfiles desde el servidor…', true);
+
+                await loadAsistentes(true);
+                clearCacheBtn.disabled = false;
+            });
         }
 
-        /* ── Botón limpiar caché ─────────────────────────────────────── */
-        clearCacheBtn.addEventListener('click', async function() {
-            if (isLive) {
-                alert('Detén la cámara antes de recargar los perfiles.');
-                return;
-            }
-            if (activeCacheKey) {
-                await deleteCachedDescriptors(activeCacheKey);
-            }
-            faceDB = [];
-            dbCount.textContent = 0;
-            cacheRow.style.display = 'none';
-            toggleBtn.disabled = true;
-            btnLabel.textContent = 'Cargando perfiles…';
-            setStatus('Recargando perfiles desde el servidor…', true);
-            await loadAsistentes(true);
-        });
-
-        /* ── 3. Controlar cámara ─────────────────────────────────────── */
-        toggleBtn.addEventListener('click', async function () {
+        toggleBtn.addEventListener('click', async function() {
             if (!isLive) {
                 await startCamera();
             } else {
@@ -644,185 +1369,220 @@ let procesados = 0;
         });
 
         async function startCamera() {
+            if (!DAY_VALID) {
+                setStatus('El check-in no está habilitado hoy para este evento.', false);
+                return;
+            }
+            if (!faceMatcher) {
+                setStatus('Todavía no hay perfiles faciales disponibles para comparar.', false);
+                return;
+            }
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setStatus(cameraErrorMessage(null), false);
+                return;
+            }
+
+            toggleBtn.disabled = true;
+            setCameraState('Activando', 'busy');
+            setStatus('Solicitando acceso a la cámara…', true);
+
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+                    video: {
+                        facingMode: { ideal: 'user' },
+                        width: { ideal: 960 },
+                        height: { ideal: 720 }
+                    },
                     audio: false
                 });
+
                 video.srcObject = stream;
                 await video.play();
 
+                canvas.width  = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 480;
                 camWrap.classList.add('is-active');
                 toggleBtn.classList.add('is-live');
-                btnLabel.textContent  = 'Detener Cámara';
+                toggleBtn.disabled = false;
+                btnLabel.textContent = 'Detener cámara';
                 isLive = true;
 
-                setStatus('Cámara activa. Posiciona el rostro frente a la cámara.', false);
-                resultEl.style.display = 'none';
-
-                // Ajustar canvas al video
-                video.addEventListener('loadedmetadata', function () {
-                    canvas.width  = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                }, { once: true });
-
+                setCameraState('Cámara activa', 'live');
+                setStatus('Cámara activa. Posiciona el rostro dentro del óvalo.', false);
+                clearResult();
                 startDetection();
             } catch (e) {
-                setStatus('❌ No se pudo acceder a la cámara: ' + e.message);
+                toggleBtn.disabled = false;
+                btnLabel.textContent = 'Activar cámara';
+                setCameraState('Cámara inactiva', '');
+                setStatus(cameraErrorMessage(e), false);
                 console.error('[FaceCheckin] Cámara:', e);
             }
         }
 
         function stopCamera() {
-            clearInterval(detectTimer);
+            if (detectTimer) {
+                clearTimeout(detectTimer);
+                detectTimer = null;
+            }
             if (stream) {
-                stream.getTracks().forEach(t => t.stop());
+                stream.getTracks().forEach(function(track) { track.stop(); });
                 stream = null;
             }
+
+            try { video.pause(); } catch (e) {}
             video.srcObject = null;
             camWrap.classList.remove('is-active');
             toggleBtn.classList.remove('is-live');
-            btnLabel.textContent = 'Activar Cámara';
+            toggleBtn.disabled = !faceMatcher || !DAY_VALID;
+            btnLabel.textContent = DAY_VALID ? 'Activar cámara' : 'Check-in no disponible hoy';
             isLive = false;
+            isProcessing = false;
             lastCedula = null;
-            setStatus('Cámara detenida.');
+            setCameraState('Cámara inactiva', '');
+            setStatus('Cámara detenida.', false);
 
-            // Limpiar canvas
             const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
-        /* ── 4. Loop de detección facial ─────────────────────────────── */
         function startDetection() {
-            detectTimer = setInterval(runDetection, DETECT_INTERVAL_MS);
+            if (detectTimer) clearTimeout(detectTimer);
+            detectTimer = window.setTimeout(detectionLoop, 150);
+        }
+
+        async function detectionLoop() {
+            if (!isLive) return;
+            await runDetection();
+            if (isLive) {
+                detectTimer = window.setTimeout(detectionLoop, DETECT_INTERVAL_MS);
+            }
         }
 
         async function runDetection() {
-            if (!isLive || isProcessing || faceDB.length === 0) return;
+            if (!isLive || isProcessing || !faceMatcher || document.hidden) return;
             if (video.readyState < 2) return;
 
             isProcessing = true;
             try {
                 const detection = await faceapi
-                    .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+                    .detectSingleFace(video, detectorOptions || new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
                     .withFaceLandmarks()
                     .withFaceDescriptor();
 
-                // Dibujar en canvas
                 const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
 
                 if (!detection) {
-                    camLabel.textContent = 'Posiciona el rostro en el óvalo';
-                    isProcessing = false;
+                    camLabel.textContent = 'Posiciona el rostro dentro del óvalo';
                     return;
                 }
 
-                // Dibujar detección
                 const dims = faceapi.matchDimensions(canvas, video, true);
                 const resized = faceapi.resizeResults(detection, dims);
                 faceapi.draw.drawDetections(canvas, resized);
 
-                // Comparar con base de datos
-                const matcher = new faceapi.FaceMatcher(
-                    faceDB.map(f => new faceapi.LabeledFaceDescriptors(f.cedula, [f.descriptor])),
-                    MATCH_THRESHOLD
-                );
-                const match = matcher.findBestMatch(detection.descriptor);
-
-                if (match.label !== 'unknown') {
-                    const cedula = match.label;
-                    const now = Date.now();
-
-                    // Evitar re-procesar la misma persona en menos de 8 segundos
-                    if (cedula === lastCedula && (now - lastCedulaTs) < 8000) {
-                        camLabel.textContent = '✅ Ya identificado';
-                        isProcessing = false;
-                        return;
-                    }
-
-                    lastCedula   = cedula;
-                    lastCedulaTs = now;
-
-                    const perfil = faceDB.find(f => f.cedula === cedula);
-                    camLabel.textContent = '🔍 Identificando: ' + (perfil ? perfil.nombre : cedula) + '…';
-                    setStatus('Rostro reconocido. Buscando ticket…', true);
-
-                    await procesarCheckin(cedula, match.distance);
-                } else {
+                const match = faceMatcher.findBestMatch(detection.descriptor);
+                if (match.label === 'unknown') {
                     camLabel.textContent = 'Rostro no reconocido. Acércate o mejora la iluminación.';
+                    return;
                 }
+
+                const cedula = String(match.label);
+                const now = Date.now();
+                if (cedula === lastCedula && (now - lastCedulaTs) < 8000) {
+                    camLabel.textContent = 'Ya identificado. Espera unos segundos.';
+                    return;
+                }
+
+                lastCedula = cedula;
+                lastCedulaTs = now;
+                const nombre = profileNames.get(cedula) || cedula;
+
+                camLabel.textContent = 'Identificando: ' + nombre + '…';
+                setCameraState('Validando ticket', 'busy');
+                setStatus('Rostro reconocido. Buscando ticket…', true);
+                await procesarCheckin(cedula, match.distance);
+                if (isLive) setCameraState('Cámara activa', 'live');
+
             } catch (e) {
                 console.warn('[FaceCheckin] Error detección:', e);
+            } finally {
+                isProcessing = false;
             }
-            isProcessing = false;
         }
 
-        /* ── 5. Ejecutar check-in vía AJAX ───────────────────────────── */
         async function procesarCheckin(cedula, distance) {
             try {
                 const res = await fetch(AJAX_URL, {
                     method: 'POST',
+                    credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: new URLSearchParams({
-                        action:   'evapp_face_checkin_process',
+                        action: 'evapp_face_checkin_process',
                         security: NONCE_CI,
-                        event_id: EVENT_ID,
-                        cedula:   cedula
+                        event_id: String(EVENT_ID),
+                        cedula: cedula
                     })
                 });
                 const data = await res.json();
 
                 if (data.success) {
-                    const d = data.data;
+                    const d = data.data || {};
                     const tipo = d.already ? 'warn' : 'ok';
-                    const titulo = d.already
-                        ? '⚠️ Ya hizo check-in hoy'
-                        : '✅ Check-In Exitoso';
+                    const titulo = d.already ? 'Ya hizo check-in hoy' : 'Check-In Exitoso';
 
                     let metaHtml = '';
-                    if (d.full_name)    metaHtml += '<strong>' + escapeHtml(d.full_name) + '</strong><br>';
-                    if (d.company)      metaHtml += '🏢 ' + escapeHtml(d.company) + '<br>';
-                    if (d.designation)  metaHtml += '💼 ' + escapeHtml(d.designation) + '<br>';
-                    if (d.localidad)    metaHtml += '📍 ' + escapeHtml(d.localidad) + '<br>';
-                    metaHtml += '📅 ' + escapeHtml(d.checkin_date_label) + '<br>';
-                    metaHtml += '🎯 Reconocimiento facial (conf: ' + (1 - distance).toFixed(2) + ')';
+                    if (d.full_name)   metaHtml += '<strong>' + escapeHtml(d.full_name) + '</strong><br>';
+                    if (d.cedula)      metaHtml += 'Cédula: ' + escapeHtml(d.cedula) + '<br>';
+                    if (d.company)     metaHtml += 'Empresa: ' + escapeHtml(d.company) + '<br>';
+                    if (d.designation) metaHtml += 'Cargo: ' + escapeHtml(d.designation) + '<br>';
+                    if (d.localidad)   metaHtml += 'Localidad: ' + escapeHtml(d.localidad) + '<br>';
+                    if (d.checkin_date_label) metaHtml += 'Fecha: ' + escapeHtml(d.checkin_date_label) + '<br>';
+                    metaHtml += 'Coincidencia facial: ' + Math.max(0, (1 - Number(distance || 0))).toFixed(2);
                     if (d.payment_message) metaHtml += '<br>' + escapeHtml(d.payment_message);
 
                     showResult(tipo, titulo, metaHtml);
-                    setStatus(tipo === 'ok' ? '✅ Check-in registrado.' : '⚠️ El asistente ya había ingresado hoy.');
-                    camLabel.textContent = tipo === 'ok' ? '✅ Check-in OK' : '⚠️ Ya ingresó';
+                    setStatus(tipo === 'ok' ? 'Check-in registrado correctamente.' : 'El asistente ya había ingresado hoy.', false);
+                    camLabel.textContent = tipo === 'ok' ? 'Check-in registrado' : 'Asistente ya ingresó';
 
                     if (!d.already) {
                         checkinCount++;
-                        ciCount.textContent = checkinCount;
+                        ciCount.textContent = String(checkinCount);
                     }
-
                 } else {
-                    const errMsg = data.data && data.data.error ? data.data.error : 'Error desconocido';
-                    showResult('err', '❌ No se pudo hacer Check-In', escapeHtml(errMsg));
-                    setStatus('❌ ' + errMsg);
-                    camLabel.textContent = '❌ Sin ticket para este evento';
+                    const errMsg = data && data.data && data.data.error ? data.data.error : 'Error desconocido';
+                    showResult('err', 'No se pudo hacer Check-In', escapeHtml(errMsg));
+                    setStatus(errMsg, false);
+                    camLabel.textContent = 'No fue posible validar el ticket';
                 }
-
             } catch (e) {
-                setStatus('❌ Error de conexión: ' + e.message);
+                setStatus('Error de conexión al procesar el check-in.', false);
+                showResult('err', 'Error de conexión', 'No fue posible completar la validación. Vuelve a intentar.');
                 console.error('[FaceCheckin] Error check-in AJAX:', e);
             }
         }
 
-        /* ── Utilidad ─────────────────────────────────────────────────── */
         function escapeHtml(str) {
-            if (!str) return '';
+            if (str === null || typeof str === 'undefined') return '';
             return String(str)
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
         }
 
-        /* ── Arrancar ─────────────────────────────────────────────────── */
-        loadModels();
+        window.addEventListener('pagehide', function() {
+            if (isLive) stopCamera();
+        });
+
+        if (DAY_VALID) {
+            loadModels();
+        } else {
+            toggleBtn.disabled = true;
+            setCameraState('Fuera de fecha', '');
+        }
 
     })();
     </script>
@@ -847,6 +1607,11 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
         wp_send_json_error( ['error' => 'Permisos insuficientes.'], 403 );
     }
 
+    // Mantiene el AJAX alineado con la visibilidad/permisos del dashboard.
+    if ( function_exists('eventosapp_user_can_access_frontend_feature') && ! eventosapp_user_can_access_frontend_feature('face_checkin') ) {
+        wp_send_json_error( ['error' => 'No tienes permisos para usar Check-In Facial.'], 403 );
+    }
+
     check_ajax_referer( 'evapp_face_load_asistentes', 'security' );
 
     $event_id = isset( $_POST['event_id'] ) ? (int) $_POST['event_id'] : 0;
@@ -866,7 +1631,10 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
 
     $force_refresh = ! empty($_POST['force_refresh']);
     $cache_key = 'evapp_face_data_' . absint($event_id);
-    if ( ! $force_refresh ) {
+
+    if ( $force_refresh ) {
+        delete_transient($cache_key);
+    } else {
         $cached_payload = get_transient($cache_key);
         if ( is_array($cached_payload) ) {
             wp_send_json_success($cached_payload);
@@ -958,10 +1726,19 @@ add_action( 'wp_ajax_evapp_get_asistentes_face_data', function () {
     }
 
     // ── Paso 3: Generar cache_version (cambia si se agregan/quitan fotos) ──
-    $total_urls   = array_sum( array_map( function( $a ) { return count( $a['foto_urls'] ); }, $resultado ) );
-    $version_data = array_map( function( $a ) { return $a['asistente_id'] . '_' . $a['foto_id']; }, $resultado );
+    $total_urls = array_sum( array_map( function( $a ) { return count( $a['foto_urls'] ); }, $resultado ) );
+    $version_data = array_map( function( $a ) {
+        $urls = isset( $a['foto_urls'] ) && is_array( $a['foto_urls'] ) ? $a['foto_urls'] : [];
+        sort( $urls );
+        return implode( '|', [
+            (string) $a['asistente_id'],
+            (string) $a['cedula'],
+            (string) $a['nombre'],
+            implode( ',', $urls ),
+        ] );
+    }, $resultado );
     sort( $version_data );
-    $cache_version = substr( md5( implode( '|', $version_data ) . '|n' . $total_urls ), 0, 12 );
+    $cache_version = substr( md5( implode( '||', $version_data ) . '|n' . $total_urls ), 0, 12 );
 
     $response = [
         'asistentes'    => $resultado,
@@ -988,6 +1765,11 @@ add_action( 'wp_ajax_evapp_face_checkin_process', function () {
 
     if ( function_exists('eventosapp_current_user_can_checkin') && ! eventosapp_current_user_can_checkin() ) {
         wp_send_json_error( ['error' => 'Permisos insuficientes para Check-In.'], 403 );
+    }
+
+    // Mantiene el endpoint protegido con la misma feature usada por el dashboard.
+    if ( function_exists('eventosapp_user_can_access_frontend_feature') && ! eventosapp_user_can_access_frontend_feature('face_checkin') ) {
+        wp_send_json_error( ['error' => 'No tienes permisos para usar Check-In Facial.'], 403 );
     }
 
     check_ajax_referer( 'evapp_face_checkin_process', 'security' );
