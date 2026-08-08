@@ -1195,13 +1195,13 @@ JS;
 /**
  * AJAX: búsqueda segmentada y optimizada.
  *
- * Mejora de rendimiento:
- * - Por defecto busca solo por Cédula (_evapp_search_cc).
- * - Permite segmentar por nombres/apellidos, celular, correo o todos.
- * - "Todos" conserva compatibilidad con el índice amplio _evapp_search_blob,
- *   pero queda como última opción porque es la consulta más costosa.
- * - Si un ticket antiguo todavía no tiene los índices nuevos, usa fallback seguro
- *   sobre los metadatos principales sin modificar permisos ni flujos existentes.
+ * Reglas de rendimiento y segmentación:
+ * - Cédula consulta únicamente el índice/meta de cédula.
+ * - Celular consulta únicamente el índice/meta de teléfono.
+ * - Correo consulta únicamente el índice/meta de correo.
+ * - Nombres y apellidos consulta únicamente los campos de nombre/apellido.
+ * - Solo "Todos los datos" utiliza el índice amplio _evapp_search_blob.
+ * - Los fallbacks de compatibilidad nunca saltan de un segmento a otro.
  */
 add_action('wp_ajax_eventosapp_front_search', function(){
     if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('search') ) {
@@ -1279,12 +1279,13 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         'all'   => '_evapp_search_blob',
     ];
 
+    // Fallbacks estrictamente limitados al segmento solicitado.
+    // "all" NO se incluye aquí porque su consulta principal ya usa el blob amplio.
     $raw_meta_fallback_map = [
         'cc'    => [ '_eventosapp_asistente_cc' ],
         'phone' => [ '_eventosapp_asistente_tel' ],
         'email' => [ '_eventosapp_asistente_email' ],
         'name'  => [ '_eventosapp_asistente_nombre', '_eventosapp_asistente_apellido' ],
-        'all'   => [ '_evapp_search_blob' ],
     ];
 
     if ( $search_type === 'cc' || $search_type === 'phone' ) {
@@ -1345,7 +1346,57 @@ add_action('wp_ajax_eventosapp_front_search', function(){
         return array_map('intval', (array) $ids);
     };
 
-    $cache_key = 'evfs_ids_' . md5(wp_json_encode([
+    /**
+     * Fallback específico para búsquedas por nombre completo.
+     *
+     * Los tickets antiguos pueden no tener _evapp_search_name. Cuando el usuario
+     * escribe "Nombre Apellido", los valores históricos viven en dos metakeys
+     * distintas. Esta consulta concatena SOLO esos dos campos, sin tocar el blob
+     * general, manteniendo la segmentación y la compatibilidad.
+     */
+    $find_full_name_ticket_ids = function( $name_value, $limit = 30 ) use ( $wpdb, $allowed_event_ids ) {
+        $name_value = trim((string) $name_value);
+        if ( $name_value === '' ) return [];
+
+        $join_event = '';
+        $params = [];
+
+        if ( ! empty($allowed_event_ids) ) {
+            $placeholders = implode(',', array_fill(0, count($allowed_event_ids), '%s'));
+            $join_event = " INNER JOIN {$wpdb->postmeta} evm ON evm.post_id = p.ID AND evm.meta_key = %s AND evm.meta_value IN ($placeholders)";
+            $params[] = '_eventosapp_ticket_evento_id';
+            foreach ( $allowed_event_ids as $aid ) {
+                $params[] = (string) absint($aid);
+            }
+        }
+
+        $sql = "
+            SELECT DISTINCT p.ID
+            FROM {$wpdb->posts} p
+            {$join_event}
+            LEFT JOIN {$wpdb->postmeta} fn
+              ON fn.post_id = p.ID AND fn.meta_key = '_eventosapp_asistente_nombre'
+            LEFT JOIN {$wpdb->postmeta} ln
+              ON ln.post_id = p.ID AND ln.meta_key = '_eventosapp_asistente_apellido'
+            WHERE p.post_type = %s
+              AND p.post_status NOT IN ('trash','auto-draft','inherit')
+              AND CONCAT_WS(' ', COALESCE(fn.meta_value,''), COALESCE(ln.meta_value,'')) LIKE %s
+            ORDER BY p.ID DESC
+            LIMIT %d
+        ";
+
+        $params[] = 'eventosapp_ticket';
+        $params[] = '%' . $wpdb->esc_like($name_value) . '%';
+        $params[] = (int) $limit;
+
+        $prepared = $wpdb->prepare($sql, $params);
+        $ids = $wpdb->get_col($prepared);
+        return array_map('intval', (array) $ids);
+    };
+
+    // Prefijo versionado para no reutilizar durante el despliegue resultados
+    // cacheados por la lógica anterior que podía caer al blob general.
+    $cache_key = 'evfs_ids_segmented_v2_' . md5(wp_json_encode([
         'q'      => $search_value,
         'type'   => $search_type,
         'events' => $allowed_event_ids,
@@ -1353,18 +1404,28 @@ add_action('wp_ajax_eventosapp_front_search', function(){
     $tickets = wp_cache_get($cache_key, 'eventosapp_search');
 
     if ( ! is_array($tickets) ) {
+        // 1) Consulta primaria: únicamente el índice del segmento seleccionado.
         $tickets = $find_ticket_ids([ $search_meta_map[$search_type] ], $like, 30);
 
-        if ( empty($tickets) && isset($raw_meta_fallback_map[$search_type]) ) {
-            $fallback_value = ($search_type === 'cc' || $search_type === 'phone') ? ($q_digits !== '' ? $q_digits : $q) : $q_norm;
-            $fallback_like  = '%' . $wpdb->esc_like($fallback_value) . '%';
+        // 2) Compatibilidad con tickets antiguos, sin salir del segmento.
+        if ( empty($tickets) && $search_type === 'name' ) {
+            // Una sola palabra se resuelve de forma más barata sobre nombre/apellido.
+            // Una frase (ej. "James Wood") requiere combinar ambos campos históricos.
+            if ( preg_match('/\s/u', $q_norm) ) {
+                $tickets = $find_full_name_ticket_ids($q_norm, 30);
+            } else {
+                $tickets = $find_ticket_ids($raw_meta_fallback_map['name'], '%' . $wpdb->esc_like($q_norm) . '%', 30);
+            }
+        } elseif ( empty($tickets) && isset($raw_meta_fallback_map[$search_type]) ) {
+            $fallback_value = ($search_type === 'cc' || $search_type === 'phone')
+                ? ($q_digits !== '' ? $q_digits : $q)
+                : $q_norm;
+            $fallback_like = '%' . $wpdb->esc_like($fallback_value) . '%';
             $tickets = $find_ticket_ids($raw_meta_fallback_map[$search_type], $fallback_like, 30);
         }
 
-        if ( empty($tickets) && $search_type !== 'all' ) {
-            $tickets = $find_ticket_ids([ '_evapp_search_blob' ], '%' . $wpdb->esc_like($q_norm) . '%', 30);
-        }
-
+        // IMPORTANTE: no existe fallback al _evapp_search_blob para búsquedas
+        // específicas. El blob solo se consulta cuando search_type === 'all'.
         wp_cache_set($cache_key, array_map('intval', (array) $tickets), 'eventosapp_search', 30);
     }
 
