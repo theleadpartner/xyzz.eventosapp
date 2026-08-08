@@ -1,271 +1,268 @@
 <?php
 /**
- * Sistema de Cron para envíos programados de códigos de doble autenticación
- * 
+ * Sistema de programación para envíos de códigos de doble autenticación.
+ *
+ * La cola central de EventosApp es la vía principal cuando está disponible.
+ * WP-Cron se conserva únicamente como fallback y como disparador heredado.
+ *
  * @package EventosApp
  */
 
-if (!defined('ABSPATH')) exit;
+if ( ! defined( 'ABSPATH' ) ) exit;
 
-// ========================================
-// REGISTRAR HOOKS DE CRON
-// ========================================
+add_action( 'eventosapp_send_auth_codes_scheduled', 'eventosapp_cron_send_auth_codes', 10, 1 );
+add_action( 'eventosapp_send_auth_codes_for_specific_day', 'eventosapp_cron_send_auth_codes_specific_day', 10, 2 );
 
-add_action('eventosapp_send_auth_codes_scheduled', 'eventosapp_cron_send_auth_codes', 10, 1);
+function eventosapp_mark_day_as_sent( $event_id, $date ) {
+    $event_id = absint( $event_id );
+    $date = sanitize_text_field( (string) $date );
+    if ( ! $event_id || ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date ) ) return;
 
-/**
- * Marca un día como "enviado" en el registro del evento
- * 
- * @param int $event_id ID del evento
- * @param string $date Fecha en formato Y-m-d
- */
-function eventosapp_mark_day_as_sent($event_id, $date) {
-    $days_sent = get_post_meta($event_id, '_eventosapp_double_auth_days_sent', true);
-    
-    if (!is_array($days_sent)) {
-        $days_sent = [];
-    }
-    
-    if (!in_array($date, $days_sent)) {
+    $days_sent = get_post_meta( $event_id, '_eventosapp_double_auth_days_sent', true );
+    $days_sent = is_array( $days_sent ) ? $days_sent : [];
+
+    if ( ! in_array( $date, $days_sent, true ) ) {
         $days_sent[] = $date;
-        update_post_meta($event_id, '_eventosapp_double_auth_days_sent', $days_sent);
+        sort( $days_sent );
+        update_post_meta( $event_id, '_eventosapp_double_auth_days_sent', $days_sent );
     }
 }
 
-/**
- * Verifica si ya se envió el código de un día específico
- * 
- * @param int $event_id ID del evento
- * @param string $date Fecha en formato Y-m-d
- * @return bool True si ya se envió, false si no
- */
-function eventosapp_is_day_code_sent($event_id, $date) {
-    $days_sent = get_post_meta($event_id, '_eventosapp_double_auth_days_sent', true);
-    
-    if (!is_array($days_sent)) {
-        return false;
-    }
-    
-    return in_array($date, $days_sent);
+function eventosapp_is_day_code_sent( $event_id, $date ) {
+    $days_sent = get_post_meta( absint( $event_id ), '_eventosapp_double_auth_days_sent', true );
+    return is_array( $days_sent ) && in_array( sanitize_text_field( (string) $date ), $days_sent, true );
+}
+
+function eventosapp_get_sent_days( $event_id ) {
+    $days_sent = get_post_meta( absint( $event_id ), '_eventosapp_double_auth_days_sent', true );
+    return is_array( $days_sent ) ? $days_sent : [];
+}
+
+function eventosapp_clear_sent_days( $event_id ) {
+    delete_post_meta( absint( $event_id ), '_eventosapp_double_auth_days_sent' );
 }
 
 /**
- * Obtiene la lista de días ya enviados
- * 
- * @param int $event_id ID del evento
- * @return array Array de fechas en formato Y-m-d
+ * Calcula el instante de envío de un día posterior respetando:
+ * - cantidad (X)
+ * - unidad (horas, días o semanas antes)
+ * - hora local configurada
+ * - zona horaria real del evento
  */
-function eventosapp_get_sent_days($event_id) {
-    $days_sent = get_post_meta($event_id, '_eventosapp_double_auth_days_sent', true);
-    
-    if (!is_array($days_sent)) {
-        return [];
-    }
-    
-    return $days_sent;
-}
+function eventosapp_double_auth_followup_timestamp( $event_id, $day ) {
+    $event_id = absint( $event_id );
+    $day = sanitize_text_field( (string) $day );
+    if ( ! $event_id || ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $day ) ) return 0;
 
-/**
- * Limpia el registro de días enviados (útil para reprogramar todo el evento)
- * 
- * @param int $event_id ID del evento
- */
-function eventosapp_clear_sent_days($event_id) {
-    delete_post_meta($event_id, '_eventosapp_double_auth_days_sent');
-}
+    $amount = max( 1, absint( get_post_meta( $event_id, '_eventosapp_double_auth_followup_amount', true ) ?: 1 ) );
+    $unit = sanitize_key( (string) get_post_meta( $event_id, '_eventosapp_double_auth_followup_unit', true ) );
+    $clock = sanitize_text_field( (string) get_post_meta( $event_id, '_eventosapp_double_auth_followup_time', true ) );
 
-/**
- * Programar envío de códigos de autenticación
- * 
- * @param int $event_id ID del evento
- */
-function eventosapp_schedule_auth_codes_send($event_id) {
-    // Cancelar cualquier cron previo para este evento.
-    // wp_schedule_single_event() trabaja con timestamps UNIX UTC; por eso aquí se evita
-    // mezclar timestamps locales de WordPress con timestamps reales de cron.
-    $hook = 'eventosapp_send_auth_codes_scheduled';
-    $args = [$event_id];
-    wp_clear_scheduled_hook($hook, $args);
+    if ( ! in_array( $unit, [ 'hours', 'days', 'weeks' ], true ) ) $unit = 'days';
+    if ( ! preg_match( '/^\d{2}:\d{2}$/', $clock ) ) $clock = '06:00';
 
-    // Obtener configuración
-    $enabled = get_post_meta($event_id, '_eventosapp_ticket_double_auth_enabled', true);
-    $scheduled_datetime = absint(get_post_meta($event_id, '_eventosapp_double_auth_scheduled_datetime', true));
-
-    if ($enabled !== '1' || !$scheduled_datetime) {
-        return; // No programar si no está configurado
-    }
-    
-    // Obtener días del evento para verificar si ya se enviaron
-    $auth_mode = get_post_meta($event_id, '_eventosapp_ticket_double_auth_mode', true);
-    $event_days = [];
-    if (function_exists('eventosapp_get_event_days')) {
-        $event_days = eventosapp_get_event_days($event_id);
-    }
-    
-    // Verificar si ya se enviaron códigos del primer día
-    // Solo reprogramar si NO se ha enviado el primer día
-    if (!empty($event_days) && $auth_mode === 'all_days') {
-        $first_day = $event_days[0];
-        
-        if (eventosapp_is_day_code_sent($event_id, $first_day)) {
-            // Ya se envió el primer día, no reprogramar el envío inicial
-            // Solo reprogramar días siguientes si es necesario
-            eventosapp_schedule_remaining_days($event_id, $event_days);
-            return;
-        }
-    }
-    
-    // Si llegamos aquí, programar el envío inicial.
-    // $scheduled_datetime debe ser un Unix timestamp UTC generado con DateTime::getTimestamp().
-    if ($scheduled_datetime > 0) {
-        wp_schedule_single_event($scheduled_datetime, $hook, $args);
-    }
-}
-
-/**
- * Programa los días restantes de un evento multi-día
- * 
- * @param int $event_id ID del evento
- * @param array $event_days Array de días del evento
- */
-function eventosapp_schedule_remaining_days($event_id, $event_days) {
-    if (empty($event_days)) {
-        return;
-    }
-    
-    $days_sent = eventosapp_get_sent_days($event_id);
-    $event_tz = get_post_meta($event_id, '_eventosapp_zona_horaria', true);
-    
-    if (!$event_tz) {
-        $event_tz = wp_timezone_string();
-    }
+    $timezone = function_exists( 'eventosapp_double_auth_event_timezone' )
+        ? eventosapp_double_auth_event_timezone( $event_id )
+        : wp_timezone();
 
     try {
-        $event_timezone = new DateTimeZone($event_tz);
-    } catch (Exception $e) {
-        $event_timezone = wp_timezone();
-    }
-
-    // Programar envíos para los días que NO se han enviado (excepto el primero que ya se chequeó)
-    for ($i = 1; $i < count($event_days); $i++) {
-        $day = $event_days[$i];
-        
-        // Si ya se envió este día, saltar
-        if (in_array($day, $days_sent)) {
-            continue;
+        $dt = DateTimeImmutable::createFromFormat( '!Y-m-d H:i', $day . ' ' . $clock, $timezone );
+        $errors = DateTimeImmutable::getLastErrors();
+        if ( ! $dt instanceof DateTimeImmutable || ( $errors !== false && ( ! empty( $errors['warning_count'] ) || ! empty( $errors['error_count'] ) ) ) ) {
+            return 0;
         }
-        
-        try {
-            $dt = new DateTime($day . ' 06:00:00', $event_timezone);
-            $timestamp = $dt->getTimestamp();
 
-            // Solo programar si es futuro.
-            // Importante: WP-Cron requiere timestamps UNIX UTC. No usar current_time('timestamp')
-            // para comparar, porque WordPress lo ajusta con el offset del sitio.
-            if ($timestamp > time()) {
-                // Verificar si ya existe este evento programado
-                $existing = wp_next_scheduled('eventosapp_send_auth_codes_for_specific_day', [$event_id, $day]);
-                
-                if (!$existing) {
-                    wp_schedule_single_event(
-                        $timestamp,
-                        'eventosapp_send_auth_codes_for_specific_day',
-                        [$event_id, $day]
-                    );
-                }
+        if ( $unit === 'hours' ) {
+            $dt = $dt->sub( new DateInterval( 'PT' . $amount . 'H' ) );
+        } elseif ( $unit === 'weeks' ) {
+            $dt = $dt->sub( new DateInterval( 'P' . $amount . 'W' ) );
+        } else {
+            $dt = $dt->sub( new DateInterval( 'P' . $amount . 'D' ) );
+        }
+
+        return $dt->getTimestamp();
+    } catch ( Throwable $e ) {
+        return 0;
+    }
+}
+
+/**
+ * Construye la programación efectiva que debe reflejarse en Cola y Tareas.
+ */
+function eventosapp_double_auth_schedule_plan( $event_id ) {
+    $event_id = absint( $event_id );
+    if ( ! $event_id || get_post_meta( $event_id, '_eventosapp_ticket_double_auth_enabled', true ) !== '1' ) return [];
+
+    $initial = absint( get_post_meta( $event_id, '_eventosapp_double_auth_scheduled_datetime', true ) );
+    if ( ! $initial ) return [];
+
+    $mode = get_post_meta( $event_id, '_eventosapp_ticket_double_auth_mode', true ) ?: 'first_day';
+    $days = function_exists( 'eventosapp_double_auth_event_days' )
+        ? eventosapp_double_auth_event_days( $event_id )
+        : ( function_exists( 'eventosapp_get_event_days' ) ? (array) eventosapp_get_event_days( $event_id ) : [] );
+
+    $plan = [
+        [
+            'key'       => 'initial',
+            'day'       => ( $mode === 'all_days' && ! empty( $days ) ) ? (string) $days[0] : '',
+            'timestamp' => $initial,
+            'kind'      => 'initial',
+        ],
+    ];
+
+    if ( $mode === 'all_days' && count( $days ) > 1 ) {
+        for ( $i = 1; $i < count( $days ); $i++ ) {
+            $day = sanitize_text_field( (string) $days[$i] );
+            $timestamp = eventosapp_double_auth_followup_timestamp( $event_id, $day );
+            if ( $timestamp > 0 ) {
+                $plan[] = [
+                    'key'       => 'day_' . str_replace( '-', '', $day ),
+                    'day'       => $day,
+                    'timestamp' => $timestamp,
+                    'kind'      => 'followup',
+                ];
             }
-        } catch (Exception $e) {
-            // Continuar con el siguiente día si hay error
-            continue;
         }
+    }
+
+    return $plan;
+}
+
+function eventosapp_double_auth_clear_legacy_cron( $event_id ) {
+    $event_id = absint( $event_id );
+    if ( ! $event_id ) return;
+
+    wp_clear_scheduled_hook( 'eventosapp_send_auth_codes_scheduled', [ $event_id ] );
+    wp_clear_scheduled_hook( 'eventosapp_auto_send_auth_codes', [ $event_id ] );
+
+    $days = function_exists( 'eventosapp_double_auth_event_days' )
+        ? eventosapp_double_auth_event_days( $event_id )
+        : ( function_exists( 'eventosapp_get_event_days' ) ? (array) eventosapp_get_event_days( $event_id ) : [] );
+
+    foreach ( $days as $day ) {
+        wp_clear_scheduled_hook( 'eventosapp_send_auth_codes_for_specific_day', [ $event_id, $day ] );
     }
 }
 
 /**
- * Ejecutar envío programado de códigos
- * 
- * @param int $event_id ID del evento
+ * Vía principal: sincroniza con la cola central.
+ * Fallback: WP-Cron, para no romper instalaciones donde la cola no esté cargada.
  */
-function eventosapp_cron_send_auth_codes($event_id) {
-    // Verificar que el evento existe y tiene doble auth activa
-    $enabled = get_post_meta($event_id, '_eventosapp_ticket_double_auth_enabled', true);
-    if ($enabled !== '1') {
+function eventosapp_schedule_auth_codes_send( $event_id ) {
+    $event_id = absint( $event_id );
+    if ( ! $event_id ) return false;
+
+    eventosapp_double_auth_clear_legacy_cron( $event_id );
+
+    if ( function_exists( 'eventosapp_task_queue_sync_double_auth_schedule' ) ) {
+        $adapter_ok = ! function_exists( 'eventosapp_task_queue_get_adapter' )
+            || eventosapp_task_queue_get_adapter( 'double_auth_scheduled' );
+
+        if ( $adapter_ok ) {
+            return (bool) eventosapp_task_queue_sync_double_auth_schedule( $event_id );
+        }
+    }
+
+    $plan = eventosapp_double_auth_schedule_plan( $event_id );
+    if ( empty( $plan ) ) return false;
+
+    $scheduled_any = false;
+    foreach ( $plan as $item ) {
+        $timestamp = absint( $item['timestamp'] ?? 0 );
+        if ( ! $timestamp || $timestamp <= time() ) continue;
+
+        if ( ( $item['kind'] ?? '' ) === 'initial' ) {
+            $scheduled_any = (bool) wp_schedule_single_event(
+                $timestamp,
+                'eventosapp_send_auth_codes_scheduled',
+                [ $event_id ]
+            ) || $scheduled_any;
+        } elseif ( ! empty( $item['day'] ) ) {
+            $scheduled_any = (bool) wp_schedule_single_event(
+                $timestamp,
+                'eventosapp_send_auth_codes_for_specific_day',
+                [ $event_id, $item['day'] ]
+            ) || $scheduled_any;
+        }
+    }
+
+    return $scheduled_any;
+}
+
+/**
+ * Compatibilidad con llamadas históricas que programaban solo días posteriores.
+ */
+function eventosapp_schedule_remaining_days( $event_id, $event_days ) {
+    $event_id = absint( $event_id );
+    $event_days = is_array( $event_days ) ? array_values( $event_days ) : [];
+    if ( ! $event_id || count( $event_days ) < 2 ) return;
+
+    if ( function_exists( 'eventosapp_task_queue_sync_double_auth_schedule' ) ) {
+        eventosapp_task_queue_sync_double_auth_schedule( $event_id );
         return;
     }
 
-    $auth_mode = get_post_meta($event_id, '_eventosapp_ticket_double_auth_mode', true);
+    $days_sent = eventosapp_get_sent_days( $event_id );
+    for ( $i = 1; $i < count( $event_days ); $i++ ) {
+        $day = sanitize_text_field( (string) $event_days[$i] );
+        if ( in_array( $day, $days_sent, true ) ) continue;
 
-    // Obtener días del evento
-    $event_days = [];
-    if (function_exists('eventosapp_get_event_days')) {
-        $event_days = eventosapp_get_event_days($event_id);
-    }
+        $timestamp = eventosapp_double_auth_followup_timestamp( $event_id, $day );
+        if ( $timestamp <= time() ) continue;
 
-    if (empty($event_days)) {
-        return;
-    }
-    
-    if ($auth_mode === 'all_days') {
-        // Modo multi-día: enviar código del primer día en el envío programado
-        $first_day = $event_days[0];
-        
-        // Verificar si ya se envió el código de este día
-        if (eventosapp_is_day_code_sent($event_id, $first_day)) {
-            // Ya se envió, no volver a enviar
-            return;
+        if ( ! wp_next_scheduled( 'eventosapp_send_auth_codes_for_specific_day', [ $event_id, $day ] ) ) {
+            wp_schedule_single_event(
+                $timestamp,
+                'eventosapp_send_auth_codes_for_specific_day',
+                [ $event_id, $day ]
+            );
         }
-        
-        // Enviar códigos para el primer día (códigos por día)
-        eventosapp_send_mass_auth_codes_for_day($event_id, $first_day);
-        
-        // Marcar el primer día como enviado
-        eventosapp_mark_day_as_sent($event_id, $first_day);
-        
-        // Programar envíos para los días siguientes
-        eventosapp_schedule_remaining_days($event_id, $event_days);
-        
-    } else {
-        // Modo clásico / primer día: envío único usando códigos generales
-        // Verificar si ya se envió
-        if (empty($event_days)) {
-            return;
-        }
-        
-        $first_day = $event_days[0];
-        
-        if (eventosapp_is_day_code_sent($event_id, $first_day)) {
-            // Ya se envió, no volver a enviar
-            return;
-        }
-        
-        eventosapp_send_mass_auth_codes($event_id);
-        
-        // Marcar como enviado
-        eventosapp_mark_day_as_sent($event_id, $first_day);
     }
 }
 
+function eventosapp_cron_send_auth_codes( $event_id ) {
+    $event_id = absint( $event_id );
+    if ( ! $event_id || get_post_meta( $event_id, '_eventosapp_ticket_double_auth_enabled', true ) !== '1' ) return;
 
-/**
- * Hook para envío de código de un día específico
- */
-add_action('eventosapp_send_auth_codes_for_specific_day', 'eventosapp_cron_send_auth_codes_specific_day', 10, 2);
+    $mode = get_post_meta( $event_id, '_eventosapp_ticket_double_auth_mode', true ) ?: 'first_day';
+    $days = function_exists( 'eventosapp_double_auth_event_days' ) ? eventosapp_double_auth_event_days( $event_id ) : [];
+    $target_day = ( $mode === 'all_days' && $days ) ? (string) reset( $days ) : '';
 
-function eventosapp_cron_send_auth_codes_specific_day($event_id, $date) {
-    $enabled = get_post_meta($event_id, '_eventosapp_ticket_double_auth_enabled', true);
-    if ($enabled !== '1') {
+    if ( function_exists( 'eventosapp_task_queue_sync_double_auth_schedule' ) ) {
+        eventosapp_task_queue_sync_double_auth_schedule( $event_id );
+        if ( function_exists( 'eventosapp_task_queue_activate_double_auth_due_task' ) ) {
+            eventosapp_task_queue_activate_double_auth_due_task( $event_id, $target_day );
+        }
         return;
     }
-    
-    // Verificar si ya se envió el código de este día
-    if (eventosapp_is_day_code_sent($event_id, $date)) {
-        // Ya se envió, no volver a enviar
+
+    if ( $target_day ) {
+        if ( eventosapp_is_day_code_sent( $event_id, $target_day ) ) return;
+        eventosapp_send_mass_auth_codes_for_day( $event_id, $target_day );
+        eventosapp_schedule_remaining_days( $event_id, $days );
         return;
     }
 
-    // Enviar códigos para este día específico
-    eventosapp_send_mass_auth_codes_for_day($event_id, $date);
-    
-    // Marcar este día como enviado
-    eventosapp_mark_day_as_sent($event_id, $date);
+    $first_day = $days ? (string) reset( $days ) : '';
+    if ( $first_day && eventosapp_is_day_code_sent( $event_id, $first_day ) ) return;
+    eventosapp_send_mass_auth_codes( $event_id );
+}
+
+function eventosapp_cron_send_auth_codes_specific_day( $event_id, $date ) {
+    $event_id = absint( $event_id );
+    $date = sanitize_text_field( (string) $date );
+
+    if ( ! $event_id || ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date ) ) return;
+    if ( get_post_meta( $event_id, '_eventosapp_ticket_double_auth_enabled', true ) !== '1' ) return;
+    if ( eventosapp_is_day_code_sent( $event_id, $date ) ) return;
+
+    if ( function_exists( 'eventosapp_task_queue_sync_double_auth_schedule' ) ) {
+        eventosapp_task_queue_sync_double_auth_schedule( $event_id );
+        if ( function_exists( 'eventosapp_task_queue_activate_double_auth_due_task' ) ) {
+            eventosapp_task_queue_activate_double_auth_due_task( $event_id, $date );
+        }
+        return;
+    }
+
+    eventosapp_send_mass_auth_codes_for_day( $event_id, $date );
 }

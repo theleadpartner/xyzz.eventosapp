@@ -278,6 +278,28 @@ function eventosapp_task_queue_integrations_execution_evidence($evidence, $task)
         }
     }
 
+
+    if ( ($task['task_type'] ?? '') === 'double_auth_scheduled' ) {
+        $target_day = sanitize_text_field((string)($payload['target_day'] ?? ''));
+        if ( $target_day === '' && function_exists('eventosapp_double_auth_event_days') ) {
+            $days = eventosapp_double_auth_event_days($event_id);
+            $target_day = ! empty($days) ? (string)$days[0] : '';
+        }
+        if ( $target_day !== '' && function_exists('eventosapp_is_day_code_sent') && eventosapp_is_day_code_sent($event_id, $target_day) ) {
+            return [
+                'executed'=>true,
+                'source'=>'double_auth_history',
+                'completed_at'=>'',
+                'total_items'=>absint($task['total_items'] ?? 0),
+                'processed_items'=>absint($task['processed_items'] ?? 0),
+                'success_items'=>absint($task['success_items'] ?? 0),
+                'error_items'=>absint($task['error_items'] ?? 0),
+                'skipped_items'=>absint($task['skipped_items'] ?? 0),
+                'message'=>'El historial de Doble Autenticación registra este día como procesado.',
+            ];
+        }
+    }
+
     return $evidence;
 }
 add_filter('eventosapp_task_queue_execution_evidence', 'eventosapp_task_queue_integrations_execution_evidence', 10, 2);
@@ -665,6 +687,127 @@ function eventosapp_task_queue_process_whatsapp_reminder($task, $runtime) {
     });
 }
 
+
+/**
+ * Procesador de Doble Autenticación para Cola y Tareas.
+ * Resuelve los tickets al comenzar la tarea para incluir inscripciones creadas
+ * después de programar y antes de ejecutar el envío.
+ */
+function eventosapp_task_queue_process_double_auth($task, $runtime) {
+    $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+    $event_id = absint($task['event_id'] ?? ($payload['event_id'] ?? 0));
+    $target_day = sanitize_text_field((string)($payload['target_day'] ?? ''));
+    $task_type = sanitize_key((string)($task['task_type'] ?? 'double_auth_scheduled'));
+    $is_scheduled = $task_type === 'double_auth_scheduled';
+    $dispatch_method = sanitize_key((string)($payload['dispatch_method'] ?? ($is_scheduled ? 'automatico' : 'masivo')));
+    if ( ! in_array($dispatch_method, ['manual','masivo','automatico'], true) ) $dispatch_method = $is_scheduled ? 'automatico' : 'masivo';
+    $regenerate_all_days = ! empty($payload['regenerate_all_days']);
+
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+        return [
+            'processed'=>0,'success'=>0,'errors'=>1,'skipped'=>0,
+            'next_cursor'=>absint($task['cursor_value'] ?? 0),'total_items'=>0,'done'=>true,
+            'logs'=>[['level'=>'error','message'=>'La tarea de Doble Autenticación no tiene un evento válido.']],
+        ];
+    }
+
+    if ( get_post_meta($event_id, '_eventosapp_ticket_double_auth_enabled', true) !== '1' ) {
+        return [
+            'processed'=>0,'success'=>0,'errors'=>0,'skipped'=>0,
+            'next_cursor'=>0,'total_items'=>0,'done'=>true,
+            'logs'=>[['level'=>'warning','message'=>'La Doble Autenticación fue desactivada antes de ejecutar la tarea. No se enviaron códigos.']],
+        ];
+    }
+
+    if ( empty($payload['prepared']) ) {
+        // Solo las tareas programadas respetan el registro histórico de días ya
+        // enviados. Un envío manual explícito debe poder reenviar/regenerar.
+        $already_sent = $is_scheduled && $target_day !== '' && function_exists('eventosapp_is_day_code_sent')
+            ? eventosapp_is_day_code_sent($event_id, $target_day)
+            : false;
+
+        $ticket_ids = $already_sent
+            ? []
+            : (function_exists('eventosapp_double_auth_ticket_ids')
+                ? eventosapp_double_auth_ticket_ids($event_id)
+                : get_posts([
+                    'post_type'=>'eventosapp_ticket','post_status'=>'publish','fields'=>'ids','nopaging'=>true,
+                    'no_found_rows'=>true,'meta_query'=>[['key'=>'_eventosapp_ticket_evento_id','value'=>$event_id,'compare'=>'=']],
+                    'orderby'=>'ID','order'=>'ASC',
+                ]));
+
+        $payload['prepared'] = 1;
+        $payload['ticket_ids'] = eventosapp_task_queue_ticket_ids($ticket_ids);
+        if ( $already_sent ) $payload['skip_reason'] = 'El día ya figura como procesado en el historial de Doble Autenticación.';
+
+        eventosapp_task_queue_update($task['id'], [
+            'payload'=>$payload,
+            'total_items'=>count($payload['ticket_ids']),
+            'cursor_value'=>0,
+        ]);
+        $task['payload'] = $payload;
+        $task['total_items'] = count($payload['ticket_ids']);
+        $task['cursor_value'] = 0;
+
+        if ( $already_sent ) {
+            return [
+                'processed'=>0,'success'=>0,'errors'=>0,'skipped'=>0,
+                'next_cursor'=>0,'total_items'=>0,'done'=>true,
+                'logs'=>[['level'=>'warning','message'=>$payload['skip_reason']]],
+            ];
+        }
+    }
+
+    if ( ! function_exists('eventosapp_double_auth_prepare_ticket_code_for_dispatch') || ! function_exists('eventosapp_send_auth_code_channels') ) {
+        return [
+            'processed'=>0,'success'=>0,'errors'=>1,'skipped'=>0,
+            'next_cursor'=>absint($task['cursor_value'] ?? 0),'total_items'=>absint($task['total_items'] ?? 0),'done'=>false,
+            'fatal'=>true,'error_message'=>'El motor de Doble Autenticación no está disponible.',
+            'logs'=>[['level'=>'error','message'=>'No se cargaron los helpers de envío de Doble Autenticación. Revisa el orden de includes.']],
+        ];
+    }
+
+    return eventosapp_task_queue_process_ticket_list($task, $runtime, function($ticket_id, $payload, $task) use ($event_id, $target_day, $dispatch_method, $regenerate_all_days) {
+        if ( absint(get_post_meta($ticket_id, '_eventosapp_ticket_evento_id', true)) !== $event_id ) {
+            return eventosapp_task_queue_item_result(true, 'El ticket ya no pertenece al evento.', true);
+        }
+
+        $code = '';
+        if ( $regenerate_all_days && get_post_meta($event_id, '_eventosapp_ticket_double_auth_mode', true) === 'all_days' && function_exists('eventosapp_double_auth_event_days') ) {
+            $days = eventosapp_double_auth_event_days($event_id);
+            foreach ( $days as $day ) {
+                if ( ! function_exists('eventosapp_assign_auth_code_to_ticket_for_day') ) break;
+                $day_code = eventosapp_assign_auth_code_to_ticket_for_day($ticket_id, $day);
+                if ( $day === $target_day ) $code = $day_code;
+            }
+            if ( $target_day !== '' && ! $code ) {
+                $code = eventosapp_double_auth_prepare_ticket_code_for_dispatch($ticket_id, $target_day, true);
+            }
+        } else {
+            $code = eventosapp_double_auth_prepare_ticket_code_for_dispatch($ticket_id, $target_day, true);
+        }
+
+        if ( ! preg_match('/^\d{5}$/', (string)$code) ) {
+            return eventosapp_task_queue_item_result(false, 'No se pudo generar un código de verificación válido.');
+        }
+
+        $dispatch = eventosapp_send_auth_code_channels($ticket_id, $dispatch_method, $target_day, $code);
+        $ok = is_array($dispatch) && ! empty($dispatch['all_ok']);
+        return eventosapp_task_queue_item_result(
+            $ok,
+            is_array($dispatch) ? ($dispatch['message'] ?? '') : 'Respuesta inválida del motor de envío.',
+            false,
+            [
+                'target_day'=>$target_day,
+                'partial'=>is_array($dispatch) && ! empty($dispatch['partial']),
+                'channels'=>is_array($dispatch) ? ($dispatch['channels'] ?? []) : [],
+                'regenerate_all_days'=>$regenerate_all_days ? 1 : 0,
+                'dispatch_method'=>$dispatch_method,
+            ]
+        );
+    });
+}
+
 /**
  * Adaptador de importación masiva de tickets desde Herramientas.
  *
@@ -740,8 +883,123 @@ function eventosapp_task_queue_register_integrations() {
         'batch_size'=>6,'min_batch_size'=>1,'max_batch_size'=>12,
         'process_batch'=>'eventosapp_task_queue_process_whatsapp_reminder',
     ]);
+    eventosapp_task_queue_register_adapter('double_auth_scheduled', [
+        'label'=>'Doble autenticación programada','group'=>'scheduled','channel'=>'mixed',
+        'batch_size'=>6,'min_batch_size'=>1,'max_batch_size'=>12,
+        'process_batch'=>'eventosapp_task_queue_process_double_auth',
+    ]);
+    eventosapp_task_queue_register_adapter('double_auth_massive', [
+        'label'=>'Doble autenticación masiva','group'=>'massive','channel'=>'mixed',
+        'batch_size'=>6,'min_batch_size'=>1,'max_batch_size'=>12,
+        'process_batch'=>'eventosapp_task_queue_process_double_auth',
+    ]);
+    eventosapp_task_queue_register_adapter('double_auth_regenerate', [
+        'label'=>'Doble autenticación · regeneración de códigos','group'=>'massive','channel'=>'mixed',
+        'batch_size'=>6,'min_batch_size'=>1,'max_batch_size'=>12,
+        'process_batch'=>'eventosapp_task_queue_process_double_auth',
+    ]);
 }
 add_action('init', 'eventosapp_task_queue_register_integrations', 35);
+
+/**
+ * Envía los procesos manuales masivos de Doble Autenticación a la cola central.
+ * Evita que un único AJAX intente procesar cientos/miles de tickets y, además,
+ * impide iniciar una regeneración concurrente que pueda invalidar códigos
+ * mientras otra tarea del mismo evento todavía los está enviando.
+ *
+ * @param int  $event_id        Evento.
+ * @param bool $regenerate_all  Regenerar todos los códigos diarios antes de enviar.
+ * @return int|WP_Error ID de tarea creada.
+ */
+function eventosapp_task_queue_create_double_auth_manual($event_id, $regenerate_all = false) {
+    $event_id = absint($event_id);
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) {
+        return new WP_Error('eventosapp_double_auth_invalid_event', 'El evento no es válido.');
+    }
+    if ( get_post_meta($event_id, '_eventosapp_ticket_double_auth_enabled', true) !== '1' ) {
+        return new WP_Error('eventosapp_double_auth_disabled', 'La Doble Autenticación no está activa para este evento.');
+    }
+    if ( ! function_exists('eventosapp_task_queue_create') || ! eventosapp_task_queue_get_adapter($regenerate_all ? 'double_auth_regenerate' : 'double_auth_massive') ) {
+        return new WP_Error('eventosapp_double_auth_queue_unavailable', 'La cola central todavía no está disponible para Doble Autenticación.');
+    }
+
+    // No permitir dos procesos manuales de códigos en paralelo para un mismo evento.
+    $manual_map = get_post_meta($event_id, '_eventosapp_double_auth_manual_queue_tasks', true);
+    $manual_map = is_array($manual_map) ? $manual_map : [];
+    foreach ( $manual_map as $row ) {
+        $task_id = absint(is_array($row) ? ($row['task_id'] ?? 0) : 0);
+        $task = $task_id ? eventosapp_task_queue_get($task_id) : null;
+        if ( $task && ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+            return new WP_Error(
+                'eventosapp_double_auth_queue_busy',
+                'Ya existe un envío manual de Doble Autenticación activo para este evento (tarea #' . $task_id . '). Espera a que termine o cancélalo desde Cola y Tareas.'
+            );
+        }
+    }
+
+    // Si una programación está ejecutándose o vence en los próximos 5 minutos,
+    // no iniciar una regeneración manual que pueda cambiar el código en tránsito.
+    $scheduled_map = get_post_meta($event_id, '_eventosapp_double_auth_queue_tasks', true);
+    $scheduled_map = is_array($scheduled_map) ? $scheduled_map : [];
+    foreach ( $scheduled_map as $row ) {
+        $task_id = absint(is_array($row) ? ($row['task_id'] ?? 0) : 0);
+        $task = $task_id ? eventosapp_task_queue_get($task_id) : null;
+        if ( ! $task || in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) continue;
+        $planned = function_exists('eventosapp_task_queue_planned_timestamp') ? eventosapp_task_queue_planned_timestamp($task) : 0;
+        if ( $task['status'] === 'running' || $task['status'] === 'queued' || ($planned > 0 && $planned <= (time() + 300)) ) {
+            return new WP_Error(
+                'eventosapp_double_auth_schedule_due',
+                'Hay una tarea programada de Doble Autenticación ejecutándose o próxima a iniciar (tarea #' . $task_id . '). No se inició otro envío para evitar invalidar códigos en tránsito.'
+            );
+        }
+    }
+
+    $task_type = $regenerate_all ? 'double_auth_regenerate' : 'double_auth_massive';
+    $target_day = function_exists('eventosapp_double_auth_target_day') ? eventosapp_double_auth_target_day($event_id) : '';
+    $channel = function_exists('eventosapp_double_auth_queue_channel') ? eventosapp_double_auth_queue_channel($event_id) : 'email';
+    $channels = function_exists('eventosapp_double_auth_event_channels') ? eventosapp_double_auth_event_channels($event_id) : ['email'=>true,'whatsapp'=>false];
+    $template_id = function_exists('eventosapp_double_auth_whatsapp_template_id') ? eventosapp_double_auth_whatsapp_template_id($event_id) : '';
+    $date_label = $target_day && preg_match('/^\d{4}-\d{2}-\d{2}$/', $target_day) ? ' · ' . date_i18n('d/m/Y', strtotime($target_day)) : '';
+
+    $task_id = eventosapp_task_queue_create([
+        'task_type'=>$task_type,
+        'task_group'=>'massive',
+        'channel'=>$channel,
+        'title'=>($regenerate_all ? 'Regenerar doble autenticación · ' : 'Doble autenticación masiva · ') . get_the_title($event_id) . $date_label,
+        'event_id'=>$event_id,
+        'event_date'=>$target_day ?: null,
+        'status'=>'queued',
+        'next_run_at'=>current_time('mysql', true),
+        'total_items'=>0,
+        'payload'=>[
+            'event_id'=>$event_id,
+            'target_day'=>$target_day,
+            'prepared'=>0,
+            'source'=>'double_auth_manual_queue',
+            'dispatch_method'=>'masivo',
+            'regenerate_all_days'=>$regenerate_all ? 1 : 0,
+            'channels'=>$channels,
+            'whatsapp_template_id'=>$template_id,
+            'auth_mode'=>get_post_meta($event_id, '_eventosapp_ticket_double_auth_mode', true) ?: 'first_day',
+        ],
+        'notification_email'=>eventosapp_task_queue_current_notification_email(),
+        'created_by'=>get_current_user_id(),
+    ]);
+
+    if ( is_wp_error($task_id) ) return $task_id;
+
+    $key = $regenerate_all ? 'regenerate' : 'massive';
+    $manual_map[$key] = [
+        'task_id'=>absint($task_id),
+        'created_at'=>current_time('mysql'),
+        'target_day'=>$target_day,
+    ];
+    update_post_meta($event_id, '_eventosapp_double_auth_manual_queue_tasks', $manual_map);
+    update_post_meta($event_id, '_eventosapp_double_auth_last_queue_task_id', absint($task_id));
+
+    if ( function_exists('eventosapp_task_queue_kick') ) eventosapp_task_queue_kick();
+    return absint($task_id);
+}
 
 /**
  * Crea una tarea manual y responde con la forma esperada por la UI histórica.
@@ -1046,11 +1304,159 @@ function eventosapp_task_queue_sync_attendance_schedule($event_id, $config = nul
     }
 }
 
+
+/**
+ * Sincroniza todas las fechas programadas de Doble Autenticación con la cola.
+ * El mapa se guarda en el evento para permitir cancelar/reprogramar sin duplicar.
+ */
+function eventosapp_task_queue_sync_double_auth_schedule($event_id) {
+    static $syncing = [];
+    $event_id = absint($event_id);
+    if ( ! $event_id || ! empty($syncing[$event_id]) || ! function_exists('eventosapp_task_queue_create') ) return false;
+    $syncing[$event_id] = true;
+
+    try {
+        $old_map = get_post_meta($event_id, '_eventosapp_double_auth_queue_tasks', true);
+        $old_map = is_array($old_map) ? $old_map : [];
+        $enabled = get_post_meta($event_id, '_eventosapp_ticket_double_auth_enabled', true) === '1';
+        $plan = $enabled && function_exists('eventosapp_double_auth_schedule_plan')
+            ? eventosapp_double_auth_schedule_plan($event_id)
+            : [];
+        $next_map = [];
+
+        if ( ! $enabled || empty($plan) ) {
+            foreach ( $old_map as $old ) {
+                $task_id = absint(is_array($old) ? ($old['task_id'] ?? 0) : 0);
+                $task = $task_id ? eventosapp_task_queue_get($task_id) : null;
+                if ( $task && ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+                    eventosapp_task_queue_cancel($task_id, 'La programación de Doble Autenticación fue desactivada o quedó sin fecha válida.');
+                }
+            }
+            delete_post_meta($event_id, '_eventosapp_double_auth_queue_tasks');
+            if ( function_exists('eventosapp_double_auth_clear_legacy_cron') ) eventosapp_double_auth_clear_legacy_cron($event_id);
+            return true;
+        }
+
+        $channel = function_exists('eventosapp_double_auth_queue_channel') ? eventosapp_double_auth_queue_channel($event_id) : 'email';
+        $channels = function_exists('eventosapp_double_auth_event_channels') ? eventosapp_double_auth_event_channels($event_id) : ['email'=>true,'whatsapp'=>false];
+        $template_id = function_exists('eventosapp_double_auth_whatsapp_template_id') ? eventosapp_double_auth_whatsapp_template_id($event_id) : '';
+        $mode = get_post_meta($event_id, '_eventosapp_ticket_double_auth_mode', true) ?: 'first_day';
+
+        foreach ( $plan as $item ) {
+            $key = sanitize_key((string)($item['key'] ?? ''));
+            $day = sanitize_text_field((string)($item['day'] ?? ''));
+            $timestamp = absint($item['timestamp'] ?? 0);
+            if ( $key === '' || ! $timestamp ) continue;
+
+            if ( $day !== '' && function_exists('eventosapp_is_day_code_sent') && eventosapp_is_day_code_sent($event_id, $day) ) {
+                continue;
+            }
+
+            $signature = md5(wp_json_encode([
+                'event_id'=>$event_id,'key'=>$key,'day'=>$day,'timestamp'=>$timestamp,'mode'=>$mode,
+                'channels'=>$channels,'template_id'=>$template_id,
+            ]));
+            $old = is_array($old_map[$key] ?? null) ? $old_map[$key] : [];
+            $old_task_id = absint($old['task_id'] ?? 0);
+            $old_task = $old_task_id ? eventosapp_task_queue_get($old_task_id) : null;
+
+            if ( $old_task && ! in_array($old_task['status'], eventosapp_task_queue_terminal_statuses(), true) && hash_equals((string)($old['signature'] ?? ''), $signature) ) {
+                eventosapp_task_queue_store_schedule_context($old_task_id, $event_id, $timestamp);
+                eventosapp_task_queue_reconcile_scheduled_task($old_task_id);
+                $next_map[$key] = [
+                    'task_id'=>$old_task_id,'signature'=>$signature,'timestamp'=>$timestamp,'day'=>$day,
+                ];
+                continue;
+            }
+
+            if ( $old_task && ! in_array($old_task['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+                eventosapp_task_queue_cancel($old_task_id, 'La programación de Doble Autenticación fue reemplazada por una nueva configuración.');
+            }
+
+            if ( eventosapp_task_queue_timestamp_is_previous_event_date($timestamp, $event_id) ) {
+                continue;
+            }
+
+            $date_label = $day && preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) ? ' · ' . date_i18n('d/m/Y', strtotime($day)) : '';
+            $payload = array_merge([
+                'event_id'=>$event_id,
+                'target_day'=>$day,
+                'schedule_key'=>$key,
+                'prepared'=>0,
+                'signature'=>$signature,
+                'source'=>'double_auth_schedule',
+                'channels'=>$channels,
+                'whatsapp_template_id'=>$template_id,
+                'auth_mode'=>$mode,
+            ], eventosapp_task_queue_schedule_context($event_id, $timestamp));
+
+            $task_id = eventosapp_task_queue_create([
+                'task_type'=>'double_auth_scheduled','task_group'=>'scheduled','channel'=>$channel,
+                'title'=>'Doble autenticación · ' . get_the_title($event_id) . $date_label,
+                'event_id'=>$event_id,
+                'event_date'=>$day ?: null,
+                'scheduled_at'=>$timestamp,'next_run_at'=>$timestamp,'status'=>'scheduled',
+                'total_items'=>0,'payload'=>$payload,
+                'notification_email'=>eventosapp_task_queue_current_notification_email(),
+                'created_by'=>get_current_user_id(),
+            ]);
+
+            if ( ! is_wp_error($task_id) ) {
+                $next_map[$key] = [
+                    'task_id'=>absint($task_id),'signature'=>$signature,'timestamp'=>$timestamp,'day'=>$day,
+                ];
+            }
+        }
+
+        foreach ( $old_map as $key => $old ) {
+            if ( isset($next_map[$key]) ) continue;
+            $task_id = absint(is_array($old) ? ($old['task_id'] ?? 0) : 0);
+            $task = $task_id ? eventosapp_task_queue_get($task_id) : null;
+            if ( $task && ! in_array($task['status'], eventosapp_task_queue_terminal_statuses(), true) ) {
+                eventosapp_task_queue_cancel($task_id, 'La fecha de Doble Autenticación fue eliminada, sustituida o ya se encuentra procesada.');
+            }
+        }
+
+        update_post_meta($event_id, '_eventosapp_double_auth_queue_tasks', $next_map);
+        if ( function_exists('eventosapp_double_auth_clear_legacy_cron') ) eventosapp_double_auth_clear_legacy_cron($event_id);
+        return true;
+    } finally {
+        unset($syncing[$event_id]);
+    }
+}
+
+/** Activa la tarea programada correspondiente a un día cuando un hook heredado despierta. */
+function eventosapp_task_queue_activate_double_auth_due_task($event_id, $day = '') {
+    $event_id = absint($event_id);
+    $day = sanitize_text_field((string)$day);
+    $map = get_post_meta($event_id, '_eventosapp_double_auth_queue_tasks', true);
+    $map = is_array($map) ? $map : [];
+
+    foreach ( $map as $row ) {
+        if ( ! is_array($row) ) continue;
+        if ( sanitize_text_field((string)($row['day'] ?? '')) !== $day ) continue;
+        $task_id = absint($row['task_id'] ?? 0);
+        if ( $task_id ) return eventosapp_task_queue_activate_due_task($task_id);
+    }
+    return false;
+}
+
+/** Agrupa cambios de metadatos de doble autenticación para sincronizar una sola vez al final de la petición. */
+function eventosapp_task_queue_defer_double_auth_sync($event_id) {
+    $event_id = absint($event_id);
+    if ( ! $event_id || get_post_type($event_id) !== 'eventosapp_event' ) return;
+    if ( ! isset($GLOBALS['eventosapp_double_auth_sync_pending']) || ! is_array($GLOBALS['eventosapp_double_auth_sync_pending']) ) {
+        $GLOBALS['eventosapp_double_auth_sync_pending'] = [];
+    }
+    $GLOBALS['eventosapp_double_auth_sync_pending'][$event_id] = true;
+}
+
 add_action('save_post_eventosapp_event', function($post_id) {
     if ( wp_is_post_revision($post_id) || (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) ) return;
     eventosapp_task_queue_sync_email_reminder($post_id);
     eventosapp_task_queue_sync_ticket_reminders($post_id);
     eventosapp_task_queue_sync_attendance_schedule($post_id);
+    eventosapp_task_queue_sync_double_auth_schedule($post_id);
 }, 280, 1);
 
 add_action('updated_post_meta', function($meta_id, $post_id, $meta_key, $value) {
@@ -1063,6 +1469,37 @@ add_action('added_post_meta', function($meta_id, $post_id, $meta_key, $value) {
         eventosapp_task_queue_sync_attendance_schedule($post_id, $value);
     }
 }, 30, 4);
+
+
+$eventosapp_double_auth_schedule_meta_keys = [
+    '_eventosapp_ticket_double_auth_enabled',
+    '_eventosapp_double_auth_scheduled_datetime',
+    '_eventosapp_ticket_double_auth_mode',
+    '_eventosapp_double_auth_followup_amount',
+    '_eventosapp_double_auth_followup_unit',
+    '_eventosapp_double_auth_followup_time',
+    '_eventosapp_double_auth_send_email',
+    '_eventosapp_double_auth_send_whatsapp',
+    '_eventosapp_double_auth_whatsapp_template_id',
+];
+
+add_action('updated_post_meta', function($meta_id, $post_id, $meta_key, $value) use ($eventosapp_double_auth_schedule_meta_keys) {
+    if ( in_array($meta_key, $eventosapp_double_auth_schedule_meta_keys, true) ) eventosapp_task_queue_defer_double_auth_sync($post_id);
+}, 35, 4);
+add_action('added_post_meta', function($meta_id, $post_id, $meta_key, $value) use ($eventosapp_double_auth_schedule_meta_keys) {
+    if ( in_array($meta_key, $eventosapp_double_auth_schedule_meta_keys, true) ) eventosapp_task_queue_defer_double_auth_sync($post_id);
+}, 35, 4);
+add_action('deleted_post_meta', function($meta_ids, $post_id, $meta_key, $meta_value) use ($eventosapp_double_auth_schedule_meta_keys) {
+    if ( in_array($meta_key, $eventosapp_double_auth_schedule_meta_keys, true) ) eventosapp_task_queue_defer_double_auth_sync($post_id);
+}, 35, 4);
+
+add_action('shutdown', function() {
+    $pending = isset($GLOBALS['eventosapp_double_auth_sync_pending']) && is_array($GLOBALS['eventosapp_double_auth_sync_pending'])
+        ? array_keys($GLOBALS['eventosapp_double_auth_sync_pending'])
+        : [];
+    foreach ( $pending as $event_id ) eventosapp_task_queue_sync_double_auth_schedule(absint($event_id));
+    $GLOBALS['eventosapp_double_auth_sync_pending'] = [];
+}, 20);
 
 /**
  * Los hooks cron históricos quedan como disparadores de respaldo. En vez de
@@ -1097,6 +1534,24 @@ add_action('init', function() {
             if ( $task_id ) eventosapp_task_queue_activate_due_task($task_id);
         }, 10, 2);
     }
+
+    // Hooks históricos de Doble Autenticación: se mantienen como despertadores,
+    // pero el envío real siempre se ejecuta mediante Cola y Tareas.
+    remove_action('eventosapp_send_auth_codes_scheduled', 'eventosapp_cron_send_auth_codes', 10);
+    add_action('eventosapp_send_auth_codes_scheduled', function($event_id) {
+        eventosapp_task_queue_sync_double_auth_schedule($event_id);
+        $mode = get_post_meta($event_id, '_eventosapp_ticket_double_auth_mode', true) ?: 'first_day';
+        $days = function_exists('eventosapp_double_auth_event_days') ? eventosapp_double_auth_event_days($event_id) : [];
+        $day = ($mode === 'all_days' && ! empty($days)) ? (string)$days[0] : '';
+        eventosapp_task_queue_activate_double_auth_due_task($event_id, $day);
+    }, 10, 1);
+
+    remove_action('eventosapp_send_auth_codes_for_specific_day', 'eventosapp_cron_send_auth_codes_specific_day', 10);
+    add_action('eventosapp_send_auth_codes_for_specific_day', function($event_id, $day) {
+        eventosapp_task_queue_sync_double_auth_schedule($event_id);
+        eventosapp_task_queue_activate_double_auth_due_task($event_id, sanitize_text_field((string)$day));
+    }, 10, 2);
+
 }, 60);
 
 /**
@@ -1146,6 +1601,39 @@ add_action('eventosapp_task_queue_completed', function($task_id, $task) {
             update_post_meta($event_id, '_eventosapp_attendance_confirmation_schedule', $config);
         }
     }
+
+    if ( in_array($task['task_type'], ['double_auth_scheduled','double_auth_massive','double_auth_regenerate'], true) && $event_id ) {
+        $payload = is_array($task['payload'] ?? null) ? $task['payload'] : [];
+        $target_day = sanitize_text_field((string)($payload['target_day'] ?? ''));
+        $total = absint($task['total_items']);
+        $success = absint($task['success_items']);
+        $failed = absint($task['error_items']);
+
+        $was_noop = ! empty($payload['skip_reason']);
+        if ( ! $was_noop ) {
+            if ( $target_day !== '' && function_exists('eventosapp_log_mass_send_for_day') ) {
+                eventosapp_log_mass_send_for_day($event_id, $target_day, $total, $success, $failed);
+            } elseif ( function_exists('eventosapp_log_mass_send') ) {
+                eventosapp_log_mass_send($event_id, $total, $success, $failed);
+            }
+        }
+
+        // Conserva el comportamiento histórico: los envíos programados y el
+        // masivo normal cuentan como día enviado. La regeneración de seguridad
+        // no cambia ese registro administrativo.
+        if ( in_array($task['task_type'], ['double_auth_scheduled','double_auth_massive'], true) ) {
+            $mark_day = $target_day;
+            if ( $mark_day === '' && function_exists('eventosapp_double_auth_event_days') ) {
+                $days = eventosapp_double_auth_event_days($event_id);
+                $mark_day = ! empty($days) ? (string)$days[0] : '';
+            }
+            if ( $mark_day !== '' && function_exists('eventosapp_mark_day_as_sent') ) eventosapp_mark_day_as_sent($event_id, $mark_day);
+        }
+
+        update_post_meta($event_id, '_eventosapp_double_auth_last_queue_task_id', absint($task_id));
+        update_post_meta($event_id, '_eventosapp_double_auth_last_queue_finished_at', current_time('mysql'));
+    }
+
 }, 10, 2);
 
 /**
@@ -1156,7 +1644,7 @@ function eventosapp_task_queue_migrate_existing_schedules() {
     global $wpdb;
     if ( ! function_exists('eventosapp_task_queue_create') ) return;
 
-    $version = '2026.07.27.3';
+    $version = '2026.08.08.1';
     $done_version = get_option('eventosapp_task_queue_schedule_migration_version', '');
     $cursor = absint(get_option('eventosapp_task_queue_schedule_migration_cursor', 0));
 
@@ -1172,6 +1660,7 @@ function eventosapp_task_queue_migrate_existing_schedules() {
             eventosapp_task_queue_sync_email_reminder($event_id);
             eventosapp_task_queue_sync_ticket_reminders($event_id);
             eventosapp_task_queue_sync_attendance_schedule($event_id);
+            eventosapp_task_queue_sync_double_auth_schedule($event_id);
             $cursor = max($cursor, $event_id);
         }
 
