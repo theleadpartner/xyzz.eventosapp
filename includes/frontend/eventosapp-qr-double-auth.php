@@ -217,6 +217,52 @@ if ( ! function_exists( 'eventosapp_qr_double_auth_find_ticket' ) ) {
     }
 }
 
+
+
+/**
+ * Rate limit de intentos de segundo factor por ticket y operador.
+ * Evita fuerza bruta sin bloquear globalmente al asistente para otros puestos.
+ */
+if ( ! function_exists( 'eventosapp_qr_double_auth_attempt_state' ) ) {
+    function eventosapp_qr_double_auth_attempt_state( $ticket_id, $user_id = 0 ) {
+        $ticket_id = absint( $ticket_id );
+        $user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+        $key = 'evapp_da_try_' . md5( $ticket_id . '|' . $user_id );
+        $state = get_transient( $key );
+        $state = is_array( $state ) ? $state : [ 'count' => 0, 'locked_until' => 0 ];
+        $state['key'] = $key;
+        $state['count'] = absint( $state['count'] ?? 0 );
+        $state['locked_until'] = absint( $state['locked_until'] ?? 0 );
+        return $state;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_qr_double_auth_record_failed_attempt' ) ) {
+    function eventosapp_qr_double_auth_record_failed_attempt( $ticket_id, $user_id = 0 ) {
+        $state = eventosapp_qr_double_auth_attempt_state( $ticket_id, $user_id );
+        $state['count']++;
+
+        if ( $state['count'] >= 8 ) {
+            $state['locked_until'] = time() + ( 5 * MINUTE_IN_SECONDS );
+        }
+
+        set_transient(
+            $state['key'],
+            [ 'count' => $state['count'], 'locked_until' => $state['locked_until'] ],
+            10 * MINUTE_IN_SECONDS
+        );
+        return $state;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_qr_double_auth_clear_attempts' ) ) {
+    function eventosapp_qr_double_auth_clear_attempts( $ticket_id, $user_id = 0 ) {
+        $state = eventosapp_qr_double_auth_attempt_state( $ticket_id, $user_id );
+        delete_transient( $state['key'] );
+    }
+}
+
+
 // ============================================================
 // SHORTCODE: QR Check-In con Doble Autenticación
 // ============================================================
@@ -1026,6 +1072,196 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
       line-height:1.45;
     }
 
+
+    /* === POPUP DE SEGUNDO FACTOR === */
+    body.evda-modal-open { overflow:hidden; }
+    .evda-auth-modal {
+      --evapp-primary:#3279bd;
+      --evapp-primary-dark:#255f96;
+      --evapp-primary-soft:#eaf4ff;
+      --evapp-surface:#ffffff;
+      --evapp-border:#dfe7f1;
+      --evapp-text:#182230;
+      --evapp-muted:#64748b;
+      --evapp-success:#16855b;
+      --evapp-success-soft:#ecfdf5;
+      --evapp-warning:#a16207;
+      --evapp-warning-soft:#fff8e6;
+      --evapp-danger:#c53a3a;
+      --evapp-danger-soft:#fff1f1;
+      position:fixed;
+      inset:0;
+      z-index:999999;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:20px;
+      font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    }
+    .evda-auth-modal.is-open { display:flex; }
+    .evda-auth-modal * { box-sizing:border-box; }
+    .evda-auth-modal-backdrop {
+      position:absolute;
+      inset:0;
+      background:rgba(15,23,42,.68);
+      -webkit-backdrop-filter:blur(4px);
+      backdrop-filter:blur(4px);
+    }
+    .evda-auth-dialog {
+      position:relative;
+      z-index:1;
+      width:min(560px,100%);
+      max-height:min(90vh,90dvh);
+      overflow:hidden;
+      display:flex;
+      flex-direction:column;
+      background:#fff;
+      color:var(--evapp-text);
+      border:1px solid rgba(255,255,255,.72);
+      border-radius:22px;
+      box-shadow:0 30px 90px rgba(15,23,42,.35);
+      animation:evdaModalIn .18s ease-out;
+    }
+    .evda-auth-modal-head {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:14px;
+      padding:17px 18px;
+      border-bottom:1px solid var(--evapp-border);
+      background:#fbfdff;
+    }
+    .evda-auth-modal-heading { display:flex;align-items:center;gap:11px;min-width:0; }
+    .evda-auth-modal-icon {
+      width:38px;height:38px;flex:0 0 38px;display:grid;place-items:center;
+      border-radius:12px;background:var(--evapp-primary-soft);color:var(--evapp-primary);
+    }
+    .evda-auth-modal-icon svg {
+      width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;
+      stroke-linecap:round;stroke-linejoin:round;
+    }
+    .evda-auth-modal-title { margin:0;font-size:16px;font-weight:850;line-height:1.2;color:var(--evapp-text); }
+    .evda-auth-modal-subtitle { margin:3px 0 0;font-size:11px;color:var(--evapp-muted); }
+    .evda-auth-modal-close {
+      width:36px;height:36px;flex:0 0 36px;display:grid;place-items:center;padding:0;
+      border:1px solid var(--evapp-border);border-radius:10px;background:#fff;color:var(--evapp-muted);
+      font:inherit;font-size:22px;line-height:1;cursor:pointer;
+    }
+    .evda-auth-modal-close:hover:not(:disabled) { color:var(--evapp-text);background:#f8fafc; }
+    .evda-auth-modal-close:disabled { opacity:.45;cursor:not-allowed; }
+    .evda-auth-modal-body { padding:18px;overflow:auto;overscroll-behavior:contain; }
+    .evda-auth-modal-foot {
+      display:flex;gap:10px;padding:14px 18px;border-top:1px solid var(--evapp-border);background:#fbfdff;
+    }
+    .evda-auth-modal-foot[hidden] { display:none!important; }
+    .evda-auth-modal-foot .evda-action-btn,
+    .evda-auth-modal .evda-action-btn {
+      min-height:46px;display:flex;align-items:center;justify-content:center;gap:8px;
+      border:1px solid transparent;border-radius:12px;padding:11px 14px;background:var(--evapp-primary);
+      color:#fff;font:inherit;font-size:13px;font-weight:800;cursor:pointer;
+      box-shadow:0 9px 20px rgba(50,121,189,.18);
+    }
+    .evda-auth-modal-foot .evda-action-btn { width:100%; }
+    .evda-auth-modal .evda-action-btn:hover:not(:disabled) { background:var(--evapp-primary-dark); }
+    .evda-auth-modal .evda-action-btn:disabled { opacity:.5;cursor:not-allowed; }
+    .evda-auth-modal .evda-action-btn.is-secondary {
+      background:#fff;border-color:var(--evapp-border);color:var(--evapp-text);box-shadow:none;
+    }
+    .evda-auth-modal .evda-verify-btn { background:var(--evapp-success);box-shadow:0 9px 20px rgba(22,133,91,.18); }
+    .evda-auth-modal .evda-cancel-btn { width:auto;background:#fff;border-color:var(--evapp-border);color:var(--evapp-text);box-shadow:none; }
+
+    .evda-auth-modal .evda-state {
+      display:flex;align-items:flex-start;gap:12px;padding:15px;border:1px solid var(--evapp-border);
+      border-radius:14px;background:#fff;
+    }
+    .evda-auth-modal .evda-state + .evapp-qr-grid,
+    .evda-auth-modal .evapp-qr-grid + .evda-auth-form,
+    .evda-auth-modal .evda-state + .evda-action-btn,
+    .evda-auth-modal .evapp-qr-grid + .evda-action-btn { margin-top:14px; }
+    .evda-auth-modal .evda-state-icon {
+      width:38px;height:38px;flex:0 0 38px;display:grid;place-items:center;border-radius:12px;font-size:18px;font-weight:900;
+    }
+    .evda-auth-modal .evda-state-copy{min-width:0}
+    .evda-auth-modal .evda-state-title{margin:0;color:var(--evapp-text);font-size:14px;font-weight:850}
+    .evda-auth-modal .evda-state-text{margin:4px 0 0;color:var(--evapp-muted);font-size:12px;line-height:1.5}
+    .evda-auth-modal .evda-state.is-success{border-color:#cfeadf;background:var(--evapp-success-soft)}
+    .evda-auth-modal .evda-state.is-success .evda-state-icon{color:var(--evapp-success);background:#d9f6e8}
+    .evda-auth-modal .evda-state.is-warning{border-color:#f1dfad;background:var(--evapp-warning-soft)}
+    .evda-auth-modal .evda-state.is-warning .evda-state-icon{color:var(--evapp-warning);background:#ffefbf}
+    .evda-auth-modal .evda-state.is-danger{border-color:#efc7c7;background:var(--evapp-danger-soft)}
+    .evda-auth-modal .evda-state.is-danger .evda-state-icon{color:var(--evapp-danger);background:#fbdada}
+    .evda-auth-modal .evda-state.is-info{border-color:#cfe3f6;background:var(--evapp-primary-soft)}
+    .evda-auth-modal .evda-state.is-info .evda-state-icon{color:var(--evapp-primary);background:#dbeeff}
+
+    .evda-auth-modal .evapp-qr-grid {
+      display:grid;grid-template-columns:minmax(110px,.44fr) minmax(0,1fr);gap:0;overflow:hidden;
+      border:1px solid var(--evapp-border);border-radius:14px;background:#fff;
+    }
+    .evda-auth-modal .evapp-qr-grid .evda-label,
+    .evda-auth-modal .evapp-qr-grid .evda-value {
+      min-width:0;padding:10px 12px;border-bottom:1px solid var(--evapp-border);
+      font-size:12px;line-height:1.45;overflow-wrap:anywhere;
+    }
+    .evda-auth-modal .evapp-qr-grid .evda-label{background:#f8fafc;color:var(--evapp-muted);font-weight:800}
+    .evda-auth-modal .evapp-qr-grid .evda-value{color:var(--evapp-text);font-weight:650}
+    .evda-auth-modal .evapp-qr-grid>:nth-last-child(-n+2){border-bottom:0}
+    .evda-auth-modal .evda-qr-type {
+      display:inline-flex;align-items:center;min-height:24px;padding:4px 8px;border-radius:999px;
+      background:var(--evapp-primary-soft);color:var(--evapp-primary-dark);font-size:11px;font-weight:800;
+    }
+
+    .evda-auth-modal .evda-auth-form {
+      margin-top:14px;padding:16px;border:1px solid #cfe3f6;border-radius:14px;background:#f8fbfe;
+    }
+    .evda-auth-modal .evda-auth-label { display:block;margin:0 0 7px;color:var(--evapp-text);font-size:13px;font-weight:850; }
+    .evda-auth-modal .evda-auth-help { margin:0 0 12px;color:var(--evapp-muted);font-size:12px;line-height:1.5; }
+    .evda-auth-modal .evda-auth-input {
+      width:100%;min-height:62px;margin:0;padding:10px 12px;border:1px solid #b9cfe3;border-radius:12px;
+      background:#fff;color:var(--evapp-text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+      font-size:28px;font-weight:850;letter-spacing:.32em;text-align:center;outline:none;
+    }
+    .evda-auth-modal .evda-auth-input:focus { border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.14); }
+    .evda-auth-modal .evda-auth-error { display:none;margin:9px 0 0;color:var(--evapp-danger);font-size:12px;font-weight:700;line-height:1.45; }
+    .evda-auth-modal .evda-auth-error.is-visible { display:block; }
+    .evda-auth-modal .evda-auth-buttons { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;margin-top:12px; }
+
+    .evda-auth-modal .evda-payment-note,
+    .evda-auth-modal .evda-inline-status {
+      margin-top:12px;padding:11px 12px;border:1px solid #cfe3f6;border-radius:11px;
+      background:var(--evapp-primary-soft);color:var(--evapp-primary-dark);font-size:12px;font-weight:700;line-height:1.5;
+    }
+    .evda-auth-modal .evda-inline-status.is-success{color:var(--evapp-success);background:var(--evapp-success-soft);border-color:#cfeadf}
+    .evda-auth-modal .evda-inline-status.is-danger{color:var(--evapp-danger);background:var(--evapp-danger-soft);border-color:#efc7c7}
+    .evda-auth-modal .evda-companion-panel {
+      margin-top:14px;padding:14px;border:1px solid var(--evapp-border);border-radius:13px;background:#fbfdff;
+    }
+    .evda-auth-modal .evda-companion-label{margin-bottom:9px;color:var(--evapp-text);font-size:12px;font-weight:850}
+    .evda-auth-modal .evda-companion-row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:9px}
+    .evda-auth-modal .evda-companion-input {
+      width:100%;min-height:44px;padding:8px 10px;border:1px solid var(--evapp-border);
+      border-radius:11px;background:#fff;color:var(--evapp-text);font:inherit;font-size:14px;font-weight:750;outline:none;
+    }
+    .evda-auth-modal .evda-companion-status{min-height:18px;margin-top:8px;color:var(--evapp-muted);font-size:12px;line-height:1.45}
+
+    @keyframes evdaModalIn {
+      from{opacity:0;transform:translateY(10px) scale(.985)}
+      to{opacity:1;transform:translateY(0) scale(1)}
+    }
+    @media (max-width:600px) {
+      .evda-auth-modal{align-items:flex-end;padding:10px}
+      .evda-auth-dialog{width:100%;max-height:92dvh;border-radius:20px 20px 14px 14px}
+      .evda-auth-modal-body{padding:15px}
+      .evda-auth-modal-head{padding:14px 15px}
+      .evda-auth-modal-foot{padding:12px 15px}
+      .evda-auth-modal .evapp-qr-grid{grid-template-columns:1fr}
+      .evda-auth-modal .evapp-qr-grid .evda-label{padding-bottom:4px;border-bottom:0;font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+      .evda-auth-modal .evapp-qr-grid .evda-value{padding-top:4px}
+      .evda-auth-modal .evda-auth-buttons{grid-template-columns:1fr}
+      .evda-auth-modal .evda-cancel-btn{width:100%}
+      .evda-auth-modal .evda-companion-row{grid-template-columns:1fr}
+    }
+
+
     @keyframes evdaPulse { 0%,100%{opacity:.45} 50%{opacity:1} }
 
     @media (max-width:900px) {
@@ -1067,7 +1303,8 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
       .evapp-double-auth-app .evda-auth-input { font-size:23px; letter-spacing:.25em; }
     }
     @media (prefers-reduced-motion:reduce) {
-      .evapp-double-auth-app * { scroll-behavior:auto!important; transition:none!important; animation:none!important; }
+      .evapp-double-auth-app *,
+      .evda-auth-modal * { scroll-behavior:auto!important; transition:none!important; animation:none!important; }
     }
     </style>
 
@@ -1175,15 +1412,36 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
             <div class="evda-panel-head">
               <div>
                 <h2 class="evda-panel-title">Validación de acceso</h2>
-                <p class="evda-panel-desc">Aquí verás el ticket, la verificación del código y el resultado final del check-in.</p>
+                <p class="evda-panel-desc">Aquí verás el estado general del proceso. La verificación del código y su respuesta se muestran en una ventana emergente.</p>
               </div>
             </div>
             <div class="evapp-qr-result" data-role="result" aria-live="polite">
-              <div class="evapp-qr-help">Activa la cámara y escanea el QR. Después solicita al asistente su código de 5 dígitos.</div>
+              <div class="evapp-qr-help">Activa la cámara y escanea el QR. Cuando el día requiera segundo factor, se abrirá automáticamente la ventana para ingresar el código.</div>
             </div>
           </section>
         </div>
       </div>
+    </div>
+
+
+    <div class="evda-auth-modal" id="<?php echo esc_attr( $instance_id ); ?>-modal" aria-hidden="true">
+      <div class="evda-auth-modal-backdrop" data-role="auth-modal-backdrop"></div>
+      <section class="evda-auth-dialog" role="dialog" aria-modal="true" aria-labelledby="<?php echo esc_attr( $instance_id ); ?>-modal-title">
+        <header class="evda-auth-modal-head">
+          <div class="evda-auth-modal-heading">
+            <span class="evda-auth-modal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 2 4 6v6c0 5.5 3.8 10.7 8 12 4.2-1.3 8-6.5 8-12V6l-8-4Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+            </span>
+            <div>
+              <h2 class="evda-auth-modal-title" id="<?php echo esc_attr( $instance_id ); ?>-modal-title">Verificación de seguridad</h2>
+              <p class="evda-auth-modal-subtitle">Doble autenticación antes de autorizar el ingreso</p>
+            </div>
+          </div>
+          <button type="button" class="evda-auth-modal-close" data-role="auth-modal-close" aria-label="Cerrar ventana">×</button>
+        </header>
+        <div class="evda-auth-modal-body" data-role="auth-modal-body"></div>
+        <footer class="evda-auth-modal-foot" data-role="auth-modal-foot" hidden></footer>
+      </section>
     </div>
 
     <script>
@@ -1209,9 +1467,14 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
       const out         = root.querySelector('[data-role="result"]');
       const vwrap       = root.querySelector('[data-role="video-wrap"]');
       const cameraState = root.querySelector('[data-role="camera-state"]');
+      const authModal   = document.getElementById(root.id + '-modal');
+      const modalBody   = authModal ? authModal.querySelector('[data-role="auth-modal-body"]') : null;
+      const modalFoot   = authModal ? authModal.querySelector('[data-role="auth-modal-foot"]') : null;
+      const modalClose  = authModal ? authModal.querySelector('[data-role="auth-modal-close"]') : null;
+      const modalBackdrop = authModal ? authModal.querySelector('[data-role="auth-modal-backdrop"]') : null;
       const ctx         = cvs ? cvs.getContext('2d', { willReadFrequently:true }) : null;
 
-      if (!btn || !video || !frame || !cvs || !ctx || !out || !vwrap || !cameraState) return;
+      if (!btn || !video || !frame || !cvs || !ctx || !out || !vwrap || !cameraState || !authModal || !modalBody || !modalFoot || !modalClose) return;
 
       const MAX_SCAN_WIDTH = 960;
       const DETECTION_INTERVAL = 90;
@@ -1225,6 +1488,8 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
       let lastAt = 0;
       let jsQrPromise = null;
       let currentTicket = null;
+      let modalBusy = false;
+      let modalPreviousFocus = null;
       let barcodeDetector = null;
 
       try {
@@ -1513,7 +1778,7 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
         });
       }
 
-      function appendPaymentReminder(ticketId){
+      function appendPaymentReminder(ticketId,target=out){
         if (!paymentReminderAvailable || !ticketId || ticketId <= 0) return;
 
         const reminder = document.createElement('button');
@@ -1521,12 +1786,12 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
         reminder.className = 'evda-action-btn';
         reminder.dataset.role = 'payment-reminder';
         reminder.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l7.89 5.26a2 2 0 0 0 2.22 0L21 8"></path><rect x="3" y="5" width="18" height="14" rx="2"></rect></svg><span>Enviar enlace de pago por correo</span>';
-        out.appendChild(reminder);
+        target.appendChild(reminder);
 
         const status = document.createElement('div');
         status.className = 'evda-inline-status';
         status.hidden = true;
-        out.appendChild(status);
+        target.appendChild(status);
 
         reminder.addEventListener('click',()=>sendPaymentReminder(ticketId, reminder, status));
       }
@@ -1567,9 +1832,9 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
           });
       }
 
-      function appendCompanionsPanel(ticketId){
+      function appendCompanionsPanel(ticketId,target=out){
         if (!companionsEndpointAvailable || !ticketId || ticketId <= 0) return;
-        if (out.querySelector('[data-role="companions-panel"]')) return;
+        if (target.querySelector('[data-role="companions-panel"]')) return;
 
         const panel = document.createElement('div');
         panel.className = 'evda-companion-panel';
@@ -1579,7 +1844,7 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
           + '<input type="number" inputmode="numeric" class="evda-companion-input" min="0" max="500" step="1" value="0" aria-label="Cantidad de acompañantes">'
           + '<button type="button" class="evda-action-btn"><span>Registrar acompañantes</span></button>'
           + '</div><div class="evda-companion-status" aria-live="polite"></div>';
-        out.appendChild(panel);
+        target.appendChild(panel);
 
         const input = panel.querySelector('input');
         const action = panel.querySelector('button');
@@ -1656,17 +1921,116 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
         smoothScrollTo(out);
       }
 
-      function showAuthForm(ticket, errorMessage=''){
-        currentTicket = ticket;
+      function openModal(){
+        modalPreviousFocus = document.activeElement;
+        authModal.classList.add('is-open');
+        authModal.setAttribute('aria-hidden','false');
+        document.body.classList.add('evda-modal-open');
+      }
 
-        let html = renderState('success','Ticket encontrado','El QR corresponde al evento activo. Verifica ahora el código de seguridad del asistente.');
-        html += renderTicketGrid(ticket);
-        if (ticket.payment_message) {
-          html += '<div class="evda-payment-note">'+safeValue(ticket.payment_message,'')+'</div>';
+      function closeModal(resetTicket=true, announceCancel=false){
+        if (modalBusy) return;
+        const hadTicket = !!currentTicket;
+
+        authModal.classList.remove('is-open');
+        authModal.setAttribute('aria-hidden','true');
+        document.body.classList.remove('evda-modal-open');
+        modalBody.innerHTML = '';
+        modalFoot.innerHTML = '';
+        modalFoot.hidden = true;
+
+        if (resetTicket) currentTicket = null;
+
+        if (announceCancel && hadTicket) {
+          setOutput(renderState('info','Verificación cerrada','El ticket no fue modificado. Puedes escanear otro QR.'));
+          injectScanAgainButton();
         }
+
+        if (modalPreviousFocus && typeof modalPreviousFocus.focus === 'function') {
+          try { modalPreviousFocus.focus({preventScroll:true}); } catch(e) {}
+        }
+      }
+
+      function setModalBusy(on){
+        modalBusy = !!on;
+        modalClose.disabled = modalBusy;
+
+        authModal.querySelectorAll('button,input').forEach(el=>{
+          if (el === modalClose) return;
+          if (on) el.dataset.evdaWasDisabled = el.disabled ? '1' : '0';
+          if (on) {
+            el.disabled = true;
+          } else {
+            if (el.dataset.evdaWasDisabled !== '1') el.disabled = false;
+            delete el.dataset.evdaWasDisabled;
+          }
+        });
+      }
+
+      async function scanAnotherFromModal(){
+        modalBusy = false;
+        closeModal(true,false);
+        setOutput('<div class="evapp-qr-help">Preparando la cámara para el siguiente asistente…</div>');
+        btn.disabled = true;
+        setCameraState('Preparando cámara','busy');
+
+        try {
+          await ensureJsQR();
+          const started = await start();
+          if (started) setOutput('<div class="evapp-qr-help">Cámara activa. Centra el QR dentro del marco.</div>');
+        } catch(e) {
+          setOutput(renderState('danger','No se pudo preparar el lector',e && e.message ? e.message : 'Vuelve a intentar.'));
+          injectScanAgainButton();
+        } finally {
+          btn.disabled = !moduleEnabled || !dayIsValid;
+        }
+      }
+
+      function setModalFooter(mode='scan-again'){
+        modalFoot.innerHTML = '';
+        modalFoot.hidden = false;
+
+        if (mode === 'scan-again') {
+          const scanBtn = document.createElement('button');
+          scanBtn.type = 'button';
+          scanBtn.className = 'evda-action-btn';
+          scanBtn.textContent = 'Cerrar y escanear otro QR';
+          scanBtn.addEventListener('click',scanAnotherFromModal);
+          modalFoot.appendChild(scanBtn);
+          return;
+        }
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'evda-action-btn is-secondary';
+        closeBtn.textContent = 'Cerrar';
+        closeBtn.addEventListener('click',()=>closeModal(true,false));
+        modalFoot.appendChild(closeBtn);
+      }
+
+      function openModalProcessing(ticket, title='Procesando', text='Estamos verificando la información antes de confirmar el ingreso.'){
+        currentTicket = ticket;
+        modalBusy = false;
+        modalFoot.hidden = true;
+        modalFoot.innerHTML = '';
+        modalBody.innerHTML = renderState('info',title,text) + renderTicketGrid(ticket);
+        if (!authModal.classList.contains('is-open')) openModal();
+        setModalBusy(true);
+      }
+
+      function openAuthModal(ticket, errorMessage=''){
+        currentTicket = ticket;
+        modalBusy = false;
+        modalFoot.hidden = true;
+        modalFoot.innerHTML = '';
+
+        let html = renderState('success','QR validado','El ticket corresponde al evento activo. Ingresa el código de 5 dígitos para completar el acceso.');
+        html += renderTicketGrid(ticket);
+        if (ticket.payment_message) html += '<div class="evda-payment-note">'+safeValue(ticket.payment_message,'')+'</div>';
+
         html += '<div class="evda-auth-form">'
           + '<label class="evda-auth-label" for="'+root.id+'-auth-code">Código de verificación</label>'
-          + '<p class="evda-auth-help" id="'+root.id+'-auth-help">Solicita al asistente el código de 5 dígitos recibido para este evento o para la fecha de hoy.</p>'
+          + '<p class="evda-auth-help" id="'+root.id+'-auth-help">Solicita al asistente el código recibido por correo o WhatsApp para la fecha correspondiente.</p>'
           + '<input type="text" id="'+root.id+'-auth-code" class="evda-auth-input" placeholder="00000" maxlength="5" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="done" aria-describedby="'+root.id+'-auth-help '+root.id+'-auth-error">'
           + '<div class="evda-auth-error'+(errorMessage ? ' is-visible' : '')+'" id="'+root.id+'-auth-error" role="alert">'+safeValue(errorMessage,'')+'</div>'
           + '<div class="evda-auth-buttons">'
@@ -1674,19 +2038,17 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
           + '<button type="button" class="evda-action-btn evda-cancel-btn" data-role="cancel-auth"><span>Cancelar</span></button>'
           + '</div></div>';
 
-        setOutput(html);
-        smoothScrollTo(out);
+        modalBody.innerHTML = html;
+        if (!authModal.classList.contains('is-open')) openModal();
+        setOutput(renderState('info','Segundo factor pendiente','La ventana de verificación está abierta. El ticket no se modificará hasta validar correctamente el código.'));
 
-        const input = out.querySelector('.evda-auth-input');
-        const verifyBtn = out.querySelector('[data-role="verify-code"]');
-        const cancelBtn = out.querySelector('[data-role="cancel-auth"]');
-        const errorEl = out.querySelector('.evda-auth-error');
-
+        const input = modalBody.querySelector('.evda-auth-input');
+        const verifyBtn = modalBody.querySelector('[data-role="verify-code"]');
+        const cancelBtn = modalBody.querySelector('[data-role="cancel-auth"]');
+        const errorEl = modalBody.querySelector('.evda-auth-error');
         if (!input || !verifyBtn || !cancelBtn || !errorEl) return;
 
-        setTimeout(()=>{
-          try { input.focus({preventScroll:true}); } catch(e) { input.focus(); }
-        },100);
+        setTimeout(()=>{ try { input.focus({preventScroll:true}); } catch(e) { input.focus(); } },80);
 
         input.addEventListener('input',(e)=>{
           e.target.value = e.target.value.replace(/[^0-9]/g,'').slice(0,5);
@@ -1709,19 +2071,113 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
             input.focus();
             return;
           }
-          verifyBtn.disabled = true;
-          cancelBtn.disabled = true;
+
+          setModalBusy(true);
           verifyBtn.querySelector('span').textContent = 'Verificando…';
           verifyAndCheckin(ticket,code);
         });
 
         cancelBtn.addEventListener('click',()=>{
-          currentTicket = null;
-          setOutput(renderState('info','Operación cancelada','El ticket no fue modificado. Puedes escanear otro QR cuando estés listo.'));
-          injectScanAgainButton();
-          smoothScrollTo(out);
+          modalBusy = false;
+          closeModal(true,true);
         });
       }
+
+      function showModalAuthError(message){
+        setModalBusy(false);
+        const input = modalBody.querySelector('.evda-auth-input');
+        const verifyBtn = modalBody.querySelector('[data-role="verify-code"]');
+        const errorEl = modalBody.querySelector('.evda-auth-error');
+
+        if (verifyBtn && verifyBtn.querySelector('span')) verifyBtn.querySelector('span').textContent = 'Verificar y aprobar Check-In';
+        if (errorEl) {
+          errorEl.textContent = message;
+          errorEl.classList.add('is-visible');
+        }
+        if (input) {
+          input.value = '';
+          try { input.focus({preventScroll:true}); } catch(e) { input.focus(); }
+        }
+      }
+
+      function showModalFinal(ticket, data, type='success', title='Check-in confirmado', text='El ingreso quedó registrado correctamente.'){
+        setModalBusy(false);
+
+        let html = renderState(type,title,text);
+        const qrBadge = '<span class="evda-qr-type">'+safeValue(data.qr_type_label || ticket.qr_type_label || 'QR')+'</span>';
+        html += '<div class="evapp-qr-grid">';
+        html += row('Nombre',data.full_name || ticket.nombre);
+        html += row('Evento',data.event_name || <?php echo wp_json_encode( $event_name ); ?>);
+        html += row('Fecha del check-in',data.checkin_date_label || data.checkin_date);
+        html += row('Medio QR',qrBadge,true);
+        if (data.empresa) html += row('Empresa',data.empresa);
+        if (data.cargo) html += row('Cargo',data.cargo);
+        html += row('Localidad',data.localidad || ticket.localidad);
+        html += '</div>';
+
+        if (data.payment_message) html += '<div class="evda-payment-note">'+safeValue(data.payment_message,'')+'</div>';
+
+        modalBody.innerHTML = html;
+        if (!authModal.classList.contains('is-open')) openModal();
+
+        if (data.acompanantes_enabled && !data.already_checked) {
+          appendCompanionsPanel(parseInt(data.ticket_id || ticket.id || '0',10) || 0, modalBody);
+        }
+
+        setModalFooter('scan-again');
+        injectScanAgainButton();
+        currentTicket = null;
+        setOutput(renderState(type,title,text));
+      }
+
+      function showModalFailure(ticket, title, message, paymentRequired=false){
+        setModalBusy(false);
+        modalBody.innerHTML = renderState('danger',title,message) + renderTicketGrid(ticket);
+        if (!authModal.classList.contains('is-open')) openModal();
+
+        if (paymentRequired) {
+          appendPaymentReminder(parseInt(ticket.id || '0',10) || 0, modalBody);
+        }
+
+        setModalFooter('scan-again');
+        setOutput(renderState('danger',title,message));
+        injectScanAgainButton();
+      }
+
+      modalClose.addEventListener('click',()=>closeModal(true,true));
+      if (modalBackdrop) modalBackdrop.addEventListener('click',()=>closeModal(true,true));
+
+      document.addEventListener('keydown',(e)=>{
+        if (!authModal.classList.contains('is-open')) return;
+
+        if (e.key === 'Escape' && !modalBusy) {
+          closeModal(true,true);
+          return;
+        }
+
+        if (e.key === 'Tab') {
+          const focusables = Array.from(authModal.querySelectorAll(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+          )).filter(el=>el.offsetParent !== null);
+
+          if (!focusables.length) {
+            e.preventDefault();
+            modalClose.focus();
+            return;
+          }
+
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      });
 
       function onScan(data){
         const now = Date.now();
@@ -1774,7 +2230,13 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
               return;
             }
 
-            showAuthForm(ticket);
+            if (ticket.auth_required === false) {
+              openModalProcessing(ticket,'Confirmando acceso','Este día no requiere segundo factor. Estamos registrando el check-in con las reglas del evento.');
+              verifyAndCheckin(ticket,'');
+              return;
+            }
+
+            openAuthModal(ticket);
           })
           .catch(()=>{
             setCameraState('Cámara inactiva');
@@ -1785,15 +2247,25 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
       }
 
       function verifyAndCheckin(ticket, code){
-        setOutput(renderState('info','Verificando código','Estamos validando el código y las reglas de acceso antes de confirmar el check-in.'));
-        smoothScrollTo(out);
+        if (!authModal.classList.contains('is-open')) {
+          openModalProcessing(ticket,'Verificando acceso','Estamos validando las reglas antes de confirmar el check-in.');
+        } else {
+          setModalBusy(true);
+          const state = modalBody.querySelector('.evda-state');
+          if (state && ticket.auth_required !== false) {
+            const title = state.querySelector('.evda-state-title');
+            const text = state.querySelector('.evda-state-text');
+            if (title) title.textContent = 'Verificando código';
+            if (text) text.textContent = 'Estamos validando el segundo factor y las reglas de acceso.';
+          }
+        }
 
         const fd = new FormData();
         fd.append('action','eventosapp_verify_and_checkin');
         fd.append('nonce',nonceVerify);
         fd.append('event_id',String(eventID));
         fd.append('ticket_id',String(ticket.id));
-        fd.append('auth_code',code);
+        fd.append('auth_code',code || '');
         fd.append('qr_type',ticket.qr_type || '');
         fd.append('qr_type_label',ticket.qr_type_label || '');
 
@@ -1804,58 +2276,35 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
               const payload = resp && resp.data && typeof resp.data === 'object' ? resp.data : {};
               const msg = responseMessage(resp,'No se pudo completar la validación.');
 
+              if (payload.auth_invalid && ticket.auth_required !== false) {
+                showModalAuthError(msg);
+                return;
+              }
+
               if (payload.payment_required) {
                 ticket.payment_required = true;
                 ticket.payment_message = msg;
-                showPaymentBlocked(ticket);
+                showModalFailure(ticket,'Check-in bloqueado',msg,true);
                 return;
               }
 
-              if (payload.auth_invalid) {
-                showAuthForm(ticket,msg);
-                return;
-              }
-
-              setOutput(renderState('danger','No se pudo completar el check-in',msg));
-              injectScanAgainButton();
-              smoothScrollTo(out);
+              showModalFailure(ticket,'No se pudo completar el check-in',msg,false);
               return;
             }
 
             const d = resp.data || {};
-            let html = d.already_checked
-              ? renderState('warning','Check-in ya confirmado','El asistente ya tenía ingreso registrado para esta fecha.')
-              : renderState('success','Check-in confirmado','El ingreso del asistente quedó registrado correctamente después de validar el código de seguridad.');
+            const type = d.already_checked ? 'warning' : 'success';
+            const title = d.already_checked ? 'Check-in ya confirmado' : 'Check-in confirmado';
+            const text = d.already_checked
+              ? 'El asistente ya tenía ingreso registrado para esta fecha.'
+              : (d.auth_required === false
+                  ? 'El ingreso quedó registrado correctamente. Este día no requería segundo factor.'
+                  : 'El ingreso quedó registrado correctamente después de validar el código de seguridad.');
 
-            const qrBadge = '<span class="evda-qr-type">'+safeValue(d.qr_type_label || ticket.qr_type_label || 'QR')+'</span>';
-            html += '<div class="evapp-qr-grid">';
-            html += row('Nombre',d.full_name || ticket.nombre);
-            html += row('Evento',d.event_name || <?php echo wp_json_encode( $event_name ); ?>);
-            html += row('Fecha del check-in',d.checkin_date_label || d.checkin_date);
-            html += row('Medio QR',qrBadge,true);
-            if (d.empresa) html += row('Empresa',d.empresa);
-            if (d.cargo) html += row('Cargo',d.cargo);
-            html += row('Localidad',d.localidad || ticket.localidad);
-            html += '</div>';
-
-            if (d.payment_message) {
-              html += '<div class="evda-payment-note">'+safeValue(d.payment_message,'')+'</div>';
-            }
-
-            setOutput(html);
-
-            if (d.acompanantes_enabled && !d.already_checked) {
-              appendCompanionsPanel(parseInt(d.ticket_id || ticket.id || '0',10) || 0);
-            }
-
-            injectScanAgainButton();
-            currentTicket = null;
-            smoothScrollTo(out);
+            showModalFinal(ticket,d,type,title,text);
           })
           .catch(()=>{
-            setOutput(renderState('danger','Error de conexión','No se pudo verificar el código. Comprueba la conexión e intenta nuevamente.'));
-            injectScanAgainButton();
-            smoothScrollTo(out);
+            showModalFailure(ticket,'Error de conexión','No se pudo verificar el acceso. Comprueba la conexión e intenta nuevamente.',false);
           });
       }
 
@@ -1884,7 +2333,11 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
         }
       });
 
-      window.addEventListener('pagehide',stop,{passive:true});
+      window.addEventListener('pagehide',()=>{
+        stop();
+        modalBusy = false;
+        if (authModal.classList.contains('is-open')) closeModal(true,false);
+      },{passive:true});
       document.addEventListener('visibilitychange',()=>{
         if (document.hidden && running) stop();
       });
@@ -1909,16 +2362,12 @@ function eventosapp_ajax_search_ticket_by_qr() {
 
     eventosapp_qr_double_auth_ajax_guard( $event_id );
 
-    if ( $qr_code === '' || ! $event_id ) {
-        wp_send_json_error( 'Datos incompletos', 400 );
-    }
+    if ( $qr_code === '' || ! $event_id ) wp_send_json_error( 'Datos incompletos', 400 );
 
     $day_context = eventosapp_qr_double_auth_day_context( $event_id );
     if ( empty( $day_context['valid'] ) ) {
         wp_send_json_error(
-            ! empty( $day_context['error'] )
-                ? $day_context['error']
-                : 'El check-in solo está permitido en las fechas del evento.',
+            ! empty( $day_context['error'] ) ? $day_context['error'] : 'El check-in solo está permitido en las fechas del evento.',
             400
         );
     }
@@ -1926,58 +2375,32 @@ function eventosapp_ajax_search_ticket_by_qr() {
     $lookup = eventosapp_qr_double_auth_find_ticket( $qr_code, $event_id );
     if ( empty( $lookup['found'] ) || empty( $lookup['ticket_id'] ) ) {
         wp_send_json_error(
-            ! empty( $lookup['error'] )
-                ? $lookup['error']
-                : 'Ticket no encontrado o no pertenece a este evento.',
+            ! empty( $lookup['error'] ) ? $lookup['error'] : 'Ticket no encontrado o no pertenece a este evento.',
             404
         );
     }
 
     $ticket_id = absint( $lookup['ticket_id'] );
-
-    if ( get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
-        wp_send_json_error( 'El QR no corresponde a un ticket válido.', 404 );
-    }
+    if ( get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) wp_send_json_error( 'El QR no corresponde a un ticket válido.', 404 );
 
     $ticket_event = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
-    if ( $ticket_event !== $event_id ) {
-        wp_send_json_error( 'El ticket no pertenece a este evento.', 403 );
-    }
+    if ( $ticket_event !== $event_id ) wp_send_json_error( 'El ticket no pertenece a este evento.', 403 );
 
-    $today = $day_context['today'];
+    $today = sanitize_text_field( (string) ( $day_context['today'] ?? '' ) );
 
-    $nombre           = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
-    $apellido         = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
-    $email            = get_post_meta( $ticket_id, '_eventosapp_asistente_email', true );
-    $localidad        = get_post_meta( $ticket_id, '_eventosapp_asistente_localidad', true );
-    $empresa          = get_post_meta( $ticket_id, '_eventosapp_asistente_empresa', true );
-    $cargo            = get_post_meta( $ticket_id, '_eventosapp_asistente_cargo', true );
-    $ticket_public_id = get_post_meta( $ticket_id, 'eventosapp_ticketID', true );
+    $status_arr = maybe_unserialize( get_post_meta( $ticket_id, '_eventosapp_checkin_status', true ) );
+    $status_arr = is_array( $status_arr ) ? $status_arr : [];
+    $checked_in = isset( $status_arr[$today] ) && in_array( $status_arr[$today], [ 'checked_in', 'checked-in' ], true );
 
-    $status_arr = get_post_meta( $ticket_id, '_eventosapp_checkin_status', true );
-    $status_arr = maybe_unserialize( $status_arr );
-    if ( ! is_array( $status_arr ) ) {
-        $status_arr = [];
-    }
-
-    $checked_in   = isset( $status_arr[ $today ] ) && $status_arr[ $today ] === 'checked_in';
-    $checkin_date = $checked_in ? date_i18n( 'd/m/Y', strtotime( $today ) ) : '';
-
-    // Mantener paridad con el Check-In QR normal: si el evento controla pagos,
-    // no se debe pedir el código de seguridad a un ticket que aún no puede ingresar.
-    $control_pago    = get_post_meta( $event_id, '_eventosapp_ticket_control_pago', true ) === '1';
+    $control_pago = get_post_meta( $event_id, '_eventosapp_ticket_control_pago', true ) === '1';
     $payment_required = false;
-    $payment_message  = '';
+    $payment_message = '';
 
     if ( $control_pago ) {
-        $estado_pago = get_post_meta( $ticket_id, '_eventosapp_estado_pago', true );
-        if ( empty( $estado_pago ) ) {
-            $estado_pago = 'no_pagado';
-        }
-
+        $estado_pago = get_post_meta( $ticket_id, '_eventosapp_estado_pago', true ) ?: 'no_pagado';
         if ( $estado_pago === 'no_pagado' ) {
             $payment_required = true;
-            $payment_message  = 'El Check-In no se puede realizar porque el ticket no ha sido pagado. Realiza el pago correspondiente para continuar.';
+            $payment_message = 'El Check-In no se puede realizar porque el ticket no ha sido pagado. Realiza el pago correspondiente para continuar.';
         } else {
             $payment_message = 'El ticket está en modo Pagado.';
         }
@@ -1986,16 +2409,22 @@ function eventosapp_ajax_search_ticket_by_qr() {
     wp_send_json_success( [
         'ticket' => [
             'id'               => $ticket_id,
-            'nombre'           => trim( $nombre . ' ' . $apellido ),
-            'email'            => $email,
-            'ticket_id'        => $ticket_public_id,
-            'localidad'        => $localidad,
-            'empresa'          => $empresa,
-            'cargo'            => $cargo,
-            'qr_type'          => isset( $lookup['type'] ) ? $lookup['type'] : 'legacy',
-            'qr_type_label'    => isset( $lookup['type_label'] ) ? $lookup['type_label'] : 'QR Legacy',
+            'nombre'           => trim(
+                get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true ) . ' ' .
+                get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true )
+            ),
+            'email'            => get_post_meta( $ticket_id, '_eventosapp_asistente_email', true ),
+            'ticket_id'        => get_post_meta( $ticket_id, 'eventosapp_ticketID', true ),
+            'localidad'        => get_post_meta( $ticket_id, '_eventosapp_asistente_localidad', true ),
+            'empresa'          => get_post_meta( $ticket_id, '_eventosapp_asistente_empresa', true ),
+            'cargo'            => get_post_meta( $ticket_id, '_eventosapp_asistente_cargo', true ),
+            'qr_type'          => isset( $lookup['type'] ) ? sanitize_key( $lookup['type'] ) : 'legacy',
+            'qr_type_label'    => isset( $lookup['type_label'] ) ? sanitize_text_field( $lookup['type_label'] ) : 'QR Legacy',
             'checked_in'       => $checked_in,
-            'checkin_date'     => $checkin_date,
+            'checkin_date'     => $checked_in ? date_i18n( 'd/m/Y', strtotime( $today ) ) : '',
+            'auth_required'    => function_exists( 'eventosapp_double_auth_requires_code_for_day' )
+                ? (bool) eventosapp_double_auth_requires_code_for_day( $event_id, $today )
+                : true,
             'payment_required' => $payment_required,
             'payment_message'  => $payment_message,
         ],
@@ -2020,63 +2449,76 @@ function eventosapp_ajax_verify_and_checkin() {
 
     eventosapp_qr_double_auth_ajax_guard( $event_id );
 
-    if ( ! $ticket_id || ! $event_id || ! preg_match( '/^\d{5}$/', $auth_code ) ) {
-        wp_send_json_error( [
-            'message'      => 'Datos incompletos o código de verificación inválido.',
-            'auth_invalid' => true,
-        ], 400 );
-    }
-
-    if ( get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) {
-        wp_send_json_error( 'Ticket inválido.', 404 );
-    }
+    if ( ! $ticket_id || ! $event_id ) wp_send_json_error( [ 'message' => 'Datos incompletos.' ], 400 );
+    if ( get_post_type( $ticket_id ) !== 'eventosapp_ticket' ) wp_send_json_error( 'Ticket inválido.', 404 );
 
     $ticket_event = absint( get_post_meta( $ticket_id, '_eventosapp_ticket_evento_id', true ) );
-    if ( $ticket_event !== $event_id ) {
-        wp_send_json_error( 'El ticket no pertenece a este evento.', 403 );
-    }
+    if ( $ticket_event !== $event_id ) wp_send_json_error( 'El ticket no pertenece a este evento.', 403 );
 
     $day_context = eventosapp_qr_double_auth_day_context( $event_id );
     if ( empty( $day_context['valid'] ) ) {
         wp_send_json_error(
-            ! empty( $day_context['error'] )
-                ? $day_context['error']
-                : 'El check-in solo está permitido en las fechas del evento.',
+            ! empty( $day_context['error'] ) ? $day_context['error'] : 'El check-in solo está permitido en las fechas del evento.',
             400
         );
     }
 
-    // Mantener paridad con el Check-In QR principal para evitar que este módulo
-    // se convierta en una vía alternativa que omita el control de pago.
-    $control_pago   = get_post_meta( $event_id, '_eventosapp_ticket_control_pago', true ) === '1';
+    $today = sanitize_text_field( (string) ( $day_context['today'] ?? '' ) );
+    $auth_required = function_exists( 'eventosapp_double_auth_requires_code_for_day' )
+        ? (bool) eventosapp_double_auth_requires_code_for_day( $event_id, $today )
+        : true;
+
+    if ( $auth_required && ! preg_match( '/^\d{5}$/', $auth_code ) ) {
+        wp_send_json_error( [
+            'message' => 'Ingresa un código de verificación válido de 5 dígitos.',
+            'auth_invalid' => true,
+        ], 400 );
+    }
+
+    // El segundo factor nunca omite el control de pago.
+    $control_pago = get_post_meta( $event_id, '_eventosapp_ticket_control_pago', true ) === '1';
     $payment_message = '';
-
     if ( $control_pago ) {
-        $estado_pago = get_post_meta( $ticket_id, '_eventosapp_estado_pago', true );
-        if ( empty( $estado_pago ) ) {
-            $estado_pago = 'no_pagado';
-        }
-
+        $estado_pago = get_post_meta( $ticket_id, '_eventosapp_estado_pago', true ) ?: 'no_pagado';
         if ( $estado_pago === 'no_pagado' ) {
             wp_send_json_error( [
-                'message'          => 'El Check-In no se puede realizar porque el ticket no ha sido pagado. Realiza el pago correspondiente para continuar.',
+                'message' => 'El Check-In no se puede realizar porque el ticket no ha sido pagado. Realiza el pago correspondiente para continuar.',
                 'payment_required' => true,
-                'ticket_id'        => $ticket_id,
+                'ticket_id' => $ticket_id,
             ], 403 );
         }
-
         $payment_message = 'El ticket está en modo Pagado.';
     }
 
-    if ( ! function_exists( 'eventosapp_validate_auth_code' ) ) {
-        wp_send_json_error( 'Sistema de autenticación no disponible.', 500 );
-    }
+    if ( $auth_required ) {
+        $attempt_state = eventosapp_qr_double_auth_attempt_state( $ticket_id );
+        if ( ! empty( $attempt_state['locked_until'] ) && $attempt_state['locked_until'] > time() ) {
+            $remaining = max( 1, $attempt_state['locked_until'] - time() );
+            wp_send_json_error( [
+                'message' => 'Se alcanzó el límite temporal de intentos para este ticket. Intenta nuevamente en ' . ceil( $remaining / 60 ) . ' minuto(s).',
+                'auth_invalid' => true,
+                'retry_after' => $remaining,
+            ], 429 );
+        }
 
-    if ( ! eventosapp_validate_auth_code( $ticket_id, $auth_code ) ) {
-        wp_send_json_error( [
-            'message'      => 'Código de verificación incorrecto. Verifica los 5 dígitos e intenta nuevamente.',
-            'auth_invalid' => true,
-        ], 403 );
+        if ( ! function_exists( 'eventosapp_validate_auth_code' ) ) wp_send_json_error( 'Sistema de autenticación no disponible.', 500 );
+
+        if ( ! eventosapp_validate_auth_code( $ticket_id, $auth_code ) ) {
+            $attempt_state = eventosapp_qr_double_auth_record_failed_attempt( $ticket_id );
+            $remaining_attempts = max( 0, 8 - absint( $attempt_state['count'] ?? 0 ) );
+            $message = 'Código de verificación incorrecto. Verifica los 5 dígitos e intenta nuevamente.';
+            if ( $remaining_attempts > 0 && $remaining_attempts <= 3 ) {
+                $message .= ' Intentos disponibles antes del bloqueo temporal: ' . $remaining_attempts . '.';
+            }
+
+            wp_send_json_error( [
+                'message' => $message,
+                'auth_invalid' => true,
+                'attempts_remaining' => $remaining_attempts,
+            ], 403 );
+        }
+
+        eventosapp_qr_double_auth_clear_attempts( $ticket_id );
     }
 
     if ( $qr_type_label === '' ) {
@@ -2091,81 +2533,76 @@ function eventosapp_ajax_verify_and_checkin() {
         }
     }
 
-    $event_tz = get_post_meta( $event_id, '_eventosapp_zona_horaria', true );
-    if ( ! $event_tz ) {
-        $event_tz = wp_timezone_string();
-        if ( ! $event_tz || $event_tz === 'UTC' ) {
-            $offset   = get_option( 'gmt_offset' );
-            $event_tz = $offset ? ( timezone_name_from_abbr( '', $offset * 3600, 0 ) ?: 'UTC' ) : 'UTC';
-        }
-    }
+    $already_checked = false;
 
-    try {
-        $dt = new DateTime( 'now', new DateTimeZone( $event_tz ) );
-    } catch ( Exception $e ) {
-        $dt = new DateTime( 'now', wp_timezone() );
-    }
-
-    $today = $day_context['today'] ?: $dt->format( 'Y-m-d' );
-
-    $status_arr = get_post_meta( $ticket_id, '_eventosapp_checkin_status', true );
-    $status_arr = maybe_unserialize( $status_arr );
-    if ( ! is_array( $status_arr ) ) {
-        $status_arr = [];
-    }
-
-    $already_checked = isset( $status_arr[ $today ] ) && $status_arr[ $today ] === 'checked_in';
-
-    if ( ! $already_checked ) {
-        $status_arr[ $today ] = 'checked_in';
-        update_post_meta( $ticket_id, '_eventosapp_checkin_status', $status_arr );
-
-        $log = get_post_meta( $ticket_id, '_eventosapp_checkin_log', true );
-        $log = maybe_unserialize( $log );
-        if ( ! is_array( $log ) ) {
-            $log = [];
-        }
-
-        $user = wp_get_current_user();
-        $log[] = [
-            'fecha'         => $dt->format( 'Y-m-d' ),
-            'hora'          => $dt->format( 'H:i:s' ),
-            'dia'           => $today,
-            'status'        => 'checked_in',
+    if ( function_exists( 'eventosapp_register_ticket_checkin' ) ) {
+        $checkin = eventosapp_register_ticket_checkin( $ticket_id, 'presencial', [
+            'day'           => $today,
             'origen'        => 'QR Doble Autenticación',
             'qr_type'       => $qr_type,
             'qr_type_label' => $qr_type_label,
-            'usuario'       => $user && $user->exists()
-                ? ( $user->display_name . ' (' . $user->user_email . ')' )
-                : 'Sistema',
-        ];
-        update_post_meta( $ticket_id, '_eventosapp_checkin_log', $log );
+        ] );
 
-        if ( function_exists( 'eventosapp_update_qr_usage_stats' ) ) {
-            eventosapp_update_qr_usage_stats( $event_id, $qr_type );
+        if ( ! is_array( $checkin ) || empty( $checkin['ok'] ) ) {
+            wp_send_json_error(
+                is_array( $checkin ) && ! empty( $checkin['message'] ) ? $checkin['message'] : 'No fue posible registrar el check-in.',
+                500
+            );
+        }
+
+        $already_checked = ! empty( $checkin['already_checked'] );
+        if ( ! empty( $checkin['day'] ) ) $today = sanitize_text_field( $checkin['day'] );
+    } else {
+        // Fallback para instalaciones antiguas sin helper central.
+        $status_arr = maybe_unserialize( get_post_meta( $ticket_id, '_eventosapp_checkin_status', true ) );
+        $status_arr = is_array( $status_arr ) ? $status_arr : [];
+        $already_checked = isset( $status_arr[$today] ) && in_array( $status_arr[$today], [ 'checked_in', 'checked-in' ], true );
+
+        if ( ! $already_checked ) {
+            $status_arr[$today] = 'checked_in';
+            update_post_meta( $ticket_id, '_eventosapp_checkin_status', $status_arr );
+
+            try {
+                $dt = new DateTime( 'now', function_exists( 'eventosapp_double_auth_event_timezone' ) ? eventosapp_double_auth_event_timezone( $event_id ) : wp_timezone() );
+            } catch ( Throwable $e ) {
+                $dt = new DateTime( 'now', wp_timezone() );
+            }
+
+            $log = maybe_unserialize( get_post_meta( $ticket_id, '_eventosapp_checkin_log', true ) );
+            $log = is_array( $log ) ? $log : [];
+            $user = wp_get_current_user();
+
+            $log[] = [
+                'fecha'         => $dt->format( 'Y-m-d' ),
+                'hora'          => $dt->format( 'H:i:s' ),
+                'dia'           => $today,
+                'status'        => 'checked_in',
+                'origen'        => 'QR Doble Autenticación',
+                'qr_type'       => $qr_type,
+                'qr_type_label' => $qr_type_label,
+                'usuario'       => $user && $user->exists() ? ( $user->display_name . ' (' . $user->user_email . ')' ) : 'Sistema',
+            ];
+            update_post_meta( $ticket_id, '_eventosapp_checkin_log', $log );
+            if ( function_exists( 'eventosapp_update_qr_usage_stats' ) ) eventosapp_update_qr_usage_stats( $event_id, $qr_type );
         }
     }
 
-    $nombre    = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
-    $apellido  = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
-    $empresa   = get_post_meta( $ticket_id, '_eventosapp_asistente_empresa', true );
-    $cargo     = get_post_meta( $ticket_id, '_eventosapp_asistente_cargo', true );
-    $localidad = get_post_meta( $ticket_id, '_eventosapp_asistente_localidad', true );
+    $nombre = get_post_meta( $ticket_id, '_eventosapp_asistente_nombre', true );
+    $apellido = get_post_meta( $ticket_id, '_eventosapp_asistente_apellido', true );
     $full_name = trim( $nombre . ' ' . $apellido );
 
-    $message = $already_checked
-        ? sprintf( 'Check-in confirmado para %s (ya había ingresado hoy anteriormente)', $full_name )
-        : sprintf( 'Check-in exitoso para %s', $full_name );
-
     wp_send_json_success( [
-        'message'              => $message,
+        'message'              => $already_checked
+            ? sprintf( 'Check-in confirmado para %s (ya había ingresado hoy anteriormente)', $full_name )
+            : sprintf( 'Check-in exitoso para %s', $full_name ),
         'already_checked'      => $already_checked,
+        'auth_required'        => $auth_required,
         'ticket_id'            => $ticket_id,
         'full_name'            => $full_name,
         'event_name'           => get_the_title( $event_id ),
-        'empresa'              => $empresa,
-        'cargo'                => $cargo,
-        'localidad'            => $localidad,
+        'empresa'              => get_post_meta( $ticket_id, '_eventosapp_asistente_empresa', true ),
+        'cargo'                => get_post_meta( $ticket_id, '_eventosapp_asistente_cargo', true ),
+        'localidad'            => get_post_meta( $ticket_id, '_eventosapp_asistente_localidad', true ),
         'checkin_date'         => $today,
         'checkin_date_label'   => date_i18n( 'D, d M Y', strtotime( $today ) ),
         'qr_type'              => $qr_type,
