@@ -1336,172 +1336,816 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
         $instance_id = 'evapp-company-monitor-' . wp_generate_uuid4();
         $nonce       = wp_create_nonce( 'eventosapp_company_checkin_monitor' );
         $ajax_url    = admin_url( 'admin-ajax.php' );
+        $dashboard_url = function_exists( 'eventosapp_get_dashboard_url' )
+            ? eventosapp_get_dashboard_url()
+            : home_url( '/' );
+        $dashboard_url = remove_query_arg( [ 'evapp', 'evapp_err', 'set' ], $dashboard_url );
+        $change_event_url = add_query_arg( [ 'evapp' => 'change_event' ], $dashboard_url );
+        $event_name = get_the_title( $event_id );
+        if ( ! $event_name ) {
+            $event_name = 'Evento #' . $event_id;
+        }
+        $event_modalidad_label = function_exists( 'eventosapp_get_event_modalidad_label' )
+            ? (string) eventosapp_get_event_modalidad_label( $event_id )
+            : '';
 
         ob_start();
         ?>
-        <div id="<?php echo esc_attr( $instance_id ); ?>" class="evapp-company-monitor" data-ajax-url="<?php echo esc_url( $ajax_url ); ?>" data-nonce="<?php echo esc_attr( $nonce ); ?>">
+        <div
+            id="<?php echo esc_attr( $instance_id ); ?>"
+            class="evapp-company-monitor"
+            data-ajax-url="<?php echo esc_url( $ajax_url ); ?>"
+            data-nonce="<?php echo esc_attr( $nonce ); ?>"
+        >
             <style>
-                .evapp-company-monitor{--evapp-company-blue:#2F73B5;--evapp-company-border:#dfe5ec;--evapp-company-muted:#667085;font-family:inherit;color:#1d2939;width:100%;max-width:100%}
-                .evapp-company-monitor *{box-sizing:border-box}
-                .evapp-company-monitor .screen-reader-text{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-                .evapp-company-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}
-                .evapp-company-header h2{margin:0 0 5px;font-size:28px;line-height:1.15}
-                .evapp-company-header p{margin:0;color:var(--evapp-company-muted)}
-                .evapp-company-refresh{border:0;border-radius:10px;background:var(--evapp-company-blue);color:#fff;padding:11px 16px;font-weight:700;cursor:pointer;white-space:nowrap;min-height:44px}
-                .evapp-company-refresh:disabled{opacity:.6;cursor:wait}
-                .evapp-company-refresh:focus-visible,.evapp-company-controls input:focus-visible,.evapp-company-controls select:focus-visible{outline:3px solid rgba(47,115,181,.25);outline-offset:2px}
-                .evapp-company-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
-                .evapp-company-kpi{min-width:0;padding:15px;border:1px solid var(--evapp-company-border);border-radius:14px;background:#fff;box-shadow:0 3px 12px rgba(16,24,40,.05)}
-                .evapp-company-kpi strong{display:block;font-size:27px;line-height:1;color:var(--evapp-company-blue);margin-bottom:7px}
-                .evapp-company-kpi span{display:block;font-size:13px;line-height:1.35;color:var(--evapp-company-muted)}
-                .evapp-company-controls{display:grid;grid-template-columns:minmax(240px,1fr) minmax(210px,280px);gap:12px;margin:14px 0}
-                .evapp-company-control{display:flex;flex-direction:column;gap:6px;min-width:0}
-                .evapp-company-control-label{font-size:12px;font-weight:700;color:#475467}
-                .evapp-company-controls input,.evapp-company-controls select{width:100%;min-width:0;min-height:44px;border:1px solid #cfd6df;border-radius:10px;padding:9px 12px;background:#fff;color:#1d2939;font:inherit}
-                .evapp-company-meta{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:8px 0 12px;color:var(--evapp-company-muted);font-size:13px}
-                .evapp-company-table-wrap{max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--evapp-company-border);border-radius:14px;background:#fff}
-                .evapp-company-table{width:100%;min-width:980px;border-collapse:collapse}
-                .evapp-company-table th,.evapp-company-table td{padding:13px 14px;border-bottom:1px solid #edf0f4;text-align:left;vertical-align:top;overflow-wrap:anywhere}
-                .evapp-company-table th{position:sticky;top:0;z-index:1;background:#f7f9fc;color:#344054;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+                .evapp-company-monitor{
+                    --evapp-primary:#3279bd;
+                    --evapp-primary-dark:#255f96;
+                    --evapp-primary-soft:#eaf4ff;
+                    --evapp-app-bg:#f5f8fc;
+                    --evapp-surface:#ffffff;
+                    --evapp-border:#dfe7f1;
+                    --evapp-text:#182230;
+                    --evapp-muted:#64748b;
+                    --evapp-success:#16855b;
+                    --evapp-success-soft:#ecfdf5;
+                    --evapp-warning:#a16207;
+                    --evapp-warning-soft:#fff8e6;
+                    --evapp-danger:#c53a3a;
+                    --evapp-danger-soft:#fff1f1;
+                    --evapp-purple:#6d4bc3;
+                    --evapp-purple-soft:#f3efff;
+                    --evapp-radius:18px;
+                    --evapp-radius-lg:26px;
+                    width:100%;
+                    max-width:1180px;
+                    margin:0 auto;
+                    color:var(--evapp-text);
+                    font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+                    line-height:1.45;
+                    box-sizing:border-box;
+                }
+                .evapp-company-monitor *,
+                .evapp-company-monitor *::before,
+                .evapp-company-monitor *::after{box-sizing:border-box}
+                .evapp-company-monitor a{text-decoration:none}
+                .evapp-company-monitor .screen-reader-text{
+                    position:absolute!important;
+                    width:1px!important;
+                    height:1px!important;
+                    padding:0!important;
+                    margin:-1px!important;
+                    overflow:hidden!important;
+                    clip:rect(0,0,0,0)!important;
+                    white-space:nowrap!important;
+                    border:0!important;
+                }
+                .evapp-company-shell{
+                    width:100%;
+                    padding:clamp(18px,3vw,36px);
+                    background:var(--evapp-app-bg);
+                    border:1px solid var(--evapp-border);
+                    border-radius:var(--evapp-radius-lg);
+                    box-shadow:0 18px 50px rgba(31,65,99,.08);
+                }
+                .evapp-company-header{
+                    display:flex;
+                    align-items:flex-start;
+                    justify-content:space-between;
+                    gap:24px;
+                    margin-bottom:22px;
+                }
+                .evapp-company-heading{min-width:0}
+                .evapp-company-eyebrow{
+                    margin:0 0 7px;
+                    color:var(--evapp-primary);
+                    font-size:12px;
+                    font-weight:800;
+                    letter-spacing:.15em;
+                    text-transform:uppercase;
+                }
+                .evapp-company-title{
+                    margin:0;
+                    color:var(--evapp-text);
+                    font-size:clamp(27px,4vw,42px);
+                    font-weight:800;
+                    line-height:1.08;
+                    letter-spacing:-.035em;
+                }
+                .evapp-company-subtitle{
+                    max-width:760px;
+                    margin:10px 0 0;
+                    color:var(--evapp-muted);
+                    font-size:15px;
+                    line-height:1.6;
+                }
+                .evapp-company-header-actions{
+                    display:flex;
+                    align-items:center;
+                    flex:0 0 auto;
+                }
+                .evapp-company-btn{
+                    min-height:44px;
+                    display:inline-flex;
+                    align-items:center;
+                    justify-content:center;
+                    gap:9px;
+                    margin:0;
+                    padding:10px 15px;
+                    border:1px solid transparent;
+                    border-radius:12px;
+                    font:inherit;
+                    font-size:14px;
+                    font-weight:750;
+                    line-height:1.15;
+                    text-align:center;
+                    cursor:pointer;
+                    transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+                    -webkit-tap-highlight-color:transparent;
+                }
+                .evapp-company-btn svg{
+                    width:18px;
+                    height:18px;
+                    flex:0 0 18px;
+                    fill:none;
+                    stroke:currentColor;
+                    stroke-width:2;
+                    stroke-linecap:round;
+                    stroke-linejoin:round;
+                }
+                .evapp-company-btn:hover:not(:disabled){transform:translateY(-1px)}
+                .evapp-company-btn:focus-visible,
+                .evapp-company-control input:focus-visible,
+                .evapp-company-control select:focus-visible{
+                    outline:3px solid rgba(50,121,189,.22);
+                    outline-offset:2px;
+                }
+                .evapp-company-btn:disabled{opacity:.55;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+                .evapp-company-btn-secondary{
+                    background:var(--evapp-surface);
+                    border-color:var(--evapp-border);
+                    color:var(--evapp-text)!important;
+                    box-shadow:0 5px 15px rgba(31,65,99,.05);
+                    white-space:nowrap;
+                }
+                .evapp-company-btn-secondary:hover:not(:disabled){
+                    border-color:#c7d7e8;
+                    color:var(--evapp-primary-dark)!important;
+                    box-shadow:0 8px 20px rgba(31,65,99,.09);
+                }
+                .evapp-company-btn-primary{
+                    background:var(--evapp-primary);
+                    border-color:var(--evapp-primary);
+                    color:#fff!important;
+                    box-shadow:0 9px 20px rgba(50,121,189,.18);
+                }
+                .evapp-company-btn-primary:hover:not(:disabled){
+                    background:var(--evapp-primary-dark);
+                    border-color:var(--evapp-primary-dark);
+                    box-shadow:0 12px 24px rgba(50,121,189,.24);
+                }
+                .evapp-company-btn-ghost{
+                    min-height:42px;
+                    background:#fff;
+                    border-color:var(--evapp-border);
+                    color:var(--evapp-muted)!important;
+                    box-shadow:none;
+                }
+                .evapp-company-btn-ghost:hover:not(:disabled){color:var(--evapp-primary-dark)!important;border-color:#c7d7e8;background:#fafdff}
+                .evapp-company-event-context{
+                    display:flex;
+                    align-items:center;
+                    justify-content:space-between;
+                    gap:16px;
+                    margin-bottom:22px;
+                    padding:16px 18px;
+                    background:var(--evapp-surface);
+                    border:1px solid var(--evapp-border);
+                    border-radius:var(--evapp-radius);
+                    box-shadow:0 8px 24px rgba(31,65,99,.045);
+                }
+                .evapp-company-event-main{min-width:0;display:flex;align-items:center;gap:13px}
+                .evapp-company-event-icon{
+                    width:44px;
+                    height:44px;
+                    flex:0 0 44px;
+                    display:grid;
+                    place-items:center;
+                    color:var(--evapp-primary);
+                    background:var(--evapp-primary-soft);
+                    border-radius:13px;
+                }
+                .evapp-company-event-icon svg{
+                    width:22px;
+                    height:22px;
+                    fill:none;
+                    stroke:currentColor;
+                    stroke-width:1.9;
+                    stroke-linecap:round;
+                    stroke-linejoin:round;
+                }
+                .evapp-company-event-copy{min-width:0}
+                .evapp-company-event-kicker{
+                    display:block;
+                    margin-bottom:3px;
+                    color:var(--evapp-muted);
+                    font-size:11px;
+                    font-weight:800;
+                    letter-spacing:.09em;
+                    text-transform:uppercase;
+                }
+                .evapp-company-event-name{
+                    display:block;
+                    overflow:hidden;
+                    color:var(--evapp-text);
+                    font-size:15px;
+                    font-weight:800;
+                    line-height:1.3;
+                    text-overflow:ellipsis;
+                    white-space:nowrap;
+                }
+                .evapp-company-event-meta{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}
+                .evapp-company-chip{
+                    min-height:30px;
+                    display:inline-flex;
+                    align-items:center;
+                    gap:7px;
+                    padding:6px 10px;
+                    border:1px solid var(--evapp-border);
+                    border-radius:999px;
+                    background:#fff;
+                    color:var(--evapp-muted);
+                    font-size:12px;
+                    font-weight:750;
+                    white-space:nowrap;
+                }
+                .evapp-company-chip-status::before{
+                    content:"";
+                    width:7px;
+                    height:7px;
+                    border-radius:50%;
+                    background:var(--evapp-success);
+                    box-shadow:0 0 0 3px rgba(22,133,91,.11);
+                }
+                .evapp-company-chip[data-state="stale"]::before{background:var(--evapp-warning);box-shadow:0 0 0 3px rgba(161,98,7,.11)}
+                .evapp-company-chip[data-state="error"]::before{background:var(--evapp-danger);box-shadow:0 0 0 3px rgba(197,58,58,.11)}
+                .evapp-company-change-event{
+                    min-height:36px;
+                    display:inline-flex;
+                    align-items:center;
+                    justify-content:center;
+                    padding:7px 11px;
+                    border:1px solid var(--evapp-border);
+                    border-radius:10px;
+                    color:var(--evapp-primary-dark)!important;
+                    background:#fff;
+                    font-size:12px;
+                    font-weight:800;
+                    white-space:nowrap;
+                    transition:border-color .16s ease,background .16s ease,transform .16s ease;
+                }
+                .evapp-company-change-event:hover{border-color:#c7d7e8;background:#fafdff;transform:translateY(-1px)}
+                .evapp-company-summary{
+                    display:grid;
+                    grid-template-columns:repeat(4,minmax(0,1fr));
+                    gap:12px;
+                    margin-bottom:18px;
+                }
+                .evapp-company-kpi{
+                    position:relative;
+                    min-width:0;
+                    overflow:hidden;
+                    padding:17px;
+                    border:1px solid var(--evapp-border);
+                    border-radius:var(--evapp-radius);
+                    background:var(--evapp-surface);
+                    box-shadow:0 7px 22px rgba(31,65,99,.045);
+                }
+                .evapp-company-kpi::after{
+                    content:"";
+                    position:absolute;
+                    right:-24px;
+                    bottom:-28px;
+                    width:86px;
+                    height:86px;
+                    border-radius:50%;
+                    background:var(--kpi-soft,var(--evapp-primary-soft));
+                    opacity:.8;
+                    pointer-events:none;
+                }
+                .evapp-company-kpi-icon{
+                    width:36px;
+                    height:36px;
+                    display:grid;
+                    place-items:center;
+                    margin-bottom:13px;
+                    border-radius:11px;
+                    color:var(--kpi-color,var(--evapp-primary));
+                    background:var(--kpi-soft,var(--evapp-primary-soft));
+                }
+                .evapp-company-kpi-icon svg{
+                    width:19px;
+                    height:19px;
+                    fill:none;
+                    stroke:currentColor;
+                    stroke-width:2;
+                    stroke-linecap:round;
+                    stroke-linejoin:round;
+                }
+                .evapp-company-kpi strong{
+                    position:relative;
+                    z-index:1;
+                    display:block;
+                    margin-bottom:6px;
+                    color:var(--evapp-text);
+                    font-size:clamp(25px,3vw,31px);
+                    font-weight:850;
+                    line-height:1;
+                    letter-spacing:-.035em;
+                }
+                .evapp-company-kpi span{
+                    position:relative;
+                    z-index:1;
+                    display:block;
+                    color:var(--evapp-muted);
+                    font-size:12px;
+                    font-weight:700;
+                    line-height:1.35;
+                }
+                .evapp-company-kpi.is-success{--kpi-color:var(--evapp-success);--kpi-soft:var(--evapp-success-soft)}
+                .evapp-company-kpi.is-purple{--kpi-color:var(--evapp-purple);--kpi-soft:var(--evapp-purple-soft)}
+                .evapp-company-kpi.is-warning{--kpi-color:var(--evapp-warning);--kpi-soft:var(--evapp-warning-soft)}
+                .evapp-company-panel{
+                    padding:clamp(14px,2vw,20px);
+                    border:1px solid var(--evapp-border);
+                    border-radius:var(--evapp-radius);
+                    background:var(--evapp-surface);
+                    box-shadow:0 8px 24px rgba(31,65,99,.045);
+                }
+                .evapp-company-toolbar{
+                    display:grid;
+                    grid-template-columns:minmax(240px,1fr) minmax(170px,220px) minmax(200px,260px) auto;
+                    gap:10px;
+                    align-items:end;
+                }
+                .evapp-company-control{display:flex;flex-direction:column;gap:7px;min-width:0}
+                .evapp-company-control-label{
+                    color:#475569;
+                    font-size:11px;
+                    font-weight:800;
+                    letter-spacing:.045em;
+                    text-transform:uppercase;
+                }
+                .evapp-company-search-wrap{position:relative}
+                .evapp-company-search-icon{
+                    position:absolute;
+                    top:50%;
+                    left:13px;
+                    width:18px;
+                    height:18px;
+                    color:#7b8ba0;
+                    transform:translateY(-50%);
+                    pointer-events:none;
+                }
+                .evapp-company-search-icon svg{display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+                .evapp-company-control input,
+                .evapp-company-control select{
+                    width:100%;
+                    min-width:0;
+                    min-height:44px;
+                    margin:0;
+                    border:1px solid #cfdae6;
+                    border-radius:12px;
+                    background:#fff;
+                    color:var(--evapp-text);
+                    font:inherit;
+                    font-size:14px;
+                    outline:none;
+                    transition:border-color .16s ease,box-shadow .16s ease;
+                }
+                .evapp-company-control input{padding:9px 13px 9px 40px}
+                .evapp-company-control select{padding:9px 34px 9px 12px}
+                .evapp-company-control input:hover,
+                .evapp-company-control select:hover{border-color:#b9c9d9}
+                .evapp-company-control input:focus,
+                .evapp-company-control select:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.10)}
+                .evapp-company-toolbar-actions{display:flex;gap:8px;align-items:center}
+                .evapp-company-meta{
+                    display:flex;
+                    justify-content:space-between;
+                    gap:12px;
+                    align-items:center;
+                    margin:16px 0 12px;
+                    padding-top:14px;
+                    border-top:1px solid #edf2f7;
+                    color:var(--evapp-muted);
+                    font-size:12px;
+                }
+                .evapp-company-results{font-weight:800;color:#475569}
+                .evapp-company-updated{display:inline-flex;align-items:center;gap:6px}
+                .evapp-company-updated::before{
+                    content:"";
+                    width:6px;
+                    height:6px;
+                    border-radius:50%;
+                    background:#94a3b8;
+                }
+                .evapp-company-table-wrap{
+                    max-width:100%;
+                    overflow:auto;
+                    -webkit-overflow-scrolling:touch;
+                    border:1px solid var(--evapp-border);
+                    border-radius:15px;
+                    background:#fff;
+                }
+                .evapp-company-table{
+                    width:100%;
+                    min-width:1040px;
+                    border-collapse:separate;
+                    border-spacing:0;
+                }
+                .evapp-company-table th,
+                .evapp-company-table td{
+                    padding:13px 14px;
+                    border-bottom:1px solid #edf2f7;
+                    text-align:left;
+                    vertical-align:top;
+                    overflow-wrap:anywhere;
+                }
+                .evapp-company-table th{
+                    position:sticky;
+                    top:0;
+                    z-index:2;
+                    background:#f8fbfe;
+                    color:#526275;
+                    font-size:10.5px;
+                    font-weight:850;
+                    text-transform:uppercase;
+                    letter-spacing:.06em;
+                    white-space:nowrap;
+                }
                 .evapp-company-table tbody tr:last-child td{border-bottom:0}
-                .evapp-company-table tbody tr:hover{background:#fbfcfe}
-                .evapp-company-rank{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:999px;background:#eef4fb;color:var(--evapp-company-blue);font-weight:800}
-                .evapp-company-name{font-weight:800;display:block;margin-bottom:4px}
+                .evapp-company-table tbody tr{transition:background .14s ease}
+                .evapp-company-table tbody tr:hover{background:#fbfdff}
+                .evapp-company-rank{
+                    display:inline-flex;
+                    align-items:center;
+                    justify-content:center;
+                    width:34px;
+                    height:34px;
+                    border-radius:11px;
+                    background:var(--evapp-primary-soft);
+                    color:var(--evapp-primary-dark);
+                    font-size:13px;
+                    font-weight:850;
+                }
+                .evapp-company-name{display:block;margin-bottom:5px;color:var(--evapp-text);font-weight:850;line-height:1.28}
+                .evapp-company-company-hint{display:block;color:var(--evapp-muted);font-size:11px;line-height:1.35}
+                .evapp-company-nit{font-weight:800;color:#334155}
                 .evapp-company-aliases{display:flex;gap:5px;flex-wrap:wrap}
-                .evapp-company-alias{display:inline-flex;max-width:100%;padding:3px 7px;border-radius:999px;background:#f2f4f7;color:#475467;font-size:11px;overflow-wrap:anywhere}
-                .evapp-company-count{display:inline-flex;min-width:42px;justify-content:center;padding:6px 10px;border-radius:999px;background:#e8f3ff;color:#175b93;font-weight:800}
-                .evapp-company-nit-warning{display:block;color:#b54708;font-size:11px;line-height:1.35;margin-top:4px}
-                .evapp-company-empty,.evapp-company-error,.evapp-company-loading{padding:28px;text-align:center;color:var(--evapp-company-muted)}
-                .evapp-company-error{color:#b42318;background:#fff6f5;border:1px solid #fecdca;border-radius:12px;margin:12px 0}
-                .evapp-company-loading{border:1px dashed var(--evapp-company-border);border-radius:12px}
+                .evapp-company-alias{
+                    display:inline-flex;
+                    max-width:100%;
+                    padding:4px 8px;
+                    border:1px solid #e8edf3;
+                    border-radius:999px;
+                    background:#f8fafc;
+                    color:#566579;
+                    font-size:10.5px;
+                    line-height:1.3;
+                    overflow-wrap:anywhere;
+                }
+                .evapp-company-count{
+                    display:inline-flex;
+                    min-width:44px;
+                    justify-content:center;
+                    padding:6px 10px;
+                    border-radius:999px;
+                    background:var(--evapp-primary-soft);
+                    color:var(--evapp-primary-dark);
+                    font-weight:850;
+                }
+                .evapp-company-nit-warning{
+                    display:flex;
+                    align-items:flex-start;
+                    gap:5px;
+                    margin-top:5px;
+                    color:#9a5a05;
+                    font-size:10.5px;
+                    font-weight:650;
+                    line-height:1.35;
+                }
+                .evapp-company-nit-warning::before{content:"!";flex:0 0 auto;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--evapp-warning-soft);font-size:10px;font-weight:900}
+                .evapp-company-arrival{color:#455468;font-size:12px;white-space:nowrap}
+                .evapp-company-state{
+                    padding:32px 20px;
+                    text-align:center;
+                    color:var(--evapp-muted);
+                    border:1px dashed var(--evapp-border);
+                    border-radius:14px;
+                    background:#fbfdff;
+                }
+                .evapp-company-state-icon{
+                    width:44px;
+                    height:44px;
+                    display:grid;
+                    place-items:center;
+                    margin:0 auto 10px;
+                    border-radius:13px;
+                    color:var(--evapp-primary);
+                    background:var(--evapp-primary-soft);
+                }
+                .evapp-company-state-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+                .evapp-company-state strong{display:block;margin-bottom:4px;color:var(--evapp-text);font-size:14px}
+                .evapp-company-state p{max-width:520px;margin:0 auto;color:var(--evapp-muted);font-size:12px;line-height:1.5}
+                .evapp-company-error{
+                    margin:12px 0;
+                    padding:14px 16px;
+                    color:#9b2c2c;
+                    background:var(--evapp-danger-soft);
+                    border:1px solid #f4caca;
+                    border-left:4px solid var(--evapp-danger);
+                    border-radius:12px;
+                    font-size:13px;
+                    font-weight:650;
+                    line-height:1.45;
+                }
+                .evapp-company-loading{
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    gap:10px;
+                    min-height:108px;
+                    padding:24px;
+                    color:var(--evapp-muted);
+                    border:1px dashed var(--evapp-border);
+                    border-radius:14px;
+                    background:#fbfdff;
+                    font-size:13px;
+                    font-weight:700;
+                }
+                .evapp-company-spinner{
+                    width:19px;
+                    height:19px;
+                    border:2px solid #d8e4ef;
+                    border-top-color:var(--evapp-primary);
+                    border-radius:50%;
+                    animation:evapp-company-spin .75s linear infinite;
+                }
+                @keyframes evapp-company-spin{to{transform:rotate(360deg)}}
                 .evapp-company-hidden{display:none!important}
 
-                @media(max-width:900px){
-                    .evapp-company-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
-                    .evapp-company-header{flex-direction:column}
-                    .evapp-company-refresh{width:100%}
-                    .evapp-company-controls{grid-template-columns:1fr}
-                    .evapp-company-meta{align-items:flex-start;flex-direction:column;gap:4px}
+                @media(max-width:1050px){
+                    .evapp-company-toolbar{grid-template-columns:minmax(220px,1fr) repeat(2,minmax(180px,1fr))}
+                    .evapp-company-toolbar-actions{grid-column:1/-1;justify-content:flex-end}
                 }
-
-                /* En móvil cada fila se convierte en una tarjeta legible, sin scroll horizontal. */
+                @media(max-width:900px){
+                    .evapp-company-header{flex-direction:column}
+                    .evapp-company-header-actions,.evapp-company-header-actions .evapp-company-btn{width:100%}
+                    .evapp-company-event-context{align-items:flex-start}
+                    .evapp-company-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+                    .evapp-company-toolbar{grid-template-columns:1fr 1fr}
+                    .evapp-company-toolbar .evapp-company-control:first-child{grid-column:1/-1}
+                    .evapp-company-toolbar-actions{grid-column:1/-1}
+                }
                 @media(max-width:760px){
+                    .evapp-company-shell{padding:16px;border-radius:20px}
+                    .evapp-company-event-context{display:grid;grid-template-columns:minmax(0,1fr) auto}
+                    .evapp-company-event-main{grid-column:1/-1}
+                    .evapp-company-event-meta{justify-content:flex-start}
+                    .evapp-company-change-event{grid-column:1/-1;width:100%}
+                    .evapp-company-toolbar{grid-template-columns:1fr}
+                    .evapp-company-toolbar .evapp-company-control:first-child{grid-column:auto}
+                    .evapp-company-toolbar-actions{grid-column:auto;width:100%}
+                    .evapp-company-toolbar-actions .evapp-company-btn{width:100%}
+                    .evapp-company-meta{align-items:flex-start;flex-direction:column;gap:5px}
                     .evapp-company-table-wrap{overflow:visible;border:0;border-radius:0;background:transparent}
                     .evapp-company-table{display:block;min-width:0;width:100%}
                     .evapp-company-table thead{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
                     .evapp-company-table tbody{display:grid;gap:12px;width:100%}
-                    .evapp-company-table tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100%;overflow:hidden;border:1px solid var(--evapp-company-border);border-radius:14px;background:#fff;box-shadow:0 3px 12px rgba(16,24,40,.05)}
-                    .evapp-company-table td{display:block;min-width:0;padding:10px 12px;border:0;border-bottom:1px solid #edf0f4;background:transparent}
-                    .evapp-company-table td::before{content:attr(data-label);display:block;margin-bottom:5px;color:#667085;font-size:10px;font-weight:800;line-height:1.2;text-transform:uppercase;letter-spacing:.045em}
-                    .evapp-company-table .evapp-company-cell-company{grid-column:1/-1;order:1;padding:14px;background:#f7f9fc}
+                    .evapp-company-table tr{
+                        display:grid;
+                        grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+                        width:100%;
+                        overflow:hidden;
+                        border:1px solid var(--evapp-border);
+                        border-radius:15px;
+                        background:#fff;
+                        box-shadow:0 7px 22px rgba(31,65,99,.045);
+                    }
+                    .evapp-company-table td{
+                        display:block;
+                        min-width:0;
+                        padding:10px 12px;
+                        border:0;
+                        border-bottom:1px solid #edf2f7;
+                        background:transparent;
+                    }
+                    .evapp-company-table td::before{
+                        content:attr(data-label);
+                        display:block;
+                        margin-bottom:5px;
+                        color:#718096;
+                        font-size:9.5px;
+                        font-weight:850;
+                        line-height:1.2;
+                        text-transform:uppercase;
+                        letter-spacing:.06em;
+                    }
+                    .evapp-company-table .evapp-company-cell-company{grid-column:1/-1;order:1;padding:14px;background:#f8fbfe}
                     .evapp-company-table .evapp-company-cell-rank{order:2}
                     .evapp-company-table .evapp-company-cell-count{order:3}
                     .evapp-company-table .evapp-company-cell-nit{grid-column:1/-1;order:4}
                     .evapp-company-table .evapp-company-cell-aliases{grid-column:1/-1;order:5}
                     .evapp-company-table .evapp-company-cell-first{order:6;border-bottom:0}
-                    .evapp-company-table .evapp-company-cell-last{order:7;border-bottom:0;border-left:1px solid #edf0f4}
-                    .evapp-company-name{font-size:17px;line-height:1.25;margin:0}
-                    .evapp-company-rank{width:34px;height:34px}
-                    .evapp-company-count{min-width:48px}
+                    .evapp-company-table .evapp-company-cell-last{order:7;border-bottom:0;border-left:1px solid #edf2f7}
+                    .evapp-company-name{font-size:16px;margin:0 0 4px}
+                    .evapp-company-rank{width:36px;height:36px}
                 }
-
                 @media(max-width:520px){
-                    .evapp-company-header h2{font-size:23px}
-                    .evapp-company-summary{gap:8px}
-                    .evapp-company-kpi{padding:12px}
-                    .evapp-company-kpi strong{font-size:23px}
-                    .evapp-company-kpi span{font-size:11px}
+                    .evapp-company-title{font-size:26px}
+                    .evapp-company-subtitle{font-size:13px}
+                    .evapp-company-summary{grid-template-columns:1fr;gap:9px}
+                    .evapp-company-kpi{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:12px;align-items:center;padding:13px 14px}
+                    .evapp-company-kpi-icon{grid-row:1/3;margin:0}
+                    .evapp-company-kpi strong{margin:0;font-size:24px}
+                    .evapp-company-kpi span{font-size:11.5px}
+                    .evapp-company-panel{padding:12px}
                     .evapp-company-table .evapp-company-cell-first,.evapp-company-table .evapp-company-cell-last{grid-column:1/-1;border-left:0}
-                    .evapp-company-table .evapp-company-cell-first{border-bottom:1px solid #edf0f4}
+                    .evapp-company-table .evapp-company-cell-first{border-bottom:1px solid #edf2f7}
+                }
+                @media(prefers-reduced-motion:reduce){
+                    .evapp-company-monitor *{scroll-behavior:auto!important;transition:none!important;animation:none!important}
                 }
             </style>
 
-            <?php if ( function_exists( 'eventosapp_active_event_bar' ) ) : ?>
-                <?php eventosapp_active_event_bar(); ?>
-            <?php endif; ?>
+            <div class="evapp-company-shell">
+                <header class="evapp-company-header">
+                    <div class="evapp-company-heading">
+                        <p class="evapp-company-eyebrow">EVENTOSAPP</p>
+                        <h1 class="evapp-company-title">Empresas con Check-In</h1>
+                        <p class="evapp-company-subtitle">Monitorea en tiempo real las empresas que ya tienen asistentes registrados, agrupando variantes de nombre y NIT sin perder el orden real de llegada.</p>
+                    </div>
+                    <div class="evapp-company-header-actions">
+                        <a href="<?php echo esc_url( $dashboard_url ); ?>" class="evapp-company-btn evapp-company-btn-secondary" aria-label="Volver al dashboard">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                            <span>Volver al dashboard</span>
+                        </a>
+                    </div>
+                </header>
 
-            <div class="evapp-company-header">
-                <div>
-                    <h2>Empresas con check-in</h2>
-                    <p>Monitoreo dinámico de asistentes agrupados por NIT y empresa.</p>
-                </div>
-                <button type="button" class="evapp-company-refresh">Actualizar ahora</button>
+                <section class="evapp-company-event-context" aria-label="Evento activo">
+                    <div class="evapp-company-event-main">
+                        <span class="evapp-company-event-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><path d="M4 21V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v16M2 21h20M8 7h2M13 7h1M8 11h2M13 11h1M8 15h2"></path><path d="m15 16 2 2 4-5"></path></svg>
+                        </span>
+                        <span class="evapp-company-event-copy">
+                            <span class="evapp-company-event-kicker">Evento activo</span>
+                            <span class="evapp-company-event-name" title="<?php echo esc_attr( $event_name ); ?>"><?php echo esc_html( $event_name ); ?></span>
+                        </span>
+                    </div>
+                    <div class="evapp-company-event-meta">
+                        <?php if ( $event_modalidad_label !== '' ) : ?>
+                            <span class="evapp-company-chip"><?php echo esc_html( $event_modalidad_label ); ?></span>
+                        <?php endif; ?>
+                        <span class="evapp-company-chip evapp-company-chip-status" data-cache-state="cached" data-state="cached">Sincronización activa</span>
+                    </div>
+                    <a href="<?php echo esc_url( $change_event_url ); ?>" class="evapp-company-change-event">Cambiar evento</a>
+                </section>
+
+                <section class="evapp-company-summary" aria-label="Resumen del monitor" aria-live="polite">
+                    <article class="evapp-company-kpi">
+                        <span class="evapp-company-kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v16M2 21h20M8 7h2M13 7h1M8 11h2M13 11h1M8 15h2"></path></svg></span>
+                        <strong data-kpi="companies">0</strong>
+                        <span>Empresas identificadas</span>
+                    </article>
+                    <article class="evapp-company-kpi is-success">
+                        <span class="evapp-company-kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"></circle><path d="M3.5 19c.8-3.4 2.7-5.2 5.5-5.2s4.7 1.8 5.5 5.2M16 7h5M18.5 4.5v5"></path></svg></span>
+                        <strong data-kpi="identified">0</strong>
+                        <span>Asistentes asociados</span>
+                    </article>
+                    <article class="evapp-company-kpi is-purple">
+                        <span class="evapp-company-kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"></path><path d="M4 6h5M4 18h5"></path></svg></span>
+                        <strong data-kpi="checked">0</strong>
+                        <span>Total con check-in</span>
+                    </article>
+                    <article class="evapp-company-kpi is-warning">
+                        <span class="evapp-company-kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 17h.01"></path></svg></span>
+                        <strong data-kpi="unidentified">0</strong>
+                        <span>Sin Empresa ni NIT</span>
+                    </article>
+                </section>
+
+                <section class="evapp-company-panel" aria-label="Listado de empresas">
+                    <div class="evapp-company-toolbar">
+                        <label class="evapp-company-control">
+                            <span class="evapp-company-control-label">Buscar empresa o NIT</span>
+                            <span class="evapp-company-search-wrap">
+                                <span class="evapp-company-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg></span>
+                                <input type="search" class="evapp-company-search" placeholder="Ej. EventosApp o 901582705" autocomplete="off" inputmode="search">
+                            </span>
+                        </label>
+                        <label class="evapp-company-control">
+                            <span class="evapp-company-control-label">Filtrar</span>
+                            <select class="evapp-company-filter">
+                                <option value="all">Todas las empresas</option>
+                                <option value="with-nit">Con NIT</option>
+                                <option value="without-nit">Sin NIT</option>
+                                <option value="nit-warning">NIT con alerta</option>
+                            </select>
+                        </label>
+                        <label class="evapp-company-control">
+                            <span class="evapp-company-control-label">Ordenar listado</span>
+                            <select class="evapp-company-sort">
+                                <option value="arrival">Orden de llegada</option>
+                                <option value="latest">Última llegada más reciente</option>
+                                <option value="quantity">Mayor cantidad de asistentes</option>
+                                <option value="name">Nombre de empresa</option>
+                            </select>
+                        </label>
+                        <div class="evapp-company-toolbar-actions">
+                            <button type="button" class="evapp-company-btn evapp-company-btn-ghost evapp-company-clear" disabled>
+                                <span>Limpiar filtros</span>
+                            </button>
+                            <button type="button" class="evapp-company-btn evapp-company-btn-primary evapp-company-refresh">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66"></path><path d="M20 4v7h-7"></path></svg>
+                                <span class="evapp-company-refresh-label">Actualizar ahora</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="evapp-company-meta" aria-live="polite">
+                        <span class="evapp-company-results">0 empresas visibles</span>
+                        <span class="evapp-company-updated">Sin actualizar</span>
+                    </div>
+
+                    <div class="evapp-company-loading" aria-live="polite">
+                        <span class="evapp-company-spinner" aria-hidden="true"></span>
+                        <span>Cargando empresas con check-in…</span>
+                    </div>
+                    <div class="evapp-company-error evapp-company-hidden" role="alert"></div>
+
+                    <div class="evapp-company-table-wrap evapp-company-hidden">
+                        <table class="evapp-company-table">
+                            <thead>
+                                <tr>
+                                    <th>Llegada #</th>
+                                    <th>Empresa principal</th>
+                                    <th>NIT normalizado</th>
+                                    <th>Nombres asociados</th>
+                                    <th>Asistentes</th>
+                                    <th>Primera llegada</th>
+                                    <th>Última llegada</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="evapp-company-state evapp-company-empty evapp-company-hidden">
+                        <span class="evapp-company-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v16M2 21h20M8 7h2M13 7h1M8 11h2M13 11h1M8 15h2"></path></svg></span>
+                        <strong class="evapp-company-empty-title">Todavía no hay empresas con check-in</strong>
+                        <p class="evapp-company-empty-copy">Cuando se registren ingresos presenciales asociados a Empresa o NIT aparecerán en este listado.</p>
+                    </div>
+                </section>
             </div>
-
-            <div class="evapp-company-summary" aria-live="polite">
-                <div class="evapp-company-kpi"><strong data-kpi="companies">0</strong><span>Empresas identificadas</span></div>
-                <div class="evapp-company-kpi"><strong data-kpi="identified">0</strong><span>Asistentes asociados</span></div>
-                <div class="evapp-company-kpi"><strong data-kpi="checked">0</strong><span>Total con check-in</span></div>
-                <div class="evapp-company-kpi"><strong data-kpi="unidentified">0</strong><span>Sin Empresa ni NIT</span></div>
-            </div>
-
-            <div class="evapp-company-controls">
-                <label class="evapp-company-control">
-                    <span class="evapp-company-control-label">Buscar empresa o NIT</span>
-                    <input type="search" class="evapp-company-search" placeholder="Ej. EventosApp o 901582705" autocomplete="off">
-                </label>
-                <label class="evapp-company-control">
-                    <span class="evapp-company-control-label">Ordenar listado</span>
-                    <select class="evapp-company-sort">
-                        <option value="arrival">Orden de llegada</option>
-                        <option value="quantity">Mayor cantidad de asistentes</option>
-                        <option value="name">Nombre de empresa</option>
-                    </select>
-                </label>
-            </div>
-
-            <div class="evapp-company-meta" aria-live="polite">
-                <span class="evapp-company-results">0 empresas visibles</span>
-                <span class="evapp-company-updated">Sin actualizar</span>
-            </div>
-
-            <div class="evapp-company-loading">Cargando empresas con check-in…</div>
-            <div class="evapp-company-error evapp-company-hidden" role="alert"></div>
-
-            <div class="evapp-company-table-wrap evapp-company-hidden">
-                <table class="evapp-company-table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Empresa principal</th>
-                            <th>NIT normalizado</th>
-                            <th>Nombres asociados</th>
-                            <th>Asistentes</th>
-                            <th>Primera llegada</th>
-                            <th>Última llegada</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-            <div class="evapp-company-empty evapp-company-hidden">Todavía no hay empresas con asistentes registrados en check-in.</div>
 
             <script>
             (function(){
                 const root = document.getElementById(<?php echo wp_json_encode( $instance_id ); ?>);
                 if (!root) return;
 
-                // Carga inicial al abrir la sección y, después, actualización automática cada 5 minutos.
-                // El botón "Actualizar ahora" conserva la actualización manual inmediata.
+                // Mantiene el patrón original: carga inmediata y actualización automática cada 5 minutos.
+                // El backend sigue usando cache + dirty flag + build lock para evitar reconstrucciones paralelas.
                 const AUTO_REFRESH_MS = 5 * 60 * 1000;
                 const ERROR_RETRY_MS = AUTO_REFRESH_MS;
                 const REQUEST_TIMEOUT_MS = 20000;
+                const SEARCH_DEBOUNCE_MS = 140;
                 const ajaxUrl = root.dataset.ajaxUrl;
                 const nonce = root.dataset.nonce;
                 const searchInput = root.querySelector('.evapp-company-search');
+                const filterSelect = root.querySelector('.evapp-company-filter');
                 const sortSelect = root.querySelector('.evapp-company-sort');
                 const refreshButton = root.querySelector('.evapp-company-refresh');
+                const refreshLabel = root.querySelector('.evapp-company-refresh-label');
+                const clearButton = root.querySelector('.evapp-company-clear');
                 const loading = root.querySelector('.evapp-company-loading');
                 const errorBox = root.querySelector('.evapp-company-error');
                 const tableWrap = root.querySelector('.evapp-company-table-wrap');
                 const tbody = root.querySelector('tbody');
                 const emptyBox = root.querySelector('.evapp-company-empty');
+                const emptyTitle = root.querySelector('.evapp-company-empty-title');
+                const emptyCopy = root.querySelector('.evapp-company-empty-copy');
                 const resultsLabel = root.querySelector('.evapp-company-results');
                 const updatedLabel = root.querySelector('.evapp-company-updated');
+                const cacheStateLabel = root.querySelector('[data-cache-state]');
+                const collator = typeof Intl !== 'undefined' && typeof Intl.Collator === 'function'
+                    ? new Intl.Collator('es', {sensitivity:'base', numeric:true})
+                    : null;
                 let rows = [];
                 let isLoading = false;
                 let refreshTimer = null;
                 let searchTimer = null;
+                let renderFrame = null;
                 let lastLoadStartedAt = 0;
                 let lastBuiltAt = 0;
                 let destroyed = false;
@@ -1512,6 +2156,23 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                         ? stringValue.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
                         : stringValue;
                 };
+
+                const compareText = (a, b) => {
+                    const aValue = String(a || '');
+                    const bValue = String(b || '');
+                    return collator ? collator.compare(aValue, bValue) : aValue.localeCompare(bValue, 'es');
+                };
+
+                const finiteNumber = (value, fallback) => {
+                    const number = Number(value);
+                    return Number.isFinite(number) && number > 0 ? number : fallback;
+                };
+
+                const prepareRows = (sourceRows) => (Array.isArray(sourceRows) ? sourceRows : []).map((row) => {
+                    const safeRow = row && typeof row === 'object' ? row : {};
+                    safeRow._search = normalize(safeRow.search_text || [safeRow.company, safeRow.nit].join(' '));
+                    return safeRow;
+                });
 
                 const textCell = (text, className) => {
                     const element = document.createElement('span');
@@ -1532,44 +2193,87 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                     if (element) element.textContent = Number(value || 0).toLocaleString('es-CO');
                 };
 
+                const hasActiveFilters = () => {
+                    return searchInput.value.trim() !== '' || filterSelect.value !== 'all' || sortSelect.value !== 'arrival';
+                };
+
+                const updateClearButton = () => {
+                    clearButton.disabled = !hasActiveFilters();
+                };
+
+                const rowMatchesFilter = (row) => {
+                    if (filterSelect.value === 'with-nit') return Boolean(String(row.nit_base || '').trim());
+                    if (filterSelect.value === 'without-nit') return !String(row.nit_base || '').trim();
+                    if (filterSelect.value === 'nit-warning') return Boolean(row.nit_has_conflict);
+                    return true;
+                };
+
                 const getVisibleRows = () => {
                     const term = normalize(searchInput.value).trim();
-                    const visible = rows.filter((row) => !term || normalize(row.search_text).includes(term));
+                    const visible = rows.filter((row) => {
+                        if (!rowMatchesFilter(row)) return false;
+                        return !term || String(row._search || '').includes(term);
+                    });
 
                     visible.sort((a, b) => {
+                        if (sortSelect.value === 'latest') {
+                            return finiteNumber(b.last_arrival_ts, 0) - finiteNumber(a.last_arrival_ts, 0)
+                                || finiteNumber(a.first_arrival_ts, Number.MAX_SAFE_INTEGER) - finiteNumber(b.first_arrival_ts, Number.MAX_SAFE_INTEGER)
+                                || compareText(a.company, b.company);
+                        }
                         if (sortSelect.value === 'quantity') {
-                            return Number(b.attendees) - Number(a.attendees)
-                                || Number(a.first_arrival_ts || Number.MAX_SAFE_INTEGER) - Number(b.first_arrival_ts || Number.MAX_SAFE_INTEGER)
-                                || String(a.company).localeCompare(String(b.company), 'es');
+                            return Number(b.attendees || 0) - Number(a.attendees || 0)
+                                || finiteNumber(a.first_arrival_ts, Number.MAX_SAFE_INTEGER) - finiteNumber(b.first_arrival_ts, Number.MAX_SAFE_INTEGER)
+                                || compareText(a.company, b.company);
                         }
                         if (sortSelect.value === 'name') {
-                            return String(a.company).localeCompare(String(b.company), 'es', {sensitivity: 'base'});
+                            return compareText(a.company, b.company);
                         }
-                        return Number(a.first_arrival_ts || Number.MAX_SAFE_INTEGER) - Number(b.first_arrival_ts || Number.MAX_SAFE_INTEGER)
-                            || String(a.company).localeCompare(String(b.company), 'es');
+                        return finiteNumber(a.first_arrival_ts, Number.MAX_SAFE_INTEGER) - finiteNumber(b.first_arrival_ts, Number.MAX_SAFE_INTEGER)
+                            || compareText(a.company, b.company);
                     });
 
                     return visible;
                 };
 
+                const setEmptyState = (visibleLength) => {
+                    if (visibleLength > 0) {
+                        emptyBox.classList.add('evapp-company-hidden');
+                        return;
+                    }
+
+                    if (rows.length && hasActiveFilters()) {
+                        emptyTitle.textContent = 'No hay coincidencias';
+                        emptyCopy.textContent = 'Prueba con otro nombre, NIT o combinación de filtros para ampliar el resultado.';
+                    } else {
+                        emptyTitle.textContent = 'Todavía no hay empresas con check-in';
+                        emptyCopy.textContent = 'Cuando se registren ingresos presenciales asociados a Empresa o NIT aparecerán en este listado.';
+                    }
+                    emptyBox.classList.remove('evapp-company-hidden');
+                };
+
                 const render = () => {
+                    if (destroyed) return;
                     const visible = getVisibleRows();
                     const fragment = document.createDocumentFragment();
                     resultsLabel.textContent = visible.length.toLocaleString('es-CO') + (visible.length === 1 ? ' empresa visible' : ' empresas visibles');
+                    updateClearButton();
 
-                    visible.forEach((row, index) => {
+                    visible.forEach((row) => {
                         const tr = document.createElement('tr');
 
-                        const rankTd = createCell('Posición', 'evapp-company-cell-rank');
-                        rankTd.appendChild(textCell(String(index + 1), 'evapp-company-rank'));
+                        const rankTd = createCell('Orden de llegada', 'evapp-company-cell-rank');
+                        const arrivalPosition = Number(row.arrival_position || 0);
+                        rankTd.appendChild(textCell(arrivalPosition > 0 ? String(arrivalPosition) : '—', 'evapp-company-rank'));
                         tr.appendChild(rankTd);
 
                         const companyTd = createCell('Empresa principal', 'evapp-company-cell-company');
                         companyTd.appendChild(textCell(row.company || 'Empresa sin nombre registrado', 'evapp-company-name'));
+                        companyTd.appendChild(textCell('Agrupación por NIT o nombre normalizado', 'evapp-company-company-hint'));
                         tr.appendChild(companyTd);
 
                         const nitTd = createCell('NIT normalizado', 'evapp-company-cell-nit');
-                        nitTd.appendChild(textCell(row.nit || 'Sin NIT'));
+                        nitTd.appendChild(textCell(row.nit || 'Sin NIT', 'evapp-company-nit'));
                         if (row.nit_has_conflict) {
                             nitTd.appendChild(textCell('Se detectaron varios dígitos de verificación para la misma base.', 'evapp-company-nit-warning'));
                         }
@@ -1588,11 +2292,11 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                         tr.appendChild(countTd);
 
                         const firstTd = createCell('Primera llegada', 'evapp-company-cell-first');
-                        firstTd.textContent = row.first_arrival || 'Sin hora registrada';
+                        firstTd.appendChild(textCell(row.first_arrival || 'Sin hora registrada', 'evapp-company-arrival'));
                         tr.appendChild(firstTd);
 
                         const lastTd = createCell('Última llegada', 'evapp-company-cell-last');
-                        lastTd.textContent = row.last_arrival || 'Sin hora registrada';
+                        lastTd.appendChild(textCell(row.last_arrival || 'Sin hora registrada', 'evapp-company-arrival'));
                         tr.appendChild(lastTd);
 
                         fragment.appendChild(tr);
@@ -1600,12 +2304,34 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
 
                     tbody.replaceChildren(fragment);
                     tableWrap.classList.toggle('evapp-company-hidden', visible.length === 0);
-                    emptyBox.classList.toggle('evapp-company-hidden', visible.length !== 0);
+                    setEmptyState(visible.length);
+                };
+
+                const scheduleRender = () => {
+                    if (renderFrame) window.cancelAnimationFrame(renderFrame);
+                    renderFrame = window.requestAnimationFrame(() => {
+                        renderFrame = null;
+                        render();
+                    });
                 };
 
                 const showError = (message) => {
                     errorBox.textContent = message || 'No fue posible cargar la información.';
                     errorBox.classList.remove('evapp-company-hidden');
+                    cacheStateLabel.dataset.state = 'error';
+                    cacheStateLabel.textContent = 'Error de sincronización';
+                };
+
+                const setCacheState = (state) => {
+                    const normalizedState = ['fresh', 'cached', 'stale'].includes(String(state)) ? String(state) : 'cached';
+                    cacheStateLabel.dataset.state = normalizedState;
+                    if (normalizedState === 'fresh') {
+                        cacheStateLabel.textContent = 'Datos actualizados';
+                    } else if (normalizedState === 'stale') {
+                        cacheStateLabel.textContent = 'Actualización en proceso';
+                    } else {
+                        cacheStateLabel.textContent = 'Caché optimizada';
+                    }
                 };
 
                 const clearRefreshTimer = () => {
@@ -1625,9 +2351,11 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                 };
 
                 const load = async (source) => {
-                    if (destroyed || isLoading || document.hidden && source === 'auto') return;
+                    if (destroyed || isLoading || (document.hidden && source === 'auto')) return;
                     if (!navigator.onLine) {
-                        updatedLabel.textContent = 'Sin conexión. Se reintentará en 5 minutos o al actualizar manualmente.';
+                        updatedLabel.textContent = 'Sin conexión. Se reintentará automáticamente.';
+                        cacheStateLabel.dataset.state = 'error';
+                        cacheStateLabel.textContent = 'Sin conexión';
                         scheduleRefresh(ERROR_RETRY_MS);
                         return;
                     }
@@ -1638,8 +2366,9 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                     isLoading = true;
                     lastLoadStartedAt = now;
                     clearRefreshTimer();
+                    root.setAttribute('aria-busy', 'true');
                     refreshButton.disabled = true;
-                    refreshButton.textContent = 'Actualizando…';
+                    refreshLabel.textContent = 'Actualizando…';
                     errorBox.classList.add('evapp-company-hidden');
                     if (!rows.length) loading.classList.remove('evapp-company-hidden');
 
@@ -1673,14 +2402,17 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                         }
 
                         if (!data.unchanged) {
-                            rows = Array.isArray(data.rows) ? data.rows : [];
+                            rows = prepareRows(data.rows);
                             setKpi('companies', data.companies);
                             setKpi('identified', data.identified_attendees);
                             setKpi('checked', data.total_checked_in);
                             setKpi('unidentified', data.without_company_nit);
                             render();
+                        } else if (!rows.length) {
+                            render();
                         }
 
+                        setCacheState(data.cache_state || 'cached');
                         updatedLabel.textContent = 'Actualizado: ' + (data.generated_at || 'ahora');
                     } catch (error) {
                         requestFailed = true;
@@ -1692,7 +2424,8 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                         if (timeoutId) window.clearTimeout(timeoutId);
                         loading.classList.add('evapp-company-hidden');
                         refreshButton.disabled = false;
-                        refreshButton.textContent = 'Actualizar ahora';
+                        refreshLabel.textContent = 'Actualizar ahora';
+                        root.removeAttribute('aria-busy');
                         isLoading = false;
                         scheduleRefresh(requestFailed ? ERROR_RETRY_MS : AUTO_REFRESH_MS);
                     }
@@ -1700,10 +2433,19 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
 
                 searchInput.addEventListener('input', function(){
                     if (searchTimer) window.clearTimeout(searchTimer);
-                    searchTimer = window.setTimeout(render, 120);
+                    searchTimer = window.setTimeout(scheduleRender, SEARCH_DEBOUNCE_MS);
+                    updateClearButton();
                 });
-                sortSelect.addEventListener('change', render);
+                filterSelect.addEventListener('change', scheduleRender);
+                sortSelect.addEventListener('change', scheduleRender);
                 refreshButton.addEventListener('click', function(){ load('manual'); });
+                clearButton.addEventListener('click', function(){
+                    searchInput.value = '';
+                    filterSelect.value = 'all';
+                    sortSelect.value = 'arrival';
+                    render();
+                    searchInput.focus();
+                });
 
                 document.addEventListener('visibilitychange', function(){
                     if (document.hidden) {
@@ -1718,10 +2460,15 @@ if ( ! function_exists( 'eventosapp_company_checkin_monitor_shortcode' ) ) {
                     }
                 });
 
+                window.addEventListener('online', function(){
+                    if (!destroyed && !isLoading) load('online');
+                });
+
                 window.addEventListener('pagehide', function(){
                     destroyed = true;
                     clearRefreshTimer();
                     if (searchTimer) window.clearTimeout(searchTimer);
+                    if (renderFrame) window.cancelAnimationFrame(renderFrame);
                 }, {once:true});
 
                 load('initial');
