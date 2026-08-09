@@ -22,43 +22,91 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
     // Nonces
     $nonce_ident = wp_create_nonce('eventosapp_net2_identify');
     $nonce_log   = wp_create_nonce('eventosapp_net2_log');
+    $dashboard_url = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
+    $event_title   = get_the_title($event_id) ?: 'Evento';
 
     ob_start(); ?>
     <style>
-      .evapp-net-shell { max-width:560px; margin:0 auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-      .evapp-net-card  { background:#0b1020; color:#eaf1ff; border-radius:16px; padding:18px; box-shadow:0 8px 24px rgba(0,0,0,.15); }
-      .evapp-net-title { display:flex; align-items:center; gap:.6rem; margin:0 0 10px; font-weight:800; font-size:1.05rem; letter-spacing:.2px; }
-      .evapp-net-field { margin:10px 0; }
-      .evapp-net-field label { display:block; font-size:.95rem; margin-bottom:6px; color:#c9d6ff; font-weight:600; }
-      .evapp-net-input { width:100%; padding:.7rem .8rem; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#0a0f1d; color:#eaf1ff; }
-      .evapp-net-btn   { display:flex; align-items:center; justify-content:center; gap:.5rem; border:0; border-radius:12px; padding:.9rem 1.1rem; font-weight:800; cursor:pointer; width:100%; background:#2563eb; color:#fff; transition:filter .15s, background .15s; }
-      .evapp-net-btn:hover{ filter:brightness(.98); }
-      .evapp-net-btn.is-live{ background:#e04f5f; }
-      .evapp-net-help  { color:#a9b6d3; font-size:.9rem; opacity:.85; margin-top:6px; }
-      .evapp-net-bad   { color:#ff6b6b; font-weight:700; }
-      .evapp-net-ok    { color:#7CFF8D; font-weight:800; }
-
-      .evapp-qr-video-wrap { position:relative; margin-top:12px; border-radius:14px; overflow:hidden; background:#0a0f1d; aspect-ratio:3/4; display:none; }
-      .evapp-qr-video { width:100%; height:100%; object-fit:cover; display:none; }
-      .evapp-qr-frame { position:absolute; inset:0; pointer-events:none; display:none; }
-      .evapp-qr-frame .mask { position:absolute; inset:0; background: radial-gradient(ellipse 60% 40% at 50% 50%, rgba(255,255,255,0) 62%, rgba(10,15,29,.55) 64%); }
-      .evapp-qr-corner { position:absolute; width:44px; height:44px; border:4px solid #4f7cff; border-radius:10px; }
-      .evapp-qr-corner.tl{top:16px;left:16px;border-right:0;border-bottom:0}
-      .evapp-qr-corner.tr{top:16px;right:16px;border-left:0;border-bottom:0}
-      .evapp-qr-corner.bl{bottom:16px;left:16px;border-right:0;border-top:0}
-      .evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}
-
-      .evapp-qr-result { margin-top:14px; background:#0a0f1d; border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:14px; }
-      .evapp-qr-actions { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
-      .evapp-qr-grid { display:grid; grid-template-columns: 1fr; gap:.2rem .8rem; margin-top:.4rem; }
-      .evapp-qr-grid div b { color:#a7b8ff; font-weight:600; }
-      @media(min-width:480px){ .evapp-qr-grid{ grid-template-columns:auto 1fr } .evapp-qr-grid div{ display:contents } .evapp-qr-grid b{ text-align:right } }
-
-      .evapp-qr-video-wrap.is-immersive{ aspect-ratio:auto; height: calc(100vh - var(--evapp-offset, 56px)); width:100%; display:block; }
-      .evapp-qr-btn-secondary{ margin-top:12px; width:100%; background:#2563eb!important; color:#fff; border:0; border-radius:10px; padding:.7rem 1rem; font-weight:800; cursor:pointer; transition:filter .15s; text-align:center; }
-      .evapp-qr-btn-secondary:hover{ filter:brightness(1.05); }
-      .evapp-qr-btn-outline{ margin-top:0; width:100%; background:transparent!important; color:#eaf1ff; border:1px solid rgba(255,255,255,.18); border-radius:10px; padding:.7rem 1rem; font-weight:800; cursor:pointer; text-align:center; }
-      .evapp-qr-btn-outline:hover{ background:rgba(255,255,255,.04)!important; }
+      .evapp-net-shell{
+        --evapp-primary:#3279bd;
+        --evapp-primary-dark:#255f96;
+        --evapp-primary-soft:#eaf4ff;
+        --evapp-app-bg:#f5f8fc;
+        --evapp-surface:#fff;
+        --evapp-border:#dfe7f1;
+        --evapp-text:#182230;
+        --evapp-muted:#64748b;
+        --evapp-success:#15803d;
+        --evapp-danger:#b42318;
+        width:100%;
+        max-width:760px;
+        margin:0 auto;
+        padding:0 10px;
+        color:var(--evapp-text);
+        font-family:inherit;
+        line-height:1.45;
+      }
+      .evapp-net-shell,.evapp-net-shell *{box-sizing:border-box}
+      .evapp-net-backbar{display:flex;align-items:center;justify-content:flex-start;margin:0 0 12px}
+      .evapp-net-back{
+        display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:9px 13px;
+        color:var(--evapp-primary)!important;background:var(--evapp-primary-soft);border:1px solid #cfe3f6;
+        border-radius:12px;text-decoration:none!important;font-size:13px;font-weight:750;transition:.18s ease;
+      }
+      .evapp-net-back:hover{color:#fff!important;background:var(--evapp-primary);border-color:var(--evapp-primary);transform:translateY(-1px)}
+      .evapp-net-back svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.2}
+      .evapp-net-card{
+        padding:clamp(18px,4vw,30px);background:var(--evapp-app-bg);border:1px solid var(--evapp-border);
+        border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);color:var(--evapp-text);
+      }
+      .evapp-net-hero{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:14px;margin-bottom:18px}
+      .evapp-net-hero-icon{
+        display:flex;align-items:center;justify-content:center;width:54px;height:54px;color:#fff;
+        background:linear-gradient(145deg,var(--evapp-primary),var(--evapp-primary-dark));border-radius:16px;
+        box-shadow:0 8px 18px rgba(47,115,181,.22);
+      }
+      .evapp-net-hero-icon svg{width:27px;height:27px}
+      .evapp-net-eyebrow{margin:0 0 3px;color:var(--evapp-primary);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+      .evapp-net-title{margin:0;color:var(--evapp-text);font-weight:850;font-size:clamp(1.2rem,4vw,1.55rem);letter-spacing:-.02em;line-height:1.2}
+      .evapp-net-event{margin:5px 0 0;color:var(--evapp-muted);font-size:.9rem}
+      #evappIdentStep,#evappScanStep{padding:clamp(16px,3vw,22px);background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.045)}
+      .evapp-net-field{margin:0 0 16px}
+      .evapp-net-field label{display:block;margin-bottom:7px;color:var(--evapp-text);font-size:.92rem;font-weight:750}
+      .evapp-net-field small{display:block!important;margin-top:6px!important;color:var(--evapp-muted)!important;font-size:.82rem!important;line-height:1.35!important}
+      .evapp-net-input{
+        width:100%;min-height:46px;padding:11px 13px;border:1px solid var(--evapp-border);border-radius:12px;
+        background:#fff;color:var(--evapp-text);font:inherit;font-size:16px;transition:border-color .18s ease,box-shadow .18s ease;
+      }
+      .evapp-net-input:focus{outline:none;border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.13)}
+      .evapp-net-btn,.evapp-qr-btn-secondary,.evapp-qr-btn-outline{
+        display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:46px;padding:11px 16px;
+        border-radius:12px;font:inherit;font-weight:800;cursor:pointer;text-align:center;text-decoration:none!important;transition:.18s ease;
+      }
+      .evapp-net-btn,.evapp-qr-btn-secondary{border:1px solid var(--evapp-primary);background:var(--evapp-primary)!important;color:#fff!important;box-shadow:0 7px 16px rgba(47,115,181,.18)}
+      .evapp-net-btn:hover,.evapp-qr-btn-secondary:hover{background:var(--evapp-primary-dark)!important;border-color:var(--evapp-primary-dark);transform:translateY(-1px)}
+      .evapp-net-btn:disabled{opacity:.62;cursor:not-allowed;transform:none}
+      .evapp-net-btn.is-live{background:var(--evapp-danger)!important;border-color:var(--evapp-danger)}
+      .evapp-net-help{color:var(--evapp-muted);font-size:.88rem;line-height:1.45;margin-top:10px}
+      .evapp-net-bad,.evapp-net-ok{display:block;margin-top:12px;padding:11px 13px;border-radius:12px;font-size:.88rem;font-weight:750;text-align:center}
+      .evapp-net-bad{color:var(--evapp-danger);background:#fff1f0;border:1px solid #f4c7c3}
+      .evapp-net-ok{color:var(--evapp-success);background:#edf9f0;border:1px solid #c9e8d1}
+      .evapp-qr-video-wrap{position:relative;margin-top:14px;border-radius:16px;overflow:hidden;background:#0b1020;aspect-ratio:3/4;display:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+      .evapp-qr-video{width:100%;height:100%;object-fit:cover;display:none}
+      .evapp-qr-frame{position:absolute;inset:0;pointer-events:none;display:none}
+      .evapp-qr-frame .mask{position:absolute;inset:0;background:radial-gradient(ellipse 60% 40% at 50% 50%,rgba(255,255,255,0) 62%,rgba(10,15,29,.55) 64%)}
+      .evapp-qr-corner{position:absolute;width:44px;height:44px;border:4px solid #67a9e7;border-radius:10px}
+      .evapp-qr-corner.tl{top:16px;left:16px;border-right:0;border-bottom:0}.evapp-qr-corner.tr{top:16px;right:16px;border-left:0;border-bottom:0}
+      .evapp-qr-corner.bl{bottom:16px;left:16px;border-right:0;border-top:0}.evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}
+      .evapp-qr-video-wrap.is-immersive{aspect-ratio:auto;height:min(76vh,720px);width:100%;display:block}
+      .evapp-qr-result{margin-top:14px;padding:14px;background:#f8fbff;border:1px solid var(--evapp-border);border-radius:14px;color:var(--evapp-text)}
+      .evapp-qr-actions{display:grid;grid-template-columns:1fr;gap:10px;margin-top:14px}
+      .evapp-qr-grid{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}
+      .evapp-qr-grid>div{min-width:0;overflow-wrap:anywhere}.evapp-qr-grid div b{color:var(--evapp-muted);font-weight:700}
+      .evapp-qr-btn-outline{margin-top:0;border:1px solid var(--evapp-border)!important;background:#fff!important;color:var(--evapp-text)!important;box-shadow:none}
+      .evapp-qr-btn-outline:hover{border-color:#b9d4ed!important;background:var(--evapp-primary-soft)!important;color:var(--evapp-primary)!important}
+      @media(min-width:560px){.evapp-qr-grid{grid-template-columns:minmax(100px,auto) minmax(0,1fr)}.evapp-qr-grid div{display:contents}.evapp-qr-grid b{text-align:right}.evapp-qr-actions{grid-template-columns:1fr 1fr}}
+      @media(max-width:520px){.evapp-net-shell{padding:0}.evapp-net-card{border-radius:20px;padding:16px}.evapp-net-hero{grid-template-columns:1fr}.evapp-net-hero-icon{width:48px;height:48px}.evapp-net-back{width:100%;justify-content:center}.evapp-qr-video-wrap.is-immersive{height:68vh}}
+      @media(prefers-reduced-motion:reduce){.evapp-net-shell *{scroll-behavior:auto!important;transition:none!important}}
     </style>
 
     <div class="evapp-net-shell"
@@ -66,30 +114,43 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
          data-ident-nonce="<?php echo esc_attr($nonce_ident); ?>"
          data-log-nonce="<?php echo esc_attr($nonce_log); ?>">
 
+      <div class="evapp-net-backbar">
+        <a class="evapp-net-back" href="<?php echo esc_url($dashboard_url); ?>">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          Volver al dashboard
+        </a>
+      </div>
+
       <div class="evapp-net-card">
-        <div class="evapp-net-title">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z" stroke="#a7b8ff"/></svg>
-          Networking – Doble autenticación
+        <div class="evapp-net-hero">
+          <span class="evapp-net-hero-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z" stroke="currentColor" stroke-width="1.8"/></svg>
+          </span>
+          <div>
+            <p class="evapp-net-eyebrow">EventosApp · Networking</p>
+            <h2 class="evapp-net-title">Doble autenticación</h2>
+            <p class="evapp-net-event"><?php echo esc_html($event_title); ?></p>
+          </div>
         </div>
 
         <!-- Paso 1: Identidad -->
         <div id="evappIdentStep">
           <div class="evapp-net-field">
             <label>Cédula</label>
-            <input type="text" id="evappIdentCC" class="evapp-net-input" placeholder="Ej: 1020304050">
+            <input type="text" id="evappIdentCC" class="evapp-net-input" placeholder="Ej: 1020304050" inputmode="numeric" autocomplete="off">
             <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
               Escribe tal cual como está en tu inscripción.
             </small>
           </div>
           <div class="evapp-net-field">
             <label>Apellidos</label>
-            <input type="text" id="evappIdentLast" class="evapp-net-input" placeholder="Ej: Pérez García">
+            <input type="text" id="evappIdentLast" class="evapp-net-input" placeholder="Ej: Pérez García" autocomplete="family-name">
             <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
               Escribe tal cual como están en tu inscripción.
             </small>
           </div>
           <button type="button" id="evappIdentBtn" class="evapp-net-btn">Confirmar identidad</button>
-          <div id="evappIdentMsg" class="evapp-net-help" style="margin-top:12px;text-align:center;">Para iniciar a escanear un QR debes autenticarte.</div>
+          <div id="evappIdentMsg" class="evapp-net-help" aria-live="polite" style="margin-top:12px;text-align:center;">Para iniciar a escanear un QR debes autenticarte.</div>
         </div>
 
         <!-- Paso 2: Scanner -->
@@ -113,7 +174,7 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
             <canvas id="evappCanvasNet" style="display:none;"></canvas>
           </div>
 
-          <div class="evapp-qr-result" id="evappResultNet">
+          <div class="evapp-qr-result" id="evappResultNet" aria-live="polite">
             <div class="evapp-net-help">Tip: coloca el QR dentro del marco.</div>
           </div>
         </div>
@@ -147,7 +208,9 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
       let readerTicketId = 0;
 
       // Scanner state
-      let stream=null, running=false, lastScan="", lastAt=0;
+      let stream=null, running=false, lastScan="", lastAt=0, lastFrameAt=0;
+      const MAX_SCAN_WIDTH = 960;
+      const SCAN_INTERVAL_MS = 90;
       let barcodeDetector = ('BarcodeDetector' in window) ? new window.BarcodeDetector({formats:['qr_code']}) : null;
 
       function setIdentMsg(html, good=false){
@@ -155,7 +218,8 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
         msgIdent.className = good ? 'evapp-net-ok' : 'evapp-net-bad';
       }
       function setScanOutput(html){ out.innerHTML = html; }
-      function row(label,value){ return `<div><b>${label}:</b></div><div>${value || '-'}</div>`; }
+      function escapeHtml(value){ const el=document.createElement('div'); el.textContent=String(value ?? ''); return el.innerHTML; }
+      function row(label,value){ return `<div><b>${escapeHtml(label)}:</b></div><div>${escapeHtml(value || '-')}</div>`; }
       function normalizeRaw(raw){
         let s=String(raw||'').trim();
         if (s.includes('/')) s = s.split('/').pop();
@@ -181,6 +245,7 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
 
         msgIdent.className = 'evapp-net-help';
         msgIdent.innerHTML = 'Validando…';
+        btnIdent.disabled = true;
 
         fetch(ajaxURL, { method:'POST', body:fd, credentials:'same-origin' })
           .then(r=>r.json())
@@ -201,7 +266,14 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
             scanStep.style.display='block';
             scanWelcome.textContent = 'Hola, ' + (d.full_name || 'asistente') + '. Activa la cámara para escanear.';
           })
-          .catch(()=> setIdentMsg('Error de red.'));
+          .catch(()=> setIdentMsg('Error de red.'))
+          .finally(()=>{ btnIdent.disabled = false; });
+      });
+
+      [cc, last].forEach((input)=>{
+        input?.addEventListener('keydown', (event)=>{
+          if (event.key === 'Enter') { event.preventDefault(); btnIdent.click(); }
+        });
       });
 
       // === Scanner ===
@@ -245,20 +317,30 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
         video.srcObject=stream; await video.play();
         video.style.display='block'; frame.style.display='block';
         vwrap?.classList.add('is-immersive'); smoothScrollTo(vwrap);
-        cvs.width  = video.videoWidth  || 640;
-        cvs.height = video.videoHeight || 480;
-        running=true; setLiveUI(true);
-        tick();
+        const sourceWidth = video.videoWidth || 640;
+        const sourceHeight = video.videoHeight || 480;
+        const scale = Math.min(1, MAX_SCAN_WIDTH / sourceWidth);
+        cvs.width  = Math.max(320, Math.round(sourceWidth * scale));
+        cvs.height = Math.max(240, Math.round(sourceHeight * scale));
+        running=true; lastFrameAt=0; setLiveUI(true);
+        requestAnimationFrame(tick);
       }
-      async function tick(){
+      async function tick(timestamp){
         if (!running) return;
+        if (timestamp && lastFrameAt && (timestamp - lastFrameAt) < SCAN_INTERVAL_MS){
+          requestAnimationFrame(tick);
+          return;
+        }
+        lastFrameAt = timestamp || performance.now();
         ctx.drawImage(video,0,0,cvs.width,cvs.height);
         if (barcodeDetector){
+          let bmp = null;
           try{
-            const bmp = await createImageBitmap(cvs);
+            bmp = await createImageBitmap(cvs);
             const codes = await barcodeDetector.detect(bmp);
             if (codes && codes.length){ onScan(normalizeRaw(codes[0].rawValue||'')); return; }
           }catch(e){}
+          finally{ if (bmp && typeof bmp.close === 'function') bmp.close(); }
         } else if (window.jsQR){
           const img = ctx.getImageData(0,0,cvs.width,cvs.height);
           const code= window.jsQR(img.data,img.width,img.height);
@@ -309,7 +391,7 @@ add_shortcode('eventosapp_qr_networking_auth', function($atts){
         if (data === lastScan && (now - lastAt) < 2500){ requestAnimationFrame(tick); return; }
         lastScan=data; lastAt=now; beep(); stop();
 
-        setScanOutput('<div class="evapp-net-help">Procesando: '+ data +'…</div>');
+        setScanOutput('<div class="evapp-net-help">Procesando: '+ escapeHtml(data) +'…</div>');
         smoothScrollTo(out);
 
         const fd = new FormData();
@@ -463,361 +545,6 @@ function eventosapp_net2_log_cb(){
 
     wp_send_json_success($result);
 }
-
-/* ======================================================================
- * RANKING NETWORKING (Top lectores / Top leídos del día)
- * =====================================================================*/
-
-/**
- * NOMBRE REAL de la tabla de networking (doble autenticación).
- * Se usa tanto para registrar interacciones como para el ranking.
- * 
- * Se protege con function_exists() para evitar colisiones con 
- * includes/functions/eventosapp-networking.php.
- */
-if ( ! function_exists('eventosapp_net2_table_name') ) {
-    function eventosapp_net2_table_name(){
-        global $wpdb;
-        return $wpdb->prefix . 'eventosapp_networking';
-    }
-}
-
-
-/**
- * Resuelve nombre completo del asistente (ticket -> meta).
- */
-function eventosapp_ticket_full_name($ticket_id){
-    $first = get_post_meta($ticket_id, '_eventosapp_asistente_nombre', true);
-    $last  = get_post_meta($ticket_id, '_eventosapp_asistente_apellido', true);
-    $name  = trim( sprintf('%s %s', (string)$first, (string)$last) );
-    return $name ?: ('Ticket #'.(int)$ticket_id);
-}
-
-/**
- * Top lectores (quienes MÁS han leído contactos) del EVENTO COMPLETO.
- * Cuenta lecturas ÚNICAS por par lector → leído dentro del evento.
- * Si un lector escanea varias veces al mismo contacto durante el evento,
- * contará UNA sola vez.
- */
-function eventosapp_net2_get_top_readers_today($event_id, $limit = 10){
-    global $wpdb;
-    $table    = eventosapp_net2_table_name();
-    $event_id = (int) $event_id;
-    $limit    = (int) $limit;
-
-    // Clave: quitar filtro por día y contar DISTINCT read_ticket_id
-    $sql = "
-        SELECT
-            reader_ticket_id AS ticket_id,
-            COUNT(DISTINCT read_ticket_id) AS cnt
-        FROM {$table}
-        WHERE event_id = %d
-        GROUP BY reader_ticket_id
-        ORDER BY cnt DESC, reader_ticket_id ASC
-        LIMIT %d
-    ";
-    $rows = $wpdb->get_results( $wpdb->prepare($sql, $event_id, $limit), ARRAY_A );
-
-    $out = [];
-    foreach ((array)$rows as $r){
-        $out[] = [
-            'ticket_id' => (int)$r['ticket_id'],
-            'count'     => (int)$r['cnt'],
-        ];
-    }
-    return $out;
-}
-
-
-/**
- * Top leídos (contactos que MÁS han sido leídos) del EVENTO COMPLETO.
- * Cuenta lectores ÚNICOS por objetivo dentro del evento.
- * Si el mismo lector vuelve a escanear al mismo objetivo en otro día del evento,
- * contará UNA sola vez.
- */
-function eventosapp_net2_get_top_read_targets_today($event_id, $limit = 10){
-    global $wpdb;
-    $table    = eventosapp_net2_table_name();
-    $event_id = (int) $event_id;
-    $limit    = (int) $limit;
-
-    // Clave: quitar filtro por día y contar DISTINCT reader_ticket_id
-    $sql = "
-        SELECT
-            read_ticket_id AS ticket_id,
-            COUNT(DISTINCT reader_ticket_id) AS cnt
-        FROM {$table}
-        WHERE event_id = %d
-        GROUP BY read_ticket_id
-        ORDER BY cnt DESC, ticket_id ASC
-        LIMIT %d
-    ";
-    $rows = $wpdb->get_results( $wpdb->prepare($sql, $event_id, $limit), ARRAY_A );
-
-    $out = [];
-    foreach ((array)$rows as $r){
-        $out[] = [
-            'ticket_id' => (int)$r['ticket_id'],
-            'count'     => (int)$r['cnt'],
-        ];
-    }
-    return $out;
-}
-
-
-/**
- * AJAX: obtener ranking del EVENTO COMPLETO (solo autenticados y con permisos).
- * Mantiene el mismo hook/action para no romper el frontend existente.
- */
-add_action('wp_ajax_eventosapp_net2_ranking_today', function(){
-    if ( ! is_user_logged_in() ) {
-        wp_send_json_error(['error'=>'No autenticado.']);
-    }
-    if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('networking_ranking') ) {
-        wp_send_json_error(['error'=>'Sin permisos.']);
-    }
-
-    $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
-    if ( ! $event_id && function_exists('eventosapp_get_active_event') ) {
-        $event_id = (int) eventosapp_get_active_event();
-    }
-    if ( ! $event_id ) {
-        wp_send_json_error(['error'=>'No hay evento activo.']);
-    }
-
-    // Ya devuelven ÚNICOS por evento completo
-    $readers = eventosapp_net2_get_top_readers_today($event_id, 10);
-    $targets = eventosapp_net2_get_top_read_targets_today($event_id, 10);
-
-    foreach ($readers as &$r){ $r['name'] = eventosapp_ticket_full_name($r['ticket_id']); }
-    foreach ($targets as &$t){ $t['name'] = eventosapp_ticket_full_name($t['ticket_id']); }
-
-    wp_send_json_success([
-        'event_id' => $event_id,
-        'readers'  => $readers,
-        'targets'  => $targets,
-        // En lugar de una fecha del día, enviamos una etiqueta clara para el frontend
-        'date'     => 'Acumulado del evento (lecturas únicas)',
-    ]);
-});
-
-
-/**
- * Helper seguro: URL de la landing de networking del evento.
- * Usa la función del admin si está disponible; si no, construye un fallback.
- */
-if ( ! function_exists('eventosapp_net2_get_landing_url') ) {
-    function eventosapp_net2_get_landing_url($event_id){
-        $event_id = (int) $event_id;
-        if ( $event_id <= 0 ) return home_url( '/' );
-
-        // Si está cargado el helper del admin, úsalo.
-        if ( function_exists('eventosapp_networking_build_url') ) {
-            return eventosapp_networking_build_url($event_id);
-        }
-
-        // Fallback: reconstruir la URL a partir del slug guardado o el default.
-        $slug = get_post_meta($event_id, '_eventosapp_networking_slug', true);
-        if ( ! $slug ) {
-            $title = get_the_title($event_id);
-            $slug  = sanitize_title( $title ?: "evento-$event_id" );
-        } else {
-            $slug = sanitize_title( $slug );
-        }
-
-        // Por convención, la landing cuelga de /networking/{slug}/
-        $parent = 'networking';
-        return home_url( '/' . $parent . '/' . $slug . '/' );
-    }
-}
-
-/** 
- * Shortcode: [eventosapp_networking_ranking]
- * Requiere estar logueado y tener permiso/feature 'networking_ranking'.
- * Muestra: título evento, etiqueta de acumulado, botón actualizar,
- *          campo de Landing (URL) con botón "Copiar" y "Abrir",
- *          y dos rankings (Top lectores / Top leídos).
- */
-add_shortcode('eventosapp_networking_ranking', function(){
-    if ( ! function_exists('eventosapp_require_feature') ) {
-        return '<div style="color:#b33">Módulo base no disponible.</div>';
-    }
-    // Protegemos la feature
-    eventosapp_require_feature('networking_ranking');
-
-    // Event ID: usamos el evento activo
-    $event_id = function_exists('eventosapp_get_active_event') ? (int) eventosapp_get_active_event() : 0;
-    if ( ! $event_id ) {
-        return '<div style="color:#b33">No hay evento activo.</div>';
-    }
-
-    $event_title  = get_the_title($event_id) ?: 'Evento';
-    $accum_label  = 'Acumulado del evento (lecturas únicas)';
-    $landing_url  = eventosapp_net2_get_landing_url($event_id);
-
-    ob_start(); ?>
-    <style>
-      .evapp-rank-wrap{ max-width:1100px; margin:0 auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-      .evapp-rank-head{ display:grid; grid-template-columns:1fr; gap:12px; margin:0 0 16px; }
-      @media(min-width:960px){ .evapp-rank-head{ grid-template-columns:1fr 1fr; align-items:flex-end; } }
-
-      .evapp-rank-title{ font-weight:800; font-size:1.1rem; letter-spacing:.2px; }
-      .evapp-rank-date{ color:#5a6475; font-weight:600; }
-
-      .evapp-head-actions{ display:grid; grid-template-columns:1fr auto; gap:8px; align-items:end; }
-      .evapp-rank-btn{ background:#2563eb; color:#fff; border:0; border-radius:12px; padding:.6rem 1rem; font-weight:800; cursor:pointer; }
-
-      /* Campo Landing */
-      .evapp-landing{ display:grid; gap:6px; }
-      .evapp-landing-label{ font-weight:700; font-size:.95rem; color:#1e293b; }
-      .evapp-landing-row{ display:grid; grid-template-columns:1fr auto auto; gap:8px; }
-      .evapp-landing-input{ width:100%; padding:.55rem .7rem; border:1px solid #cbd5e1; border-radius:10px; font-size:.9rem; background:#fff; color:#0f172a; }
-      .evapp-landing-btn{ display:inline-flex; align-items:center; justify-content:center; gap:.45rem; padding:.55rem .75rem; border:0; border-radius:10px; font-weight:800; cursor:pointer; }
-      .evapp-landing-copy{ background:#0ea5e9; color:#fff; }
-      .evapp-landing-copy:hover{ filter:brightness(.98); }
-      .evapp-landing-open{ background:#64748b; color:#fff; text-decoration:none; }
-      .evapp-landing-open:hover{ filter:brightness(.98); }
-
-      .evapp-rank-grid{ display:grid; grid-template-columns:1fr; gap:18px; margin-top:6px; }
-      @media(min-width:960px){ .evapp-rank-grid{ grid-template-columns:1fr 1fr; } }
-
-      .evapp-panel{ background:#0b1020; color:#eaf1ff; border-radius:16px; padding:16px; box-shadow:0 8px 24px rgba(0,0,0,.15); }
-      .evapp-panel h3{ margin:0 0 10px; font-size:1rem; letter-spacing:.2px; }
-
-      .evapp-podium{ display:grid; gap:10px; }
-      .evapp-item{ display:flex; align-items:center; gap:12px; background:#0a0f1d; border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:10px 12px; }
-      .evapp-rank{ display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; background:#1f2a44; font-weight:900; }
-      .evapp-name{ font-weight:800; }
-      .evapp-count{ margin-left:auto; font-weight:900; color:#7CFF8D; }
-
-      /* Jerarquía de tamaños */
-      .tier-1  .evapp-item:nth-child(1){ transform:scale(1.12); border-width:2px; border-color:#ffd25a; }
-      .tier-2  .evapp-item:nth-child(n+2):nth-child(-n+5){ transform:scale(1.06); }
-      /* Del 6 al 10 normal */
-
-      .evapp-empty{ color:#b2bed6; font-size:.95rem; }
-    </style>
-
-    <div class="evapp-rank-wrap" data-event="<?php echo esc_attr($event_id); ?>">
-      <div class="evapp-rank-head">
-        <div>
-          <div class="evapp-rank-title">Ranking Networking — <strong><?php echo esc_html($event_title); ?></strong></div>
-          <div class="evapp-rank-date" id="evappRankDate"><?php echo esc_html($accum_label); ?></div>
-        </div>
-
-        <div class="evapp-head-actions">
-          <div class="evapp-landing">
-            <label class="evapp-landing-label">Landing del networking (evento)</label>
-            <div class="evapp-landing-row">
-              <input id="evappLandingInput" type="text" class="evapp-landing-input" readonly value="<?php echo esc_attr($landing_url); ?>">
-              <button id="evappLandingCopy" type="button" class="evapp-landing-btn evapp-landing-copy" title="Copiar al portapapeles">
-                <!-- icono copy -->
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>
-                Copiar
-              </button>
-              <a class="evapp-landing-btn evapp-landing-open" href="<?php echo esc_url($landing_url); ?>" target="_blank" rel="noopener">
-                <!-- icono external -->
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6.364 1.5a.5.5 0 0 0 0 1H12V8a.5.5 0 0 0 1 0V1a1 1 0 0 0-1-1H6.364z"/><path d="M15 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1H13v3.5a.5.5 0 0 0 1 0V.5z"/><path d="M1.5 3A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10A1.5 1.5 0 0 0 13 14.5V7a.5.5 0 0 0-1 0v7.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10A.5.5 0 0 1 1.5 4H9a.5.5 0 0 0 0-1H1.5z"/></svg>
-                Abrir
-              </a>
-            </div>
-          </div>
-          <button type="button" class="evapp-rank-btn" id="evappRankRefresh">Actualizar</button>
-        </div>
-      </div>
-
-      <div class="evapp-rank-grid">
-        <div class="evapp-panel">
-          <h3>Top 10 — Usuarios que más han <strong>leído contactos</strong> (evento)</h3>
-          <div id="evappReaders" class="evapp-podium"></div>
-        </div>
-        <div class="evapp-panel">
-          <h3>Top 10 — Contactos que más han sido <strong>leídos</strong> (evento)</h3>
-          <div id="evappTargets" class="evapp-podium"></div>
-        </div>
-      </div>
-    </div>
-
-    <script>
-    (function(){
-      const root    = document.querySelector('.evapp-rank-wrap');
-      const eventId = parseInt(root?.dataset.event || '0', 10) || 0;
-      const ajaxURL = "<?php echo esc_js( admin_url('admin-ajax.php') ); ?>";
-
-      const readersBox = document.getElementById('evappReaders');
-      const targetsBox = document.getElementById('evappTargets');
-      const dateBox    = document.getElementById('evappRankDate');
-      const btnRefresh = document.getElementById('evappRankRefresh');
-
-      // Copiar landing
-      const inputLanding = document.getElementById('evappLandingInput');
-      const btnCopy      = document.getElementById('evappLandingCopy');
-      btnCopy?.addEventListener('click', async ()=>{
-        try{
-          await navigator.clipboard.writeText(inputLanding.value.trim());
-          const old = btnCopy.innerHTML;
-          btnCopy.innerHTML = '¡Copiado!';
-          btnCopy.style.backgroundColor = '#059669';
-          setTimeout(()=>{ btnCopy.innerHTML = old; btnCopy.style.backgroundColor = ''; }, 1600);
-        }catch(e){
-          alert('No se pudo copiar. Selecciona y copia manualmente.');
-        }
-      });
-
-      function renderList(container, rows){
-        container.innerHTML = '';
-        if (!rows || !rows.length){
-          container.innerHTML = '<div class="evapp-empty">Sin datos por ahora.</div>';
-          return;
-        }
-        container.classList.remove('tier-1', 'tier-2');
-        if (rows.length >= 1) container.classList.add('tier-1');
-        if (rows.length >= 2) container.classList.add('tier-2');
-
-        rows.forEach((r, i)=>{
-          const item = document.createElement('div');
-          item.className = 'evapp-item';
-          item.innerHTML = `
-            <span class="evapp-rank">${i+1}</span>
-            <span class="evapp-name">${(r.name||'—')}</span>
-            <span class="evapp-count">${(r.count||0)}</span>
-          `;
-          container.appendChild(item);
-        });
-      }
-
-      async function loadData(){
-        const fd = new FormData();
-        fd.append('action', 'eventosapp_net2_ranking_today');
-        fd.append('event_id', String(eventId||0));
-        try{
-          const res = await fetch(ajaxURL, {method:'POST', body:fd, credentials:'same-origin'});
-          const j = await res.json();
-          if (!j || !j.success){
-            const msg = (j && j.data && j.data.error) ? j.data.error : 'No se pudo cargar el ranking.';
-            readersBox.innerHTML = '<div class="evapp-empty">'+msg+'</div>';
-            targetsBox.innerHTML = '<div class="evapp-empty">'+msg+'</div>';
-            return;
-          }
-          const d = j.data || {};
-          renderList(readersBox, d.readers || []);
-          renderList(targetsBox, d.targets || []);
-          if (d.date) dateBox.textContent = d.date;
-        }catch(e){
-          readersBox.innerHTML = '<div class="evapp-empty">Error de red.</div>';
-          targetsBox.innerHTML = '<div class="evapp-empty">Error de red.</div>';
-        }
-      }
-
-      btnRefresh?.addEventListener('click', loadData);
-      loadData();
-      setInterval(loadData, 30000);
-    })();
-    </script>
-    <?php
-    return ob_get_clean();
-});
-
 
 /* ======================================================================
  * =========  BLOQUE DE FUNCIONES DEL MÓDULO DE NETWORKING  =============

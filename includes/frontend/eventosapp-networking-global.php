@@ -125,48 +125,50 @@ add_shortcode('eventosapp_networking_global', function($atts){
     if (empty($auth_form_fields)) {
         $auth_form_fields = array_intersect_key($auth_field_options, array_flip([ 'cc', 'apellido' ]));
     }
+
+    $dashboard_url = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
+    $event_title   = $event_id ? (get_the_title($event_id) ?: 'Evento') : 'Networking Global';
     
     ob_start(); ?>
     <style>
-      .evapp-netglobal-shell { max-width:560px; margin:0 auto; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-      .evapp-netglobal-card  { background:#0b1020; color:#eaf1ff; border-radius:16px; padding:18px; box-shadow:0 8px 24px rgba(0,0,0,.15); }
-      .evapp-netglobal-title { display:flex; align-items:center; gap:.6rem; margin:0 0 10px; font-weight:800; font-size:1.05rem; letter-spacing:.2px; }
-      .evapp-netglobal-field { margin:10px 0; }
-      .evapp-netglobal-field label { display:block; font-size:.95rem; margin-bottom:6px; color:#c9d6ff; font-weight:600; }
-      .evapp-netglobal-input { width:100%; padding:.7rem .8rem; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:#0a0f1d; color:#eaf1ff; }
-      .evapp-netglobal-btn   { display:flex; align-items:center; justify-content:center; gap:.5rem; border:0; border-radius:12px; padding:.9rem 1.1rem; font-weight:800; cursor:pointer; width:100%; background:#2563eb; color:#fff; transition:filter .15s, background .15s; }
-      .evapp-netglobal-btn:hover{ filter:brightness(.98); }
-      .evapp-netglobal-btn.is-live{ background:#e04f5f; }
-      .evapp-netglobal-help  { color:#a9b6d3; font-size:.9rem; opacity:.85; margin-top:6px; }
-      .evapp-netglobal-msg   { padding:12px; border-radius:8px; margin-top:12px; text-align:center; font-weight:600; }
-      .evapp-netglobal-bad   { background:#fee2e2; color:#dc2626; border:1px solid #ef4444; }
-      .evapp-netglobal-ok    { background:#d1fae5; color:#047857; border:1px solid #10b981; }
-      
-      .evapp-netglobal-result { display:none; margin-top:1.5rem; }
-      .evapp-netglobal-avatar { width:100px; height:100px; border-radius:50%; margin:0 auto 1rem; display:block; object-fit:cover; border:3px solid #4f7cff; }
-      .evapp-netglobal-name { text-align:center; font-size:1.5rem; font-weight:800; margin:0 0 .5rem; color:#eaf1ff; }
-      .evapp-netglobal-role { text-align:center; font-size:1rem; color:#a7b8ff; margin:0 0 1.5rem; }
-      .evapp-netglobal-grid { display:grid; grid-template-columns:1fr; gap:.6rem; margin:1rem 0; }
-      .evapp-netglobal-grid-item { background:#0a0f1d; padding:12px; border-radius:8px; border:1px solid rgba(255,255,255,.06); }
-      .evapp-netglobal-grid-item b { display:block; color:#a7b8ff; font-size:.85rem; margin-bottom:4px; }
-      .evapp-netglobal-grid-item span { color:#eaf1ff; font-size:1rem; }
-      .evapp-netglobal-actions { display:flex; flex-direction:column; gap:12px; margin-top:1.5rem; }
-      .evapp-netglobal-download { background:#10b981!important; }
-      .evapp-netglobal-back { background:transparent!important; border:1px solid rgba(255,255,255,.18)!important; }
-      
-      /* Scanner QR */
-      .evapp-qr-video-wrap { position:relative; margin-top:12px; border-radius:14px; overflow:hidden; background:#0a0f1d; aspect-ratio:3/4; display:none; }
-      .evapp-qr-video { width:100%; height:100%; object-fit:cover; display:none; }
-      .evapp-qr-frame { position:absolute; inset:0; pointer-events:none; display:none; }
-      .evapp-qr-frame .mask { position:absolute; inset:0; background: radial-gradient(ellipse 60% 40% at 50% 50%, rgba(255,255,255,0) 62%, rgba(10,15,29,.55) 64%); }
-      .evapp-qr-corner { position:absolute; width:44px; height:44px; border:4px solid #4f7cff; border-radius:10px; }
-      .evapp-qr-corner.tl{top:16px;left:16px;border-right:0;border-bottom:0}
-      .evapp-qr-corner.tr{top:16px;right:16px;border-left:0;border-bottom:0}
-      .evapp-qr-corner.bl{bottom:16px;left:16px;border-right:0;border-top:0}
-      .evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}
-      .evapp-qr-video-wrap.is-immersive{ aspect-ratio:auto; height: calc(100vh - var(--evapp-offset, 56px)); width:100%; display:block; }
-      
-      .evapp-qr-result-box { margin-top:14px; background:#0a0f1d; border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:14px; }
+      .evapp-netglobal-shell{
+        --evapp-primary:#3279bd;--evapp-primary-dark:#255f96;--evapp-primary-soft:#eaf4ff;
+        --evapp-app-bg:#f5f8fc;--evapp-surface:#fff;--evapp-border:#dfe7f1;--evapp-text:#182230;
+        --evapp-muted:#64748b;--evapp-success:#15803d;--evapp-danger:#b42318;
+        width:100%;max-width:780px;margin:0 auto;padding:0 10px;color:var(--evapp-text);font-family:inherit;line-height:1.45;
+      }
+      .evapp-netglobal-shell,.evapp-netglobal-shell *{box-sizing:border-box}
+      .evapp-netglobal-backbar{display:flex;margin:0 0 12px}
+      .evapp-netglobal-dashboard-link{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid #cfe3f6;border-radius:12px;background:var(--evapp-primary-soft);color:var(--evapp-primary)!important;text-decoration:none!important;font-size:13px;font-weight:750;transition:.18s ease}
+      .evapp-netglobal-dashboard-link:hover{background:var(--evapp-primary);border-color:var(--evapp-primary);color:#fff!important;transform:translateY(-1px)}
+      .evapp-netglobal-dashboard-link svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.2}
+      .evapp-netglobal-card{padding:clamp(18px,4vw,30px);background:var(--evapp-app-bg);border:1px solid var(--evapp-border);border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);color:var(--evapp-text)}
+      .evapp-netglobal-hero{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:14px;margin-bottom:18px}
+      .evapp-netglobal-hero-icon{display:flex;align-items:center;justify-content:center;width:54px;height:54px;color:#fff;background:linear-gradient(145deg,var(--evapp-primary),var(--evapp-primary-dark));border-radius:16px;box-shadow:0 8px 18px rgba(47,115,181,.22)}
+      .evapp-netglobal-hero-icon svg{width:27px;height:27px}
+      .evapp-netglobal-eyebrow{margin:0 0 3px;color:var(--evapp-primary);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+      .evapp-netglobal-title{margin:0;color:var(--evapp-text);font-size:clamp(1.2rem,4vw,1.55rem);font-weight:850;letter-spacing:-.02em;line-height:1.2}
+      .evapp-netglobal-event{margin:5px 0 0;color:var(--evapp-muted);font-size:.9rem}
+      #evappNetGlobalAuth,#evappNetGlobalScan,.evapp-netglobal-result{padding:clamp(16px,3vw,22px);background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.045)}
+      .evapp-netglobal-field{margin:0 0 16px}.evapp-netglobal-field label{display:block;margin-bottom:7px;color:var(--evapp-text);font-size:.92rem;font-weight:750}
+      .evapp-netglobal-input{width:100%;min-height:46px;padding:11px 13px;border:1px solid var(--evapp-border);border-radius:12px;background:#fff;color:var(--evapp-text);font:inherit;font-size:16px;transition:border-color .18s ease,box-shadow .18s ease}
+      .evapp-netglobal-input:focus{outline:none;border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.13)}
+      .evapp-netglobal-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:46px;padding:11px 16px;border:1px solid var(--evapp-primary);border-radius:12px;background:var(--evapp-primary);color:#fff!important;font:inherit;font-weight:800;cursor:pointer;text-align:center;transition:.18s ease;box-shadow:0 7px 16px rgba(47,115,181,.18)}
+      .evapp-netglobal-btn:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);transform:translateY(-1px)}
+      .evapp-netglobal-btn:disabled{opacity:.62;cursor:not-allowed;transform:none}.evapp-netglobal-btn.is-live{background:var(--evapp-danger);border-color:var(--evapp-danger)}
+      .evapp-netglobal-help{color:var(--evapp-muted);font-size:.88rem;line-height:1.45;margin-top:7px}.evapp-netglobal-msg{padding:11px 13px;border-radius:12px;margin-top:12px;text-align:center;font-weight:750;font-size:.88rem}
+      .evapp-netglobal-bad{background:#fff1f0;color:var(--evapp-danger);border:1px solid #f4c7c3;padding:11px 13px;border-radius:12px}.evapp-netglobal-ok{background:#edf9f0;color:var(--evapp-success);border:1px solid #c9e8d1;padding:11px 13px;border-radius:12px}
+      .evapp-netglobal-result{display:none;margin-top:0}.evapp-netglobal-avatar{width:104px;height:104px;border-radius:50%;margin:0 auto 14px;display:block;object-fit:cover;border:4px solid #dbeaf8;box-shadow:0 5px 18px rgba(31,52,73,.1)}
+      .evapp-netglobal-name{text-align:center;font-size:clamp(1.25rem,4vw,1.55rem);font-weight:850;margin:0 0 5px;color:var(--evapp-text)}
+      .evapp-netglobal-role{text-align:center;font-size:.95rem;color:var(--evapp-muted);margin:0 0 18px}.evapp-netglobal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0}
+      .evapp-netglobal-grid-item{min-width:0;background:#f8fbff;padding:13px;border-radius:12px;border:1px solid var(--evapp-border);overflow-wrap:anywhere}.evapp-netglobal-grid-item b{display:block;color:var(--evapp-primary);font-size:.78rem;margin-bottom:4px}.evapp-netglobal-grid-item span{color:var(--evapp-text);font-size:.93rem}
+      .evapp-netglobal-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}.evapp-netglobal-download{background:var(--evapp-primary)!important}.evapp-netglobal-back{background:#fff!important;color:var(--evapp-text)!important;border:1px solid var(--evapp-border)!important;box-shadow:none}.evapp-netglobal-back:hover{background:var(--evapp-primary-soft)!important;color:var(--evapp-primary)!important;border-color:#b9d4ed!important}
+      .evapp-qr-video-wrap{position:relative;margin-top:14px;border-radius:16px;overflow:hidden;background:#0b1020;aspect-ratio:3/4;display:none}.evapp-qr-video{width:100%;height:100%;object-fit:cover;display:none}.evapp-qr-frame{position:absolute;inset:0;pointer-events:none;display:none}
+      .evapp-qr-frame .mask{position:absolute;inset:0;background:radial-gradient(ellipse 60% 40% at 50% 50%,rgba(255,255,255,0) 62%,rgba(10,15,29,.55) 64%)}.evapp-qr-corner{position:absolute;width:44px;height:44px;border:4px solid #67a9e7;border-radius:10px}
+      .evapp-qr-corner.tl{top:16px;left:16px;border-right:0;border-bottom:0}.evapp-qr-corner.tr{top:16px;right:16px;border-left:0;border-bottom:0}.evapp-qr-corner.bl{bottom:16px;left:16px;border-right:0;border-top:0}.evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}
+      .evapp-qr-video-wrap.is-immersive{aspect-ratio:auto;height:min(76vh,720px);width:100%;display:block}.evapp-qr-result-box{margin-top:14px;background:#f8fbff;border:1px solid var(--evapp-border);border-radius:14px;padding:14px;color:var(--evapp-text)}
+      @media(max-width:620px){.evapp-netglobal-shell{padding:0}.evapp-netglobal-card{padding:16px;border-radius:20px}.evapp-netglobal-backbar .evapp-netglobal-dashboard-link{width:100%;justify-content:center}.evapp-netglobal-hero{grid-template-columns:1fr}.evapp-netglobal-grid,.evapp-netglobal-actions{grid-template-columns:1fr}.evapp-qr-video-wrap.is-immersive{height:68vh}}
+      @media(prefers-reduced-motion:reduce){.evapp-netglobal-shell *{scroll-behavior:auto!important;transition:none!important}}
     </style>
 
     <div class="evapp-netglobal-shell"
@@ -176,10 +178,21 @@ add_shortcode('eventosapp_networking_global', function($atts){
          data-auth-nonce="<?php echo esc_attr($nonce_auth); ?>"
          data-log-nonce="<?php echo esc_attr($nonce_log); ?>">
 
+      <div class="evapp-netglobal-backbar">
+        <a class="evapp-netglobal-dashboard-link" href="<?php echo esc_url($dashboard_url); ?>">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          Volver al dashboard
+        </a>
+      </div>
+
       <div class="evapp-netglobal-card">
-        <div class="evapp-netglobal-title">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z" stroke="#a7b8ff"/></svg>
-          Networking – Doble autenticación
+        <div class="evapp-netglobal-hero">
+          <span class="evapp-netglobal-hero-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z" stroke="currentColor" stroke-width="1.8"/></svg></span>
+          <div>
+            <p class="evapp-netglobal-eyebrow">EventosApp · Networking</p>
+            <h2 class="evapp-netglobal-title">Networking Global</h2>
+            <p class="evapp-netglobal-event"><?php echo esc_html($event_title); ?></p>
+          </div>
         </div>
 
         <!-- Paso 1: Autenticación -->
@@ -209,7 +222,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
           
           <button type="button" id="evappAuthBtn" class="evapp-netglobal-btn">Confirmar identidad</button>
           
-          <p id="evappAuthMsg" class="evapp-netglobal-help"></p>
+          <p id="evappAuthMsg" class="evapp-netglobal-help" aria-live="polite"></p>
         </div>
 
         <!-- Paso 2: Scanner -->
@@ -238,7 +251,7 @@ add_shortcode('eventosapp_networking_global', function($atts){
             <canvas id="evappCanvasGlobal" style="display:none;"></canvas>
           </div>
           
-          <div id="evappResultBoxGlobal" class="evapp-qr-result-box"></div>
+          <div id="evappResultBoxGlobal" class="evapp-qr-result-box" aria-live="polite"></div>
         </div>
 
         <!-- Paso 3: Resultado -->
@@ -284,6 +297,9 @@ add_shortcode('eventosapp_networking_global', function($atts){
       let running = false;
       let lastScan = "";
       let lastAt = 0;
+      let lastFrameAt = 0;
+      const MAX_SCAN_WIDTH = 960;
+      const SCAN_INTERVAL_MS = 90;
       let barcodeDetector = ('BarcodeDetector' in window) ? new window.BarcodeDetector({formats:['qr_code']}) : null;
 
       // ========== SISTEMA DE SESIÓN PERSISTENTE ==========
@@ -354,10 +370,11 @@ add_shortcode('eventosapp_networking_global', function($atts){
               const stored = localStorage.getItem(key);
               if (stored) {
                 const session = JSON.parse(stored);
-                // Verificar si no ha expirado
+                // Verificar si no ha expirado y limpiar sesiones vencidas.
                 if (Date.now() <= session.expires) {
                   return session;
                 }
+                localStorage.removeItem(key);
               }
             }
           }
@@ -477,26 +494,37 @@ add_shortcode('eventosapp_networking_global', function($atts){
         frame.style.display = 'block';
         vwrap?.classList.add('is-immersive');
         smoothScrollTo(vwrap);
-        cvs.width = video.videoWidth || 640;
-        cvs.height = video.videoHeight || 480;
+        const sourceWidth = video.videoWidth || 640;
+        const sourceHeight = video.videoHeight || 480;
+        const scale = Math.min(1, MAX_SCAN_WIDTH / sourceWidth);
+        cvs.width = Math.max(320, Math.round(sourceWidth * scale));
+        cvs.height = Math.max(240, Math.round(sourceHeight * scale));
         running = true;
+        lastFrameAt = 0;
         setLiveUI(true);
-        tick();
+        requestAnimationFrame(tick);
       }
 
-      async function tick() {
+      async function tick(timestamp) {
         if (!running) return;
+        if (timestamp && lastFrameAt && (timestamp - lastFrameAt) < SCAN_INTERVAL_MS) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        lastFrameAt = timestamp || performance.now();
         ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
         
         if (barcodeDetector) {
+          let bmp = null;
           try {
-            const bmp = await createImageBitmap(cvs);
+            bmp = await createImageBitmap(cvs);
             const codes = await barcodeDetector.detect(bmp);
             if (codes && codes.length) {
               onScan(normalizeRaw(codes[0].rawValue || ''));
               return;
             }
           } catch(e) {}
+          finally { if (bmp && typeof bmp.close === 'function') bmp.close(); }
         } else if (window.jsQR) {
           const img = ctx.getImageData(0, 0, cvs.width, cvs.height);
           const code = window.jsQR(img.data, img.width, img.height);

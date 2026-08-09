@@ -24,465 +24,63 @@ add_shortcode('eventosapp_ranking_networking', function(){
 
     $evento_nombre = get_the_title($active_event);
     $fecha_actual = date_i18n('l, j \d\e F \d\e Y');
+    $dashboard_url = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
 
     ob_start();
     ?>
     <style>
-    /* Variables */
-    .evapp-ranking-wrapper {
-        --evapp-blue: #2F73B5;
-        --evapp-gold: #FFD700;
-        --evapp-silver: #C0C0C0;
-        --evapp-bronze: #CD7F32;
-        --evapp-radius: 16px;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        max-width: 1400px;
-        margin: 0 auto;
-        padding: 20px;
+    .evapp-ranking-wrapper{
+        --evapp-primary:#3279bd;--evapp-primary-dark:#255f96;--evapp-primary-soft:#eaf4ff;
+        --evapp-app-bg:#f5f8fc;--evapp-surface:#fff;--evapp-border:#dfe7f1;--evapp-text:#182230;
+        --evapp-muted:#64748b;--evapp-success:#15803d;--evapp-danger:#b42318;
+        --evapp-gold:#d6a815;--evapp-silver:#8a98a8;--evapp-bronze:#b5793e;
+        width:100%;max-width:1240px;margin:0 auto;padding:0 10px;color:var(--evapp-text);font-family:inherit;line-height:1.45;
     }
-
-    /* Header */
-    .evapp-ranking-header {
-        background: linear-gradient(135deg, var(--evapp-blue) 0%, #1F4B77 100%);
-        color: #fff;
-        padding: 30px;
-        border-radius: var(--evapp-radius);
-        margin-bottom: 30px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-    }
-
-    .evapp-ranking-header h1 {
-        margin: 0 0 10px;
-        font-size: 2rem;
-        font-weight: 800;
-        letter-spacing: 0.5px;
-    }
-
-    .evapp-ranking-header .evento-info {
-        font-size: 1.1rem;
-        opacity: 0.95;
-        margin-bottom: 5px;
-    }
-
-    .evapp-ranking-header .fecha-info {
-        font-size: 0.95rem;
-        opacity: 0.85;
-    }
-
-    /* Controles */
-    .evapp-ranking-controls {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 30px;
-        gap: 15px;
-        flex-wrap: wrap;
-    }
-
-    .evapp-refresh-btn {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        background: var(--evapp-blue);
-        color: #fff;
-        border: none;
-        padding: 12px 24px;
-        border-radius: 10px;
-        font-weight: 700;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        box-shadow: 0 2px 8px rgba(47,115,181,0.3);
-    }
-
-    .evapp-refresh-btn:hover {
-        background: #275F95;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(47,115,181,0.4);
-    }
-
-    .evapp-refresh-btn:active {
-        transform: translateY(0);
-    }
-
-    .evapp-refresh-btn svg {
-        width: 18px;
-        height: 18px;
-        fill: currentColor;
-    }
-
-    .evapp-refresh-btn.loading svg {
-        animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
-    }
-
-    .evapp-last-update {
-        color: #6b7280;
-        font-size: 0.9rem;
-    }
-
-    /* Grid de Rankings */
-    .evapp-ranking-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
-        gap: 30px;
-        margin-bottom: 30px;
-    }
-
-    @media (max-width: 768px) {
-        .evapp-ranking-grid {
-            grid-template-columns: 1fr;
-        }
-    }
-
-    /* Tarjeta de Ranking */
-    .evapp-ranking-card {
-        background: #fff;
-        border-radius: var(--evapp-radius);
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-        overflow: hidden;
-    }
-
-    .evapp-ranking-card-header {
-        background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-        padding: 20px 25px;
-        border-bottom: 2px solid #e5e7eb;
-    }
-
-    .evapp-ranking-card-header h2 {
-        margin: 0;
-        font-size: 1.4rem;
-        font-weight: 800;
-        color: #111827;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .evapp-ranking-card-header svg {
-        width: 24px;
-        height: 24px;
-    }
-
-    /* Items del Ranking */
-    .evapp-ranking-list {
-        padding: 0;
-        margin: 0;
-        list-style: none;
-    }
-
-    .evapp-ranking-item {
-        display: flex;
-        align-items: center;
-        padding: 18px 25px;
-        border-bottom: 1px solid #f3f4f6;
-        transition: background-color 0.2s ease;
-    }
-
-    .evapp-ranking-item:hover {
-        background: #f9fafb;
-    }
-
-    .evapp-ranking-item:last-child {
-        border-bottom: none;
-    }
-
-    /* Posiciones con jerarquía */
-    .evapp-ranking-position {
-        flex-shrink: 0;
-        font-weight: 800;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-right: 20px;
-    }
-
-    /* Posición #1 - Más grande */
-    .evapp-ranking-item.rank-1 {
-        background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
-        border-left: 4px solid var(--evapp-gold);
-    }
-
-    .evapp-ranking-item.rank-1 .evapp-ranking-position {
-        width: 60px;
-        height: 60px;
-        background: var(--evapp-gold);
-        color: #78350f;
-        font-size: 1.8rem;
-        box-shadow: 0 4px 12px rgba(255,215,0,0.4);
-    }
-
-    .evapp-ranking-item.rank-1 .evapp-ranking-name {
-        font-size: 1.4rem;
-    }
-
-    .evapp-ranking-item.rank-1 .evapp-ranking-count {
-        font-size: 1.8rem;
-    }
-
-    /* Posiciones #2 al #5 - Grandes */
-    .evapp-ranking-item.rank-2,
-    .evapp-ranking-item.rank-3,
-    .evapp-ranking-item.rank-4,
-    .evapp-ranking-item.rank-5 {
-        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-    }
-
-    .evapp-ranking-item.rank-2 {
-        border-left: 4px solid var(--evapp-silver);
-    }
-
-    .evapp-ranking-item.rank-3 {
-        border-left: 4px solid var(--evapp-bronze);
-    }
-
-    .evapp-ranking-item.rank-2 .evapp-ranking-position,
-    .evapp-ranking-item.rank-3 .evapp-ranking-position,
-    .evapp-ranking-item.rank-4 .evapp-ranking-position,
-    .evapp-ranking-item.rank-5 .evapp-ranking-position {
-        width: 50px;
-        height: 50px;
-        font-size: 1.5rem;
-    }
-
-    .evapp-ranking-item.rank-2 .evapp-ranking-position {
-        background: var(--evapp-silver);
-        color: #374151;
-        box-shadow: 0 3px 10px rgba(192,192,192,0.4);
-    }
-
-    .evapp-ranking-item.rank-3 .evapp-ranking-position {
-        background: var(--evapp-bronze);
-        color: #fff;
-        box-shadow: 0 3px 10px rgba(205,127,50,0.4);
-    }
-
-    .evapp-ranking-item.rank-4 .evapp-ranking-position,
-    .evapp-ranking-item.rank-5 .evapp-ranking-position {
-        background: linear-gradient(135deg, var(--evapp-blue) 0%, #1F4B77 100%);
-        color: #fff;
-        box-shadow: 0 2px 8px rgba(47,115,181,0.3);
-    }
-
-    .evapp-ranking-item.rank-2 .evapp-ranking-name,
-    .evapp-ranking-item.rank-3 .evapp-ranking-name,
-    .evapp-ranking-item.rank-4 .evapp-ranking-name,
-    .evapp-ranking-item.rank-5 .evapp-ranking-name {
-        font-size: 1.2rem;
-    }
-
-    .evapp-ranking-item.rank-2 .evapp-ranking-count,
-    .evapp-ranking-item.rank-3 .evapp-ranking-count,
-    .evapp-ranking-item.rank-4 .evapp-ranking-count,
-    .evapp-ranking-item.rank-5 .evapp-ranking-count {
-        font-size: 1.5rem;
-    }
-
-    /* Posiciones #6 al #10 - Tamaño normal */
-    .evapp-ranking-item.rank-6 .evapp-ranking-position,
-    .evapp-ranking-item.rank-7 .evapp-ranking-position,
-    .evapp-ranking-item.rank-8 .evapp-ranking-position,
-    .evapp-ranking-item.rank-9 .evapp-ranking-position,
-    .evapp-ranking-item.rank-10 .evapp-ranking-position {
-        width: 40px;
-        height: 40px;
-        background: #6b7280;
-        color: #fff;
-        font-size: 1.2rem;
-    }
-
-    .evapp-ranking-item.rank-6 .evapp-ranking-name,
-    .evapp-ranking-item.rank-7 .evapp-ranking-name,
-    .evapp-ranking-item.rank-8 .evapp-ranking-name,
-    .evapp-ranking-item.rank-9 .evapp-ranking-name,
-    .evapp-ranking-item.rank-10 .evapp-ranking-name {
-        font-size: 1rem;
-    }
-
-    .evapp-ranking-item.rank-6 .evapp-ranking-count,
-    .evapp-ranking-item.rank-7 .evapp-ranking-count,
-    .evapp-ranking-item.rank-8 .evapp-ranking-count,
-    .evapp-ranking-item.rank-9 .evapp-ranking-count,
-    .evapp-ranking-item.rank-10 .evapp-ranking-count {
-        font-size: 1.2rem;
-    }
-
-    /* Info del usuario */
-    .evapp-ranking-info {
-        flex-grow: 1;
-    }
-
-    .evapp-ranking-name {
-        font-weight: 700;
-        color: #111827;
-        margin-bottom: 2px;
-    }
-
-    /* Contador */
-    .evapp-ranking-count {
-        flex-shrink: 0;
-        font-weight: 800;
-        color: var(--evapp-blue);
-        margin-left: 15px;
-    }
-
-    /* Estado vacío */
-    .evapp-ranking-empty {
-        padding: 40px 25px;
-        text-align: center;
-        color: #6b7280;
-    }
-
-    .evapp-ranking-empty svg {
-        width: 48px;
-        height: 48px;
-        margin-bottom: 15px;
-        opacity: 0.5;
-    }
-
-    /* Landing URL Section */
-    .evapp-landing-section {
-        background: #fff;
-        border-radius: var(--evapp-radius);
-        padding: 25px;
-        margin-bottom: 30px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-    }
-
-    .evapp-landing-title {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #374151;
-        margin: 0 0 15px;
-    }
-
-    .evapp-landing-controls {
-        display: flex;
-        gap: 10px;
-        align-items: stretch;
-    }
-
-    .evapp-landing-url-wrapper {
-        flex: 1;
-        position: relative;
-    }
-
-    .evapp-landing-url {
-        width: 100%;
-        padding: 14px 16px;
-        border: 2px solid #e5e7eb;
-        border-radius: 10px;
-        font-size: 0.95rem;
-        color: #374151;
-        background: #f9fafb;
-        transition: all 0.2s ease;
-    }
-
-    .evapp-landing-url:focus {
-        outline: none;
-        border-color: var(--evapp-blue);
-        background: #fff;
-    }
-
-    .evapp-landing-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        padding: 14px 24px;
-        border: none;
-        border-radius: 10px;
-        font-weight: 700;
-        font-size: 0.95rem;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        white-space: nowrap;
-    }
-
-    .evapp-landing-btn svg {
-        width: 18px;
-        height: 18px;
-    }
-
-    .evapp-landing-btn-copy {
-        background: #3b82f6;
-        color: #fff;
-    }
-
-    .evapp-landing-btn-copy:hover {
-        background: #2563eb;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(37,99,235,0.3);
-    }
-
-    .evapp-landing-btn-copy.copied {
-        background: #10b981;
-    }
-
-    .evapp-landing-btn-open {
-        background: #6b7280;
-        color: #fff;
-    }
-
-    .evapp-landing-btn-open:hover {
-        background: #4b5563;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(75,85,99,0.3);
-    }
-
-    /* Responsive */
-    @media (max-width: 768px) {
-        .evapp-ranking-header h1 {
-            font-size: 1.5rem;
-        }
-
-        .evapp-ranking-controls {
-            flex-direction: column;
-            align-items: stretch;
-        }
-
-        .evapp-refresh-btn {
-            width: 100%;
-            justify-content: center;
-        }
-
-        .evapp-ranking-item.rank-1 .evapp-ranking-position {
-            width: 50px;
-            height: 50px;
-            font-size: 1.5rem;
-        }
-
-        .evapp-ranking-item.rank-1 .evapp-ranking-name {
-            font-size: 1.2rem;
-        }
-
-        .evapp-ranking-item.rank-1 .evapp-ranking-count {
-            font-size: 1.5rem;
-        }
-
-        .evapp-landing-controls {
-            flex-direction: column;
-        }
-
-        .evapp-landing-btn {
-            width: 100%;
-        }
-    }
+    .evapp-ranking-wrapper,.evapp-ranking-wrapper *{box-sizing:border-box}
+    .evapp-ranking-backbar{display:flex;margin:0 0 12px}
+    .evapp-ranking-back{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid #cfe3f6;border-radius:12px;background:var(--evapp-primary-soft);color:var(--evapp-primary)!important;text-decoration:none!important;font-size:13px;font-weight:750;transition:.18s ease}
+    .evapp-ranking-back:hover{background:var(--evapp-primary);border-color:var(--evapp-primary);color:#fff!important;transform:translateY(-1px)}
+    .evapp-ranking-back svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.2}
+    .evapp-ranking-shell{padding:clamp(18px,3vw,34px);background:var(--evapp-app-bg);border:1px solid var(--evapp-border);border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08)}
+    .evapp-ranking-header{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:15px;padding:0;margin:0 0 20px;background:transparent;color:var(--evapp-text);box-shadow:none}
+    .evapp-ranking-header-icon{display:flex;align-items:center;justify-content:center;width:58px;height:58px;color:#fff;background:linear-gradient(145deg,var(--evapp-primary),var(--evapp-primary-dark));border-radius:17px;box-shadow:0 8px 18px rgba(47,115,181,.22);font-size:27px}
+    .evapp-ranking-eyebrow{margin:0 0 3px;color:var(--evapp-primary);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+    .evapp-ranking-header h1{margin:0;color:var(--evapp-text);font-size:clamp(1.35rem,3vw,1.9rem);font-weight:850;letter-spacing:-.025em;line-height:1.18}
+    .evapp-ranking-header-meta{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:7px;color:var(--evapp-muted);font-size:.88rem}.evapp-ranking-header-meta strong{color:var(--evapp-text)}
+    .evapp-ranking-controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 18px;padding:14px;background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:16px}
+    .evapp-refresh-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 15px;border:1px solid var(--evapp-primary);border-radius:11px;background:var(--evapp-primary);color:#fff;font:inherit;font-size:.9rem;font-weight:800;cursor:pointer;transition:.18s ease;box-shadow:0 6px 14px rgba(47,115,181,.16)}
+    .evapp-refresh-btn:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);transform:translateY(-1px)}.evapp-refresh-btn:disabled{opacity:.65;cursor:not-allowed;transform:none}.evapp-refresh-btn svg{width:18px;height:18px}.evapp-refresh-btn.loading svg{animation:evapp-rank-spin .9s linear infinite}@keyframes evapp-rank-spin{to{transform:rotate(360deg)}}
+    .evapp-last-update{color:var(--evapp-muted);font-size:.84rem}
+    .evapp-landing-section{background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;padding:18px;margin-bottom:18px;box-shadow:0 8px 24px rgba(31,52,73,.04)}
+    .evapp-landing-title{font-size:.95rem;font-weight:800;color:var(--evapp-text);margin:0 0 10px}.evapp-landing-controls{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:9px;align-items:stretch}.evapp-landing-url-wrapper{min-width:0}.evapp-landing-url{width:100%;height:44px;padding:10px 12px;border:1px solid var(--evapp-border);border-radius:11px;font:inherit;font-size:.86rem;color:var(--evapp-text);background:#f8fbff}.evapp-landing-url:focus{outline:none;border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.12)}
+    .evapp-landing-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:10px 13px;border:1px solid var(--evapp-border);border-radius:11px;font:inherit;font-size:.86rem;font-weight:800;cursor:pointer;transition:.18s ease;white-space:nowrap}.evapp-landing-btn svg{width:17px;height:17px}.evapp-landing-btn-copy{background:var(--evapp-primary);border-color:var(--evapp-primary);color:#fff}.evapp-landing-btn-copy:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark)}.evapp-landing-btn-copy.copied{background:var(--evapp-success);border-color:var(--evapp-success)}.evapp-landing-btn-open{background:#fff;color:var(--evapp-text)}.evapp-landing-btn-open:hover{background:var(--evapp-primary-soft);border-color:#b9d4ed;color:var(--evapp-primary)}
+    .evapp-ranking-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:0}.evapp-ranking-card{min-width:0;background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.045);overflow:hidden}.evapp-ranking-card-header{padding:16px 18px;background:#f8fbff;border-bottom:1px solid var(--evapp-border)}.evapp-ranking-card-header h2{display:flex;align-items:center;gap:9px;margin:0;color:var(--evapp-text);font-size:1rem;font-weight:820;line-height:1.3}.evapp-ranking-card-header svg{width:21px;height:21px;color:var(--evapp-primary)}
+    .evapp-ranking-list{padding:8px;margin:0;list-style:none}.evapp-ranking-item{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;padding:11px 10px;border-bottom:1px solid #edf2f7;transition:background-color .15s ease}.evapp-ranking-item:last-child{border-bottom:0}.evapp-ranking-item:hover{background:#f8fbff}.evapp-ranking-position{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:38px;height:38px;border-radius:12px;background:#eef3f8;color:var(--evapp-muted);font-weight:850;font-size:.9rem}.evapp-ranking-info{min-width:0}.evapp-ranking-name{font-weight:780;color:var(--evapp-text);font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.evapp-ranking-count{display:inline-flex;align-items:center;justify-content:center;min-width:42px;height:32px;padding:0 9px;border-radius:10px;background:var(--evapp-primary-soft);color:var(--evapp-primary-dark);font-weight:850;font-size:.9rem}
+    .evapp-ranking-item.rank-1{background:#fffaf0}.evapp-ranking-item.rank-1 .evapp-ranking-position{background:#f6e6a6;color:#6f5700}.evapp-ranking-item.rank-2 .evapp-ranking-position{background:#e8edf2;color:#566474}.evapp-ranking-item.rank-3 .evapp-ranking-position{background:#f1dfcd;color:#7a4c24}.evapp-ranking-item.rank-1 .evapp-ranking-count,.evapp-ranking-item.rank-2 .evapp-ranking-count,.evapp-ranking-item.rank-3 .evapp-ranking-count{font-size:.95rem}
+    .evapp-ranking-empty{padding:34px 18px;text-align:center;color:var(--evapp-muted);font-size:.9rem}.evapp-ranking-empty svg{width:40px;height:40px;margin-bottom:8px;opacity:.45}.evapp-ranking-empty p{margin:0}
+    @media(max-width:900px){.evapp-ranking-grid{grid-template-columns:1fr}}
+    @media(max-width:640px){.evapp-ranking-wrapper{padding:0}.evapp-ranking-shell{padding:16px;border-radius:20px}.evapp-ranking-back{width:100%;justify-content:center}.evapp-ranking-header{grid-template-columns:1fr}.evapp-ranking-header-icon{width:50px;height:50px}.evapp-ranking-controls{align-items:stretch}.evapp-refresh-btn{width:100%}.evapp-last-update{width:100%;text-align:center}.evapp-landing-controls{grid-template-columns:1fr}.evapp-landing-btn{width:100%}.evapp-ranking-item{gap:9px}.evapp-ranking-position{width:34px;height:34px}.evapp-ranking-name{white-space:normal;overflow:visible}}
+    @media(prefers-reduced-motion:reduce){.evapp-ranking-wrapper *{scroll-behavior:auto!important;transition:none!important}}
     </style>
 
     <div class="evapp-ranking-wrapper" data-event-id="<?php echo esc_attr($active_event); ?>" data-nonce="<?php echo esc_attr(wp_create_nonce('eventosapp_ranking_networking')); ?>">
-        
+        <div class="evapp-ranking-backbar">
+            <a class="evapp-ranking-back" href="<?php echo esc_url($dashboard_url); ?>">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                Volver al dashboard
+            </a>
+        </div>
+        <div class="evapp-ranking-shell">
         <div class="evapp-ranking-header">
-            <h1>🏆 Ranking de Networking</h1>
-            <div class="evento-info">
-                <strong>Evento:</strong> <?php echo esc_html($evento_nombre); ?>
-            </div>
-            <div class="fecha-info">
-                <?php echo esc_html($fecha_actual); ?>
+            <span class="evapp-ranking-header-icon" aria-hidden="true">🏆</span>
+            <div>
+                <p class="evapp-ranking-eyebrow">EventosApp · Networking</p>
+                <h1>Ranking de Networking</h1>
+                <div class="evapp-ranking-header-meta">
+                    <span><strong>Evento:</strong> <?php echo esc_html($evento_nombre); ?></span>
+                    <span><?php echo esc_html($fecha_actual); ?></span>
+                    <span>Conexiones únicas acumuladas</span>
+                </div>
             </div>
         </div>
 
@@ -499,22 +97,16 @@ add_shortcode('eventosapp_ranking_networking', function(){
         </div>
 
         <?php
-        // Generar URL de la landing de networking
+        // URL real de la landing de Networking del evento.
+        // Evitamos reutilizar la página de Check-In QR con doble autenticación,
+        // porque es un módulo diferente aunque comparta concepto de autenticación.
         $networking_landing_url = '';
-        if (function_exists('eventosapp_get_qr_double_auth_url')) {
-            $base_url = eventosapp_get_qr_double_auth_url();
-            if ($base_url && $base_url !== '#') {
-                // Si la URL base no tiene parámetros, agregamos el event ID
-                $networking_landing_url = add_query_arg('event', $active_event, $base_url);
-            }
+        $networking_page_id = absint(get_post_meta($active_event, '_eventosapp_networking_page_id', true));
+        if ($networking_page_id) {
+            $networking_landing_url = get_permalink($networking_page_id);
         }
-        
-        // Alternativamente, buscar si hay una meta específica del evento
-        if (empty($networking_landing_url) || $networking_landing_url === '#') {
-            $networking_page_id = get_post_meta($active_event, '_eventosapp_networking_page_id', true);
-            if ($networking_page_id) {
-                $networking_landing_url = get_permalink($networking_page_id);
-            }
+        if (!$networking_landing_url && function_exists('eventosapp_networking_build_url')) {
+            $networking_landing_url = eventosapp_networking_build_url($active_event);
         }
         ?>
 
@@ -596,6 +188,7 @@ add_shortcode('eventosapp_ranking_networking', function(){
             </div>
         </div>
 
+        </div>
     </div>
 
     <script>
@@ -611,6 +204,14 @@ add_shortcode('eventosapp_ranking_networking', function(){
         const readContainer = document.getElementById('evapp-ranking-read');
         const refreshBtn = document.getElementById('evapp-refresh-ranking');
         const lastUpdateSpan = document.getElementById('evapp-last-update-time');
+        let isLoading = false;
+        let lastLoadedAt = 0;
+
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.textContent = String(value ?? '');
+            return div.innerHTML;
+        }
 
         function formatTime() {
             const now = new Date();
@@ -638,7 +239,7 @@ add_shortcode('eventosapp_ranking_networking', function(){
                     <li class="evapp-ranking-item rank-${rank}">
                         <div class="evapp-ranking-position">${rank}</div>
                         <div class="evapp-ranking-info">
-                            <div class="evapp-ranking-name">${item.nombre}</div>
+                            <div class="evapp-ranking-name">${escapeHtml(item.nombre)}</div>
                         </div>
                         <div class="evapp-ranking-count">${item.cantidad}</div>
                     </li>
@@ -648,6 +249,8 @@ add_shortcode('eventosapp_ranking_networking', function(){
         }
 
         function loadRanking() {
+            if (isLoading) return;
+            isLoading = true;
             refreshBtn.classList.add('loading');
             refreshBtn.disabled = true;
 
@@ -666,6 +269,7 @@ add_shortcode('eventosapp_ranking_networking', function(){
                     renderRanking(data.data.top_readers, readersContainer, 'readers');
                     renderRanking(data.data.top_read, readContainer, 'read');
                     lastUpdateSpan.textContent = formatTime();
+                    lastLoadedAt = Date.now();
                 } else {
                     console.error('Error al cargar ranking:', data);
                     readersContainer.innerHTML = `<li class="evapp-ranking-empty"><p>Error al cargar datos</p></li>`;
@@ -678,6 +282,7 @@ add_shortcode('eventosapp_ranking_networking', function(){
                 readContainer.innerHTML = `<li class="evapp-ranking-empty"><p>Error de conexión</p></li>`;
             })
             .finally(() => {
+                isLoading = false;
                 refreshBtn.classList.remove('loading');
                 refreshBtn.disabled = false;
             });
@@ -686,8 +291,13 @@ add_shortcode('eventosapp_ranking_networking', function(){
         // Event listeners
         refreshBtn.addEventListener('click', loadRanking);
 
-        // Auto-refresh cada 30 segundos
-        setInterval(loadRanking, 30000);
+        // Auto-refresh cada 30 segundos solo cuando la pestaña está visible.
+        setInterval(() => { if (!document.hidden) loadRanking(); }, 30000);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && (!lastLoadedAt || Date.now() - lastLoadedAt > 30000)) {
+                loadRanking();
+            }
+        });
 
         // Funcionalidad de copiar URL
         const copyBtn = document.getElementById('evapp-copy-url');
@@ -763,10 +373,16 @@ add_shortcode('eventosapp_ranking_networking', function(){
  * AJAX: Obtener ranking de networking
  */
 add_action('wp_ajax_eventosapp_get_ranking_networking', 'eventosapp_get_ranking_networking_ajax');
-add_action('wp_ajax_nopriv_eventosapp_get_ranking_networking', 'eventosapp_get_ranking_networking_ajax');
 
 function eventosapp_get_ranking_networking_ajax() {
     check_ajax_referer('eventosapp_ranking_networking', 'security');
+
+    if ( ! is_user_logged_in() ) {
+        wp_send_json_error(['message' => 'Debes iniciar sesión.'], 401);
+    }
+    if ( ! function_exists('eventosapp_role_can') || ! eventosapp_role_can('networking_ranking') ) {
+        wp_send_json_error(['message' => 'No tienes permisos para consultar el ranking.'], 403);
+    }
 
     $event_id = isset($_POST['event_id']) ? absint($_POST['event_id']) : 0;
     
@@ -777,8 +393,8 @@ function eventosapp_get_ranking_networking_ajax() {
     global $wpdb;
     $table = $wpdb->prefix . 'eventosapp_networking';
 
-    // Verificar que la tabla existe
-    $table_exists = $wpdb->get_var("SHOW TABLES LIKE '{$table}'");
+    // Verificar que la tabla existe sin interpolar directamente el identificador.
+    $table_exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
     if (!$table_exists) {
         wp_send_json_error(['message' => 'Tabla de networking no encontrada']);
     }
@@ -787,7 +403,7 @@ function eventosapp_get_ranking_networking_ajax() {
     $top_readers_query = $wpdb->prepare("
         SELECT 
             reader_ticket_id as ticket_id,
-            COUNT(*) as cantidad
+            COUNT(DISTINCT read_ticket_id) as cantidad
         FROM {$table}
         WHERE event_id = %d
         GROUP BY reader_ticket_id
@@ -801,7 +417,7 @@ function eventosapp_get_ranking_networking_ajax() {
     $top_read_query = $wpdb->prepare("
         SELECT 
             read_ticket_id as ticket_id,
-            COUNT(*) as cantidad
+            COUNT(DISTINCT reader_ticket_id) as cantidad
         FROM {$table}
         WHERE event_id = %d
         GROUP BY read_ticket_id
