@@ -22,107 +22,73 @@ add_shortcode('eventosapp_networking_search', function($atts) {
     ], $atts, 'eventosapp_networking_search');
 
     $nonce = wp_create_nonce('eventosapp_networking_search');
-    $dashboard_url = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
 
     ob_start();
     ?>
-    <style>
+    <style id="eventosapp-networking-search-ui">
         .evapp-netsearch-wrapper{
             --evapp-primary:#3279bd;--evapp-primary-dark:#255f96;--evapp-primary-soft:#eaf4ff;
-            --evapp-app-bg:#f5f8fc;--evapp-surface:#fff;--evapp-border:#dfe7f1;--evapp-text:#182230;
-            --evapp-muted:#64748b;--evapp-success:#15803d;--evapp-danger:#b42318;
-            width:100%;max-width:780px;margin:0 auto;padding:0 10px;color:var(--evapp-text);font-family:inherit;line-height:1.45;
+            --evapp-app-bg:#f5f8fc;--evapp-surface:#ffffff;--evapp-border:#dfe7f1;--evapp-text:#182230;
+            --evapp-muted:#64748b;--evapp-success:#15803d;--evapp-success-soft:#ecfdf3;--evapp-danger:#b42318;--evapp-danger-soft:#fff1f0;
+            width:100%;max-width:820px;margin:0 auto;padding:clamp(18px,3vw,36px);color:var(--evapp-text);background:var(--evapp-app-bg);
+            border:1px solid var(--evapp-border);border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);font-family:inherit;line-height:1.45;box-sizing:border-box;isolation:isolate;
         }
-        .evapp-netsearch-wrapper,.evapp-netsearch-wrapper *{box-sizing:border-box}
-        .evapp-netsearch-backbar{display:flex;margin:0 0 12px}
-        .evapp-netsearch-back{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid #cfe3f6;border-radius:12px;background:var(--evapp-primary-soft);color:var(--evapp-primary)!important;text-decoration:none!important;font-size:13px;font-weight:750;transition:.18s ease}
-        .evapp-netsearch-back:hover{background:var(--evapp-primary);border-color:var(--evapp-primary);color:#fff!important;transform:translateY(-1px)}
-        .evapp-netsearch-back svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.2}
-        .evapp-netsearch-card{background:var(--evapp-app-bg);color:var(--evapp-text);border:1px solid var(--evapp-border);border-radius:26px;padding:clamp(18px,4vw,30px);box-shadow:0 18px 50px rgba(31,52,73,.08)}
-        .evapp-netsearch-header{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:14px;margin-bottom:18px;text-align:left}
-        .evapp-netsearch-header-icon{display:flex;align-items:center;justify-content:center;width:54px;height:54px;color:#fff;background:linear-gradient(145deg,var(--evapp-primary),var(--evapp-primary-dark));border-radius:16px;box-shadow:0 8px 18px rgba(47,115,181,.22)}
-        .evapp-netsearch-header-icon svg{width:27px;height:27px}.evapp-netsearch-eyebrow{margin:0 0 3px;color:var(--evapp-primary);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-        .evapp-netsearch-title{margin:0;color:var(--evapp-text);font-weight:850;font-size:clamp(1.25rem,4vw,1.6rem);letter-spacing:-.02em;line-height:1.2}.evapp-netsearch-subtitle{color:var(--evapp-muted);font-size:.9rem;margin:5px 0 0}
-        .evapp-netsearch-form{margin-top:0;padding:clamp(16px,3vw,22px);background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.045)}
-        .evapp-netsearch-field{margin-bottom:16px}.evapp-netsearch-field label{display:block;font-size:.92rem;margin-bottom:7px;color:var(--evapp-text);font-weight:750}
-        .evapp-netsearch-field small{display:block!important;margin-top:6px!important;color:var(--evapp-muted)!important;font-size:.82rem!important;line-height:1.35!important}
-        .evapp-netsearch-input{width:100%;min-height:46px;padding:11px 13px;border-radius:12px;border:1px solid var(--evapp-border);background:#fff;color:var(--evapp-text);font:inherit;font-size:16px;transition:border-color .18s ease,box-shadow .18s ease}
-        .evapp-netsearch-input:focus{outline:none;border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.13)}
-        .evapp-netsearch-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:46px;border:1px solid var(--evapp-primary);border-radius:12px;padding:11px 16px;font:inherit;font-weight:800;cursor:pointer;background:var(--evapp-primary);color:#fff;transition:.18s ease;box-shadow:0 7px 16px rgba(47,115,181,.18);margin-top:4px}
-        .evapp-netsearch-btn:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);transform:translateY(-1px)}.evapp-netsearch-btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
-        .evapp-netsearch-message{margin-top:14px;padding:11px 13px;border-radius:12px;font-size:.88rem;text-align:center;font-weight:700}.evapp-netsearch-message.success{background:#edf9f0;color:var(--evapp-success);border:1px solid #c9e8d1}.evapp-netsearch-message.error{background:#fff1f0;color:var(--evapp-danger);border:1px solid #f4c7c3}.evapp-netsearch-message.info{background:var(--evapp-primary-soft);color:var(--evapp-primary-dark);border:1px solid #cfe3f6}
-        .evapp-netsearch-results{margin-top:18px;display:none;padding:clamp(16px,3vw,22px);background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px}.evapp-netsearch-results.show{display:block}
-        .evapp-netsearch-results-title{font-size:1rem;font-weight:800;margin-bottom:12px;color:var(--evapp-text);text-align:left}.evapp-netsearch-event-card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:14px;background:#f8fbff;border:1px solid var(--evapp-border);border-radius:14px;padding:15px;margin-bottom:10px;transition:.18s ease}.evapp-netsearch-event-card:last-child{margin-bottom:0}.evapp-netsearch-event-card:hover{border-color:#b9d4ed;box-shadow:0 10px 22px rgba(31,73,112,.08);transform:translateY(-1px)}
-        .evapp-netsearch-event-title{font-size:1rem;font-weight:800;color:var(--evapp-text);margin:0 0 6px}.evapp-netsearch-event-date{font-size:.84rem;color:var(--evapp-muted);margin:0;display:flex;align-items:center;gap:6px}.evapp-netsearch-event-btn{grid-column:2;grid-row:1/span 2;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 14px;background:var(--evapp-primary);color:#fff!important;border:1px solid var(--evapp-primary);border-radius:10px;font-weight:750;font-size:.86rem;text-decoration:none!important;transition:.18s ease;white-space:nowrap}.evapp-netsearch-event-btn:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);transform:translateY(-1px)}
+        .evapp-netsearch-wrapper *,.evapp-netsearch-wrapper *::before,.evapp-netsearch-wrapper *::after{box-sizing:border-box}
+        .evapp-netsearch-wrapper button,.evapp-netsearch-wrapper input{font:inherit}
+        .evapp-netsearch-wrapper svg{display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+        .evapp-netsearch-card{padding:0;background:transparent;border:0;box-shadow:none;color:var(--evapp-text)}
+        .evapp-netsearch-header{margin-bottom:20px;text-align:left}
+        .evapp-netsearch-eyebrow{margin:0 0 6px;color:var(--evapp-primary);font-size:12px;font-weight:800;letter-spacing:.11em;text-transform:uppercase}
+        .evapp-netsearch-title{margin:0;color:var(--evapp-text);font-size:clamp(27px,5vw,42px);font-weight:850;line-height:1.08;letter-spacing:-.035em}
+        .evapp-netsearch-subtitle{max-width:680px;margin:10px 0 0;color:var(--evapp-muted);font-size:15px;line-height:1.6}
+        .evapp-netsearch-form,.evapp-netsearch-results{padding:20px;background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 26px rgba(31,52,73,.05)}
+        .evapp-netsearch-form{margin-top:0}.evapp-netsearch-field{margin-bottom:17px}
+        .evapp-netsearch-field label{display:block;margin-bottom:7px;color:var(--evapp-text);font-size:12px;font-weight:800}
+        .evapp-netsearch-field small{display:block!important;margin-top:6px!important;color:var(--evapp-muted)!important;font-size:11px!important;line-height:1.5!important}
+        .evapp-netsearch-input{width:100%;min-height:46px;margin:0;padding:10px 12px;color:var(--evapp-text);background:#fff;border:1px solid var(--evapp-border);border-radius:13px;box-shadow:none;outline:none;font-size:16px;transition:border-color .16s ease,box-shadow .16s ease}
+        .evapp-netsearch-input:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.12)}
+        .evapp-netsearch-btn,.evapp-netsearch-event-btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;margin:0;padding:10px 15px;color:#fff!important;background:var(--evapp-primary);border:1px solid var(--evapp-primary);border-radius:12px;box-shadow:0 9px 20px rgba(50,121,189,.18);font-size:14px;font-weight:750;line-height:1.15;text-align:center;cursor:pointer;text-decoration:none!important;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease}
+        .evapp-netsearch-btn{width:100%}.evapp-netsearch-btn:hover:not(:disabled),.evapp-netsearch-event-btn:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);box-shadow:0 12px 24px rgba(50,121,189,.24);transform:translateY(-1px)}
+        .evapp-netsearch-btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+        .evapp-netsearch-btn:focus-visible,.evapp-netsearch-event-btn:focus-visible,.evapp-netsearch-input:focus-visible{outline:3px solid rgba(50,121,189,.20);outline-offset:2px}
+        .evapp-netsearch-message{margin-top:14px;padding:12px 13px;border-radius:12px;font-size:13px;text-align:center;font-weight:730}
+        .evapp-netsearch-message.success{background:var(--evapp-success-soft);color:var(--evapp-success);border:1px solid #c8ead4}.evapp-netsearch-message.error{background:var(--evapp-danger-soft);color:var(--evapp-danger);border:1px solid #f1c7c3}.evapp-netsearch-message.info{background:var(--evapp-primary-soft);color:var(--evapp-primary-dark);border:1px solid #cfe3f6}
+        .evapp-netsearch-results{margin-top:16px;display:none}.evapp-netsearch-results.show{display:block}
+        .evapp-netsearch-results-title{margin:0 0 13px;color:var(--evapp-text);font-size:17px;font-weight:820;line-height:1.3;text-align:left}
+        .evapp-netsearch-event-card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:14px;min-width:0;padding:15px;margin-bottom:10px;background:#fbfdff;border:1px solid var(--evapp-border);border-radius:14px;transition:border-color .16s ease,background .16s ease,box-shadow .16s ease,transform .16s ease}
+        .evapp-netsearch-event-card:last-child{margin-bottom:0}.evapp-netsearch-event-card:hover{background:#fff;border-color:#c7d7e8;box-shadow:0 9px 20px rgba(31,65,99,.09);transform:translateY(-1px)}
+        .evapp-netsearch-event-title{margin:0 0 5px;color:var(--evapp-text);font-size:15px;font-weight:820;line-height:1.3}.evapp-netsearch-event-date{display:flex;align-items:center;gap:6px;margin:0;color:var(--evapp-muted);font-size:12px;line-height:1.45}.evapp-netsearch-event-date svg{width:16px;height:16px;flex:0 0 16px}
+        .evapp-netsearch-event-btn{grid-column:2;grid-row:1/span 2;white-space:nowrap}
         .evapp-netsearch-loading{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:evapp-spin .8s linear infinite}@keyframes evapp-spin{to{transform:rotate(360deg)}}
-        @media(max-width:620px){.evapp-netsearch-wrapper{padding:0}.evapp-netsearch-card{padding:16px;border-radius:20px}.evapp-netsearch-back{width:100%;justify-content:center}.evapp-netsearch-header{grid-template-columns:1fr}.evapp-netsearch-event-card{grid-template-columns:1fr}.evapp-netsearch-event-btn{grid-column:1;grid-row:auto;width:100%;margin-top:4px}}
-        @media(prefers-reduced-motion:reduce){.evapp-netsearch-wrapper *{scroll-behavior:auto!important;transition:none!important}}
+        @media(max-width:767px){.evapp-netsearch-wrapper{padding:16px;border-radius:20px}.evapp-netsearch-event-card{grid-template-columns:1fr}.evapp-netsearch-event-btn{grid-column:1;grid-row:auto;width:100%;margin-top:4px}}
+        @media(max-width:520px){.evapp-netsearch-form,.evapp-netsearch-results{padding:16px}.evapp-netsearch-title{font-size:30px}}
+        @media(prefers-reduced-motion:reduce){.evapp-netsearch-wrapper *,.evapp-netsearch-wrapper *::before,.evapp-netsearch-wrapper *::after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
     </style>
 
     <div class="evapp-netsearch-wrapper">
-        <div class="evapp-netsearch-backbar">
-            <a class="evapp-netsearch-back" href="<?php echo esc_url($dashboard_url); ?>">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
-                Volver al dashboard
-            </a>
-        </div>
         <div class="evapp-netsearch-card">
-            <div class="evapp-netsearch-header">
-                <span class="evapp-netsearch-header-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none">
-                        <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </span>
-                <div>
-                    <p class="evapp-netsearch-eyebrow">EventosApp · Networking</p>
-                    <h2 class="evapp-netsearch-title"><?php echo esc_html($atts['title']); ?></h2>
-                    <p class="evapp-netsearch-subtitle"><?php echo esc_html($atts['subtitle']); ?></p>
-                </div>
-            </div>
+            <header class="evapp-netsearch-header">
+                <p class="evapp-netsearch-eyebrow">EVENTOSAPP</p>
+                <h1 class="evapp-netsearch-title"><?php echo esc_html($atts['title']); ?></h1>
+                <p class="evapp-netsearch-subtitle"><?php echo esc_html($atts['subtitle']); ?></p>
+            </header>
 
             <form class="evapp-netsearch-form" id="evappNetSearchForm" data-nonce="<?php echo esc_attr($nonce); ?>">
                 <div class="evapp-netsearch-field">
                     <label for="evappNetSearchCedula">Cédula / Documento de Identidad</label>
-                    <input 
-                        type="text" 
-                        id="evappNetSearchCedula" 
-                        class="evapp-netsearch-input" 
-                        placeholder="Ej: 1020304050"
-                        inputmode="numeric"
-                        required
-                        autocomplete="off"
-                    >
-                    <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
-                        Escribe tal cual como está en tu inscripción.
-                    </small>
+                    <input type="text" id="evappNetSearchCedula" class="evapp-netsearch-input" placeholder="Ej: 1020304050" inputmode="numeric" required autocomplete="off">
+                    <small>Escribe tal cual como está en tu inscripción.</small>
                 </div>
-                
                 <div class="evapp-netsearch-field">
                     <label for="evappNetSearchApellido">Apellidos</label>
-                    <input 
-                        type="text" 
-                        id="evappNetSearchApellido" 
-                        class="evapp-netsearch-input"
-                        autocomplete="family-name" 
-                        placeholder="Ej: Pérez García"
-                        required
-                        autocomplete="off"
-                    >
-                    <small style="display:block;margin-top:6px;color:#a9b6d3;font-size:0.85rem;line-height:1.3;">
-                        Escribe tal cual como están en tu inscripción.
-                    </small>
+                    <input type="text" id="evappNetSearchApellido" class="evapp-netsearch-input" placeholder="Ej: Pérez García" required autocomplete="family-name">
+                    <small>Escribe tal cual como están en tu inscripción.</small>
                 </div>
 
                 <button type="submit" class="evapp-netsearch-btn" id="evappNetSearchBtn">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                        <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
-                        <path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
+                    <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="M21 21L16.65 16.65"></path></svg>
                     Buscar mis eventos
                 </button>
-
                 <div class="evapp-netsearch-message" style="display:none;" id="evappNetSearchMsg" aria-live="polite"></div>
             </form>
 
