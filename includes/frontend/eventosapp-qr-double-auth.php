@@ -1175,6 +1175,8 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
       border-radius:14px;background:#fff;
     }
     .evda-auth-modal .evda-state + .evapp-qr-grid,
+    .evda-auth-modal .evda-state + .evda-auth-form,
+    .evda-auth-modal .evda-auth-form + .evapp-qr-grid,
     .evda-auth-modal .evapp-qr-grid + .evda-auth-form,
     .evda-auth-modal .evda-state + .evda-action-btn,
     .evda-auth-modal .evapp-qr-grid + .evda-action-btn { margin-top:14px; }
@@ -2025,8 +2027,6 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
         modalFoot.innerHTML = '';
 
         let html = renderState('success','QR validado','El ticket corresponde al evento activo. Ingresa el código de 5 dígitos para completar el acceso.');
-        html += renderTicketGrid(ticket);
-        if (ticket.payment_message) html += '<div class="evda-payment-note">'+safeValue(ticket.payment_message,'')+'</div>';
 
         html += '<div class="evda-auth-form">'
           + '<label class="evda-auth-label" for="'+root.id+'-auth-code">Código de verificación</label>'
@@ -2038,7 +2038,11 @@ add_shortcode( 'qr_checkin_doble_auth', function( $atts ) {
           + '<button type="button" class="evda-action-btn evda-cancel-btn" data-role="cancel-auth"><span>Cancelar</span></button>'
           + '</div></div>';
 
+        html += renderTicketGrid(ticket);
+        if (ticket.payment_message) html += '<div class="evda-payment-note">'+safeValue(ticket.payment_message,'')+'</div>';
+
         modalBody.innerHTML = html;
+        modalBody.scrollTop = 0;
         if (!authModal.classList.contains('is-open')) openModal();
         setOutput(renderState('info','Segundo factor pendiente','La ventana de verificación está abierta. El ticket no se modificará hasta validar correctamente el código.'));
 
