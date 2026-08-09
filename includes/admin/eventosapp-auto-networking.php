@@ -9,13 +9,193 @@
 
 if ( ! defined('ABSPATH') ) exit;
 
+
+/* ============================================================
+ *  Configuración centralizada de páginas de Networking
+ * ============================================================ */
+
+if ( ! function_exists('eventosapp_get_networking_pages_config') ) {
+    function eventosapp_get_networking_pages_config() {
+        $cfg = get_option('eventosapp_networking_pages', []);
+        if ( ! is_array($cfg) ) $cfg = [];
+
+        return wp_parse_args($cfg, [
+            'parent_page_id' => 0,
+            'search_page_id' => 0,
+            'global_page_id' => 0,
+        ]);
+    }
+}
+
+if ( ! function_exists('eventosapp_sanitize_networking_pages_option') ) {
+    function eventosapp_sanitize_networking_pages_option($input) {
+        $input = is_array($input) ? $input : [];
+        return [
+            'parent_page_id' => isset($input['parent_page_id']) ? absint($input['parent_page_id']) : 0,
+            'search_page_id' => isset($input['search_page_id']) ? absint($input['search_page_id']) : 0,
+            'global_page_id' => isset($input['global_page_id']) ? absint($input['global_page_id']) : 0,
+        ];
+    }
+}
+
+if ( ! function_exists('eventosapp_get_networking_search_url') ) {
+    function eventosapp_get_networking_search_url($fallback = '#') {
+        $cfg = eventosapp_get_networking_pages_config();
+        $pid = absint($cfg['search_page_id'] ?? 0);
+        if ( $pid ) {
+            $url = get_permalink($pid);
+            if ( $url ) return $url;
+        }
+        return $fallback;
+    }
+}
+
+if ( ! function_exists('eventosapp_get_networking_global_url') ) {
+    function eventosapp_get_networking_global_url($fallback = '#') {
+        $cfg = eventosapp_get_networking_pages_config();
+        $pid = absint($cfg['global_page_id'] ?? 0);
+        if ( $pid ) {
+            $url = get_permalink($pid);
+            if ( $url ) return $url;
+        }
+        return $fallback;
+    }
+}
+
+if ( ! function_exists('eventosapp_get_networking_parent_page_id') ) {
+    function eventosapp_get_networking_parent_page_id() {
+        $cfg = eventosapp_get_networking_pages_config();
+        $pid = absint($cfg['parent_page_id'] ?? 0);
+        if ( ! $pid ) return 0;
+
+        $page = get_post($pid);
+        if ( ! $page || $page->post_type !== 'page' || $page->post_status === 'trash' ) {
+            return 0;
+        }
+
+        return $pid;
+    }
+}
+
+if ( ! function_exists('eventosapp_render_networking_pages_field') ) {
+    function eventosapp_render_networking_pages_field($args) {
+        $key  = sanitize_key($args['key'] ?? '');
+        $desc = (string) ($args['desc'] ?? '');
+        $cfg  = eventosapp_get_networking_pages_config();
+        $current = absint($cfg[$key] ?? 0);
+
+        $pages = get_pages([
+            'post_status' => ['publish', 'private'],
+            'number'      => 0,
+            'sort_column' => 'post_title',
+            'sort_order'  => 'asc',
+        ]);
+
+        echo '<select name="eventosapp_networking_pages[' . esc_attr($key) . ']" class="regular-text">';
+        echo '<option value="0">— Selecciona una página —</option>';
+        foreach ($pages as $page) {
+            printf(
+                '<option value="%d"%s>%s</option>',
+                (int) $page->ID,
+                selected($current, $page->ID, false),
+                esc_html($page->post_title)
+            );
+        }
+        echo '</select>';
+
+        if ( $desc !== '' ) {
+            echo '<p class="description" style="margin-top:6px;">' . wp_kses_post($desc) . '</p>';
+        }
+    }
+}
+
+/**
+ * Integra todas las páginas de Networking en la misma pantalla de Configuración
+ * donde EventosApp ya mapea el resto de shortcodes.
+ *
+ * Se usa una opción separada para no alterar el saneamiento histórico de
+ * `eventosapp_pages`, evitando que una actualización del módulo elimine otras
+ * configuraciones ya existentes.
+ */
+add_action('admin_init', function(){
+    register_setting('eventosapp_pages_group', 'eventosapp_networking_pages', [
+        'type'              => 'array',
+        'sanitize_callback' => 'eventosapp_sanitize_networking_pages_option',
+        'default'           => [],
+    ]);
+
+    add_settings_field(
+        'networking_parent_page_id',
+        'Página padre de Networking',
+        'eventosapp_render_networking_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        [
+            'key'  => 'parent_page_id',
+            'desc' => 'Página padre de las landings por evento. Las páginas hijas se crean automáticamente con <code>[eventosapp_qr_networking_auth event="ID"]</code>. Si no seleccionas una página, se conserva <code>/networking/</code>.',
+        ]
+    );
+
+    add_settings_field(
+        'networking_search_page_id',
+        'Página de Acceso a Networking',
+        'eventosapp_render_networking_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        [
+            'key'  => 'search_page_id',
+            'desc' => 'Debe contener el shortcode: <code>[eventosapp_networking_search]</code>',
+        ]
+    );
+
+    add_settings_field(
+        'networking_global_page_id',
+        'Página de Networking Global',
+        'eventosapp_render_networking_pages_field',
+        'eventosapp_configuracion',
+        'eventosapp_pages_section',
+        [
+            'key'  => 'global_page_id',
+            'desc' => 'Debe contener el shortcode: <code>[eventosapp_networking_global]</code>',
+        ]
+    );
+
+    // El dashboard usa exclusivamente [eventosapp_ranking_networking].
+    // Reemplazamos la descripción histórica del campo sin cambiar su key,
+    // por lo que se conserva la página ya configurada y la protección de roles.
+    if ( function_exists('eventosapp_render_pages_field') ) {
+        add_settings_field(
+            'networking_ranking_page_id',
+            'Página de Ranking Networking',
+            'eventosapp_render_pages_field',
+            'eventosapp_configuracion',
+            'eventosapp_pages_section',
+            [
+                'key'  => 'networking_ranking_page_id',
+                'desc' => 'Debe contener el shortcode: <code>[eventosapp_ranking_networking]</code>',
+            ]
+        );
+    }
+}, 30);
+
 /* ============================================================
  *  Helpers de Landing (/networking/{slug})
  * ============================================================ */
 
 if ( ! function_exists('eventosapp_networking_parent_slug') ) {
-    function eventosapp_networking_parent_slug() { 
-        return 'networking'; 
+    function eventosapp_networking_parent_slug() {
+        $configured_id = function_exists('eventosapp_get_networking_parent_page_id')
+            ? eventosapp_get_networking_parent_page_id()
+            : 0;
+
+        if ( $configured_id ) {
+            $page = get_post($configured_id);
+            if ( $page && ! empty($page->post_name) ) {
+                return sanitize_title($page->post_name);
+            }
+        }
+
+        return 'networking';
     }
 }
 
@@ -28,13 +208,25 @@ if ( ! function_exists('eventosapp_networking_parent_title') ) {
 /** Obtiene o crea (si falta) la página padre /networking/ */
 if ( ! function_exists('eventosapp_networking_ensure_parent') ) {
     function eventosapp_networking_ensure_parent() {
+        $configured_id = function_exists('eventosapp_get_networking_parent_page_id')
+            ? eventosapp_get_networking_parent_page_id()
+            : 0;
+
+        if ( $configured_id ) {
+            return (int) $configured_id;
+        }
+
         $parent_slug  = eventosapp_networking_parent_slug();
         $parent       = get_page_by_path($parent_slug);
-        
+
         if ( $parent && $parent->post_type === 'page' && $parent->post_status !== 'trash' ) {
+            // Sincronizar automáticamente la página detectada con Configuración.
+            $cfg = function_exists('eventosapp_get_networking_pages_config') ? eventosapp_get_networking_pages_config() : [];
+            $cfg['parent_page_id'] = (int) $parent->ID;
+            update_option('eventosapp_networking_pages', $cfg, false);
             return (int) $parent->ID;
         }
-        
+
         $parent_id = wp_insert_post([
             'post_type'    => 'page',
             'post_status'  => 'publish',
@@ -44,7 +236,15 @@ if ( ! function_exists('eventosapp_networking_ensure_parent') ) {
             'post_content' => '',
         ], true);
         
-        return is_wp_error($parent_id) ? 0 : (int) $parent_id;
+        if ( is_wp_error($parent_id) || ! $parent_id ) {
+            return 0;
+        }
+
+        $cfg = function_exists('eventosapp_get_networking_pages_config') ? eventosapp_get_networking_pages_config() : [];
+        $cfg['parent_page_id'] = (int) $parent_id;
+        update_option('eventosapp_networking_pages', $cfg, false);
+
+        return (int) $parent_id;
     }
 }
 
@@ -73,9 +273,18 @@ if ( ! function_exists('eventosapp_networking_get_slug') ) {
 /** Construye la URL esperada a partir del slug */
 if ( ! function_exists('eventosapp_networking_build_url') ) {
     function eventosapp_networking_build_url($event_id) {
+        $slug      = eventosapp_networking_get_slug($event_id);
+        $parent_id = eventosapp_networking_ensure_parent();
+
+        if ( $parent_id ) {
+            $parent_url = get_permalink($parent_id);
+            if ( $parent_url ) {
+                return trailingslashit($parent_url) . trailingslashit($slug);
+            }
+        }
+
         $parent_slug = eventosapp_networking_parent_slug();
-        $slug        = eventosapp_networking_get_slug($event_id);
-        return home_url( '/' . $parent_slug . '/' . $slug . '/' );
+        return home_url('/' . trim($parent_slug, '/') . '/' . $slug . '/');
     }
 }
 
@@ -221,19 +430,22 @@ function eventosapp_render_metabox_networking($post){
     wp_nonce_field('eventosapp_networking_save', 'eventosapp_networking_nonce');
     ?>
     <style>
-        .evnet-wrap { font-size:13px; line-height:1.5; }
-        .evnet-label { display:block; font-weight:600; margin-bottom:6px; color:#1e293b; }
-        .evnet-input { width:100%; padding:7px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; }
-        .evnet-url-preview { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px; margin:8px 0; word-break:break-all; font-size:12px; color:#475569; }
-        .evnet-help { font-size:12px; color:#64748b; margin:6px 0; }
-        .evnet-actions { display:flex; gap:8px; margin-top:10px; }
-        .evnet-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 12px; border:0; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer; text-decoration:none; color:#fff; transition:background .15s; }
-        .evnet-btn-primary { background:#2563eb; }
-        .evnet-btn-primary:hover { background:#1d4ed8; color:#fff; }
-        .evnet-btn-secondary { background:#64748b; }
-        .evnet-btn-secondary:hover { background:#475569; color:#fff; }
-        .evnet-error { background:#fee; border:1px solid #fcc; border-radius:6px; padding:10px; margin:10px 0; color:#c00; font-size:12px; font-weight:600; }
-        .evnet-success { background:#d4edda; border:1px solid #c3e6cb; border-radius:6px; padding:10px; margin:10px 0; color:#155724; font-size:12px; font-weight:600; }
+        .evnet-wrap { --evnet-primary:#3279bd; --evnet-primary-dark:#255f96; --evnet-soft:#eaf4ff; --evnet-border:#dfe7f1; --evnet-text:#182230; --evnet-muted:#64748b; font-size:13px; line-height:1.5; color:var(--evnet-text); }
+        .evnet-wrap * { box-sizing:border-box; }
+        .evnet-label { display:block; font-weight:700; margin-bottom:6px; color:var(--evnet-text); }
+        .evnet-input { width:100%; min-height:38px; padding:8px 10px; border:1px solid var(--evnet-border); border-radius:9px; font-size:13px; background:#fff; color:var(--evnet-text); transition:border-color .15s,box-shadow .15s; }
+        .evnet-input:focus { outline:none; border-color:var(--evnet-primary); box-shadow:0 0 0 3px rgba(50,121,189,.12); }
+        .evnet-url-preview { background:#f8fbff; border:1px solid var(--evnet-border); border-radius:9px; padding:10px; margin:8px 0; word-break:break-all; font-size:12px; color:#475569; }
+        .evnet-help { font-size:12px; color:var(--evnet-muted); margin:6px 0; }
+        .evnet-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+        .evnet-btn { display:inline-flex; flex:1 1 auto; align-items:center; justify-content:center; gap:6px; min-height:38px; padding:8px 12px; border:1px solid transparent; border-radius:9px; font-size:13px; font-weight:700; cursor:pointer; text-decoration:none; color:#fff; transition:.15s ease; }
+        .evnet-btn-primary { background:var(--evnet-primary); border-color:var(--evnet-primary); }
+        .evnet-btn-primary:hover { background:var(--evnet-primary-dark); border-color:var(--evnet-primary-dark); color:#fff; }
+        .evnet-btn-secondary { background:#fff; border-color:var(--evnet-border); color:var(--evnet-text); }
+        .evnet-btn-secondary:hover { background:var(--evnet-soft); border-color:#bdd8ef; color:var(--evnet-primary-dark); }
+        .evnet-error { background:#fff1f0; border:1px solid #f4c7c3; border-radius:9px; padding:10px; margin:10px 0; color:#b42318; font-size:12px; font-weight:700; }
+        .evnet-success { background:#edf9f0; border:1px solid #c9e8d1; border-radius:9px; padding:10px; margin:10px 0; color:#15803d; font-size:12px; font-weight:700; }
+        @media (max-width:480px){ .evnet-actions{display:grid;grid-template-columns:1fr}.evnet-btn{width:100%} }
     </style>
 
     <div class="evnet-wrap">
@@ -313,7 +525,7 @@ function eventosapp_render_metabox_networking($post){
         // Preview en tiempo real del slug
         $('input[name="eventosapp_networking_slug"]').on('input', function(){
             var slug = $(this).val().trim() || 'evento';
-            var base = '<?php echo esc_js(home_url('/' . eventosapp_networking_parent_slug() . '/')); ?>';
+            var base = '<?php $evnet_parent_id = eventosapp_networking_ensure_parent(); echo esc_js($evnet_parent_id ? trailingslashit(get_permalink($evnet_parent_id)) : home_url('/' . eventosapp_networking_parent_slug() . '/')); ?>';
             $('#evnetUrlPreview').text(base + slug + '/');
         });
 
