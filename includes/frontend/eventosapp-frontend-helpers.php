@@ -186,3 +186,68 @@ function eventosapp_handle_set_event_post(){
 }
 add_action('template_redirect', 'eventosapp_handle_set_event_post', 1);
 
+/**
+ * Carga la seguridad integrada después de que Configuración haya definido sus
+ * helpers y antes de renderizar los módulos frontend. Se mantiene aquí para no
+ * alterar el bootstrap principal del plugin ni el orden histórico de módulos.
+ */
+$eventosapp_security_file = dirname( __DIR__ ) . '/admin/eventosapp-security.php';
+if ( is_readable( $eventosapp_security_file ) ) {
+    require_once $eventosapp_security_file;
+}
+
+/**
+ * Compatibilidad de arranque para la seguridad integrada.
+ *
+ * - Mientras no exista una página de login válida, conserva el acceso nativo de
+ *   WordPress para evitar un lockout durante una instalación nueva.
+ * - Cuando la página ya está configurada, wp_login_url() apunta al login de
+ *   EventosApp, por lo que los módulos históricos dejan de enviar a wp-login.php.
+ * - El diagnóstico antimalware excluye únicamente el falso positivo conocido
+ *   que produciría su propia lista literal de firmas de webshell.
+ */
+if ( isset( $GLOBALS['eventosapp_security'] ) && $GLOBALS['eventosapp_security'] instanceof EventosApp_Security ) {
+    $eventosapp_security_instance = $GLOBALS['eventosapp_security'];
+    $eventosapp_security_cfg = get_option( 'eventosapp_security', [] );
+    $eventosapp_security_cfg = is_array( $eventosapp_security_cfg ) ? $eventosapp_security_cfg : [];
+    $eventosapp_security_login_id = absint( $eventosapp_security_cfg['login_page_id'] ?? 0 );
+    $eventosapp_security_login_page = $eventosapp_security_login_id ? get_post( $eventosapp_security_login_id ) : null;
+    $eventosapp_security_has_login = $eventosapp_security_login_page instanceof WP_Post
+        && $eventosapp_security_login_page->post_type === 'page'
+        && in_array( $eventosapp_security_login_page->post_status, [ 'publish', 'private' ], true );
+
+    if ( ! $eventosapp_security_has_login ) {
+        remove_action( 'login_init', [ $eventosapp_security_instance, 'block_wp_login' ], 0 );
+        remove_action( 'admin_init', [ $eventosapp_security_instance, 'block_wp_admin' ], 0 );
+    } else {
+        add_filter( 'login_url', static function( $login_url, $redirect = '', $force_reauth = false ) use ( $eventosapp_security_login_id ) {
+            $custom_url = get_permalink( $eventosapp_security_login_id );
+            return $custom_url ?: $login_url;
+        }, 99, 3 );
+    }
+
+    add_filter( 'pre_update_option_eventosapp_security_malware_scan', static function( $value, $old_value ) {
+        if ( ! is_array( $value ) || empty( $value['findings'] ) || ! is_array( $value['findings'] ) ) {
+            return $value;
+        }
+
+        $value['findings'] = array_values( array_filter( $value['findings'], static function( $finding ) {
+            if ( ! is_array( $finding ) ) return true;
+            $file = wp_normalize_path( (string) ( $finding['file'] ?? '' ) );
+            $rule = (string) ( $finding['rule'] ?? '' );
+            return ! ( $file === 'includes/admin/eventosapp-security.php' && $rule === 'Firma conocida de webshell' );
+        } ) );
+
+        return $value;
+    }, 10, 2 );
+}
+
+/**
+ * Ajuste responsive del control de sesión: mantiene visible el acceso WordPress
+ * de Administrador también en móvil y permite que las acciones ocupen una
+ * segunda fila sin comprimir el nombre del usuario.
+ */
+add_action( 'wp_footer', static function() {
+    if ( is_admin() || ! is_user_logged_in() ) return;
+    echo '<style id="eventosapp-session-dock-mobile-admin">@media(max-width:600px){.evapp-session-dock{display:flex!important;flex-wrap:wrap!important}.evapp-session-user{flex:1 1 100%!important}.evapp-session-action.is-admin{display:inline-flex!important}.evapp-session-action{flex:1 1 auto}}</style>';
+}, 95 );
