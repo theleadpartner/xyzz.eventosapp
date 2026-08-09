@@ -1542,233 +1542,1597 @@ add_action('wp_ajax_eventosapp_support_register_attention', function(){
 });
 
 // =====================================================
+// UI frontend compartida: Asistencia / Métricas de apoyo
+// =====================================================
+if ( ! function_exists('eventosapp_support_frontend_icon') ) {
+    function eventosapp_support_frontend_icon( $name ) {
+        switch ( $name ) {
+            case 'back':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>';
+
+            case 'calendar':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M7 3v4M17 3v4M3 9h18"></path></svg>';
+
+            case 'qr':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"></path><path d="M14 14h2v2h-2zM18 14h2v2h-2zM16 18h2v2h-2zM20 18h1v2h-1z"></path></svg>';
+
+            case 'id':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="8" cy="11" r="2.3"></circle><path d="M5.5 16c.6-1.6 1.4-2.5 2.5-2.5s1.9.9 2.5 2.5M13 10h5M13 14h4"></path></svg>';
+
+            case 'support':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"></path><path d="M8 9h8M8 13h5"></path><path d="m16 15 1.5 1.5L21 13"></path></svg>';
+
+            case 'chart':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg>';
+
+            case 'users':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"></circle><path d="M3.5 20c.7-3.3 2.5-5 5.5-5s4.8 1.7 5.5 5"></path><circle cx="17" cy="7.5" r="2.2"></circle><path d="M15.5 14.8c.5-.2 1-.3 1.5-.3 2.2 0 3.6 1.4 4 4"></path></svg>';
+
+            case 'clock':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>';
+
+            case 'download':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>';
+
+            case 'search':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>';
+
+            case 'check':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>';
+
+            case 'close':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"></path></svg>';
+
+            default:
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4M12 16h.01"></path></svg>';
+        }
+    }
+}
+
+if ( ! function_exists('eventosapp_support_frontend_print_styles') ) {
+    function eventosapp_support_frontend_print_styles() {
+        static $printed = false;
+        if ( $printed ) return;
+        $printed = true;
+        ?>
+        <style id="eventosapp-support-frontend-ui">
+            .evapp-support-app{
+                --evapp-primary:#3279bd;
+                --evapp-primary-dark:#255f96;
+                --evapp-primary-soft:#eaf4ff;
+                --evapp-app-bg:#f5f8fc;
+                --evapp-surface:#ffffff;
+                --evapp-border:#dfe7f1;
+                --evapp-text:#182230;
+                --evapp-muted:#64748b;
+                --evapp-success:#15803d;
+                --evapp-success-soft:#ecfdf3;
+                --evapp-danger:#b42318;
+                --evapp-danger-soft:#fff1f0;
+                --evapp-warning:#b45309;
+                --evapp-warning-soft:#fff8e7;
+                --evapp-radius:18px;
+                --evapp-radius-lg:26px;
+                width:100%;
+                max-width:1180px;
+                margin:0 auto;
+                color:var(--evapp-text);
+                font-family:inherit;
+                line-height:1.45;
+                box-sizing:border-box;
+                isolation:isolate;
+            }
+            .evapp-support-app *,
+            .evapp-support-app *::before,
+            .evapp-support-app *::after{box-sizing:border-box}
+            .evapp-support-app a{text-decoration:none}
+            .evapp-support-app svg{
+                display:block;
+                fill:none;
+                stroke:currentColor;
+                stroke-width:2;
+                stroke-linecap:round;
+                stroke-linejoin:round;
+            }
+            .evapp-support-shell{
+                width:100%;
+                padding:clamp(18px,3vw,36px);
+                background:var(--evapp-app-bg);
+                border:1px solid var(--evapp-border);
+                border-radius:var(--evapp-radius-lg);
+                box-shadow:0 18px 50px rgba(31,52,73,.08);
+            }
+            .evapp-support-header{
+                display:flex;
+                align-items:flex-start;
+                justify-content:space-between;
+                gap:24px;
+                margin-bottom:22px;
+            }
+            .evapp-support-heading{min-width:0}
+            .evapp-support-eyebrow{
+                margin:0 0 6px;
+                color:var(--evapp-primary);
+                font-size:12px;
+                font-weight:800;
+                letter-spacing:.11em;
+                text-transform:uppercase;
+            }
+            .evapp-support-main-title{
+                margin:0;
+                color:var(--evapp-text);
+                font-size:clamp(27px,4vw,42px);
+                font-weight:850;
+                line-height:1.08;
+                letter-spacing:-.035em;
+            }
+            .evapp-support-subtitle{
+                max-width:780px;
+                margin:10px 0 0;
+                color:var(--evapp-muted);
+                font-size:15px;
+                line-height:1.6;
+            }
+            .evapp-support-header-actions{flex:0 0 auto}
+            .evapp-support-btn{
+                min-height:44px;
+                display:inline-flex;
+                align-items:center;
+                justify-content:center;
+                gap:9px;
+                margin:0;
+                padding:10px 15px;
+                border:1px solid transparent;
+                border-radius:12px;
+                font:inherit;
+                font-size:14px;
+                font-weight:750;
+                line-height:1.15;
+                text-align:center;
+                cursor:pointer;
+                transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+                -webkit-tap-highlight-color:transparent;
+            }
+            .evapp-support-btn svg{width:18px;height:18px;flex:0 0 18px}
+            .evapp-support-btn:hover:not(:disabled){transform:translateY(-1px)}
+            .evapp-support-btn:focus-visible,
+            .evapp-support-method:focus-visible,
+            .evapp-support-result:focus-visible,
+            .evapp-support-input:focus-visible,
+            .evapp-support-textarea:focus-visible{
+                outline:3px solid rgba(50,121,189,.20);
+                outline-offset:2px;
+            }
+            .evapp-support-btn:disabled{opacity:.55;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+            .evapp-support-btn-primary{
+                color:#fff!important;
+                background:var(--evapp-primary);
+                border-color:var(--evapp-primary);
+                box-shadow:0 9px 20px rgba(50,121,189,.18);
+            }
+            .evapp-support-btn-primary:hover{
+                color:#fff!important;
+                background:var(--evapp-primary-dark);
+                border-color:var(--evapp-primary-dark);
+                box-shadow:0 12px 24px rgba(50,121,189,.24);
+            }
+            .evapp-support-btn-secondary{
+                color:var(--evapp-text)!important;
+                background:var(--evapp-surface);
+                border-color:var(--evapp-border);
+                box-shadow:0 5px 15px rgba(31,65,99,.05);
+                white-space:nowrap;
+            }
+            .evapp-support-btn-secondary:hover{
+                color:var(--evapp-primary-dark)!important;
+                border-color:#c7d7e8;
+                box-shadow:0 8px 20px rgba(31,65,99,.09);
+            }
+            .evapp-support-btn-danger{
+                color:#fff!important;
+                background:var(--evapp-danger);
+                border-color:var(--evapp-danger);
+                box-shadow:0 9px 20px rgba(180,35,24,.16);
+            }
+            .evapp-support-event-context{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:16px;
+                margin-bottom:20px;
+                padding:16px 18px;
+                background:var(--evapp-surface);
+                border:1px solid var(--evapp-border);
+                border-radius:var(--evapp-radius);
+                box-shadow:0 8px 24px rgba(31,52,73,.045);
+            }
+            .evapp-support-event-main{
+                min-width:0;
+                display:flex;
+                align-items:center;
+                gap:13px;
+            }
+            .evapp-support-event-icon{
+                width:44px;
+                height:44px;
+                flex:0 0 44px;
+                display:grid;
+                place-items:center;
+                color:var(--evapp-primary);
+                background:var(--evapp-primary-soft);
+                border-radius:13px;
+            }
+            .evapp-support-event-icon svg{width:22px;height:22px}
+            .evapp-support-event-copy{min-width:0}
+            .evapp-support-event-kicker{
+                display:block;
+                margin-bottom:3px;
+                color:var(--evapp-muted);
+                font-size:11px;
+                font-weight:800;
+                letter-spacing:.09em;
+                text-transform:uppercase;
+            }
+            .evapp-support-event-name{
+                display:block;
+                overflow:hidden;
+                color:var(--evapp-text);
+                font-size:15px;
+                font-weight:800;
+                line-height:1.3;
+                text-overflow:ellipsis;
+                white-space:nowrap;
+            }
+            .evapp-support-event-meta{
+                display:flex;
+                align-items:center;
+                justify-content:flex-end;
+                flex-wrap:wrap;
+                gap:8px;
+            }
+            .evapp-support-chip{
+                min-height:30px;
+                display:inline-flex;
+                align-items:center;
+                gap:7px;
+                padding:6px 10px;
+                border:1px solid var(--evapp-border);
+                border-radius:999px;
+                background:#fff;
+                color:var(--evapp-muted);
+                font-size:12px;
+                font-weight:750;
+                white-space:nowrap;
+            }
+            .evapp-support-chip::before{
+                width:7px;
+                height:7px;
+                flex:0 0 7px;
+                border-radius:50%;
+                background:var(--evapp-primary);
+                content:"";
+            }
+            .evapp-support-card{
+                min-width:0;
+                padding:20px;
+                background:var(--evapp-surface);
+                border:1px solid var(--evapp-border);
+                border-radius:var(--evapp-radius);
+                box-shadow:0 8px 26px rgba(31,52,73,.05);
+            }
+            .evapp-support-card + .evapp-support-card{margin-top:16px}
+            .evapp-support-card-head{
+                display:flex;
+                align-items:flex-start;
+                justify-content:space-between;
+                gap:16px;
+                margin-bottom:16px;
+            }
+            .evapp-support-section-heading{
+                min-width:0;
+                display:flex;
+                align-items:flex-start;
+                gap:12px;
+            }
+            .evapp-support-section-icon{
+                width:40px;
+                height:40px;
+                flex:0 0 40px;
+                display:grid;
+                place-items:center;
+                color:var(--evapp-primary);
+                background:var(--evapp-primary-soft);
+                border-radius:12px;
+            }
+            .evapp-support-section-icon svg{width:20px;height:20px}
+            .evapp-support-section-title{
+                margin:0;
+                color:var(--evapp-text);
+                font-size:17px;
+                font-weight:820;
+                line-height:1.3;
+            }
+            .evapp-support-section-desc{
+                margin:5px 0 0;
+                color:var(--evapp-muted);
+                font-size:13px;
+                line-height:1.5;
+            }
+            .evapp-support-methods{
+                display:grid;
+                grid-template-columns:repeat(2,minmax(0,1fr));
+                gap:12px;
+            }
+            .evapp-support-method{
+                width:100%;
+                min-width:0;
+                min-height:106px;
+                display:flex;
+                align-items:center;
+                gap:14px;
+                padding:16px;
+                border:1px solid var(--evapp-border);
+                border-radius:16px;
+                background:#fff;
+                color:var(--evapp-text);
+                font:inherit;
+                text-align:left;
+                cursor:pointer;
+                box-shadow:0 6px 18px rgba(31,52,73,.035);
+                transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,background .16s ease;
+            }
+            .evapp-support-method:hover{
+                transform:translateY(-1px);
+                border-color:#c5d8ea;
+                box-shadow:0 10px 24px rgba(31,73,112,.08);
+            }
+            .evapp-support-method.is-active{
+                border-color:#a9cbea;
+                background:var(--evapp-primary-soft);
+                box-shadow:0 0 0 3px rgba(50,121,189,.08);
+            }
+            .evapp-support-method.is-danger{
+                border-color:#f2b8b5;
+                background:var(--evapp-danger-soft);
+            }
+            .evapp-support-method-icon{
+                width:48px;
+                height:48px;
+                flex:0 0 48px;
+                display:grid;
+                place-items:center;
+                color:var(--evapp-primary);
+                background:var(--evapp-primary-soft);
+                border-radius:14px;
+            }
+            .evapp-support-method.is-active .evapp-support-method-icon{
+                color:#fff;
+                background:var(--evapp-primary);
+            }
+            .evapp-support-method.is-danger .evapp-support-method-icon{
+                color:#fff;
+                background:var(--evapp-danger);
+            }
+            .evapp-support-method-icon svg{width:24px;height:24px}
+            .evapp-support-method-copy{min-width:0}
+            .evapp-support-method-title{
+                display:block;
+                color:inherit;
+                font-size:15px;
+                font-weight:820;
+                line-height:1.3;
+            }
+            .evapp-support-method-desc{
+                display:block;
+                margin-top:4px;
+                color:var(--evapp-muted);
+                font-size:12px;
+                line-height:1.45;
+            }
+            .evapp-support-camera{
+                display:none;
+                margin-top:16px;
+                overflow:hidden;
+                background:#07111f;
+                border:1px solid #1e293b;
+                border-radius:18px;
+                box-shadow:0 10px 30px rgba(15,23,42,.16);
+            }
+            .evapp-support-camera-head{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:12px;
+                padding:12px 14px;
+                color:#dbeafe;
+                background:#0f172a;
+                font-size:12px;
+            }
+            .evapp-support-camera-head strong{color:#fff;font-size:13px}
+            .evapp-support-camera-stage{
+                position:relative;
+                min-height:280px;
+                aspect-ratio:16/9;
+                overflow:hidden;
+            }
+            .evapp-support-camera video{
+                width:100%;
+                height:100%;
+                display:block;
+                object-fit:cover;
+            }
+            .evapp-support-frame{
+                position:absolute;
+                inset:0;
+                display:grid;
+                place-items:center;
+                pointer-events:none;
+                background:radial-gradient(ellipse 48% 52% at 50% 50%,rgba(255,255,255,0) 61%,rgba(3,7,18,.58) 63%);
+            }
+            .evapp-support-scan-guide{
+                width:min(54%,300px);
+                aspect-ratio:1;
+                border:2px solid rgba(255,255,255,.92);
+                border-radius:22px;
+                box-shadow:0 0 0 1px rgba(50,121,189,.36),0 0 28px rgba(50,121,189,.24);
+            }
+            .evapp-support-search{
+                display:none;
+                margin-top:16px;
+                padding:16px;
+                border:1px solid var(--evapp-border);
+                border-radius:16px;
+                background:#fbfdff;
+            }
+            .evapp-support-field-label{
+                display:block;
+                margin:0 0 7px;
+                color:var(--evapp-text);
+                font-size:12px;
+                font-weight:800;
+            }
+            .evapp-support-input-wrap{position:relative;min-width:0}
+            .evapp-support-input,
+            .evapp-support-textarea{
+                width:100%;
+                margin:0;
+                color:var(--evapp-text);
+                background:#fff;
+                border:1px solid var(--evapp-border);
+                border-radius:13px;
+                box-shadow:none;
+                font:inherit;
+                font-size:15px;
+                outline:none;
+                transition:border-color .16s ease,box-shadow .16s ease;
+            }
+            .evapp-support-input{
+                min-height:48px;
+                padding:10px 46px;
+            }
+            .evapp-support-textarea{
+                min-height:120px;
+                padding:12px 13px;
+                line-height:1.55;
+                resize:vertical;
+            }
+            .evapp-support-input:focus,
+            .evapp-support-textarea:focus{
+                border-color:var(--evapp-primary);
+                box-shadow:0 0 0 4px rgba(50,121,189,.12);
+            }
+            .evapp-support-search-icon{
+                position:absolute;
+                z-index:2;
+                top:50%;
+                left:15px;
+                width:20px;
+                height:20px;
+                color:var(--evapp-muted);
+                transform:translateY(-50%);
+                pointer-events:none;
+            }
+            .evapp-support-search-icon svg{width:20px;height:20px}
+            .evapp-support-clear{
+                position:absolute;
+                z-index:3;
+                top:50%;
+                right:8px;
+                width:32px;
+                height:32px;
+                display:none;
+                align-items:center;
+                justify-content:center;
+                padding:0;
+                border:0;
+                border-radius:9px;
+                color:var(--evapp-muted);
+                background:transparent;
+                cursor:pointer;
+                transform:translateY(-50%);
+            }
+            .evapp-support-clear.is-visible{display:flex}
+            .evapp-support-clear:hover{color:var(--evapp-text);background:var(--evapp-primary-soft)}
+            .evapp-support-clear svg{width:17px;height:17px}
+            .evapp-support-search-foot{
+                display:flex;
+                align-items:flex-start;
+                justify-content:space-between;
+                gap:12px;
+                margin-top:8px;
+                color:var(--evapp-muted);
+                font-size:11px;
+                line-height:1.45;
+            }
+            .evapp-support-result-count{font-weight:750;white-space:nowrap}
+            .evapp-support-results{
+                display:grid;
+                gap:9px;
+                margin-top:12px;
+            }
+            .evapp-support-result{
+                width:100%;
+                display:grid;
+                grid-template-columns:auto minmax(0,1fr) auto;
+                align-items:center;
+                gap:12px;
+                padding:13px;
+                border:1px solid var(--evapp-border);
+                border-radius:14px;
+                background:#fff;
+                color:var(--evapp-text);
+                font:inherit;
+                text-align:left;
+                cursor:pointer;
+                transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease;
+            }
+            .evapp-support-result:hover{
+                transform:translateY(-1px);
+                border-color:#c5d8ea;
+                box-shadow:0 8px 20px rgba(31,73,112,.07);
+            }
+            .evapp-support-result-avatar{
+                width:42px;
+                height:42px;
+                display:grid;
+                place-items:center;
+                border-radius:12px;
+                color:var(--evapp-primary-dark);
+                background:var(--evapp-primary-soft);
+                font-size:12px;
+                font-weight:850;
+                letter-spacing:.03em;
+            }
+            .evapp-support-result-copy{min-width:0}
+            .evapp-support-result-name{
+                display:block;
+                color:var(--evapp-text);
+                font-size:14px;
+                font-weight:800;
+                line-height:1.3;
+            }
+            .evapp-support-result-meta{
+                display:block;
+                margin-top:3px;
+                color:var(--evapp-muted);
+                font-size:11px;
+                line-height:1.4;
+                overflow-wrap:anywhere;
+            }
+            .evapp-support-result-arrow{
+                width:32px;
+                height:32px;
+                display:grid;
+                place-items:center;
+                border-radius:10px;
+                color:var(--evapp-primary);
+                background:var(--evapp-primary-soft);
+            }
+            .evapp-support-result-arrow svg{width:16px;height:16px}
+            .evapp-support-selected{
+                display:none;
+                margin-top:16px;
+                padding:16px;
+                border:1px solid #cfe3f6;
+                border-radius:16px;
+                background:var(--evapp-primary-soft);
+            }
+            .evapp-support-selected-head{
+                display:flex;
+                align-items:flex-start;
+                justify-content:space-between;
+                gap:12px;
+                margin-bottom:12px;
+            }
+            .evapp-support-selected-title{
+                margin:0;
+                color:var(--evapp-text);
+                font-size:15px;
+                font-weight:820;
+            }
+            .evapp-support-selected-subtitle{
+                margin:3px 0 0;
+                color:var(--evapp-muted);
+                font-size:11px;
+            }
+            .evapp-support-selected-clear{
+                min-height:36px;
+                padding:7px 10px;
+                font-size:11px;
+            }
+            .evapp-support-data-grid{
+                display:grid;
+                grid-template-columns:repeat(2,minmax(0,1fr));
+                gap:10px;
+            }
+            .evapp-support-data-item{
+                min-width:0;
+                padding:10px 11px;
+                border:1px solid rgba(196,219,238,.9);
+                border-radius:12px;
+                background:rgba(255,255,255,.78);
+            }
+            .evapp-support-data-label{
+                display:block;
+                margin-bottom:3px;
+                color:var(--evapp-muted);
+                font-size:10px;
+                font-weight:800;
+                letter-spacing:.05em;
+                text-transform:uppercase;
+            }
+            .evapp-support-data-value{
+                display:block;
+                color:var(--evapp-text);
+                font-size:12px;
+                font-weight:750;
+                line-height:1.4;
+                overflow-wrap:anywhere;
+            }
+            .evapp-support-reason{
+                display:none;
+                margin-top:16px;
+                padding:16px;
+                border:1px solid var(--evapp-border);
+                border-radius:16px;
+                background:#fff;
+            }
+            .evapp-support-reason-actions{
+                display:flex;
+                align-items:center;
+                justify-content:flex-end;
+                gap:10px;
+                margin-top:10px;
+            }
+            .evapp-support-status{
+                display:flex;
+                align-items:flex-start;
+                gap:9px;
+                margin-top:14px;
+                padding:11px 13px;
+                border:1px solid var(--evapp-border);
+                border-radius:12px;
+                background:#fff;
+                color:var(--evapp-muted);
+                font-size:12px;
+                font-weight:700;
+                line-height:1.45;
+            }
+            .evapp-support-status:empty{display:none}
+            .evapp-support-status.is-success{
+                color:#0f5132;
+                border-color:#b7e4c7;
+                background:var(--evapp-success-soft);
+            }
+            .evapp-support-status.is-error{
+                color:#8b1e17;
+                border-color:#f2b8b5;
+                background:var(--evapp-danger-soft);
+            }
+            .evapp-support-status.is-muted{
+                color:var(--evapp-muted);
+                border-color:var(--evapp-border);
+                background:#fff;
+            }
+            .evapp-support-empty{
+                padding:14px;
+                border:1px dashed var(--evapp-border);
+                border-radius:13px;
+                color:var(--evapp-muted);
+                background:#fbfdff;
+                font-size:12px;
+                line-height:1.5;
+            }
+            .evapp-support-summary{
+                display:grid;
+                grid-template-columns:repeat(3,minmax(0,1fr));
+                gap:12px;
+                margin-bottom:16px;
+            }
+            .evapp-support-kpi-card{
+                min-width:0;
+                padding:16px;
+                border:1px solid var(--evapp-border);
+                border-radius:16px;
+                background:#fff;
+                box-shadow:0 6px 18px rgba(31,52,73,.035);
+            }
+            .evapp-support-kpi-icon{
+                width:38px;
+                height:38px;
+                display:grid;
+                place-items:center;
+                margin-bottom:12px;
+                color:var(--evapp-primary);
+                background:var(--evapp-primary-soft);
+                border-radius:12px;
+            }
+            .evapp-support-kpi-icon svg{width:19px;height:19px}
+            .evapp-support-kpi-label{
+                display:block;
+                color:var(--evapp-muted);
+                font-size:11px;
+                font-weight:750;
+                line-height:1.3;
+            }
+            .evapp-support-kpi-value{
+                display:block;
+                margin-top:4px;
+                color:var(--evapp-text);
+                font-size:clamp(20px,3vw,28px);
+                font-weight:850;
+                line-height:1.15;
+                overflow-wrap:anywhere;
+            }
+            .evapp-support-kpi-detail{
+                display:block;
+                margin-top:4px;
+                color:var(--evapp-muted);
+                font-size:10px;
+                line-height:1.4;
+            }
+            .evapp-support-chart{
+                display:grid;
+                gap:9px;
+            }
+            .evapp-support-bar-row{
+                display:grid;
+                grid-template-columns:64px minmax(0,1fr) 50px;
+                gap:10px;
+                align-items:center;
+            }
+            .evapp-support-bar-hour{
+                color:var(--evapp-text);
+                font-size:12px;
+                font-weight:800;
+                white-space:nowrap;
+            }
+            .evapp-support-bar-track{
+                height:22px;
+                overflow:hidden;
+                border:1px solid #e2e8f0;
+                border-radius:999px;
+                background:#f1f5f9;
+            }
+            .evapp-support-bar{
+                height:100%;
+                min-width:4px;
+                border-radius:999px;
+                background:linear-gradient(90deg,var(--evapp-primary),#5f9fd8);
+            }
+            .evapp-support-bar-total{
+                color:var(--evapp-muted);
+                font-size:12px;
+                font-weight:800;
+                text-align:right;
+            }
+            .evapp-support-download-row{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:14px;
+                margin-top:16px;
+                padding:14px 15px;
+                border:1px solid #cfe3f6;
+                border-radius:14px;
+                background:var(--evapp-primary-soft);
+            }
+            .evapp-support-download-copy{min-width:0}
+            .evapp-support-download-copy strong{
+                display:block;
+                color:var(--evapp-text);
+                font-size:12px;
+                font-weight:800;
+            }
+            .evapp-support-download-copy span{
+                display:block;
+                margin-top:2px;
+                color:var(--evapp-muted);
+                font-size:10px;
+                line-height:1.45;
+            }
+            .evapp-support-table-wrap{
+                width:100%;
+                overflow:hidden;
+                border:1px solid var(--evapp-border);
+                border-radius:14px;
+            }
+            .evapp-support-ranking-table{
+                width:100%;
+                margin:0;
+                border:0;
+                border-collapse:collapse;
+                background:#fff;
+                font-size:13px;
+            }
+            .evapp-support-ranking-table th,
+            .evapp-support-ranking-table td{
+                padding:12px 13px;
+                border:0;
+                border-bottom:1px solid var(--evapp-border);
+                text-align:left;
+                vertical-align:middle;
+            }
+            .evapp-support-ranking-table th{
+                color:#475569;
+                background:#f8fafc;
+                font-size:11px;
+                font-weight:800;
+                letter-spacing:.025em;
+                text-transform:uppercase;
+            }
+            .evapp-support-ranking-table tbody tr:last-child td{border-bottom:0}
+            .evapp-support-ranking-table tbody tr:hover{background:#fbfdff}
+            .evapp-support-rank{
+                width:36px;
+                height:28px;
+                display:inline-grid;
+                place-items:center;
+                border-radius:9px;
+                color:var(--evapp-primary-dark);
+                background:var(--evapp-primary-soft);
+                font-size:11px;
+                font-weight:850;
+            }
+            .evapp-support-user-name{
+                color:var(--evapp-text);
+                font-weight:800;
+            }
+            .evapp-support-user-email{
+                color:var(--evapp-muted);
+                overflow-wrap:anywhere;
+            }
+            .evapp-support-count-badge{
+                min-width:34px;
+                min-height:28px;
+                display:inline-flex;
+                align-items:center;
+                justify-content:center;
+                padding:4px 8px;
+                border-radius:999px;
+                color:var(--evapp-primary-dark);
+                background:var(--evapp-primary-soft);
+                font-size:12px;
+                font-weight:850;
+            }
+            .evapp-support-notice-shell{
+                width:100%;
+                max-width:900px;
+                margin:0 auto;
+                padding:18px;
+                background:var(--evapp-app-bg);
+                border:1px solid var(--evapp-border);
+                border-radius:20px;
+                box-shadow:0 12px 36px rgba(31,52,73,.07);
+            }
+            .evapp-support-notice{
+                padding:14px 16px;
+                border:1px solid #f1dfad;
+                border-radius:14px;
+                color:#7c4a03;
+                background:var(--evapp-warning-soft);
+                font-size:13px;
+                line-height:1.5;
+            }
+            .evapp-support-notice.is-error{
+                color:#8b1e17;
+                border-color:#f2b8b5;
+                background:var(--evapp-danger-soft);
+            }
+            .evapp-support-notice a{color:var(--evapp-primary-dark);font-weight:800}
+            @media(max-width:900px){
+                .evapp-support-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+                .evapp-support-summary .evapp-support-kpi-card:first-child{grid-column:1/-1}
+            }
+            @media(max-width:767px){
+                .evapp-support-shell{padding:16px;border-radius:20px}
+                .evapp-support-header{display:block;margin-bottom:18px}
+                .evapp-support-header-actions{margin-top:14px}
+                .evapp-support-header-actions .evapp-support-btn{width:100%}
+                .evapp-support-event-context{
+                    align-items:flex-start;
+                    flex-direction:column;
+                    padding:14px;
+                }
+                .evapp-support-event-main{width:100%}
+                .evapp-support-event-meta{
+                    width:100%;
+                    justify-content:flex-start;
+                }
+                .evapp-support-event-meta .evapp-support-btn{width:100%}
+                .evapp-support-methods{grid-template-columns:1fr}
+                .evapp-support-camera-stage{aspect-ratio:4/5;min-height:340px}
+                .evapp-support-download-row{
+                    align-items:stretch;
+                    flex-direction:column;
+                }
+                .evapp-support-download-row .evapp-support-btn{width:100%}
+            }
+            @media(max-width:620px){
+                .evapp-support-main-title{font-size:clamp(28px,9vw,36px)}
+                .evapp-support-card{padding:16px}
+                .evapp-support-card-head{display:block}
+                .evapp-support-data-grid{grid-template-columns:1fr}
+                .evapp-support-summary{grid-template-columns:1fr}
+                .evapp-support-summary .evapp-support-kpi-card:first-child{grid-column:auto}
+                .evapp-support-search-foot{
+                    flex-direction:column;
+                    gap:4px;
+                }
+                .evapp-support-result{
+                    grid-template-columns:auto minmax(0,1fr);
+                }
+                .evapp-support-result-arrow{display:none}
+                .evapp-support-reason-actions{display:grid}
+                .evapp-support-reason-actions .evapp-support-btn{width:100%}
+                .evapp-support-bar-row{
+                    grid-template-columns:52px minmax(0,1fr) 38px;
+                    gap:7px;
+                }
+                .evapp-support-table-wrap{
+                    overflow:visible;
+                    border:0;
+                    border-radius:0;
+                    background:transparent;
+                }
+                .evapp-support-ranking-table,
+                .evapp-support-ranking-table tbody,
+                .evapp-support-ranking-table tr,
+                .evapp-support-ranking-table td{
+                    display:block;
+                    width:100%;
+                }
+                .evapp-support-ranking-table thead{display:none}
+                .evapp-support-ranking-table tbody{
+                    display:grid;
+                    gap:10px;
+                }
+                .evapp-support-ranking-table tr{
+                    padding:12px;
+                    border:1px solid var(--evapp-border);
+                    border-radius:14px;
+                    background:#fff;
+                }
+                .evapp-support-ranking-table td{
+                    display:flex;
+                    align-items:flex-start;
+                    justify-content:space-between;
+                    gap:14px;
+                    padding:7px 0;
+                    border:0;
+                    border-bottom:1px dashed #e7edf4;
+                    text-align:right;
+                }
+                .evapp-support-ranking-table td:last-child{border-bottom:0}
+                .evapp-support-ranking-table td::before{
+                    flex:0 0 auto;
+                    color:var(--evapp-muted);
+                    font-size:10px;
+                    font-weight:800;
+                    letter-spacing:.04em;
+                    text-transform:uppercase;
+                    content:attr(data-label);
+                }
+            }
+            @media(max-width:430px){
+                .evapp-support-chip{white-space:normal}
+                .evapp-support-event-meta{
+                    align-items:stretch;
+                    flex-direction:column;
+                }
+                .evapp-support-method{align-items:flex-start}
+                .evapp-support-method-icon{
+                    width:42px;
+                    height:42px;
+                    flex-basis:42px;
+                }
+                .evapp-support-camera-stage{min-height:300px}
+            }
+            @media(prefers-reduced-motion:reduce){
+                .evapp-support-app *,
+                .evapp-support-app *::before,
+                .evapp-support-app *::after{
+                    scroll-behavior:auto!important;
+                    transition-duration:.01ms!important;
+                    animation-duration:.01ms!important;
+                    animation-iteration-count:1!important;
+                }
+            }
+        </style>
+        <?php
+    }
+}
+
+if ( ! function_exists('eventosapp_support_frontend_notice_html') ) {
+    function eventosapp_support_frontend_notice_html( $message, $type = 'warning', $dashboard_url = '' ) {
+        ob_start();
+        eventosapp_support_frontend_print_styles();
+        ?>
+        <div class="evapp-support-app">
+            <div class="evapp-support-notice-shell">
+                <div class="evapp-support-notice <?php echo $type === 'error' ? 'is-error' : ''; ?>" role="<?php echo $type === 'error' ? 'alert' : 'status'; ?>">
+                    <?php echo wp_kses_post($message); ?>
+                </div>
+                <?php if ( $dashboard_url ) : ?>
+                    <div style="margin-top:12px;">
+                        <a class="evapp-support-btn evapp-support-btn-secondary" href="<?php echo esc_url($dashboard_url); ?>">
+                            <?php echo eventosapp_support_frontend_icon('back'); ?>
+                            <span>Volver al dashboard</span>
+                        </a>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+}
+
+if ( ! function_exists('eventosapp_support_frontend_navigation') ) {
+    function eventosapp_support_frontend_navigation() {
+        $dashboard_url = function_exists('eventosapp_get_dashboard_url')
+            ? eventosapp_get_dashboard_url()
+            : home_url('/');
+
+        if ( ! $dashboard_url || $dashboard_url === '#' ) {
+            $dashboard_url = home_url('/');
+        }
+
+        $dashboard_url = remove_query_arg(['evapp', 'evapp_err', 'set', 'from'], $dashboard_url);
+        $change_event_url = add_query_arg(['evapp' => 'change_event'], $dashboard_url);
+
+        return [
+            'dashboard_url'    => $dashboard_url,
+            'change_event_url' => $change_event_url,
+        ];
+    }
+}
+
+// =====================================================
 // Shortcode: Asistencia
 // =====================================================
 add_shortcode('eventosapp_support_assistance', function($atts){
     $atts = shortcode_atts(['event_id' => 0], $atts);
     $event_id = eventosapp_support_current_event_from_request($atts['event_id']);
+    $nav = eventosapp_support_frontend_navigation();
 
     if ( ! $event_id ) {
-        $dashboard = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
-        return '<div class="evapp-support-notice">Debes escoger un evento en el <a href="'.esc_url($dashboard).'">dashboard</a> antes de registrar atenciones.</div>';
+        return eventosapp_support_frontend_notice_html(
+            'Debes escoger un evento en el <a href="' . esc_url($nav['dashboard_url']) . '">dashboard</a> antes de registrar atenciones.',
+            'warning',
+            $nav['dashboard_url']
+        );
     }
 
     if ( ! eventosapp_support_user_can_feature_for_event($event_id, 'support_assistance') ) {
-        return '<div class="evapp-support-notice evapp-support-notice-error">No tienes permisos para registrar atenciones en este evento.</div>';
+        return eventosapp_support_frontend_notice_html(
+            'No tienes permisos para registrar atenciones en este evento.',
+            'error',
+            $nav['dashboard_url']
+        );
     }
 
     if ( ! wp_script_is('jsqr', 'registered') ) {
-        wp_register_script('jsqr', 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', [], null, true);
+        wp_register_script('jsqr', 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', [], '1.4.0', true);
     }
     wp_enqueue_script('jsqr');
 
     $nonce = wp_create_nonce('eventosapp_support_assistance');
+    $event_name = get_the_title($event_id);
+    $user_group = eventosapp_support_get_user_group($event_id, get_current_user_id());
+    $group_number = $user_group ? absint($user_group['group_number'] ?? 0) : 0;
+    $instance_id = 'evapp-support-assistance-' . wp_unique_id();
 
     ob_start();
-    if ( function_exists('eventosapp_active_event_bar') ) {
-        eventosapp_active_event_bar();
-    }
+    eventosapp_support_frontend_print_styles();
     ?>
-    <style>
-        .evapp-support-panel{max-width:860px;margin:0 auto;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;}
-        .evapp-support-card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:18px;box-shadow:0 8px 26px rgba(15,23,42,.08);margin-bottom:16px;}
-        .evapp-support-title{margin:0 0 8px;font-size:24px;font-weight:800;color:#10233f;}
-        .evapp-support-help{margin:0 0 14px;color:#64748b;font-size:14px;line-height:1.45;}
-        .evapp-support-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
-        .evapp-support-btn{border:0;border-radius:12px;padding:14px 16px;font-weight:800;font-size:16px;cursor:pointer;background:#2F73B5;color:#fff;box-shadow:0 4px 12px rgba(47,115,181,.22);}
-        .evapp-support-btn:hover{filter:brightness(.96);}
-        .evapp-support-btn.secondary{background:#0f766e;}
-        .evapp-support-btn.danger{background:#dc2626;}
-        .evapp-support-btn:disabled{opacity:.58;cursor:not-allowed;}
-        .evapp-support-camera{display:none;margin-top:14px;background:#0b1020;border-radius:16px;overflow:hidden;position:relative;aspect-ratio:3/4;max-height:560px;}
-        .evapp-support-camera video{width:100%;height:100%;object-fit:cover;display:block;}
-        .evapp-support-frame{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse 62% 42% at 50% 50%,rgba(255,255,255,0) 62%,rgba(3,7,18,.58) 64%);}
-        .evapp-support-search{display:none;margin-top:14px;}
-        .evapp-support-input,.evapp-support-textarea{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:12px;padding:12px 14px;font-size:16px;background:#fff;color:#111827;}
-        .evapp-support-textarea{min-height:110px;resize:vertical;}
-        .evapp-support-results{margin-top:10px;display:grid;gap:8px;}
-        .evapp-support-result{border:1px solid #e5e7eb;background:#f8fafc;border-radius:12px;padding:12px;text-align:left;cursor:pointer;}
-        .evapp-support-result:hover{background:#eef6ff;border-color:#bfdbfe;}
-        .evapp-support-selected{display:none;border:1px solid #bae6fd;background:#f0f9ff;border-radius:14px;padding:14px;margin-top:14px;}
-        .evapp-support-selected h3{margin:0 0 8px;color:#0f172a;}
-        .evapp-support-grid{display:grid;grid-template-columns:150px 1fr;gap:5px 12px;font-size:14px;}
-        .evapp-support-grid b{color:#334155;}
-        .evapp-support-reason{display:none;margin-top:14px;}
-        .evapp-support-status{margin-top:12px;font-weight:700;}
-        .evapp-support-ok{color:#15803d;}
-        .evapp-support-error{color:#b91c1c;}
-        .evapp-support-muted{color:#64748b;}
-        .evapp-support-notice{max-width:860px;margin:0 auto;padding:12px 14px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;}
-        .evapp-support-notice-error{background:#fef2f2;border-color:#fecaca;color:#991b1b;}
-        @media(max-width:700px){.evapp-support-actions{grid-template-columns:1fr}.evapp-support-grid{grid-template-columns:1fr}.evapp-support-btn{width:100%;}}
-    </style>
+    <div
+        id="<?php echo esc_attr($instance_id); ?>"
+        class="evapp-support-app evapp-support-assistance-app"
+        data-event-id="<?php echo esc_attr($event_id); ?>"
+        data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>"
+        data-nonce="<?php echo esc_attr($nonce); ?>"
+    >
+        <div class="evapp-support-shell">
+            <header class="evapp-support-header">
+                <div class="evapp-support-heading">
+                    <p class="evapp-support-eyebrow">EVENTOSAPP</p>
+                    <h1 class="evapp-support-main-title">Asistencia</h1>
+                    <p class="evapp-support-subtitle">
+                        Identifica al asistente y registra el motivo de su consulta sin alterar su estado de check-in.
+                    </p>
+                </div>
 
-    <div class="evapp-support-panel" data-event-id="<?php echo esc_attr($event_id); ?>" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr($nonce); ?>">
-        <div class="evapp-support-card">
-            <h2 class="evapp-support-title">Asistencia</h2>
-            <p class="evapp-support-help">Identifica al asistente por QR o por cédula. Esta lectura no realiza check-in; solo selecciona al asistente para registrar la atención.</p>
+                <div class="evapp-support-header-actions">
+                    <a
+                        href="<?php echo esc_url($nav['dashboard_url']); ?>"
+                        class="evapp-support-btn evapp-support-btn-secondary"
+                        aria-label="Volver al dashboard"
+                    >
+                        <?php echo eventosapp_support_frontend_icon('back'); ?>
+                        <span>Volver al dashboard</span>
+                    </a>
+                </div>
+            </header>
 
-            <div class="evapp-support-actions">
-                <button type="button" class="evapp-support-btn" id="evappSupportScanBtn">Leer QR con cámara</button>
-                <button type="button" class="evapp-support-btn secondary" id="evappSupportCedulaBtn">Identificar por Cédula</button>
-            </div>
+            <section class="evapp-support-event-context" aria-label="Evento activo">
+                <div class="evapp-support-event-main">
+                    <div class="evapp-support-event-icon" aria-hidden="true">
+                        <?php echo eventosapp_support_frontend_icon('calendar'); ?>
+                    </div>
 
-            <div class="evapp-support-camera" id="evappSupportCamera">
-                <video id="evappSupportVideo" playsinline muted></video>
-                <div class="evapp-support-frame"></div>
-            </div>
+                    <div class="evapp-support-event-copy">
+                        <span class="evapp-support-event-kicker">Evento activo</span>
+                        <strong class="evapp-support-event-name"><?php echo esc_html($event_name ?: ('Evento #' . $event_id)); ?></strong>
+                    </div>
+                </div>
 
-            <div class="evapp-support-search" id="evappSupportSearch">
-                <input type="text" id="evappSupportCedula" class="evapp-support-input" placeholder="Escribe la cédula del asistente" autocomplete="off">
-                <div class="evapp-support-results" id="evappSupportResults"></div>
-            </div>
+                <div class="evapp-support-event-meta">
+                    <?php if ( $group_number ) : ?>
+                        <span class="evapp-support-chip">Grupo <?php echo esc_html($group_number); ?></span>
+                    <?php endif; ?>
+                    <a class="evapp-support-btn evapp-support-btn-primary" href="<?php echo esc_url($nav['change_event_url']); ?>">
+                        Cambiar evento
+                    </a>
+                </div>
+            </section>
 
-            <div class="evapp-support-selected" id="evappSupportSelected"></div>
+            <section class="evapp-support-card" aria-labelledby="<?php echo esc_attr($instance_id); ?>-identify-title">
+                <div class="evapp-support-card-head">
+                    <div class="evapp-support-section-heading">
+                        <div class="evapp-support-section-icon" aria-hidden="true">
+                            <?php echo eventosapp_support_frontend_icon('support'); ?>
+                        </div>
+                        <div>
+                            <h2 id="<?php echo esc_attr($instance_id); ?>-identify-title" class="evapp-support-section-title">Identificar asistente</h2>
+                            <p class="evapp-support-section-desc">
+                                Usa el QR del ticket o busca por cédula. La lectura solo identifica al asistente para esta atención.
+                            </p>
+                        </div>
+                    </div>
+                </div>
 
-            <div class="evapp-support-reason" id="evappSupportReasonBox">
-                <label for="evappSupportReason"><strong>Razón de la consulta del asistente</strong></label>
-                <textarea id="evappSupportReason" class="evapp-support-textarea" placeholder="Describe la razón de la consulta"></textarea>
-                <button type="button" class="evapp-support-btn" id="evappSupportRegisterBtn" style="margin-top:10px;">Registrar atención</button>
-            </div>
+                <div class="evapp-support-methods" role="group" aria-label="Método de identificación">
+                    <button
+                        type="button"
+                        class="evapp-support-method"
+                        id="evappSupportScanBtn"
+                        aria-expanded="false"
+                        aria-controls="evappSupportCamera"
+                    >
+                        <span class="evapp-support-method-icon" aria-hidden="true">
+                            <?php echo eventosapp_support_frontend_icon('qr'); ?>
+                        </span>
+                        <span class="evapp-support-method-copy">
+                            <span class="evapp-support-method-title">Leer QR con cámara</span>
+                            <span class="evapp-support-method-desc">Ideal cuando el asistente tiene su ticket disponible.</span>
+                        </span>
+                    </button>
 
-            <div class="evapp-support-status" id="evappSupportStatus"></div>
+                    <button
+                        type="button"
+                        class="evapp-support-method"
+                        id="evappSupportCedulaBtn"
+                        aria-expanded="false"
+                        aria-controls="evappSupportSearch"
+                    >
+                        <span class="evapp-support-method-icon" aria-hidden="true">
+                            <?php echo eventosapp_support_frontend_icon('id'); ?>
+                        </span>
+                        <span class="evapp-support-method-copy">
+                            <span class="evapp-support-method-title">Identificar por cédula</span>
+                            <span class="evapp-support-method-desc">Busca coincidencias dentro del evento activo.</span>
+                        </span>
+                    </button>
+                </div>
+
+                <div class="evapp-support-camera" id="evappSupportCamera" aria-hidden="true">
+                    <div class="evapp-support-camera-head">
+                        <strong>Escáner QR</strong>
+                        <span>Centra el código dentro del recuadro</span>
+                    </div>
+                    <div class="evapp-support-camera-stage">
+                        <video id="evappSupportVideo" playsinline muted></video>
+                        <div class="evapp-support-frame" aria-hidden="true">
+                            <div class="evapp-support-scan-guide"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="evapp-support-search" id="evappSupportSearch" aria-hidden="true">
+                    <label class="evapp-support-field-label" for="evappSupportCedula">Cédula del asistente</label>
+
+                    <div class="evapp-support-input-wrap">
+                        <span class="evapp-support-search-icon" aria-hidden="true">
+                            <?php echo eventosapp_support_frontend_icon('search'); ?>
+                        </span>
+                        <input
+                            type="search"
+                            id="evappSupportCedula"
+                            class="evapp-support-input"
+                            placeholder="Escribe la cédula del asistente"
+                            autocomplete="off"
+                            autocapitalize="off"
+                            spellcheck="false"
+                            inputmode="numeric"
+                        >
+                        <button type="button" class="evapp-support-clear" id="evappSupportClearSearch" aria-label="Limpiar búsqueda">
+                            <?php echo eventosapp_support_frontend_icon('close'); ?>
+                        </button>
+                    </div>
+
+                    <div class="evapp-support-search-foot">
+                        <span>La búsqueda inicia desde 2 caracteres. Presiona Enter para buscar de inmediato.</span>
+                        <span class="evapp-support-result-count" id="evappSupportResultCount" aria-live="polite"></span>
+                    </div>
+
+                    <div class="evapp-support-results" id="evappSupportResults" aria-live="polite" aria-busy="false"></div>
+                </div>
+
+                <div class="evapp-support-selected" id="evappSupportSelected"></div>
+
+                <div class="evapp-support-reason" id="evappSupportReasonBox">
+                    <label class="evapp-support-field-label" for="evappSupportReason">Razón de la consulta del asistente</label>
+                    <textarea
+                        id="evappSupportReason"
+                        class="evapp-support-textarea"
+                        placeholder="Describe brevemente la razón de la consulta"
+                        maxlength="2000"
+                    ></textarea>
+
+                    <div class="evapp-support-reason-actions">
+                        <button type="button" class="evapp-support-btn evapp-support-btn-primary" id="evappSupportRegisterBtn">
+                            <?php echo eventosapp_support_frontend_icon('check'); ?>
+                            <span class="evapp-support-register-label">Registrar atención</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div
+                    class="evapp-support-status"
+                    id="evappSupportStatus"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                ></div>
+            </section>
         </div>
     </div>
 
     <script>
     (function(){
-        const panel = document.querySelector('.evapp-support-panel[data-event-id="<?php echo esc_js($event_id); ?>"]');
+        const panel = document.getElementById(<?php echo wp_json_encode($instance_id); ?>);
         if (!panel) return;
 
-        const ajaxURL = panel.dataset.ajaxUrl;
-        const nonce = panel.dataset.nonce;
+        const ajaxURL = panel.dataset.ajaxUrl || '';
+        const nonce = panel.dataset.nonce || '';
         const eventID = parseInt(panel.dataset.eventId, 10) || 0;
 
-        const scanBtn = document.getElementById('evappSupportScanBtn');
-        const cedulaBtn = document.getElementById('evappSupportCedulaBtn');
-        const cameraBox = document.getElementById('evappSupportCamera');
-        const video = document.getElementById('evappSupportVideo');
-        const searchBox = document.getElementById('evappSupportSearch');
-        const cedulaInput = document.getElementById('evappSupportCedula');
-        const resultsBox = document.getElementById('evappSupportResults');
-        const selectedBox = document.getElementById('evappSupportSelected');
-        const reasonBox = document.getElementById('evappSupportReasonBox');
-        const reasonInput = document.getElementById('evappSupportReason');
-        const registerBtn = document.getElementById('evappSupportRegisterBtn');
-        const statusBox = document.getElementById('evappSupportStatus');
+        const scanBtn = panel.querySelector('#evappSupportScanBtn');
+        const cedulaBtn = panel.querySelector('#evappSupportCedulaBtn');
+        const cameraBox = panel.querySelector('#evappSupportCamera');
+        const video = panel.querySelector('#evappSupportVideo');
+        const searchBox = panel.querySelector('#evappSupportSearch');
+        const cedulaInput = panel.querySelector('#evappSupportCedula');
+        const clearSearchBtn = panel.querySelector('#evappSupportClearSearch');
+        const resultCount = panel.querySelector('#evappSupportResultCount');
+        const resultsBox = panel.querySelector('#evappSupportResults');
+        const selectedBox = panel.querySelector('#evappSupportSelected');
+        const reasonBox = panel.querySelector('#evappSupportReasonBox');
+        const reasonInput = panel.querySelector('#evappSupportReason');
+        const registerBtn = panel.querySelector('#evappSupportRegisterBtn');
+        const registerLabel = registerBtn ? registerBtn.querySelector('.evapp-support-register-label') : null;
+        const statusBox = panel.querySelector('#evappSupportStatus');
+
+        if (!scanBtn || !cedulaBtn || !cameraBox || !video || !searchBox || !cedulaInput || !resultsBox || !selectedBox || !reasonBox || !reasonInput || !registerBtn || !statusBox) {
+            return;
+        }
 
         let stream = null;
         let scanning = false;
         let selectedTicket = null;
-        let barcodeDetector = ('BarcodeDetector' in window) ? new BarcodeDetector({formats:['qr_code']}) : null;
         let searchTimer = null;
+        let searchController = null;
+        let searchSequence = 0;
+        let scanRaf = 0;
+        let lastScanAt = 0;
+        let barcodeDetector = null;
 
-        function setStatus(message, type){
-            statusBox.className = 'evapp-support-status ' + (type === 'error' ? 'evapp-support-error' : (type === 'ok' ? 'evapp-support-ok' : 'evapp-support-muted'));
-            statusBox.textContent = message || '';
+        const scanCanvas = document.createElement('canvas');
+        const scanContext = scanCanvas.getContext('2d', {willReadFrequently:true});
+
+        if ('BarcodeDetector' in window) {
+            try {
+                barcodeDetector = new BarcodeDetector({formats:['qr_code']});
+            } catch (error) {
+                barcodeDetector = null;
+            }
         }
 
         function esc(text){
-            return String(text || '').replace(/[&<>'"]/g, function(c){
+            return String(text == null ? '' : text).replace(/[&<>'"]/g, function(c){
                 return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[c];
             });
         }
 
-        function stopCamera(){
+        function initials(firstName, lastName){
+            const first = String(firstName || '').trim().charAt(0);
+            const last = String(lastName || '').trim().charAt(0);
+            return (first + last).toUpperCase() || 'AS';
+        }
+
+        function setStatus(message, type){
+            statusBox.className = 'evapp-support-status ' + (
+                type === 'error'
+                    ? 'is-error'
+                    : (type === 'ok' ? 'is-success' : 'is-muted')
+            );
+            statusBox.textContent = message || '';
+        }
+
+        function setMethodState(button, active, danger){
+            if (!button) return;
+            button.classList.toggle('is-active', !!active && !danger);
+            button.classList.toggle('is-danger', !!danger);
+            button.setAttribute('aria-expanded', active ? 'true' : 'false');
+        }
+
+        function setResultsBusy(isBusy){
+            resultsBox.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+        }
+
+        function updateClearSearch(){
+            if (!clearSearchBtn) return;
+            clearSearchBtn.classList.toggle('is-visible', cedulaInput.value.trim() !== '');
+        }
+
+        function stopCamera(options){
+            options = options || {};
             scanning = false;
+
+            if (scanRaf) {
+                cancelAnimationFrame(scanRaf);
+                scanRaf = 0;
+            }
+
             if (stream) {
-                stream.getTracks().forEach(track => track.stop());
+                stream.getTracks().forEach(function(track){
+                    try { track.stop(); } catch (error) {}
+                });
                 stream = null;
             }
+
+            if (video.srcObject) {
+                video.srcObject = null;
+            }
+
             cameraBox.style.display = 'none';
-            scanBtn.textContent = 'Leer QR con cámara';
-            scanBtn.classList.remove('danger');
+            cameraBox.setAttribute('aria-hidden', 'true');
+            setMethodState(scanBtn, false, false);
+
+            const title = scanBtn.querySelector('.evapp-support-method-title');
+            const desc = scanBtn.querySelector('.evapp-support-method-desc');
+            if (title) title.textContent = 'Leer QR con cámara';
+            if (desc) desc.textContent = 'Ideal cuando el asistente tiene su ticket disponible.';
+
+            if (!options.keepStatus && options.status) {
+                setStatus(options.status, options.statusType || 'muted');
+            }
+        }
+
+        function closeSearch(){
+            searchBox.style.display = 'none';
+            searchBox.setAttribute('aria-hidden', 'true');
+            setMethodState(cedulaBtn, false, false);
+        }
+
+        function openSearch(){
+            stopCamera({keepStatus:true});
+            searchBox.style.display = 'block';
+            searchBox.setAttribute('aria-hidden', 'false');
+            setMethodState(cedulaBtn, true, false);
+            cedulaInput.focus();
+            updateClearSearch();
+        }
+
+        function clearSelection(options){
+            options = options || {};
+            selectedTicket = null;
+            selectedBox.style.display = 'none';
+            selectedBox.innerHTML = '';
+            reasonBox.style.display = 'none';
+            reasonInput.value = '';
+
+            if (!options.keepStatus) {
+                setStatus('', 'muted');
+            }
+        }
+
+        function resetSearchResults(){
+            resultsBox.innerHTML = '';
+            resultCount.textContent = '';
+            setResultsBusy(false);
         }
 
         async function startCamera(){
             if (scanning) {
-                stopCamera();
+                stopCamera({status:'Cámara detenida.', statusType:'muted'});
                 return;
             }
-            stopCamera();
-            searchBox.style.display = 'none';
-            cameraBox.style.display = 'block';
+
+            closeSearch();
+            clearSelection({keepStatus:true});
+            resetSearchResults();
             setStatus('Activando cámara…', 'muted');
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setStatus('Este navegador no permite acceder a la cámara desde esta página.', 'error');
+                return;
+            }
+
             try {
-                stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false});
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video:{
+                        facingMode:{ideal:'environment'},
+                        width:{ideal:1280},
+                        height:{ideal:720}
+                    },
+                    audio:false
+                });
+
                 video.srcObject = stream;
                 await video.play();
+
                 scanning = true;
-                scanBtn.textContent = 'Detener cámara';
-                scanBtn.classList.add('danger');
+                cameraBox.style.display = 'block';
+                cameraBox.setAttribute('aria-hidden', 'false');
+                setMethodState(scanBtn, true, true);
+
+                const title = scanBtn.querySelector('.evapp-support-method-title');
+                const desc = scanBtn.querySelector('.evapp-support-method-desc');
+                if (title) title.textContent = 'Detener cámara';
+                if (desc) desc.textContent = 'La cámara está activa y buscando un código QR.';
+
                 setStatus('Cámara activa. Enfoca el QR del asistente.', 'muted');
-                requestAnimationFrame(scanLoop);
-            } catch (e) {
-                cameraBox.style.display = 'none';
-                setStatus('No se pudo acceder a la cámara.', 'error');
+                lastScanAt = 0;
+                scanRaf = requestAnimationFrame(scanLoop);
+            } catch (error) {
+                stopCamera({keepStatus:true});
+                setStatus('No se pudo acceder a la cámara. Revisa los permisos del navegador e intenta nuevamente.', 'error');
             }
         }
 
-        async function scanLoop(){
+        async function scanLoop(timestamp){
             if (!scanning) return;
 
+            // Limita el análisis a ~7 veces por segundo para reducir consumo de CPU
+            // en dispositivos donde se usa jsQR como fallback.
+            if ((timestamp - lastScanAt) < 140) {
+                scanRaf = requestAnimationFrame(scanLoop);
+                return;
+            }
+            lastScanAt = timestamp;
+
             try {
-                if (barcodeDetector) {
+                if (barcodeDetector && video.readyState >= 2) {
                     const codes = await barcodeDetector.detect(video);
                     if (codes && codes.length && codes[0].rawValue) {
                         identifyByQR(codes[0].rawValue);
                         return;
                     }
-                } else if (window.jsQR && video.videoWidth && video.videoHeight) {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    const ctx = canvas.getContext('2d', {willReadFrequently:true});
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    const code = window.jsQR(imageData.data, canvas.width, canvas.height);
+                } else if (window.jsQR && scanContext && video.videoWidth && video.videoHeight) {
+                    if (scanCanvas.width !== video.videoWidth || scanCanvas.height !== video.videoHeight) {
+                        scanCanvas.width = video.videoWidth;
+                        scanCanvas.height = video.videoHeight;
+                    }
+
+                    scanContext.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+                    const imageData = scanContext.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+                    const code = window.jsQR(imageData.data, scanCanvas.width, scanCanvas.height);
+
                     if (code && code.data) {
                         identifyByQR(code.data);
                         return;
                     }
                 }
-            } catch (e) {}
+            } catch (error) {
+                // Un frame inválido no debe detener el lector; el siguiente intento continúa.
+            }
 
-            requestAnimationFrame(scanLoop);
+            if (scanning) {
+                scanRaf = requestAnimationFrame(scanLoop);
+            }
         }
 
         function postForm(data){
             const fd = new FormData();
-            Object.keys(data).forEach(key => fd.append(key, data[key]));
+            Object.keys(data).forEach(function(key){
+                fd.append(key, data[key]);
+            });
             fd.append('security', nonce);
             fd.append('event_id', eventID);
-            return fetch(ajaxURL, {method:'POST', body:fd, credentials:'same-origin'}).then(r => r.json());
+
+            return fetch(ajaxURL, {
+                method:'POST',
+                body:fd,
+                credentials:'same-origin'
+            }).then(function(response){
+                return response.json();
+            });
         }
 
         function identifyByQR(code){
-            stopCamera();
+            if (!code || !scanning) return;
+
+            stopCamera({keepStatus:true});
             setStatus('Identificando asistente…', 'muted');
-            postForm({action:'eventosapp_support_identify_qr', code:code}).then(resp => {
+
+            postForm({
+                action:'eventosapp_support_identify_qr',
+                code:code
+            }).then(function(resp){
                 if (!resp || !resp.success) {
-                    setStatus((resp && resp.data && resp.data.message) ? resp.data.message : 'No se pudo identificar el asistente.', 'error');
+                    setStatus(
+                        (resp && resp.data && resp.data.message)
+                            ? resp.data.message
+                            : 'No se pudo identificar el asistente.',
+                        'error'
+                    );
                     return;
                 }
+
                 selectTicket(resp.data);
                 setStatus('Asistente identificado por QR.', 'ok');
-            }).catch(() => setStatus('Error de red al identificar por QR.', 'error'));
+            }).catch(function(){
+                setStatus('Error de red al identificar por QR.', 'error');
+            });
         }
 
         function selectTicket(ticket){
-            selectedTicket = ticket;
+            selectedTicket = ticket || null;
+            if (!selectedTicket || !selectedTicket.ticket_id) return;
+
+            closeSearch();
+            resetSearchResults();
+
+            const fullName = ((ticket.first_name || '') + ' ' + (ticket.last_name || '')).trim() || 'Asistente';
             selectedBox.style.display = 'block';
-            selectedBox.innerHTML = '<h3>Asistente seleccionado</h3>' +
-                '<div class="evapp-support-grid">' +
-                '<b>Nombre</b><span>' + esc((ticket.first_name || '') + ' ' + (ticket.last_name || '')) + '</span>' +
-                '<b>Cédula</b><span>' + esc(ticket.cc) + '</span>' +
-                '<b>Ticket</b><span>' + esc(ticket.ticket_code) + '</span>' +
-                '<b>Correo</b><span>' + esc(ticket.email) + '</span>' +
-                '<b>Teléfono</b><span>' + esc(ticket.phone) + '</span>' +
+            selectedBox.innerHTML =
+                '<div class="evapp-support-selected-head">' +
+                    '<div>' +
+                        '<h3 class="evapp-support-selected-title">Asistente seleccionado</h3>' +
+                        '<p class="evapp-support-selected-subtitle">Verifica los datos antes de registrar la atención.</p>' +
+                    '</div>' +
+                    '<button type="button" class="evapp-support-btn evapp-support-btn-secondary evapp-support-selected-clear" data-evapp-clear-selection>Quitar selección</button>' +
+                '</div>' +
+                '<div class="evapp-support-data-grid">' +
+                    '<div class="evapp-support-data-item"><span class="evapp-support-data-label">Nombre</span><span class="evapp-support-data-value">' + esc(fullName) + '</span></div>' +
+                    '<div class="evapp-support-data-item"><span class="evapp-support-data-label">Cédula</span><span class="evapp-support-data-value">' + esc(ticket.cc || '—') + '</span></div>' +
+                    '<div class="evapp-support-data-item"><span class="evapp-support-data-label">Ticket</span><span class="evapp-support-data-value">' + esc(ticket.ticket_code || '—') + '</span></div>' +
+                    '<div class="evapp-support-data-item"><span class="evapp-support-data-label">Correo</span><span class="evapp-support-data-value">' + esc(ticket.email || '—') + '</span></div>' +
+                    '<div class="evapp-support-data-item"><span class="evapp-support-data-label">Teléfono</span><span class="evapp-support-data-value">' + esc(ticket.phone || '—') + '</span></div>' +
                 '</div>';
+
             reasonBox.style.display = 'block';
             reasonInput.value = '';
             reasonInput.focus();
@@ -1776,53 +3140,163 @@ add_shortcode('eventosapp_support_assistance', function($atts){
 
         function renderResults(items){
             resultsBox.innerHTML = '';
+            setResultsBusy(false);
+
             if (!items || !items.length) {
-                resultsBox.innerHTML = '<div class="evapp-support-muted">Sin resultados.</div>';
+                resultCount.textContent = '0 resultados';
+                resultsBox.innerHTML = '<div class="evapp-support-empty">No encontramos asistentes con esa cédula dentro del evento activo.</div>';
                 return;
             }
-            items.forEach(item => {
+
+            resultCount.textContent = items.length + (items.length === 1 ? ' resultado' : ' resultados');
+
+            items.forEach(function(item){
+                const fullName = ((item.first_name || '') + ' ' + (item.last_name || '')).trim() || 'Asistente';
+                const contact = [];
+                if (item.email) contact.push(item.email);
+                if (item.phone) contact.push(item.phone);
+
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'evapp-support-result';
-                btn.innerHTML = '<strong>' + esc((item.first_name || '') + ' ' + (item.last_name || '')) + '</strong><br>' +
-                    '<span>Cédula: ' + esc(item.cc) + ' · Ticket: ' + esc(item.ticket_code) + '</span><br>' +
-                    '<small>' + esc(item.email || '') + ' ' + esc(item.phone || '') + '</small>';
-                btn.addEventListener('click', () => {
+                btn.innerHTML =
+                    '<span class="evapp-support-result-avatar" aria-hidden="true">' + esc(initials(item.first_name, item.last_name)) + '</span>' +
+                    '<span class="evapp-support-result-copy">' +
+                        '<span class="evapp-support-result-name">' + esc(fullName) + '</span>' +
+                        '<span class="evapp-support-result-meta">Cédula: ' + esc(item.cc || '—') + ' · Ticket: ' + esc(item.ticket_code || '—') + '</span>' +
+                        (contact.length ? '<span class="evapp-support-result-meta">' + esc(contact.join(' · ')) + '</span>' : '') +
+                    '</span>' +
+                    '<span class="evapp-support-result-arrow" aria-hidden="true">' +
+                        '<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>' +
+                    '</span>';
+
+                btn.addEventListener('click', function(){
                     selectTicket(item);
                     setStatus('Asistente seleccionado por cédula.', 'ok');
                 });
+
                 resultsBox.appendChild(btn);
             });
         }
 
-        function searchByCedula(){
+        function searchByCedula(immediate){
+            clearTimeout(searchTimer);
+            updateClearSearch();
+
             const q = cedulaInput.value.trim();
+            if (searchController) {
+                searchController.abort();
+                searchController = null;
+            }
+
             if (q.length < 2) {
-                resultsBox.innerHTML = '<div class="evapp-support-muted">Escribe al menos 2 caracteres.</div>';
+                resultCount.textContent = '';
+                resultsBox.innerHTML = q.length
+                    ? '<div class="evapp-support-empty">Escribe al menos 2 caracteres para iniciar la búsqueda.</div>'
+                    : '';
+                setResultsBusy(false);
+                setStatus('', 'muted');
                 return;
             }
-            setStatus('Buscando asistente…', 'muted');
-            const url = ajaxURL + '?action=eventosapp_support_search_attendee&security=' + encodeURIComponent(nonce) + '&event_id=' + encodeURIComponent(eventID) + '&q=' + encodeURIComponent(q);
-            fetch(url, {credentials:'same-origin'}).then(r => r.json()).then(resp => {
-                if (!resp || !resp.success) {
-                    setStatus((resp && resp.data && resp.data.message) ? resp.data.message : 'No se pudo buscar.', 'error');
-                    return;
+
+            const delay = immediate ? 0 : 280;
+            searchTimer = setTimeout(function(){
+                const sequence = ++searchSequence;
+                setStatus('Buscando asistente…', 'muted');
+                setResultsBusy(true);
+                resultCount.textContent = '';
+                resultsBox.innerHTML = '<div class="evapp-support-empty">Buscando coincidencias…</div>';
+
+                if ('AbortController' in window) {
+                    searchController = new AbortController();
                 }
-                renderResults(resp.data);
-                setStatus('', 'muted');
-            }).catch(() => setStatus('Error de red al buscar por cédula.', 'error'));
+
+                const url = ajaxURL
+                    + '?action=eventosapp_support_search_attendee'
+                    + '&security=' + encodeURIComponent(nonce)
+                    + '&event_id=' + encodeURIComponent(eventID)
+                    + '&q=' + encodeURIComponent(q);
+
+                fetch(url, {
+                    credentials:'same-origin',
+                    signal:searchController ? searchController.signal : undefined
+                }).then(function(response){
+                    return response.json();
+                }).then(function(resp){
+                    if (sequence !== searchSequence) return;
+
+                    if (!resp || !resp.success) {
+                        setResultsBusy(false);
+                        setStatus(
+                            (resp && resp.data && resp.data.message)
+                                ? resp.data.message
+                                : 'No se pudo completar la búsqueda.',
+                            'error'
+                        );
+                        return;
+                    }
+
+                    renderResults(resp.data || []);
+                    setStatus('', 'muted');
+                }).catch(function(error){
+                    if (error && error.name === 'AbortError') return;
+                    if (sequence !== searchSequence) return;
+
+                    setResultsBusy(false);
+                    setStatus('Error de red al buscar por cédula.', 'error');
+                }).finally(function(){
+                    if (sequence === searchSequence) {
+                        searchController = null;
+                    }
+                });
+            }, delay);
         }
 
         scanBtn.addEventListener('click', startCamera);
+
         cedulaBtn.addEventListener('click', function(){
-            stopCamera();
-            searchBox.style.display = searchBox.style.display === 'block' ? 'none' : 'block';
-            if (searchBox.style.display === 'block') cedulaInput.focus();
+            if (searchBox.style.display === 'block') {
+                closeSearch();
+                return;
+            }
+            openSearch();
         });
 
         cedulaInput.addEventListener('input', function(){
-            clearTimeout(searchTimer);
-            searchTimer = setTimeout(searchByCedula, 320);
+            searchByCedula(false);
+        });
+
+        cedulaInput.addEventListener('keydown', function(event){
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                searchByCedula(true);
+            }
+
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                cedulaInput.value = '';
+                resetSearchResults();
+                updateClearSearch();
+                setStatus('', 'muted');
+            }
+        });
+
+        if (clearSearchBtn) {
+            clearSearchBtn.addEventListener('click', function(){
+                cedulaInput.value = '';
+                resetSearchResults();
+                updateClearSearch();
+                setStatus('', 'muted');
+                cedulaInput.focus();
+            });
+        }
+
+        selectedBox.addEventListener('click', function(event){
+            const clearButton = event.target.closest('[data-evapp-clear-selection]');
+            if (!clearButton) return;
+
+            clearSelection();
+            setStatus('Selección eliminada. Puedes identificar otro asistente.', 'muted');
         });
 
         registerBtn.addEventListener('click', function(){
@@ -1830,6 +3304,7 @@ add_shortcode('eventosapp_support_assistance', function($atts){
                 setStatus('Primero debes identificar un asistente.', 'error');
                 return;
             }
+
             const reason = reasonInput.value.trim();
             if (!reason) {
                 setStatus('Debes escribir la razón de la consulta.', 'error');
@@ -1838,29 +3313,49 @@ add_shortcode('eventosapp_support_assistance', function($atts){
             }
 
             registerBtn.disabled = true;
-            registerBtn.textContent = 'Registrando…';
+            if (registerLabel) registerLabel.textContent = 'Registrando…';
             setStatus('Guardando atención…', 'muted');
 
-            postForm({action:'eventosapp_support_register_attention', ticket_id:selectedTicket.ticket_id, reason:reason}).then(resp => {
-                registerBtn.disabled = false;
-                registerBtn.textContent = 'Registrar atención';
+            postForm({
+                action:'eventosapp_support_register_attention',
+                ticket_id:selectedTicket.ticket_id,
+                reason:reason
+            }).then(function(resp){
                 if (!resp || !resp.success) {
-                    setStatus((resp && resp.data && resp.data.message) ? resp.data.message : 'No se pudo registrar la atención.', 'error');
+                    setStatus(
+                        (resp && resp.data && resp.data.message)
+                            ? resp.data.message
+                            : 'No se pudo registrar la atención.',
+                        'error'
+                    );
                     return;
                 }
-                setStatus('Atención registrada correctamente.', 'ok');
-                selectedTicket = null;
-                selectedBox.style.display = 'none';
-                selectedBox.innerHTML = '';
-                reasonBox.style.display = 'none';
-                reasonInput.value = '';
-                resultsBox.innerHTML = '';
+
+                clearSelection({keepStatus:true});
+                resetSearchResults();
                 cedulaInput.value = '';
-            }).catch(() => {
-                registerBtn.disabled = false;
-                registerBtn.textContent = 'Registrar atención';
+                updateClearSearch();
+                setStatus('Atención registrada correctamente. Ya puedes atender a la siguiente persona.', 'ok');
+            }).catch(function(){
                 setStatus('Error de red al registrar la atención.', 'error');
+            }).finally(function(){
+                registerBtn.disabled = false;
+                if (registerLabel) registerLabel.textContent = 'Registrar atención';
             });
+        });
+
+        window.addEventListener('pagehide', function(){
+            stopCamera({keepStatus:true});
+            if (searchController) {
+                searchController.abort();
+                searchController = null;
+            }
+        });
+
+        document.addEventListener('visibilitychange', function(){
+            if (document.hidden && scanning) {
+                stopCamera({keepStatus:true});
+            }
         });
     })();
     </script>
@@ -1874,19 +3369,31 @@ add_shortcode('eventosapp_support_assistance', function($atts){
 add_shortcode('eventosapp_support_team_metrics', function($atts){
     $atts = shortcode_atts(['event_id' => 0], $atts);
     $event_id = eventosapp_support_current_event_from_request($atts['event_id']);
+    $nav = eventosapp_support_frontend_navigation();
 
     if ( ! $event_id ) {
-        $dashboard = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
-        return '<div class="evapp-support-notice">Debes escoger un evento en el <a href="'.esc_url($dashboard).'">dashboard</a> antes de ver métricas.</div>';
+        return eventosapp_support_frontend_notice_html(
+            'Debes escoger un evento en el <a href="' . esc_url($nav['dashboard_url']) . '">dashboard</a> antes de ver métricas.',
+            'warning',
+            $nav['dashboard_url']
+        );
     }
 
     if ( ! eventosapp_support_user_can_feature_for_event($event_id, 'support_team_metrics') ) {
-        return '<div class="evapp-support-notice evapp-support-notice-error">No tienes permisos para ver las métricas del equipo de apoyo.</div>';
+        return eventosapp_support_frontend_notice_html(
+            'No tienes permisos para ver las métricas del equipo de apoyo.',
+            'error',
+            $nav['dashboard_url']
+        );
     }
 
     $scope = eventosapp_support_get_metrics_scope($event_id, get_current_user_id());
     if ( ! $scope ) {
-        return '<div class="evapp-support-notice evapp-support-notice-error">No tienes permisos para ver las métricas del equipo de apoyo.</div>';
+        return eventosapp_support_frontend_notice_html(
+            'No tienes permisos para ver las métricas del equipo de apoyo.',
+            'error',
+            $nav['dashboard_url']
+        );
     }
 
     global $wpdb;
@@ -1913,95 +3420,218 @@ add_shortcode('eventosapp_support_team_metrics', function($atts){
         $where_params
     ) );
 
-    $total = (int) $wpdb->get_var( eventosapp_support_prepare_query("SELECT COUNT(*) FROM {$table} WHERE {$where_sql}", $where_params) );
+    $total = (int) $wpdb->get_var(
+        eventosapp_support_prepare_query(
+            "SELECT COUNT(*) FROM {$table} WHERE {$where_sql}",
+            $where_params
+        )
+    );
+
     $max_hour = 0;
+    $peak_hour = '';
+    $peak_hour_total = 0;
+
     foreach ( $by_hour as $row ) {
-        $max_hour = max($max_hour, (int) $row->total);
+        $row_total = (int) $row->total;
+        $max_hour = max($max_hour, $row_total);
+
+        if ( $row_total > $peak_hour_total ) {
+            $peak_hour_total = $row_total;
+            $peak_hour = (string) $row->created_hour;
+        }
     }
+
     if ( $max_hour < 1 ) $max_hour = 1;
 
-    $can_download_csv = eventosapp_support_user_can_download_csv($event_id);
-    $download_url = '';
-    if ( $can_download_csv ) {
-        $download_url = eventosapp_support_get_download_csv_url($event_id);
+    $leader_name = '';
+    $leader_total = 0;
+    if ( ! empty($top_users[0]) ) {
+        $leader_name = (string) ($top_users[0]->staff_name ?: ('Usuario #' . $top_users[0]->staff_user_id));
+        $leader_total = (int) $top_users[0]->total;
     }
+
+    $can_download_csv = eventosapp_support_user_can_download_csv($event_id);
+    $download_url = $can_download_csv ? eventosapp_support_get_download_csv_url($event_id) : '';
+    $event_name = get_the_title($event_id);
+    $instance_id = 'evapp-support-metrics-' . wp_unique_id();
 
     ob_start();
-    if ( function_exists('eventosapp_active_event_bar') ) {
-        eventosapp_active_event_bar();
-    }
+    eventosapp_support_frontend_print_styles();
     ?>
-    <style>
-        .evapp-support-metrics{max-width:980px;margin:0 auto;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;}
-        .evapp-support-metrics-card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:18px;box-shadow:0 8px 26px rgba(15,23,42,.08);margin-bottom:16px;}
-        .evapp-support-metrics h2{margin:0 0 6px;font-size:26px;color:#10233f;}
-        .evapp-support-kpi{display:inline-flex;gap:8px;align-items:center;background:#eef6ff;border:1px solid #bfdbfe;border-radius:999px;padding:8px 12px;font-weight:800;color:#1e3a8a;margin:8px 0 16px;}
-        .evapp-support-download-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0 18px;}
-        .evapp-support-download-btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border-radius:12px;background:#10233f;color:#fff;font-weight:800;padding:11px 14px;box-shadow:0 4px 12px rgba(15,35,63,.18);}
-        .evapp-support-download-btn:hover{color:#fff;filter:brightness(.96);}
-        .evapp-support-bar-row{display:grid;grid-template-columns:70px 1fr 60px;gap:10px;align-items:center;margin:8px 0;}
-        .evapp-support-bar-track{height:24px;background:#f1f5f9;border-radius:999px;overflow:hidden;border:1px solid #e2e8f0;}
-        .evapp-support-bar{height:100%;background:#2F73B5;border-radius:999px;min-width:4px;}
-        .evapp-support-table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px;}
-        .evapp-support-table th,.evapp-support-table td{border:1px solid #e5e7eb;padding:9px;text-align:left;}
-        .evapp-support-table th{background:#f8fafc;font-weight:800;}
-        .evapp-support-muted{color:#64748b;}
-        .evapp-support-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;background:#f8fafc;}
-    </style>
-    <div class="evapp-support-metrics">
-        <div class="evapp-support-metrics-card">
-            <h2>Métrica de equipo de apoyo</h2>
-            <p class="evapp-support-muted" style="margin-top:0;"><?php echo esc_html($scope['label'] ?? ''); ?></p>
-            <div class="evapp-support-kpi">Total de atenciones: <?php echo esc_html($total); ?></div>
-
-            <?php if ( $can_download_csv && $download_url ) : ?>
-                <div class="evapp-support-download-row">
-                    <a class="evapp-support-download-btn" href="<?php echo esc_url($download_url); ?>">Descargar base de consultas CSV</a>
-                    <span class="evapp-support-muted">Disponible solo para administradores y Equipo del Organizador.</span>
+    <div id="<?php echo esc_attr($instance_id); ?>" class="evapp-support-app evapp-support-metrics-app">
+        <div class="evapp-support-shell">
+            <header class="evapp-support-header">
+                <div class="evapp-support-heading">
+                    <p class="evapp-support-eyebrow">EVENTOSAPP</p>
+                    <h1 class="evapp-support-main-title">Métricas de equipo de apoyo</h1>
+                    <p class="evapp-support-subtitle">
+                        Consulta el volumen de atenciones, los horarios de mayor demanda y el desempeño del equipo dentro del alcance asignado.
+                    </p>
                 </div>
-            <?php endif; ?>
 
-            <h3>Atenciones realizadas por hora</h3>
-            <?php if ( $by_hour ) : ?>
-                <?php foreach ( $by_hour as $row ) : ?>
-                    <?php $pct = min(100, round(((int) $row->total / $max_hour) * 100)); ?>
-                    <div class="evapp-support-bar-row">
-                        <strong><?php echo esc_html($row->created_hour); ?></strong>
-                        <div class="evapp-support-bar-track"><div class="evapp-support-bar" style="width:<?php echo esc_attr($pct); ?>%;"></div></div>
-                        <span><?php echo esc_html((int) $row->total); ?></span>
+                <div class="evapp-support-header-actions">
+                    <a
+                        href="<?php echo esc_url($nav['dashboard_url']); ?>"
+                        class="evapp-support-btn evapp-support-btn-secondary"
+                        aria-label="Volver al dashboard"
+                    >
+                        <?php echo eventosapp_support_frontend_icon('back'); ?>
+                        <span>Volver al dashboard</span>
+                    </a>
+                </div>
+            </header>
+
+            <section class="evapp-support-event-context" aria-label="Evento activo">
+                <div class="evapp-support-event-main">
+                    <div class="evapp-support-event-icon" aria-hidden="true">
+                        <?php echo eventosapp_support_frontend_icon('calendar'); ?>
                     </div>
-                <?php endforeach; ?>
-            <?php else : ?>
-                <div class="evapp-support-empty">Aún no hay atenciones registradas para graficar.</div>
-            <?php endif; ?>
-        </div>
 
-        <div class="evapp-support-metrics-card">
-            <h3>Top usuarios con más atenciones</h3>
-            <?php if ( $top_users ) : ?>
-                <table class="evapp-support-table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Usuario</th>
-                            <th>Correo</th>
-                            <th>Atenciones</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php $pos = 1; foreach ( $top_users as $row ) : ?>
-                            <tr>
-                                <td><?php echo esc_html($pos++); ?></td>
-                                <td><?php echo esc_html($row->staff_name ?: ('Usuario #' . $row->staff_user_id)); ?></td>
-                                <td><?php echo esc_html($row->staff_email); ?></td>
-                                <td><strong><?php echo esc_html((int) $row->total); ?></strong></td>
-                            </tr>
+                    <div class="evapp-support-event-copy">
+                        <span class="evapp-support-event-kicker">Evento activo</span>
+                        <strong class="evapp-support-event-name"><?php echo esc_html($event_name ?: ('Evento #' . $event_id)); ?></strong>
+                    </div>
+                </div>
+
+                <div class="evapp-support-event-meta">
+                    <span class="evapp-support-chip"><?php echo esc_html($scope['label'] ?? ''); ?></span>
+                    <a class="evapp-support-btn evapp-support-btn-primary" href="<?php echo esc_url($nav['change_event_url']); ?>">
+                        Cambiar evento
+                    </a>
+                </div>
+            </section>
+
+            <section class="evapp-support-summary" aria-label="Resumen de métricas">
+                <article class="evapp-support-kpi-card">
+                    <div class="evapp-support-kpi-icon" aria-hidden="true">
+                        <?php echo eventosapp_support_frontend_icon('chart'); ?>
+                    </div>
+                    <span class="evapp-support-kpi-label">Total de atenciones</span>
+                    <strong class="evapp-support-kpi-value"><?php echo esc_html(number_format_i18n($total)); ?></strong>
+                    <span class="evapp-support-kpi-detail"><?php echo esc_html($scope['label'] ?? ''); ?></span>
+                </article>
+
+                <article class="evapp-support-kpi-card">
+                    <div class="evapp-support-kpi-icon" aria-hidden="true">
+                        <?php echo eventosapp_support_frontend_icon('clock'); ?>
+                    </div>
+                    <span class="evapp-support-kpi-label">Hora de mayor demanda</span>
+                    <strong class="evapp-support-kpi-value"><?php echo esc_html($peak_hour ?: '—'); ?></strong>
+                    <span class="evapp-support-kpi-detail">
+                        <?php echo $peak_hour ? esc_html(number_format_i18n($peak_hour_total) . ' atenciones') : 'Sin datos todavía'; ?>
+                    </span>
+                </article>
+
+                <article class="evapp-support-kpi-card">
+                    <div class="evapp-support-kpi-icon" aria-hidden="true">
+                        <?php echo eventosapp_support_frontend_icon('users'); ?>
+                    </div>
+                    <span class="evapp-support-kpi-label">Mayor número de atenciones</span>
+                    <strong class="evapp-support-kpi-value" style="font-size:18px;"><?php echo esc_html($leader_name ?: '—'); ?></strong>
+                    <span class="evapp-support-kpi-detail">
+                        <?php echo $leader_name ? esc_html(number_format_i18n($leader_total) . ' atenciones') : 'Sin datos todavía'; ?>
+                    </span>
+                </article>
+            </section>
+
+            <section class="evapp-support-card" aria-labelledby="<?php echo esc_attr($instance_id); ?>-hours-title">
+                <div class="evapp-support-card-head">
+                    <div class="evapp-support-section-heading">
+                        <div class="evapp-support-section-icon" aria-hidden="true">
+                            <?php echo eventosapp_support_frontend_icon('clock'); ?>
+                        </div>
+                        <div>
+                            <h2 id="<?php echo esc_attr($instance_id); ?>-hours-title" class="evapp-support-section-title">Atenciones realizadas por hora</h2>
+                            <p class="evapp-support-section-desc">Distribución de las consultas registradas durante el evento.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <?php if ( $by_hour ) : ?>
+                    <div class="evapp-support-chart">
+                        <?php foreach ( $by_hour as $row ) : ?>
+                            <?php
+                            $row_total = (int) $row->total;
+                            $pct = min(100, max(1, round(($row_total / $max_hour) * 100)));
+                            ?>
+                            <div
+                                class="evapp-support-bar-row"
+                                aria-label="<?php echo esc_attr($row->created_hour . ': ' . $row_total . ' atenciones'); ?>"
+                            >
+                                <strong class="evapp-support-bar-hour"><?php echo esc_html($row->created_hour); ?></strong>
+                                <div class="evapp-support-bar-track" aria-hidden="true">
+                                    <div class="evapp-support-bar" style="width:<?php echo esc_attr($pct); ?>%;"></div>
+                                </div>
+                                <span class="evapp-support-bar-total"><?php echo esc_html(number_format_i18n($row_total)); ?></span>
+                            </div>
                         <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else : ?>
-                <div class="evapp-support-empty">Aún no hay usuarios con atenciones registradas.</div>
-            <?php endif; ?>
+                    </div>
+                <?php else : ?>
+                    <div class="evapp-support-empty">Aún no hay atenciones registradas para graficar.</div>
+                <?php endif; ?>
+
+                <?php if ( $can_download_csv && $download_url ) : ?>
+                    <div class="evapp-support-download-row">
+                        <div class="evapp-support-download-copy">
+                            <strong>Base completa de consultas</strong>
+                            <span>Disponible para administradores y usuarios del Equipo del Organizador.</span>
+                        </div>
+                        <a class="evapp-support-btn evapp-support-btn-primary" href="<?php echo esc_url($download_url); ?>">
+                            <?php echo eventosapp_support_frontend_icon('download'); ?>
+                            <span>Descargar CSV</span>
+                        </a>
+                    </div>
+                <?php endif; ?>
+            </section>
+
+            <section class="evapp-support-card" aria-labelledby="<?php echo esc_attr($instance_id); ?>-ranking-title">
+                <div class="evapp-support-card-head">
+                    <div class="evapp-support-section-heading">
+                        <div class="evapp-support-section-icon" aria-hidden="true">
+                            <?php echo eventosapp_support_frontend_icon('users'); ?>
+                        </div>
+                        <div>
+                            <h2 id="<?php echo esc_attr($instance_id); ?>-ranking-title" class="evapp-support-section-title">Usuarios con más atenciones</h2>
+                            <p class="evapp-support-section-desc">Ranking de hasta 10 integrantes según el número de consultas registradas.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <?php if ( $top_users ) : ?>
+                    <div class="evapp-support-table-wrap">
+                        <table class="evapp-support-ranking-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Usuario</th>
+                                    <th>Correo</th>
+                                    <th>Atenciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php $pos = 1; foreach ( $top_users as $row ) : ?>
+                                    <tr>
+                                        <td data-label="Posición">
+                                            <span class="evapp-support-rank"><?php echo esc_html($pos++); ?></span>
+                                        </td>
+                                        <td data-label="Usuario">
+                                            <span class="evapp-support-user-name"><?php echo esc_html($row->staff_name ?: ('Usuario #' . $row->staff_user_id)); ?></span>
+                                        </td>
+                                        <td data-label="Correo">
+                                            <span class="evapp-support-user-email"><?php echo esc_html($row->staff_email ?: '—'); ?></span>
+                                        </td>
+                                        <td data-label="Atenciones">
+                                            <span class="evapp-support-count-badge"><?php echo esc_html(number_format_i18n((int) $row->total)); ?></span>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php else : ?>
+                    <div class="evapp-support-empty">Aún no hay usuarios con atenciones registradas.</div>
+                <?php endif; ?>
+            </section>
         </div>
     </div>
     <?php
