@@ -1151,23 +1151,36 @@ function eventosapp_live_raffle_public_state_ajax() {
 // SHORTCODE PRIVADO
 // ============================================================
 
+if ( ! function_exists( 'eventosapp_live_raffle_frontend_notice' ) ) {
+    function eventosapp_live_raffle_frontend_notice( $message, $show_dashboard = true ) {
+        $dashboard_url = function_exists( 'eventosapp_get_dashboard_url' )
+            ? remove_query_arg( [ 'evapp', 'evapp_err', 'set' ], eventosapp_get_dashboard_url() )
+            : home_url( '/' );
+
+        $button = $show_dashboard
+            ? '<a href="' . esc_url( $dashboard_url ) . '" style="min-height:44px;display:inline-flex;align-items:center;justify-content:center;margin-top:14px;padding:10px 15px;color:#182230;text-decoration:none;background:#fff;border:1px solid #dfe7f1;border-radius:12px;box-shadow:0 5px 15px rgba(31,65,99,.05);font-size:14px;font-weight:750;">Volver al dashboard</a>'
+            : '';
+
+        return '<div style="width:100%;max-width:1180px;margin:0 auto;padding:clamp(18px,3vw,36px);color:#182230;background:#f5f8fc;border:1px solid #dfe7f1;border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);font-family:inherit;box-sizing:border-box;"><div style="padding:20px;background:#fff;border:1px solid #dfe7f1;border-radius:18px;box-shadow:0 8px 26px rgba(31,52,73,.05);"><strong style="display:block;margin-bottom:6px;color:#3279bd;font-size:12px;letter-spacing:.10em;text-transform:uppercase;">EVENTOSAPP · SORTEO EN VIVO</strong><div style="color:#475569;font-size:14px;line-height:1.6;">' . wp_kses_post( $message ) . '</div>' . $button . '</div></div>';
+    }
+}
+
 add_shortcode( 'eventosapp_live_raffle', function() {
     if ( ! is_user_logged_in() ) {
-        return '<p>Debes iniciar sesión para gestionar el sorteo.</p>';
+        return eventosapp_live_raffle_frontend_notice( 'Debes iniciar sesión para gestionar el sorteo.', false );
     }
 
     $event_id = function_exists( 'eventosapp_get_active_event' ) ? absint( eventosapp_get_active_event() ) : 0;
     if ( ! $event_id ) {
-        $dashboard = function_exists( 'eventosapp_get_dashboard_url' ) ? eventosapp_get_dashboard_url() : home_url( '/' );
-        return '<div class="evapp-raffle-notice">No hay un evento activo. Selecciónalo desde el <a href="' . esc_url( $dashboard ) . '">dashboard</a>.</div>';
+        return eventosapp_live_raffle_frontend_notice( 'No hay un evento activo. Selecciónalo desde el dashboard para comenzar.' );
     }
 
     if ( ! eventosapp_live_raffle_is_enabled( $event_id ) ) {
-        return '<div class="evapp-raffle-notice">El Sorteo en Vivo no está activado para este evento. Actívalo en <strong>Funciones Extra del Ticket</strong>.</div>';
+        return eventosapp_live_raffle_frontend_notice( 'El Sorteo en Vivo no está activado para este evento. Actívalo en <strong>Funciones Extra del Ticket</strong>.' );
     }
 
     if ( ! eventosapp_live_raffle_user_can_view( $event_id ) ) {
-        return '<div class="evapp-raffle-notice">No tienes permisos para gestionar el Sorteo en Vivo de este evento.</div>';
+        return eventosapp_live_raffle_frontend_notice( 'No tienes permisos para gestionar el Sorteo en Vivo de este evento.' );
     }
 
     $settings    = eventosapp_live_raffle_get_settings( $event_id );
@@ -1176,41 +1189,662 @@ add_shortcode( 'eventosapp_live_raffle', function() {
     $locations   = $snapshot['locations'];
     $public_url  = eventosapp_live_raffle_get_public_url( $event_id );
     $nonce       = wp_create_nonce( 'eventosapp_live_raffle_admin_' . $event_id );
-    $ajax_url    = admin_url( 'admin-ajax.php' );
+    $ajax_url      = admin_url( 'admin-ajax.php' );
+    $dashboard_url = function_exists( 'eventosapp_get_dashboard_url' )
+        ? remove_query_arg( [ 'evapp', 'evapp_err', 'set' ], eventosapp_get_dashboard_url() )
+        : home_url( '/' );
 
     ob_start();
     ?>
-    <style>
-    .evapp-raffle-admin{--blue:#2f73b5;--blue-dark:#1f4b77;--green:#15803d;--amber:#b45309;--red:#b91c1c;--ink:#172033;--muted:#64748b;--line:#dbe3ec;--panel:#fff;max-width:1480px;margin:0 auto;padding:18px;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);box-sizing:border-box}.evapp-raffle-admin *{box-sizing:border-box}.evapp-raffle-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding:24px;border-radius:20px;background:linear-gradient(135deg,var(--blue-dark),var(--blue));color:#fff;box-shadow:0 15px 35px rgba(31,75,119,.22);margin-bottom:20px}.evapp-raffle-head h1{margin:0 0 6px;font-size:clamp(1.7rem,3vw,2.6rem);line-height:1.05}.evapp-raffle-head p{margin:0;opacity:.88}.evapp-raffle-live-toggle{display:flex;align-items:center;gap:10px;white-space:nowrap;background:rgba(255,255,255,.12);padding:10px 14px;border-radius:999px}.evapp-raffle-live-dot{width:12px;height:12px;border-radius:50%;background:#94a3b8;box-shadow:0 0 0 5px rgba(255,255,255,.12)}.evapp-raffle-live-toggle.is-active .evapp-raffle-live-dot{background:#4ade80;box-shadow:0 0 18px #4ade80}.evapp-raffle-layout{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:20px;align-items:start}.evapp-raffle-panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 8px 24px rgba(15,23,42,.06);margin-bottom:20px}.evapp-raffle-panel h2,.evapp-raffle-panel h3{margin:0 0 14px}.evapp-raffle-field{margin-bottom:16px}.evapp-raffle-field>label,.evapp-raffle-label{display:block;font-weight:800;margin-bottom:7px}.evapp-raffle-help{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:5px}.evapp-raffle-checks{display:grid;gap:8px}.evapp-raffle-check{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}.evapp-raffle-select{width:100%;min-height:42px;border:1px solid #cbd5e1;border-radius:10px;padding:8px 10px;background:#fff}.evapp-raffle-select[multiple]{min-height:125px}.evapp-raffle-actions{display:flex;gap:10px;flex-wrap:wrap}.evapp-raffle-btn{appearance:none;border:0;border-radius:11px;padding:11px 16px;font-weight:800;cursor:pointer;transition:.15s ease;background:#e2e8f0;color:#172033}.evapp-raffle-btn:hover{transform:translateY(-1px);filter:brightness(.98)}.evapp-raffle-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}.evapp-raffle-btn.primary{background:var(--blue);color:#fff}.evapp-raffle-btn.success{background:var(--green);color:#fff}.evapp-raffle-btn.warning{background:var(--amber);color:#fff}.evapp-raffle-btn.danger{background:var(--red);color:#fff}.evapp-raffle-btn.large{font-size:18px;padding:15px 24px}.evapp-raffle-url-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px}.evapp-raffle-url{width:100%;min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;background:#f8fafc}.evapp-raffle-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}.evapp-raffle-stat{border:1px solid var(--line);border-radius:16px;padding:15px;background:#fff;box-shadow:0 5px 18px rgba(15,23,42,.05)}.evapp-raffle-stat strong{display:block;font-size:clamp(1.4rem,3vw,2.2rem);line-height:1}.evapp-raffle-stat span{display:block;color:var(--muted);font-size:12px;margin-top:7px}.evapp-raffle-stage{position:relative;overflow:hidden;min-height:340px;border-radius:22px;padding:26px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;background:radial-gradient(circle at 20% 10%,rgba(125,211,252,.45),transparent 35%),radial-gradient(circle at 85% 85%,rgba(196,181,253,.5),transparent 40%),linear-gradient(145deg,#0f172a,#1e3a8a);color:#fff;box-shadow:0 20px 45px rgba(15,23,42,.25);margin-bottom:20px}.evapp-raffle-stage:before,.evapp-raffle-stage:after{content:"";position:absolute;width:180px;height:180px;border:1px solid rgba(255,255,255,.15);border-radius:35%;animation:evappFloat 7s ease-in-out infinite}.evapp-raffle-stage:before{top:-75px;left:-50px;transform:rotate(25deg)}.evapp-raffle-stage:after{right:-60px;bottom:-85px;animation-delay:-3s}@keyframes evappFloat{50%{transform:translateY(16px) rotate(45deg)}}.evapp-raffle-stage-content{position:relative;z-index:2;width:100%}.evapp-raffle-stage-kicker{text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:900;opacity:.72}.evapp-raffle-stage-name{font-size:clamp(2rem,5vw,4.4rem);line-height:1.05;font-weight:900;margin:14px auto 8px;max-width:900px;word-break:break-word}.evapp-raffle-stage-meta{font-size:clamp(1rem,2vw,1.35rem);opacity:.85}.evapp-raffle-spinner{width:90px;height:90px;border:8px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:evappSpin .8s linear infinite;margin:20px auto}@keyframes evappSpin{to{transform:rotate(360deg)}}.evapp-raffle-stage-actions{position:relative;z-index:3;display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:20px}.evapp-raffle-prize{width:min(420px,100%);border:1px solid rgba(255,255,255,.3);border-radius:10px;padding:10px 12px;background:rgba(255,255,255,.12);color:#fff;text-align:center}.evapp-raffle-prize::placeholder{color:rgba(255,255,255,.65)}.evapp-raffle-table-tools{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:12px}.evapp-raffle-search{min-width:260px;max-width:460px;width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px}.evapp-raffle-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}.evapp-raffle-table{width:100%;border-collapse:collapse;min-width:860px;font-size:13px}.evapp-raffle-table th,.evapp-raffle-table td{padding:11px 12px;border-bottom:1px solid #edf2f7;text-align:left;vertical-align:top}.evapp-raffle-table th{position:sticky;top:0;background:#f8fafc;z-index:1}.evapp-raffle-badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;background:#e2e8f0;color:#334155;margin:1px 3px 1px 0}.evapp-raffle-badge.yes{background:#dcfce7;color:#166534}.evapp-raffle-badge.no{background:#fee2e2;color:#991b1b}.evapp-raffle-badge.info{background:#dbeafe;color:#1e40af}.evapp-raffle-pagination{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px}.evapp-raffle-winners{display:grid;gap:12px}.evapp-raffle-winner{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}.evapp-raffle-winner-head{display:flex;justify-content:space-between;gap:12px}.evapp-raffle-winner h4{margin:0 0 4px}.evapp-raffle-winner-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.evapp-raffle-winner input,.evapp-raffle-winner textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px}.evapp-raffle-winner textarea{min-height:74px;resize:vertical}.evapp-raffle-empty{padding:22px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:12px}.evapp-raffle-toast{position:fixed;right:22px;bottom:22px;z-index:99999;max-width:420px;padding:13px 16px;border-radius:12px;background:#0f172a;color:#fff;box-shadow:0 12px 35px rgba(0,0,0,.25);opacity:0;transform:translateY(15px);pointer-events:none;transition:.2s ease}.evapp-raffle-toast.show{opacity:1;transform:none}.evapp-raffle-toast.error{background:#991b1b}.evapp-raffle-loading{opacity:.55;pointer-events:none}.evapp-raffle-notice{padding:16px;border:1px solid #f0c36d;background:#fff8e5;border-radius:10px}.evapp-raffle-specific{display:none;margin-top:8px}.evapp-raffle-specific.show{display:block}@media(max-width:1050px){.evapp-raffle-layout{grid-template-columns:1fr}.evapp-raffle-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.evapp-raffle-admin{padding:10px}.evapp-raffle-head{padding:18px;flex-direction:column}.evapp-raffle-live-toggle{white-space:normal}.evapp-raffle-stats{grid-template-columns:1fr 1fr}.evapp-raffle-url-row{grid-template-columns:1fr}.evapp-raffle-btn{width:100%}.evapp-raffle-stage{padding:18px;min-height:390px}.evapp-raffle-winner-grid{grid-template-columns:1fr}.evapp-raffle-search{min-width:0}.evapp-raffle-stage-actions{width:100%}}
+    <style id="eventosapp-live-raffle-admin-ui">
+    .evapp-raffle-admin{
+        --evapp-primary:#3279bd;
+        --evapp-primary-dark:#255f96;
+        --evapp-primary-soft:#eaf4ff;
+        --evapp-app-bg:#f5f8fc;
+        --evapp-surface:#ffffff;
+        --evapp-border:#dfe7f1;
+        --evapp-text:#182230;
+        --evapp-muted:#64748b;
+        --evapp-success:#15803d;
+        --evapp-success-soft:#ecfdf3;
+        --evapp-warning:#b45309;
+        --evapp-warning-soft:#fff8e7;
+        --evapp-danger:#b42318;
+        --evapp-danger-soft:#fff1f0;
+        --evapp-radius:18px;
+        --evapp-radius-lg:26px;
+        width:100%;
+        max-width:1180px;
+        margin:0 auto;
+        padding:clamp(18px,3vw,36px);
+        color:var(--evapp-text);
+        background:var(--evapp-app-bg);
+        border:1px solid var(--evapp-border);
+        border-radius:var(--evapp-radius-lg);
+        box-shadow:0 18px 50px rgba(31,52,73,.08);
+        font-family:inherit;
+        line-height:1.45;
+        box-sizing:border-box;
+        isolation:isolate;
+    }
+    .evapp-raffle-admin *,
+    .evapp-raffle-admin *::before,
+    .evapp-raffle-admin *::after{box-sizing:border-box}
+    .evapp-raffle-admin a{text-decoration:none}
+    .evapp-raffle-admin button,
+    .evapp-raffle-admin input,
+    .evapp-raffle-admin select,
+    .evapp-raffle-admin textarea{font:inherit}
+    .evapp-raffle-admin svg{
+        display:block;
+        fill:none;
+        stroke:currentColor;
+        stroke-width:2;
+        stroke-linecap:round;
+        stroke-linejoin:round;
+    }
+    .evapp-raffle-head{
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:24px;
+        margin-bottom:20px;
+    }
+    .evapp-raffle-heading{min-width:0}
+    .evapp-raffle-head .evapp-raffle-eyebrow{
+        margin:0 0 6px;
+        color:var(--evapp-primary);
+        font-size:12px;
+        font-weight:800;
+        letter-spacing:.11em;
+        text-transform:uppercase;
+    }
+    .evapp-raffle-head h1{
+        margin:0;
+        color:var(--evapp-text);
+        font-size:clamp(27px,4vw,42px);
+        font-weight:850;
+        line-height:1.08;
+        letter-spacing:-.035em;
+    }
+    .evapp-raffle-head p{
+        max-width:760px;
+        margin:10px 0 0;
+        color:var(--evapp-muted);
+        font-size:15px;
+        line-height:1.6;
+    }
+    .evapp-raffle-head-actions{
+        flex:0 0 auto;
+        display:flex;
+        align-items:center;
+        justify-content:flex-end;
+        flex-wrap:wrap;
+        gap:10px;
+    }
+    .evapp-raffle-live-toggle{
+        min-height:44px;
+        display:inline-flex;
+        align-items:center;
+        gap:9px;
+        padding:9px 13px;
+        color:var(--evapp-muted);
+        background:var(--evapp-surface);
+        border:1px solid var(--evapp-border);
+        border-radius:999px;
+        box-shadow:0 5px 15px rgba(31,65,99,.05);
+        font-size:12px;
+        white-space:nowrap;
+    }
+    .evapp-raffle-live-dot{
+        width:9px;
+        height:9px;
+        flex:0 0 9px;
+        border-radius:50%;
+        background:#94a3b8;
+        box-shadow:0 0 0 4px rgba(148,163,184,.14);
+    }
+    .evapp-raffle-live-toggle.is-active{
+        color:#166534;
+        background:var(--evapp-success-soft);
+        border-color:#c8ead4;
+    }
+    .evapp-raffle-live-toggle.is-active .evapp-raffle-live-dot{
+        background:#22c55e;
+        box-shadow:0 0 0 4px rgba(34,197,94,.13),0 0 14px rgba(34,197,94,.45);
+    }
+    .evapp-raffle-event-context{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:16px;
+        margin-bottom:20px;
+        padding:15px 16px;
+        background:var(--evapp-surface);
+        border:1px solid var(--evapp-border);
+        border-radius:var(--evapp-radius);
+        box-shadow:0 8px 24px rgba(31,52,73,.045);
+    }
+    .evapp-raffle-event-main{
+        min-width:0;
+        display:flex;
+        align-items:center;
+        gap:13px;
+    }
+    .evapp-raffle-event-icon{
+        width:46px;
+        height:46px;
+        flex:0 0 46px;
+        display:grid;
+        place-items:center;
+        color:var(--evapp-primary);
+        background:var(--evapp-primary-soft);
+        border-radius:14px;
+    }
+    .evapp-raffle-event-icon svg{width:23px;height:23px}
+    .evapp-raffle-event-copy{min-width:0}
+    .evapp-raffle-event-kicker{
+        display:block;
+        margin-bottom:2px;
+        color:var(--evapp-muted);
+        font-size:11px;
+        font-weight:800;
+        letter-spacing:.08em;
+        text-transform:uppercase;
+    }
+    .evapp-raffle-event-name{
+        display:block;
+        overflow:hidden;
+        color:var(--evapp-text);
+        font-size:15px;
+        font-weight:820;
+        line-height:1.3;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+    }
+    .evapp-raffle-event-meta{
+        display:flex;
+        align-items:center;
+        justify-content:flex-end;
+        flex-wrap:wrap;
+        gap:8px;
+    }
+    .evapp-raffle-chip{
+        min-height:30px;
+        display:inline-flex;
+        align-items:center;
+        gap:6px;
+        padding:6px 10px;
+        color:var(--evapp-muted);
+        background:#fff;
+        border:1px solid var(--evapp-border);
+        border-radius:999px;
+        font-size:12px;
+        font-weight:730;
+        white-space:nowrap;
+    }
+    .evapp-raffle-chip strong{color:var(--evapp-text);font-weight:850}
+    .evapp-raffle-panel{
+        min-width:0;
+        margin-bottom:16px;
+        padding:20px;
+        background:var(--evapp-surface);
+        border:1px solid var(--evapp-border);
+        border-radius:var(--evapp-radius);
+        box-shadow:0 8px 26px rgba(31,52,73,.05);
+    }
+    .evapp-raffle-panel h2,
+    .evapp-raffle-panel h3{
+        margin:0 0 5px;
+        color:var(--evapp-text);
+        font-size:17px;
+        font-weight:820;
+        line-height:1.3;
+    }
+    .evapp-raffle-panel-intro{margin:0 0 15px;color:var(--evapp-muted);font-size:13px;line-height:1.5}
+    .evapp-raffle-layout{
+        display:grid;
+        grid-template-columns:minmax(300px,350px) minmax(0,1fr);
+        gap:16px;
+        align-items:start;
+        width:100%;
+    }
+    .evapp-raffle-layout>aside,
+    .evapp-raffle-layout>main{min-width:0}
+    .evapp-raffle-field{margin-bottom:17px}
+    .evapp-raffle-field>label,
+    .evapp-raffle-label{
+        display:block;
+        margin-bottom:7px;
+        color:var(--evapp-text);
+        font-size:12px;
+        font-weight:800;
+    }
+    .evapp-raffle-help{
+        display:block;
+        margin-top:6px;
+        color:var(--evapp-muted);
+        font-size:11px;
+        line-height:1.5;
+    }
+    .evapp-raffle-checks{display:grid;gap:8px}
+    .evapp-raffle-check{
+        min-height:46px;
+        display:flex;
+        align-items:center;
+        gap:10px;
+        padding:10px 11px;
+        color:var(--evapp-text);
+        background:#fbfdff;
+        border:1px solid var(--evapp-border);
+        border-radius:13px;
+        cursor:pointer;
+        transition:border-color .16s ease,background .16s ease,box-shadow .16s ease;
+    }
+    .evapp-raffle-check:hover{border-color:#c7d7e8;background:#fff}
+    .evapp-raffle-check input{width:17px;height:17px;margin:0;accent-color:var(--evapp-primary)}
+    .evapp-raffle-select,
+    .evapp-raffle-url,
+    .evapp-raffle-search,
+    .evapp-raffle-winner input,
+    .evapp-raffle-winner textarea{
+        width:100%;
+        margin:0;
+        color:var(--evapp-text);
+        background:#fff;
+        border:1px solid var(--evapp-border);
+        border-radius:13px;
+        box-shadow:none;
+        outline:none;
+        transition:border-color .16s ease,box-shadow .16s ease;
+    }
+    .evapp-raffle-select{min-height:46px;padding:9px 11px}
+    .evapp-raffle-select[multiple]{min-height:132px;padding:7px}
+    .evapp-raffle-url,
+    .evapp-raffle-search{min-height:46px;padding:10px 12px}
+    .evapp-raffle-url{min-width:0;background:#fbfdff}
+    .evapp-raffle-select:focus,
+    .evapp-raffle-url:focus,
+    .evapp-raffle-search:focus,
+    .evapp-raffle-winner input:focus,
+    .evapp-raffle-winner textarea:focus,
+    .evapp-raffle-prize:focus{
+        border-color:var(--evapp-primary);
+        box-shadow:0 0 0 4px rgba(50,121,189,.12);
+    }
+    .evapp-raffle-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px}
+    .evapp-raffle-btn{
+        min-height:44px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        gap:8px;
+        margin:0;
+        padding:10px 15px;
+        appearance:none;
+        color:var(--evapp-text)!important;
+        background:var(--evapp-surface);
+        border:1px solid var(--evapp-border);
+        border-radius:12px;
+        box-shadow:0 5px 15px rgba(31,65,99,.05);
+        font-size:14px;
+        font-weight:750;
+        line-height:1.15;
+        text-align:center;
+        cursor:pointer;
+        transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+        -webkit-tap-highlight-color:transparent;
+    }
+    .evapp-raffle-btn svg{width:18px;height:18px;flex:0 0 18px}
+    .evapp-raffle-btn:hover:not(:disabled){transform:translateY(-1px);border-color:#c7d7e8;box-shadow:0 9px 20px rgba(31,65,99,.09)}
+    .evapp-raffle-btn:focus-visible,
+    .evapp-raffle-check:focus-within,
+    .evapp-raffle-select:focus-visible,
+    .evapp-raffle-search:focus-visible,
+    .evapp-raffle-url:focus-visible{
+        outline:3px solid rgba(50,121,189,.20);
+        outline-offset:2px;
+    }
+    .evapp-raffle-btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+    .evapp-raffle-btn.primary{color:#fff!important;background:var(--evapp-primary);border-color:var(--evapp-primary);box-shadow:0 9px 20px rgba(50,121,189,.18)}
+    .evapp-raffle-btn.primary:hover:not(:disabled){background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);box-shadow:0 12px 24px rgba(50,121,189,.24)}
+    .evapp-raffle-btn.success{color:#fff!important;background:var(--evapp-success);border-color:var(--evapp-success)}
+    .evapp-raffle-btn.warning{color:#fff!important;background:var(--evapp-warning);border-color:var(--evapp-warning)}
+    .evapp-raffle-btn.danger{color:#fff!important;background:var(--evapp-danger);border-color:var(--evapp-danger)}
+    .evapp-raffle-btn.large{min-height:50px;padding:12px 19px;font-size:15px}
+    .evapp-raffle-url-row{
+        display:grid;
+        grid-template-columns:minmax(0,1fr) auto auto;
+        gap:8px;
+        align-items:stretch;
+    }
+    .evapp-raffle-public-controls{margin-top:12px}
+    .evapp-raffle-stats{
+        display:grid;
+        grid-template-columns:repeat(4,minmax(0,1fr));
+        gap:10px;
+        margin-bottom:16px;
+    }
+    .evapp-raffle-stat{
+        min-width:0;
+        min-height:108px;
+        display:flex;
+        flex-direction:column;
+        justify-content:center;
+        padding:15px;
+        background:var(--evapp-surface);
+        border:1px solid var(--evapp-border);
+        border-radius:16px;
+        box-shadow:0 6px 18px rgba(31,52,73,.045);
+    }
+    .evapp-raffle-stat strong{
+        display:block;
+        color:var(--evapp-text);
+        font-size:clamp(24px,3vw,34px);
+        font-weight:860;
+        line-height:1;
+        letter-spacing:-.03em;
+    }
+    .evapp-raffle-stat span{display:block;margin-top:8px;color:var(--evapp-muted);font-size:11px;line-height:1.35}
+    .evapp-raffle-stage{
+        position:relative;
+        min-height:360px;
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        overflow:hidden;
+        margin-bottom:16px;
+        padding:clamp(22px,4vw,34px);
+        color:#fff;
+        background:
+            radial-gradient(circle at 15% 12%,rgba(105,183,255,.28),transparent 34%),
+            radial-gradient(circle at 88% 84%,rgba(92,151,210,.24),transparent 38%),
+            linear-gradient(145deg,#12283d,#1f5f96 58%,#2c78b9);
+        border:1px solid rgba(255,255,255,.16);
+        border-radius:22px;
+        box-shadow:0 18px 40px rgba(31,73,112,.22);
+        text-align:center;
+    }
+    .evapp-raffle-stage::before,
+    .evapp-raffle-stage::after{
+        position:absolute;
+        width:180px;
+        height:180px;
+        border:1px solid rgba(255,255,255,.12);
+        border-radius:38%;
+        content:"";
+        animation:evappRaffleFloat 8s ease-in-out infinite;
+    }
+    .evapp-raffle-stage::before{top:-86px;left:-58px;transform:rotate(20deg)}
+    .evapp-raffle-stage::after{right:-72px;bottom:-94px;animation-delay:-3s}
+    @keyframes evappRaffleFloat{50%{transform:translateY(14px) rotate(42deg)}}
+    .evapp-raffle-stage-content{position:relative;z-index:2;width:100%}
+    .evapp-raffle-stage-kicker{
+        color:#d9edff;
+        font-size:11px;
+        font-weight:850;
+        letter-spacing:.18em;
+        text-transform:uppercase;
+    }
+    .evapp-raffle-stage-name{
+        max-width:820px;
+        margin:14px auto 8px;
+        color:#fff;
+        font-size:clamp(32px,5vw,58px);
+        font-weight:900;
+        line-height:1.05;
+        letter-spacing:-.035em;
+        overflow-wrap:anywhere;
+    }
+    .evapp-raffle-stage-meta{max-width:800px;margin:0 auto;color:#d8e7f5;font-size:clamp(14px,2vw,18px);line-height:1.45}
+    .evapp-raffle-spinner{
+        width:82px;
+        height:82px;
+        margin:20px auto;
+        border:7px solid rgba(255,255,255,.20);
+        border-top-color:#fff;
+        border-right-color:#8fd0ff;
+        border-radius:50%;
+        animation:evappRaffleSpin .75s linear infinite;
+    }
+    @keyframes evappRaffleSpin{to{transform:rotate(360deg)}}
+    .evapp-raffle-stage-actions{
+        position:relative;
+        z-index:3;
+        width:min(900px,100%);
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        flex-wrap:wrap;
+        gap:9px;
+        margin-top:22px;
+    }
+    .evapp-raffle-stage .evapp-raffle-btn:not(.primary):not(.success):not(.warning):not(.danger){color:#fff!important;background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.28);box-shadow:none}
+    .evapp-raffle-stage .evapp-raffle-btn:not(.primary):not(.success):not(.warning):not(.danger):hover{background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.38)}
+    .evapp-raffle-prize{
+        width:min(360px,100%);
+        min-height:50px;
+        padding:11px 13px;
+        color:#fff;
+        background:rgba(255,255,255,.11);
+        border:1px solid rgba(255,255,255,.32);
+        border-radius:12px;
+        outline:none;
+        text-align:center;
+    }
+    .evapp-raffle-prize::placeholder{color:rgba(255,255,255,.68)}
+    .evapp-raffle-table-tools{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        flex-wrap:wrap;
+        gap:14px;
+        margin-bottom:13px;
+    }
+    .evapp-raffle-table-tools>div{min-width:0;flex:1 1 320px}
+    .evapp-raffle-search{min-width:0;max-width:430px;flex:1 1 280px}
+    .evapp-raffle-table-wrap{
+        width:100%;
+        max-width:100%;
+        overflow:auto;
+        border:1px solid var(--evapp-border);
+        border-radius:14px;
+        background:#fff;
+        -webkit-overflow-scrolling:touch;
+    }
+    .evapp-raffle-table{
+        width:100%;
+        min-width:820px;
+        border-collapse:collapse;
+        color:var(--evapp-text);
+        font-size:12px;
+    }
+    .evapp-raffle-table th,
+    .evapp-raffle-table td{padding:11px 12px;border-bottom:1px solid #edf2f7;text-align:left;vertical-align:top}
+    .evapp-raffle-table tbody tr:last-child td{border-bottom:0}
+    .evapp-raffle-table tbody tr:hover{background:#fbfdff}
+    .evapp-raffle-table th{
+        position:sticky;
+        top:0;
+        z-index:1;
+        color:#475569;
+        background:#f8fafc;
+        font-size:11px;
+        font-weight:800;
+        letter-spacing:.02em;
+    }
+    .evapp-raffle-badge{
+        display:inline-flex;
+        align-items:center;
+        max-width:100%;
+        margin:1px 3px 1px 0;
+        padding:4px 8px;
+        color:#475569;
+        background:#f1f5f9;
+        border-radius:999px;
+        font-size:10px;
+        font-weight:800;
+        line-height:1.3;
+        white-space:normal;
+    }
+    .evapp-raffle-badge.yes{color:#166534;background:#dcfce7}
+    .evapp-raffle-badge.no{color:#991b1b;background:#fee2e2}
+    .evapp-raffle-badge.info{color:#1d4f7a;background:var(--evapp-primary-soft)}
+    .evapp-raffle-pagination{
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        flex-wrap:wrap;
+        gap:10px;
+        margin-top:13px;
+        color:var(--evapp-muted);
+        font-size:12px;
+    }
+    .evapp-raffle-winners{display:grid;gap:10px}
+    .evapp-raffle-winner{
+        min-width:0;
+        padding:14px;
+        background:#fff;
+        border:1px solid var(--evapp-border);
+        border-radius:14px;
+        box-shadow:0 5px 16px rgba(31,52,73,.035);
+    }
+    .evapp-raffle-winner-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+    .evapp-raffle-winner h4{margin:0 0 4px;color:var(--evapp-text);font-size:14px;line-height:1.35}
+    .evapp-raffle-winner small{display:block;color:var(--evapp-muted);font-size:10px;line-height:1.45;overflow-wrap:anywhere}
+    .evapp-raffle-winner-grid{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}
+    .evapp-raffle-winner label{display:grid;gap:6px;color:var(--evapp-text);font-size:11px;font-weight:800}
+    .evapp-raffle-winner input{min-height:42px;padding:9px 10px}
+    .evapp-raffle-winner textarea{min-height:78px;padding:9px 10px;line-height:1.45;resize:vertical}
+    .evapp-save-winner{margin-top:10px}
+    .evapp-raffle-empty{
+        padding:22px 16px;
+        color:var(--evapp-muted);
+        background:#fbfdff;
+        border:1px dashed var(--evapp-border);
+        border-radius:13px;
+        text-align:center;
+        font-size:13px;
+        line-height:1.5;
+    }
+    .evapp-raffle-toast{
+        position:fixed;
+        right:22px;
+        bottom:22px;
+        z-index:99999;
+        width:min(420px,calc(100vw - 32px));
+        max-width:420px;
+        padding:13px 16px;
+        color:#fff;
+        background:#172536;
+        border-radius:12px;
+        box-shadow:0 12px 35px rgba(0,0,0,.25);
+        opacity:0;
+        transform:translateY(15px);
+        pointer-events:none;
+        transition:opacity .2s ease,transform .2s ease;
+    }
+    .evapp-raffle-toast.show{opacity:1;transform:none}
+    .evapp-raffle-toast.error{background:#991b1b}
+    .evapp-raffle-loading{cursor:progress}
+    .evapp-raffle-loading .evapp-raffle-btn{pointer-events:none;opacity:.62}
+    .evapp-raffle-notice{padding:16px;border:1px solid #f0c36d;background:#fff8e5;border-radius:12px;color:#7c4b00}
+    .evapp-raffle-specific{display:none;margin-top:8px}
+    .evapp-raffle-specific.show{display:block}
+    @media(max-width:1050px){
+        .evapp-raffle-layout{grid-template-columns:1fr}
+        .evapp-raffle-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .evapp-raffle-winners{grid-template-columns:repeat(2,minmax(0,1fr))}
+    }
+    @media(max-width:767px){
+        .evapp-raffle-admin{padding:16px;border-radius:20px}
+        .evapp-raffle-head{display:block;margin-bottom:18px}
+        .evapp-raffle-head-actions{justify-content:flex-start;margin-top:14px}
+        .evapp-raffle-head-actions .evapp-raffle-btn{flex:1 1 190px}
+        .evapp-raffle-live-toggle{flex:1 1 190px;justify-content:center;white-space:normal;text-align:center}
+        .evapp-raffle-event-context{align-items:flex-start;flex-direction:column;padding:14px}
+        .evapp-raffle-event-meta{width:100%;justify-content:flex-start}
+        .evapp-raffle-event-name{white-space:normal;overflow:visible}
+        .evapp-raffle-url-row{grid-template-columns:1fr}
+        .evapp-raffle-url-row .evapp-raffle-btn{width:100%}
+        .evapp-raffle-public-controls .evapp-raffle-btn{flex:1 1 180px}
+        .evapp-raffle-stage{min-height:390px;padding:22px 16px}
+        .evapp-raffle-stage-actions{display:grid;grid-template-columns:1fr;width:100%}
+        .evapp-raffle-stage-actions>*{width:100%!important;max-width:none}
+        .evapp-raffle-table-tools{align-items:stretch}
+        .evapp-raffle-search{max-width:none;flex-basis:100%}
+        .evapp-raffle-winners{grid-template-columns:1fr}
+    }
+    @media(max-width:520px){
+        .evapp-raffle-stats{grid-template-columns:1fr}
+        .evapp-raffle-stat{min-height:92px}
+        .evapp-raffle-panel{padding:16px}
+        .evapp-raffle-winner-head{display:block}
+        .evapp-raffle-winner-head .evapp-raffle-btn{width:100%;margin-top:10px}
+        .evapp-raffle-pagination{display:grid;grid-template-columns:1fr 1fr;width:100%}
+        .evapp-raffle-pagination span{grid-column:1/-1;grid-row:1;text-align:center}
+        .evapp-raffle-pagination .evapp-raffle-btn{width:100%}
+    }
+    @media(prefers-reduced-motion:reduce){
+        .evapp-raffle-admin *,
+        .evapp-raffle-admin *::before,
+        .evapp-raffle-admin *::after{scroll-behavior:auto!important;animation:none!important;transition:none!important}
+    }
     </style>
 
     <div class="evapp-raffle-admin" id="evapp-live-raffle-admin"
          data-event-id="<?php echo esc_attr( $event_id ); ?>"
          data-nonce="<?php echo esc_attr( $nonce ); ?>"
          data-ajax-url="<?php echo esc_url( $ajax_url ); ?>">
-        <div class="evapp-raffle-head">
-            <div>
+        <header class="evapp-raffle-head">
+            <div class="evapp-raffle-heading">
+                <p class="evapp-raffle-eyebrow">EVENTOSAPP</p>
                 <h1>Sorteo en Vivo</h1>
-                <p><?php echo esc_html( get_the_title( $event_id ) ); ?> · Selección entre asistentes con check-in confirmado.</p>
+                <p>Gestiona la segmentación, ejecuta la selección aleatoria y controla la pantalla pública sin salir del flujo operativo del evento.</p>
             </div>
-            <div class="evapp-raffle-live-toggle" id="evapp-raffle-live-status">
-                <span class="evapp-raffle-live-dot"></span>
-                <strong id="evapp-raffle-live-label">Pantalla pública desactivada</strong>
+            <div class="evapp-raffle-head-actions">
+                <div class="evapp-raffle-live-toggle" id="evapp-raffle-live-status" role="status" aria-live="polite">
+                    <span class="evapp-raffle-live-dot" aria-hidden="true"></span>
+                    <strong id="evapp-raffle-live-label">Pantalla pública desactivada</strong>
+                </div>
+                <a class="evapp-raffle-btn" href="<?php echo esc_url( $dashboard_url ); ?>" aria-label="Volver al dashboard">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                    <span>Volver al dashboard</span>
+                </a>
             </div>
-        </div>
+        </header>
+
+        <section class="evapp-raffle-event-context" aria-label="Evento activo">
+            <div class="evapp-raffle-event-main">
+                <span class="evapp-raffle-event-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M5 4h14v5a7 7 0 0 1-14 0V4Z"></path><path d="M8 20h8M12 16v4M5 7H2v1a4 4 0 0 0 4 4M19 7h3v1a4 4 0 0 1-4 4"></path></svg>
+                </span>
+                <div class="evapp-raffle-event-copy">
+                    <span class="evapp-raffle-event-kicker">Evento activo</span>
+                    <strong class="evapp-raffle-event-name"><?php echo esc_html( get_the_title( $event_id ) ); ?></strong>
+                </div>
+            </div>
+            <div class="evapp-raffle-event-meta">
+                <span class="evapp-raffle-chip"><strong id="evapp-header-eligible"><?php echo esc_html( absint( $snapshot['counts']['eligible'] ?? 0 ) ); ?></strong> elegibles</span>
+                <span class="evapp-raffle-chip"><strong id="evapp-header-winners"><?php echo esc_html( count( eventosapp_live_raffle_get_winners( $event_id ) ) ); ?></strong> ganadores</span>
+            </div>
+        </section>
 
         <div class="evapp-raffle-panel">
-            <h2>URL pública para asistentes y proyección</h2>
+            <h2>Pantalla pública para asistentes y proyección</h2>
+            <p class="evapp-raffle-panel-intro">Comparte esta dirección o ábrela en la pantalla que usarás para mostrar el sorteo en tiempo real.</p>
             <?php if ( $public_url ) : ?>
                 <div class="evapp-raffle-url-row">
-                    <input class="evapp-raffle-url" id="evapp-raffle-public-url" value="<?php echo esc_attr( $public_url ); ?>" readonly>
+                    <input class="evapp-raffle-url" id="evapp-raffle-public-url" value="<?php echo esc_attr( $public_url ); ?>" aria-label="URL pública del sorteo" readonly>
                     <button type="button" class="evapp-raffle-btn" id="evapp-raffle-copy-url">Copiar URL</button>
                     <a class="evapp-raffle-btn primary" href="<?php echo esc_url( $public_url ); ?>" target="_blank" rel="noopener">Abrir pantalla</a>
                 </div>
             <?php else : ?>
                 <div class="evapp-raffle-empty">Configura la <strong>Página Pública del Sorteo en Vivo</strong> en EventosApp → Configuración.</div>
             <?php endif; ?>
-            <div class="evapp-raffle-actions" style="margin-top:12px">
+            <div class="evapp-raffle-actions evapp-raffle-public-controls">
                 <button type="button" class="evapp-raffle-btn success" id="evapp-raffle-activate">Activar sorteo público</button>
                 <button type="button" class="evapp-raffle-btn danger" id="evapp-raffle-deactivate">Desactivar sorteo público</button>
             </div>
@@ -1220,6 +1854,7 @@ add_shortcode( 'eventosapp_live_raffle', function() {
             <aside>
                 <form class="evapp-raffle-panel" id="evapp-raffle-settings">
                     <h2>Configuración y segmentación</h2>
+                    <p class="evapp-raffle-panel-intro">Define quiénes pueden entrar al siguiente sorteo. Los ganadores confirmados quedan excluidos automáticamente.</p>
                     <div class="evapp-raffle-field">
                         <span class="evapp-raffle-label">Modalidad de check-in</span>
                         <div class="evapp-raffle-checks">
@@ -1273,6 +1908,7 @@ add_shortcode( 'eventosapp_live_raffle', function() {
 
                 <div class="evapp-raffle-panel">
                     <h3>Ganadores confirmados</h3>
+                    <p class="evapp-raffle-panel-intro">Edita el premio o las notas sin alterar el resultado guardado.</p>
                     <div class="evapp-raffle-winners" id="evapp-raffle-winners"><div class="evapp-raffle-empty">Cargando ganadores…</div></div>
                 </div>
             </aside>
@@ -1285,7 +1921,7 @@ add_shortcode( 'eventosapp_live_raffle', function() {
                     <div class="evapp-raffle-stat"><strong id="evapp-count-virtual">0</strong><span>Check-in virtual</span></div>
                 </div>
 
-                <div class="evapp-raffle-stage" id="evapp-raffle-stage">
+                <div class="evapp-raffle-stage" id="evapp-raffle-stage" aria-live="polite" aria-atomic="true">
                     <div class="evapp-raffle-stage-content">
                         <div class="evapp-raffle-stage-kicker" id="evapp-stage-kicker">Sorteo preparado</div>
                         <div id="evapp-stage-spinner"></div>
@@ -1294,7 +1930,7 @@ add_shortcode( 'eventosapp_live_raffle', function() {
                     </div>
                     <div class="evapp-raffle-stage-actions">
                         <button type="button" class="evapp-raffle-btn primary large" id="evapp-raffle-start">Iniciar sorteo</button>
-                        <input type="text" class="evapp-raffle-prize" id="evapp-raffle-prize" placeholder="Premio o categoría (opcional)">
+                        <input type="text" class="evapp-raffle-prize" id="evapp-raffle-prize" aria-label="Premio o categoría del ganador" placeholder="Premio o categoría (opcional)">
                         <button type="button" class="evapp-raffle-btn success large" id="evapp-raffle-confirm" hidden>Confirmar ganador</button>
                         <button type="button" class="evapp-raffle-btn warning large" id="evapp-raffle-retry" hidden>No confirmar e intentar de nuevo</button>
                         <button type="button" class="evapp-raffle-btn" id="evapp-raffle-reset">Limpiar pantalla</button>
@@ -1304,10 +1940,10 @@ add_shortcode( 'eventosapp_live_raffle', function() {
                 <div class="evapp-raffle-panel">
                     <div class="evapp-raffle-table-tools">
                         <div>
-                            <h2 style="margin-bottom:3px">Asistentes presentes y participantes</h2>
+                            <h2>Asistentes presentes y participantes</h2>
                             <span class="evapp-raffle-help" id="evapp-raffle-table-summary">Actualización en tiempo real.</span>
                         </div>
-                        <input class="evapp-raffle-search" id="evapp-raffle-search" type="search" placeholder="Buscar nombre, correo, empresa, localidad o ticket">
+                        <input class="evapp-raffle-search" id="evapp-raffle-search" type="search" aria-label="Buscar asistentes presentes" placeholder="Buscar nombre, correo, empresa, localidad o ticket">
                     </div>
                     <div class="evapp-raffle-table-wrap">
                         <table class="evapp-raffle-table">
@@ -1346,7 +1982,7 @@ add_shortcode( 'eventosapp_live_raffle', function() {
             prev: document.getElementById('evapp-raffle-prev'), next: document.getElementById('evapp-raffle-next'), pageLabel: document.getElementById('evapp-raffle-page-label'),
             tableSummary: document.getElementById('evapp-raffle-table-summary'), toast: document.getElementById('evapp-raffle-toast')
         };
-        let page = 1, pages = 1, refreshTimer = null, searchTimer = null, revealTimer = null, busy = false, latestState = null, winnersSignature = '';
+        let page = 1, pages = 1, refreshTimer = null, searchTimer = null, revealTimer = null, busy = false, latestState = null, winnersSignature = '', stateRequestInFlight = false;
 
         function escapeHtml(value){ return String(value == null ? '' : value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[c])); }
         function showToast(message, error){
@@ -1438,8 +2074,12 @@ add_shortcode( 'eventosapp_live_raffle', function() {
             document.getElementById('evapp-count-eligible').textContent = Number(counts.eligible || 0);
             document.getElementById('evapp-count-physical').textContent = Number(counts.physical || 0);
             document.getElementById('evapp-count-virtual').textContent = Number(counts.virtual || 0);
+            const headerEligible = document.getElementById('evapp-header-eligible');
+            if (headerEligible) headerEligible.textContent = Number(counts.eligible || 0);
         }
         function renderWinners(rows){
+            const headerWinners = document.getElementById('evapp-header-winners');
+            if (headerWinners) headerWinners.textContent = Number((rows || []).length);
             const activeElement = document.activeElement;
             if (activeElement && els.winners.contains(activeElement)) return;
             const signature = JSON.stringify((rows || []).map(row => [row.winner_id,row.ticket_id,row.prize,row.notes,row.confirmed_at]));
@@ -1448,15 +2088,22 @@ add_shortcode( 'eventosapp_live_raffle', function() {
             if (!rows || !rows.length) { els.winners.innerHTML = '<div class="evapp-raffle-empty">Todavía no hay ganadores confirmados.</div>'; return; }
             els.winners.innerHTML = rows.slice().reverse().map((row,index) => {
                 const date = row.confirmed_at ? new Date(Number(row.confirmed_at)*1000).toLocaleString('es-CO') : '—';
-                return '<div class="evapp-raffle-winner" data-winner-id="'+escapeHtml(row.winner_id)+'"><div class="evapp-raffle-winner-head"><div><h4>'+(rows.length-index)+'. '+escapeHtml(row.name || ('Ticket #'+row.ticket_id))+'</h4><small>'+escapeHtml([row.company,row.location,date].filter(Boolean).join(' · '))+'</small></div><button type="button" class="evapp-raffle-btn danger evapp-remove-winner">Eliminar</button></div><div class="evapp-raffle-winner-grid"><label>Premio<input class="evapp-winner-prize" value="'+escapeHtml(row.prize || '')+'"></label><label>Notas<textarea class="evapp-winner-notes">'+escapeHtml(row.notes || '')+'</textarea></label></div><button type="button" class="evapp-raffle-btn primary evapp-save-winner" style="margin-top:10px">Guardar cambios</button></div>';
+                return '<div class="evapp-raffle-winner" data-winner-id="'+escapeHtml(row.winner_id)+'"><div class="evapp-raffle-winner-head"><div><h4>'+(rows.length-index)+'. '+escapeHtml(row.name || ('Ticket #'+row.ticket_id))+'</h4><small>'+escapeHtml([row.company,row.location,date].filter(Boolean).join(' · '))+'</small></div><button type="button" class="evapp-raffle-btn danger evapp-remove-winner">Eliminar</button></div><div class="evapp-raffle-winner-grid"><label>Premio<input class="evapp-winner-prize" value="'+escapeHtml(row.prize || '')+'"></label><label>Notas<textarea class="evapp-winner-notes">'+escapeHtml(row.notes || '')+'</textarea></label></div><button type="button" class="evapp-raffle-btn primary evapp-save-winner">Guardar cambios</button></div>';
             }).join('');
         }
         function loadState(silent){
-            if (busy && silent) return Promise.resolve();
+            if ((busy || stateRequestInFlight) && silent) return Promise.resolve(latestState);
+            stateRequestInFlight = true;
             return request('state',{page:page,per_page:50,search:els.search.value || ''},false).then(data => {
                 renderState(data); renderCounts(data.counts); renderParticipants(data); renderWinners(data.winners);
                 return data;
-            }).catch(err => { if (!silent) showToast(err.message,true); });
+            }).catch(err => { if (!silent) showToast(err.message,true); return latestState; }).finally(() => { stateRequestInFlight = false; });
+        }
+        function scheduleRefresh(){
+            clearTimeout(refreshTimer);
+            refreshTimer = setTimeout(() => {
+                loadState(true).finally(scheduleRefresh);
+            }, document.hidden ? 30000 : 8000);
         }
         function action(op, extra, includeSettings, successMessage){
             if (busy) return;
@@ -1503,9 +2150,16 @@ add_shortcode( 'eventosapp_live_raffle', function() {
             if(e.target.closest('.evapp-remove-winner') && window.confirm('¿Eliminar este ganador? El asistente volverá a quedar disponible para futuros sorteos.')) { e.target.blur(); winnersSignature=''; action('remove_winner',{winner_id:winnerId},false,'Ganador eliminado.'); }
         });
 
-        loadState(false);
-        refreshTimer = setInterval(() => loadState(true), 8000);
-        window.addEventListener('beforeunload', () => { clearInterval(refreshTimer); clearTimeout(revealTimer); });
+        loadState(false).finally(scheduleRefresh);
+        document.addEventListener('visibilitychange', () => {
+            clearTimeout(refreshTimer);
+            if (document.hidden) {
+                scheduleRefresh();
+            } else {
+                loadState(true).finally(scheduleRefresh);
+            }
+        });
+        window.addEventListener('beforeunload', () => { clearTimeout(refreshTimer); clearTimeout(revealTimer); clearTimeout(searchTimer); });
     })();
     </script>
     <?php
@@ -1522,34 +2176,292 @@ add_shortcode( 'eventosapp_live_raffle_public', function( $atts ) {
     if ( ! $event_id ) $event_id = eventosapp_live_raffle_resolve_public_event();
 
     if ( ! $event_id ) {
-        return '<div class="evapp-raffle-public-message">Esta pantalla pública no tiene un evento válido asignado.</div>';
+        return '<div style="min-height:60vh;display:grid;place-items:center;padding:24px;color:#182230;background:#f5f8fc;border:1px solid #dfe7f1;border-radius:18px;text-align:center;font-family:inherit;box-sizing:border-box;"><div><strong style="display:block;margin-bottom:8px;color:#3279bd;font-size:12px;letter-spacing:.10em;text-transform:uppercase;">EVENTOSAPP · SORTEO EN VIVO</strong>Esta pantalla pública no tiene un evento válido asignado.</div></div>';
     }
 
-    $nonce    = eventosapp_live_raffle_public_token( $event_id );
-    $ajax_url = admin_url( 'admin-ajax.php' );
+    $nonce              = eventosapp_live_raffle_public_token( $event_id );
+    $ajax_url           = admin_url( 'admin-ajax.php' );
+    $can_back_dashboard = is_user_logged_in() && eventosapp_live_raffle_user_can_view( $event_id );
+    $dashboard_url      = function_exists( 'eventosapp_get_dashboard_url' )
+        ? remove_query_arg( [ 'evapp', 'evapp_err', 'set' ], eventosapp_get_dashboard_url() )
+        : home_url( '/' );
 
     ob_start();
     ?>
-    <style>
-    .evapp-raffle-public{--bg1:#07111f;--bg2:#172554;--cyan:#22d3ee;--purple:#a78bfa;--gold:#facc15;position:fixed;inset:0;z-index:999999;isolation:isolate;overflow:hidden;min-height:100svh;width:100%;display:flex;align-items:center;justify-content:center;padding:clamp(18px,4vw,60px);box-sizing:border-box;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#fff;background:radial-gradient(circle at 16% 18%,rgba(34,211,238,.3),transparent 28%),radial-gradient(circle at 82% 82%,rgba(167,139,250,.34),transparent 32%),linear-gradient(145deg,var(--bg1),var(--bg2))}.evapp-raffle-public *{box-sizing:border-box}.evapp-raffle-public-orb{position:absolute;border-radius:50%;filter:blur(2px);opacity:.28;animation:evappPublicFloat 9s ease-in-out infinite}.evapp-raffle-public-orb.one{width:180px;height:180px;background:var(--cyan);left:-60px;top:12%}.evapp-raffle-public-orb.two{width:260px;height:260px;background:var(--purple);right:-90px;bottom:4%;animation-delay:-4s}.evapp-raffle-public-orb.three{width:90px;height:90px;background:var(--gold);right:18%;top:6%;animation-delay:-7s}@keyframes evappPublicFloat{50%{transform:translate3d(18px,-24px,0) scale(1.08)}}.evapp-raffle-public-card{position:relative;z-index:3;width:min(1180px,100%);min-height:min(720px,86svh);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:clamp(24px,5vw,72px);border:1px solid rgba(255,255,255,.18);border-radius:clamp(24px,4vw,46px);background:linear-gradient(145deg,rgba(255,255,255,.12),rgba(255,255,255,.04));backdrop-filter:blur(18px);box-shadow:0 30px 90px rgba(0,0,0,.42)}.evapp-raffle-public-event{position:absolute;top:24px;left:28px;right:28px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;font-size:clamp(11px,1.3vw,15px);opacity:.7}.evapp-raffle-public-kicker{font-size:clamp(13px,1.8vw,20px);font-weight:900;text-transform:uppercase;letter-spacing:.22em;color:#bae6fd}.evapp-raffle-public-title{font-size:clamp(2.8rem,8vw,7.5rem);line-height:.95;font-weight:1000;letter-spacing:-.045em;margin:22px 0 14px;text-wrap:balance;max-width:1050px;word-break:break-word}.evapp-raffle-public-subtitle{font-size:clamp(1.05rem,2.4vw,2rem);line-height:1.35;opacity:.82;max-width:850px}.evapp-raffle-public-avatar{width:clamp(105px,16vw,190px);height:clamp(105px,16vw,190px);border-radius:50%;display:none;align-items:center;justify-content:center;font-size:clamp(2.7rem,7vw,6rem);font-weight:1000;background:linear-gradient(145deg,var(--cyan),var(--purple));border:6px solid rgba(255,255,255,.8);box-shadow:0 0 0 12px rgba(255,255,255,.1),0 25px 65px rgba(0,0,0,.35);margin-bottom:15px}.evapp-raffle-public.is-result .evapp-raffle-public-avatar{display:flex}.evapp-raffle-public-loader{display:none;width:clamp(100px,15vw,180px);height:clamp(100px,15vw,180px);border-radius:50%;border:clamp(8px,1.1vw,14px) solid rgba(255,255,255,.16);border-top-color:#fff;border-right-color:var(--cyan);animation:evappPublicSpin .7s linear infinite;margin:25px auto}@keyframes evappPublicSpin{to{transform:rotate(360deg)}}.evapp-raffle-public.is-drawing .evapp-raffle-public-loader{display:block}.evapp-raffle-public-countdown{font-variant-numeric:tabular-nums;font-size:clamp(2rem,5vw,5rem);font-weight:1000;color:var(--gold);min-height:1.1em}.evapp-raffle-public-prize{display:none;margin-top:18px;padding:10px 18px;border-radius:999px;background:rgba(250,204,21,.18);border:1px solid rgba(250,204,21,.5);color:#fef08a;font-weight:900;font-size:clamp(.95rem,2vw,1.4rem)}.evapp-raffle-public.is-winner .evapp-raffle-public-prize.has-value{display:inline-flex}.evapp-raffle-public-status{position:absolute;bottom:22px;left:24px;right:24px;display:flex;justify-content:center;gap:9px;align-items:center;font-size:12px;opacity:.62}.evapp-raffle-public-status-dot{width:8px;height:8px;border-radius:50%;background:#94a3b8}.evapp-raffle-public-status-dot.live{background:#4ade80;box-shadow:0 0 14px #4ade80}.evapp-raffle-public-slot{display:none;font-size:clamp(2rem,6vw,5.6rem);font-weight:1000;line-height:1;min-height:1.1em;margin:10px 0;background:linear-gradient(90deg,#fff,#67e8f9,#c4b5fd,#fff);background-size:220% auto;color:transparent;background-clip:text;-webkit-background-clip:text;animation:evappShine 1.2s linear infinite}@keyframes evappShine{to{background-position:220% center}}.evapp-raffle-public.is-drawing .evapp-raffle-public-slot{display:block}.evapp-raffle-public.is-drawing .evapp-raffle-public-title{display:none}.evapp-raffle-public-confetti{position:absolute;inset:0;pointer-events:none;z-index:5}.evapp-raffle-public-message{padding:24px;text-align:center;border-radius:14px;background:#f8fafc;color:#172033}@media(max-width:600px){.evapp-raffle-public{padding:10px}.evapp-raffle-public-card{min-height:94svh;padding:76px 18px 60px}.evapp-raffle-public-event{top:18px;left:18px;right:18px}.evapp-raffle-public-status{bottom:16px}}
+    <style id="eventosapp-live-raffle-public-ui">
+    .evapp-raffle-public{
+        --evapp-primary:#3279bd;
+        --evapp-primary-dark:#255f96;
+        --evapp-primary-bright:#63b3ed;
+        --evapp-surface:#ffffff;
+        --evapp-text:#f8fbff;
+        --evapp-muted:#c6d7e7;
+        --evapp-success:#4ade80;
+        --evapp-gold:#facc15;
+        position:fixed;
+        inset:0;
+        z-index:999999;
+        isolation:isolate;
+        width:100%;
+        min-height:100vh;
+        min-height:100dvh;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        overflow:hidden;
+        padding:clamp(14px,3.5vw,52px);
+        color:var(--evapp-text);
+        background:
+            radial-gradient(circle at 15% 15%,rgba(50,121,189,.34),transparent 31%),
+            radial-gradient(circle at 86% 82%,rgba(99,179,237,.20),transparent 34%),
+            linear-gradient(145deg,#07111b,#10283c 54%,#143d5e);
+        font-family:inherit;
+        box-sizing:border-box;
+    }
+    .evapp-raffle-public *,
+    .evapp-raffle-public *::before,
+    .evapp-raffle-public *::after{box-sizing:border-box}
+    .evapp-raffle-public-back{
+        position:fixed;
+        top:14px;
+        right:14px;
+        z-index:8;
+        min-height:42px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        gap:8px;
+        padding:9px 13px;
+        color:#fff!important;
+        background:rgba(7,17,27,.72);
+        border:1px solid rgba(255,255,255,.22);
+        border-radius:12px;
+        box-shadow:0 8px 24px rgba(0,0,0,.22);
+        font-size:12px;
+        font-weight:800;
+        line-height:1.2;
+        text-decoration:none!important;
+        backdrop-filter:blur(10px);
+        -webkit-backdrop-filter:blur(10px);
+        transition:transform .16s ease,background .16s ease,border-color .16s ease;
+    }
+    .evapp-raffle-public-back:hover{color:#fff!important;background:rgba(37,95,150,.90);border-color:rgba(255,255,255,.34);transform:translateY(-1px)}
+    .evapp-raffle-public-back:focus-visible{outline:3px solid rgba(143,208,255,.45);outline-offset:2px}
+    .evapp-raffle-public-back svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .evapp-raffle-public-orb{
+        position:absolute;
+        border-radius:50%;
+        opacity:.18;
+        filter:blur(1px);
+        animation:evappPublicFloat 10s ease-in-out infinite;
+    }
+    .evapp-raffle-public-orb.one{width:220px;height:220px;left:-72px;top:10%;background:var(--evapp-primary-bright)}
+    .evapp-raffle-public-orb.two{width:300px;height:300px;right:-110px;bottom:1%;background:var(--evapp-primary);animation-delay:-4s}
+    .evapp-raffle-public-orb.three{width:96px;height:96px;right:17%;top:7%;background:#d8efff;animation-delay:-7s}
+    @keyframes evappPublicFloat{50%{transform:translate3d(18px,-22px,0) scale(1.06)}}
+    .evapp-raffle-public-card{
+        position:relative;
+        z-index:3;
+        width:min(1180px,100%);
+        min-height:min(720px,88dvh);
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        overflow:hidden;
+        padding:clamp(74px,7vw,96px) clamp(22px,5vw,72px) clamp(72px,7vw,92px);
+        text-align:center;
+        background:linear-gradient(145deg,rgba(255,255,255,.11),rgba(255,255,255,.045));
+        border:1px solid rgba(255,255,255,.18);
+        border-radius:clamp(24px,3vw,34px);
+        box-shadow:0 28px 80px rgba(0,0,0,.34);
+        backdrop-filter:blur(16px);
+        -webkit-backdrop-filter:blur(16px);
+    }
+    .evapp-raffle-public-card::before{
+        position:absolute;
+        inset:0 0 auto;
+        height:4px;
+        background:linear-gradient(90deg,transparent,var(--evapp-primary-bright),#fff,var(--evapp-primary-bright),transparent);
+        opacity:.7;
+        content:"";
+    }
+    .evapp-raffle-public-event{
+        position:absolute;
+        top:24px;
+        left:28px;
+        right:28px;
+        overflow:hidden;
+        color:#d7e7f5;
+        font-size:clamp(11px,1.2vw,14px);
+        font-weight:800;
+        letter-spacing:.10em;
+        line-height:1.35;
+        text-overflow:ellipsis;
+        text-transform:uppercase;
+        white-space:nowrap;
+    }
+    .evapp-raffle-public-kicker{
+        color:#bfe2ff;
+        font-size:clamp(12px,1.55vw,18px);
+        font-weight:850;
+        letter-spacing:.20em;
+        line-height:1.3;
+        text-transform:uppercase;
+    }
+    .evapp-raffle-public-title{
+        max-width:1050px;
+        margin:20px 0 14px;
+        color:#fff;
+        font-size:clamp(46px,7.5vw,112px);
+        font-weight:920;
+        line-height:.95;
+        letter-spacing:-.05em;
+        overflow-wrap:anywhere;
+        text-wrap:balance;
+    }
+    .evapp-raffle-public-subtitle{
+        max-width:850px;
+        color:var(--evapp-muted);
+        font-size:clamp(16px,2.1vw,28px);
+        line-height:1.4;
+        text-wrap:balance;
+    }
+    .evapp-raffle-public-avatar{
+        width:clamp(104px,15vw,178px);
+        height:clamp(104px,15vw,178px);
+        display:none;
+        align-items:center;
+        justify-content:center;
+        margin-bottom:16px;
+        color:#fff;
+        background:linear-gradient(145deg,var(--evapp-primary-bright),var(--evapp-primary-dark));
+        border:5px solid rgba(255,255,255,.88);
+        border-radius:50%;
+        box-shadow:0 0 0 10px rgba(255,255,255,.08),0 24px 58px rgba(0,0,0,.32);
+        font-size:clamp(42px,6vw,82px);
+        font-weight:900;
+        letter-spacing:-.04em;
+    }
+    .evapp-raffle-public.is-result .evapp-raffle-public-avatar{display:flex}
+    .evapp-raffle-public-loader{
+        width:clamp(96px,14vw,166px);
+        height:clamp(96px,14vw,166px);
+        display:none;
+        margin:24px auto;
+        border:clamp(8px,1vw,12px) solid rgba(255,255,255,.14);
+        border-top-color:#fff;
+        border-right-color:var(--evapp-primary-bright);
+        border-radius:50%;
+        animation:evappPublicSpin .7s linear infinite;
+    }
+    @keyframes evappPublicSpin{to{transform:rotate(360deg)}}
+    .evapp-raffle-public.is-drawing .evapp-raffle-public-loader{display:block}
+    .evapp-raffle-public-countdown{
+        min-height:1.05em;
+        color:var(--evapp-gold);
+        font-size:clamp(34px,5vw,72px);
+        font-variant-numeric:tabular-nums;
+        font-weight:900;
+        line-height:1;
+    }
+    .evapp-raffle-public-prize{
+        display:none;
+        margin-top:20px;
+        padding:10px 18px;
+        color:#fff5b8;
+        background:rgba(250,204,21,.13);
+        border:1px solid rgba(250,204,21,.42);
+        border-radius:999px;
+        font-size:clamp(14px,1.7vw,20px);
+        font-weight:850;
+    }
+    .evapp-raffle-public.is-winner .evapp-raffle-public-prize.has-value{display:inline-flex}
+    .evapp-raffle-public-status{
+        position:absolute;
+        right:24px;
+        bottom:20px;
+        left:24px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        gap:8px;
+        color:#c9d8e6;
+        font-size:12px;
+        line-height:1.35;
+    }
+    .evapp-raffle-public-status-dot{
+        width:8px;
+        height:8px;
+        flex:0 0 8px;
+        background:#94a3b8;
+        border-radius:50%;
+    }
+    .evapp-raffle-public-status-dot.live{background:var(--evapp-success);box-shadow:0 0 14px rgba(74,222,128,.8)}
+    .evapp-raffle-public-slot{
+        min-height:1.1em;
+        display:none;
+        margin:9px 0;
+        color:transparent;
+        background:linear-gradient(90deg,#fff,#8fd0ff,#d9edff,#fff);
+        background-size:220% auto;
+        background-clip:text;
+        -webkit-background-clip:text;
+        font-size:clamp(34px,5.4vw,80px);
+        font-weight:900;
+        line-height:1;
+        animation:evappRaffleShine 1.15s linear infinite;
+    }
+    @keyframes evappRaffleShine{to{background-position:220% center}}
+    .evapp-raffle-public.is-drawing .evapp-raffle-public-slot{display:block}
+    .evapp-raffle-public.is-drawing .evapp-raffle-public-title{display:none}
+    .evapp-raffle-public-confetti{position:absolute;inset:0;z-index:5;pointer-events:none}
+    .evapp-raffle-public-message{padding:24px;color:#182230;background:#f5f8fc;border:1px solid #dfe7f1;border-radius:18px;text-align:center}
+    @media(max-width:700px){
+        .evapp-raffle-public{padding:9px}
+        .evapp-raffle-public-card{min-height:calc(100dvh - 18px);padding:70px 18px 58px;border-radius:22px}
+        .evapp-raffle-public-event{top:17px;left:16px;right:16px;white-space:normal}
+        .evapp-raffle-public-status{right:16px;bottom:14px;left:16px}
+        .evapp-raffle-public-back{top:12px;right:12px;width:42px;height:42px;min-height:42px;padding:0;border-radius:11px}
+        .evapp-raffle-public-back span{display:none}
+    }
+    @media(max-height:600px) and (orientation:landscape){
+        .evapp-raffle-public{padding:8px}
+        .evapp-raffle-public-card{min-height:calc(100dvh - 16px);padding:50px 28px 42px}
+        .evapp-raffle-public-avatar{width:86px;height:86px;margin-bottom:8px;font-size:36px;border-width:4px}
+        .evapp-raffle-public-title{margin:10px 0 8px;font-size:clamp(38px,9vh,72px)}
+        .evapp-raffle-public-subtitle{font-size:clamp(14px,3.2vh,20px)}
+        .evapp-raffle-public-loader{width:88px;height:88px;margin:10px auto}
+    }
+    @media(prefers-reduced-motion:reduce){
+        .evapp-raffle-public *,
+        .evapp-raffle-public *::before,
+        .evapp-raffle-public *::after{animation:none!important;transition:none!important}
+    }
     </style>
     <div class="evapp-raffle-public" id="evapp-live-raffle-public"
          data-event-id="<?php echo esc_attr( $event_id ); ?>"
          data-nonce="<?php echo esc_attr( $nonce ); ?>"
          data-ajax-url="<?php echo esc_url( $ajax_url ); ?>">
+        <?php if ( $can_back_dashboard ) : ?>
+            <a class="evapp-raffle-public-back" href="<?php echo esc_url( $dashboard_url ); ?>" aria-label="Volver al dashboard">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                <span>Volver al dashboard</span>
+            </a>
+        <?php endif; ?>
         <div class="evapp-raffle-public-orb one"></div><div class="evapp-raffle-public-orb two"></div><div class="evapp-raffle-public-orb three"></div>
-        <canvas class="evapp-raffle-public-confetti" id="evapp-raffle-confetti"></canvas>
-        <div class="evapp-raffle-public-card">
+        <canvas class="evapp-raffle-public-confetti" id="evapp-raffle-confetti" aria-hidden="true"></canvas>
+        <div class="evapp-raffle-public-card" role="region" aria-label="Sorteo en vivo">
             <div class="evapp-raffle-public-event" id="evapp-public-event"><?php echo esc_html( get_the_title( $event_id ) ); ?></div>
             <div class="evapp-raffle-public-avatar" id="evapp-public-avatar">EA</div>
             <div class="evapp-raffle-public-kicker" id="evapp-public-kicker">Sorteo en vivo</div>
-            <div class="evapp-raffle-public-loader"></div>
-            <div class="evapp-raffle-public-slot" id="evapp-public-slot">Participante 001</div>
-            <div class="evapp-raffle-public-title" id="evapp-public-title">Esperando al organizador</div>
+            <div class="evapp-raffle-public-loader" aria-hidden="true"></div>
+            <div class="evapp-raffle-public-slot" id="evapp-public-slot" aria-hidden="true">Participante 001</div>
+            <div class="evapp-raffle-public-title" id="evapp-public-title" aria-live="polite" aria-atomic="true">Esperando al organizador</div>
             <div class="evapp-raffle-public-countdown" id="evapp-public-countdown"></div>
             <div class="evapp-raffle-public-subtitle" id="evapp-public-subtitle">El sorteo aparecerá aquí cuando el organizador lo active.</div>
             <div class="evapp-raffle-public-prize" id="evapp-public-prize"></div>
-            <div class="evapp-raffle-public-status"><span class="evapp-raffle-public-status-dot" id="evapp-public-dot"></span><span id="evapp-public-status-text">Conectando con el evento…</span></div>
+            <div class="evapp-raffle-public-status" role="status" aria-live="polite"><span class="evapp-raffle-public-status-dot" id="evapp-public-dot" aria-hidden="true"></span><span id="evapp-public-status-text">Conectando con el evento…</span></div>
         </div>
     </div>
     <script>
@@ -1558,7 +2470,7 @@ add_shortcode( 'eventosapp_live_raffle_public', function( $atts ) {
         const root = document.getElementById('evapp-live-raffle-public'); if(!root) return;
         const eventId=root.dataset.eventId, nonce=root.dataset.nonce, ajaxUrl=root.dataset.ajaxUrl;
         const title=document.getElementById('evapp-public-title'), kicker=document.getElementById('evapp-public-kicker'), subtitle=document.getElementById('evapp-public-subtitle'), countdown=document.getElementById('evapp-public-countdown'), slot=document.getElementById('evapp-public-slot'), avatar=document.getElementById('evapp-public-avatar'), prize=document.getElementById('evapp-public-prize'), dot=document.getElementById('evapp-public-dot'), statusText=document.getElementById('evapp-public-status-text');
-        let timer=null,slotTimer=null,lastWinner='',serverOffset=0,lastPayload=null;
+        let timer=null,countdownTimer=null,slotTimer=null,lastWinner='',serverOffset=0,lastPayload=null,requestInFlight=false;
         const genericNames=['Participante 014','Participante 027','Participante 041','Participante 058','Participante 073','Participante 089','Participante 103','Participante 126','Participante 147','Participante 168'];
         function setMode(mode){root.classList.toggle('is-drawing',mode==='drawing');root.classList.toggle('is-result',mode==='candidate'||mode==='winner');root.classList.toggle('is-winner',mode==='winner');}
         function startSlot(){if(slotTimer)return;let i=0;slotTimer=setInterval(()=>{slot.textContent=genericNames[i++%genericNames.length];},95);}
@@ -1575,14 +2487,16 @@ add_shortcode( 'eventosapp_live_raffle_public', function( $atts ) {
             setMode('ready');kicker.textContent='Sorteo preparado';title.textContent='Todo listo';subtitle.textContent='El organizador iniciará el sorteo en cualquier momento.';prize.classList.remove('has-value');
         }
         function updateCountdown(){if(!lastPayload||lastPayload.status!=='drawing'){countdown.textContent='';return;}const now=Math.floor(Date.now()/1000)+serverOffset;const left=Math.max(0,Number(lastPayload.reveal_at||0)-now);countdown.textContent=left>0?String(left):'…';}
-        function load(){const fd=new FormData();fd.append('action','eventosapp_live_raffle_public_state');fd.append('event_id',eventId);fd.append('nonce',nonce);fetch(ajaxUrl,{method:'POST',credentials:'same-origin',body:fd}).then(r=>r.json()).then(resp=>{if(resp&&resp.success)render(resp.data);else throw new Error('Estado no disponible');}).catch(()=>{dot.classList.remove('live');statusText.textContent='Reconectando…';});}
+        function load(){if(requestInFlight)return Promise.resolve();requestInFlight=true;const fd=new FormData();fd.append('action','eventosapp_live_raffle_public_state');fd.append('event_id',eventId);fd.append('nonce',nonce);return fetch(ajaxUrl,{method:'POST',credentials:'same-origin',body:fd}).then(r=>r.json()).then(resp=>{if(resp&&resp.success)render(resp.data);else throw new Error('Estado no disponible');}).catch(()=>{dot.classList.remove('live');statusText.textContent='Reconectando…';}).finally(()=>{requestInFlight=false;});}
+        function scheduleLoad(){clearTimeout(timer);timer=setTimeout(()=>{load().finally(scheduleLoad);},document.hidden?4000:1200);}
         function launchConfetti(){
-            const canvas=document.getElementById('evapp-raffle-confetti'),ctx=canvas.getContext('2d');let pieces=[],running=true;const colors=['#22d3ee','#a78bfa','#facc15','#fb7185','#4ade80','#fff'];
+            if(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+            const canvas=document.getElementById('evapp-raffle-confetti'),ctx=canvas.getContext('2d');if(!ctx)return;let pieces=[],running=true;const colors=['#3279bd','#63b3ed','#facc15','#8fd0ff','#4ade80','#fff'];
             function resize(){canvas.width=root.clientWidth;canvas.height=root.clientHeight;}resize();
-            for(let i=0;i<180;i++)pieces.push({x:Math.random()*canvas.width,y:-Math.random()*canvas.height*.45,w:4+Math.random()*9,h:6+Math.random()*13,vx:-2+Math.random()*4,vy:2+Math.random()*5,r:Math.random()*Math.PI,vr:-.18+Math.random()*.36,c:colors[Math.floor(Math.random()*colors.length)]});
+            const pieceCount=window.innerWidth<700?90:140;for(let i=0;i<pieceCount;i++)pieces.push({x:Math.random()*canvas.width,y:-Math.random()*canvas.height*.45,w:4+Math.random()*9,h:6+Math.random()*13,vx:-2+Math.random()*4,vy:2+Math.random()*5,r:Math.random()*Math.PI,vr:-.18+Math.random()*.36,c:colors[Math.floor(Math.random()*colors.length)]});
             const started=performance.now();function frame(now){ctx.clearRect(0,0,canvas.width,canvas.height);pieces.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.035;p.r+=p.vr;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.r);ctx.fillStyle=p.c;ctx.fillRect(-p.w/2,-p.h/2,p.w,p.h);ctx.restore();});if(running&&now-started<6500)requestAnimationFrame(frame);else ctx.clearRect(0,0,canvas.width,canvas.height);}requestAnimationFrame(frame);setTimeout(()=>{running=false;},6600);window.addEventListener('resize',resize,{once:true});
         }
-        load();timer=setInterval(load,1200);setInterval(updateCountdown,250);window.addEventListener('beforeunload',()=>clearInterval(timer));
+        load().finally(scheduleLoad);countdownTimer=setInterval(updateCountdown,250);document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.hidden){scheduleLoad();}else{load().finally(scheduleLoad);}});window.addEventListener('beforeunload',()=>{clearTimeout(timer);clearInterval(countdownTimer);stopSlot();});
     })();
     </script>
     <?php
