@@ -1979,6 +1979,95 @@ if ( ! function_exists( 'eventosapp_expositor_count_deliveries' ) ) {
     }
 }
 
+
+if ( ! function_exists( 'eventosapp_expositor_get_product_delivery_counts' ) ) {
+    /**
+     * Obtiene en una sola consulta el total de entregas por producto para un expositor.
+     * Evita ejecutar un COUNT(*) independiente por cada tarjeta de producto.
+     *
+     * @param int $event_id
+     * @param int $expositor_id
+     * @return array<string,int>
+     */
+    function eventosapp_expositor_get_product_delivery_counts( $event_id, $expositor_id ) {
+        global $wpdb;
+
+        $event_id     = absint( $event_id );
+        $expositor_id = absint( $expositor_id );
+
+        if ( ! $event_id || ! $expositor_id ) {
+            return [];
+        }
+
+        $table = eventosapp_expositores_table_name();
+        $rows  = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT product_id, COUNT(*) AS total
+                 FROM {$table}
+                 WHERE event_id = %d AND expositor_id = %d
+                 GROUP BY product_id",
+                $event_id,
+                $expositor_id
+            ),
+            ARRAY_A
+        );
+
+        $counts = [];
+        foreach ( (array) $rows as $row ) {
+            $product_id = sanitize_key( $row['product_id'] ?? '' );
+            if ( $product_id === '' ) {
+                continue;
+            }
+
+            $counts[ $product_id ] = absint( $row['total'] ?? 0 );
+        }
+
+        return $counts;
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_get_delivery_counts_by_expositor' ) ) {
+    /**
+     * Obtiene en una sola consulta el total de entregas de varios expositores.
+     * Se usa en la vista de gestión para evitar una consulta por cada expositor.
+     *
+     * @param int   $event_id
+     * @param int[] $expositor_ids
+     * @return array<int,int>
+     */
+    function eventosapp_expositor_get_delivery_counts_by_expositor( $event_id, $expositor_ids ) {
+        global $wpdb;
+
+        $event_id     = absint( $event_id );
+        $expositor_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $expositor_ids ) ) ) );
+
+        if ( ! $event_id || empty( $expositor_ids ) ) {
+            return [];
+        }
+
+        $table        = eventosapp_expositores_table_name();
+        $placeholders = implode( ',', array_fill( 0, count( $expositor_ids ), '%d' ) );
+        $args         = array_merge( [ $event_id ], $expositor_ids );
+        $query        = "SELECT expositor_id, COUNT(*) AS total
+                         FROM {$table}
+                         WHERE event_id = %d
+                           AND expositor_id IN ({$placeholders})
+                         GROUP BY expositor_id";
+
+        $rows = $wpdb->get_results( $wpdb->prepare( $query, $args ), ARRAY_A );
+
+        $counts = array_fill_keys( $expositor_ids, 0 );
+        foreach ( (array) $rows as $row ) {
+            $expositor_id = absint( $row['expositor_id'] ?? 0 );
+            if ( $expositor_id && isset( $counts[ $expositor_id ] ) ) {
+                $counts[ $expositor_id ] = absint( $row['total'] ?? 0 );
+            }
+        }
+
+        return $counts;
+    }
+}
+
 if ( ! function_exists( 'eventosapp_expositor_get_attendee_data' ) ) {
     function eventosapp_expositor_get_attendee_data( $ticket_id ) {
         $ticket_id = absint( $ticket_id );
@@ -2281,147 +2370,1025 @@ add_action( 'wp_ajax_eventosapp_expositor_save_download_permissions', function (
 // 5. RENDER FRONTEND
 // ============================================================
 
+if ( ! function_exists( 'eventosapp_expositor_front_icon' ) ) {
+    /**
+     * Iconos inline compartidos por [eventosapp_expositor] y
+     * [eventosapp_expositor_gestion]. Todos usan currentColor para mantener
+     * consistencia con el dashboard.
+     *
+     * @param string $name
+     * @return string
+     */
+    function eventosapp_expositor_front_icon( $name ) {
+        switch ( $name ) {
+            case 'back':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>';
+
+            case 'calendar':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M7 3v4M17 3v4M3 9h18"></path></svg>';
+
+            case 'store':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1-4H5L4 9Z"></path><path d="M5 9v10h14V9M8 19v-6h4v6M14 13h3"></path><path d="M4 9c.4 1.4 1.4 2 2.5 2S8.6 10.4 9 9c.4 1.4 1.4 2 2.5 2s2.1-.6 2.5-2c.4 1.4 1.4 2 2.5 2S18.6 10.4 19 9"></path></svg>';
+
+            case 'delivery':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10v10H4zM14 10h3l3 3v4h-6z"></path><circle cx="8" cy="18" r="2"></circle><circle cx="17" cy="18" r="2"></circle><path d="M7 11h4M9 9v4"></path></svg>';
+
+            case 'box':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 7 8-4 8 4-8 4-8-4Z"></path><path d="M4 7v10l8 4 8-4V7M12 11v10"></path></svg>';
+
+            case 'database':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg>';
+
+            case 'download':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>';
+
+            case 'qr':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"></path><path d="M14 14h2v2h-2zM18 14h2v2h-2zM16 18h2v2h-2zM20 18h1v2h-1z"></path></svg>';
+
+            case 'inventory':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v14H4z"></path><path d="M8 6V4h8v2M4 10h16M9 14h6"></path></svg>';
+
+            case 'camera':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l2-2h4l2 2h4v12H4z"></path><circle cx="12" cy="13" r="4"></circle></svg>';
+
+            case 'check':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>';
+
+            case 'users':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"></circle><path d="M3.5 20c.7-3.3 2.5-5 5.5-5s4.8 1.7 5.5 5"></path><circle cx="17" cy="7.5" r="2.2"></circle><path d="M15.5 14.8c.5-.2 1-.3 1.5-.3 2.2 0 3.6 1.4 4 4"></path></svg>';
+
+            case 'shield':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.7 2.9 8.8 7 10 4.1-1.2 7-5.3 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>';
+
+            case 'settings':
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7.4 7.4 0 0 0-1.8-1L14.4 3h-4.8l-.3 3.1a7.4 7.4 0 0 0-1.8 1l-2.4-1-2 3.4L5.1 11A7 7 0 0 0 5 12c0 .3 0 .7.1 1l-2 1.5 2 3.4 2.4-1a7.4 7.4 0 0 0 1.8 1l.3 3.1h4.8l.3-3.1a7.4 7.4 0 0 0 1.8-1l2.4 1 2-3.4-2-1.5c.1-.3.1-.7.1-1Z"></path></svg>';
+
+            default:
+                return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4M12 16h.01"></path></svg>';
+        }
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_front_navigation' ) ) {
+    /**
+     * Centraliza la navegación de regreso al dashboard y el cambio de evento,
+     * usando el mismo contrato que los demás módulos frontend modernos.
+     *
+     * @return array{dashboard_url:string,change_event_url:string}
+     */
+    function eventosapp_expositor_front_navigation() {
+        $dashboard_url = function_exists( 'eventosapp_get_dashboard_url' )
+            ? eventosapp_get_dashboard_url()
+            : home_url( '/' );
+
+        if ( ! $dashboard_url || $dashboard_url === '#' ) {
+            $dashboard_url = home_url( '/' );
+        }
+
+        $dashboard_url = remove_query_arg(
+            [ 'evapp', 'evapp_err', 'set', 'from', 'event_id', 'expositor_id' ],
+            $dashboard_url
+        );
+
+        return [
+            'dashboard_url'    => $dashboard_url,
+            'change_event_url' => add_query_arg( [ 'evapp' => 'change_event' ], $dashboard_url ),
+        ];
+    }
+}
+
+if ( ! function_exists( 'eventosapp_expositor_front_notice_html' ) ) {
+    /**
+     * Estado frontend consistente para accesos sin evento, módulo desactivado
+     * o permisos insuficientes.
+     *
+     * @param string $message
+     * @param string $type warning|error|success
+     * @param string $dashboard_url
+     * @return string
+     */
+    function eventosapp_expositor_front_notice_html( $message, $type = 'warning', $dashboard_url = '' ) {
+        ob_start();
+        eventosapp_expositor_front_css();
+        ?>
+        <div class="evapp-expositor-module">
+            <div class="evapp-expositor-shell evapp-expositor-notice-shell">
+                <div class="evapp-expositor-notice <?php echo $type === 'error' ? 'error' : ( $type === 'success' ? 'success' : '' ); ?>" role="<?php echo $type === 'error' ? 'alert' : 'status'; ?>">
+                    <?php echo wp_kses_post( $message ); ?>
+                </div>
+                <?php if ( $dashboard_url ) : ?>
+                    <div class="evapp-expositor-notice-actions">
+                        <a class="evapp-expositor-btn secondary" href="<?php echo esc_url( $dashboard_url ); ?>">
+                            <?php echo eventosapp_expositor_front_icon( 'back' ); ?>
+                            <span>Volver al dashboard</span>
+                        </a>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+}
+
 function eventosapp_expositor_front_css() {
     static $printed = false;
     if ( $printed ) return;
     $printed = true;
     ?>
-    <style>
-        .evapp-expositor-module{--evapp-blue:#2F73B5;--evapp-blue-dark:#275f95;--evapp-border:#dfe3e8;--evapp-soft:#f6f8fb;--evapp-text:#1f2937;--evapp-muted:#667085;font-family:inherit;color:var(--evapp-text);box-sizing:border-box;}
-        .evapp-expositor-module *{box-sizing:border-box;}
-        .evapp-expositor-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin:0 0 12px;}
-        .evapp-expositor-header h2{margin:0 0 4px;font-size:26px;line-height:1.1;}
-        .evapp-expositor-muted{color:#637083;font-size:14px;line-height:1.45;}
-        .evapp-expositor-switch{min-width:240px;}
-        .evapp-expositor-switch label{display:block;margin:0 0 5px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;color:#667085;}
-        .evapp-expositor-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 12px;}
-        .evapp-expositor-stat-card{border:1px solid var(--evapp-border);border-radius:16px;background:#fff;padding:12px;box-shadow:0 2px 10px rgba(15,23,42,.045);min-width:0;}
-        .evapp-expositor-stat-card h3{margin:0 0 7px;font-size:12px;line-height:1.15;text-transform:uppercase;letter-spacing:.45px;color:#667085;}
-        .evapp-expositor-stat{font-size:28px;font-weight:850;color:var(--evapp-blue);line-height:1;}
-        .evapp-expositor-stat-card .evapp-expositor-btn{width:100%;min-height:38px;padding:9px 10px;font-size:14px;}
-        .evapp-expositor-app{border:1px solid var(--evapp-border);border-radius:18px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.055);overflow:hidden;}
-        .evapp-expositor-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px;background:#f7f9fc;border-bottom:1px solid var(--evapp-border);position:sticky;top:0;z-index:5;}
-        .evapp-expositor-tab{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;border:1px solid #d7dce2;border-radius:14px;background:#fff;color:#344054!important;text-decoration:none;padding:11px 10px;font-size:15px;font-weight:850;line-height:1.1;cursor:pointer;box-shadow:0 1px 4px rgba(15,23,42,.03);}
-        .evapp-expositor-tab:hover{background:#eef5ff;color:#1f4f82!important;}
-        .evapp-expositor-tab.is-active{background:var(--evapp-blue);border-color:var(--evapp-blue);color:#fff!important;box-shadow:0 6px 14px rgba(47,115,181,.22);}
-        .evapp-expositor-panels{height:calc(100svh - 330px);min-height:430px;max-height:760px;overflow:hidden;background:#fff;}
-        .evapp-expositor-panel{display:none;height:100%;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:14px;scroll-behavior:smooth;}
-        .evapp-expositor-panel.is-active{display:block;}
-        .evapp-expositor-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0 0 12px;}
-        .evapp-expositor-panel-head h3{margin:0 0 3px;font-size:20px;line-height:1.2;}
-        .evapp-expositor-card{border:1px solid var(--evapp-border);border-radius:16px;background:#fff;padding:14px;box-shadow:0 3px 14px rgba(0,0,0,.035);}
-        .evapp-expositor-card + .evapp-expositor-card{margin-top:12px;}
-        .evapp-expositor-card h3{margin:0 0 10px;font-size:18px;}
-        .evapp-expositor-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0;}
-        .evapp-expositor-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:12px;background:var(--evapp-blue);color:#fff!important;text-decoration:none;padding:11px 14px;font-weight:800;cursor:pointer;line-height:1.2;min-height:42px;text-align:center;}
-        .evapp-expositor-btn:hover{background:var(--evapp-blue-dark);color:#fff!important;}
-        .evapp-expositor-btn.secondary{background:#eef2f7;color:#1f2937!important;border:1px solid #d7dce2;}
-        .evapp-expositor-btn.secondary:hover{background:#e3e8ef;color:#1f2937!important;}
-        .evapp-expositor-btn.danger{background:#d63638;}
-        .evapp-expositor-btn.danger:hover{background:#b42324;}
-        .evapp-expositor-btn[disabled]{opacity:.55;cursor:not-allowed;}
-        .evapp-expositor-input,.evapp-expositor-select{width:100%;border:1px solid #cfd6df;border-radius:12px;padding:11px 12px;background:#fff;box-sizing:border-box;min-height:44px;font-size:16px;}
-        .evapp-expositor-form-grid{display:grid;grid-template-columns:1.5fr .75fr .75fr .75fr .75fr;gap:10px;align-items:end;}
-        .evapp-expositor-qr-grid{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:end;}
-        .evapp-expositor-field label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.45px;font-weight:850;color:#667085;margin-bottom:5px;line-height:1.25;}
-        .evapp-expositor-field small{display:block;margin-top:4px;color:#667085;font-size:12px;line-height:1.35;}
-        .evapp-expositor-table{width:100%;border-collapse:collapse;font-size:14px;}
-        .evapp-expositor-table th,.evapp-expositor-table td{border-bottom:1px solid #edf0f3;padding:9px;text-align:left;vertical-align:middle;}
-        .evapp-expositor-table th{font-size:12px;text-transform:uppercase;color:#667085;background:#f8fafc;}
-        .evapp-expositor-products-list{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px;}
-        .evapp-expositor-product-card{border:1px solid #e2e8f0;border-radius:15px;background:#fbfcfe;padding:12px;}
-        .evapp-expositor-product-main{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
-        .evapp-expositor-product-title{font-weight:850;font-size:15px;line-height:1.25;word-break:break-word;}
-        .evapp-expositor-product-code{display:block;margin-top:3px;font-size:11px;color:#667085;word-break:break-all;}
-        .evapp-expositor-product-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:10px;}
-        .evapp-expositor-chip{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:7px 8px;min-width:0;}
-        .evapp-expositor-chip span{display:block;font-size:10px;font-weight:850;letter-spacing:.35px;text-transform:uppercase;color:#667085;line-height:1.1;}
-        .evapp-expositor-chip strong{display:block;margin-top:3px;font-size:13px;color:#1f2937;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-        .evapp-expositor-product-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
-        .evapp-expositor-product-actions .evapp-expositor-btn{min-height:38px;padding:8px 10px;font-size:14px;}
-        .evapp-expositor-notice{border-radius:14px;padding:12px 14px;margin:12px 0;border:1px solid #d7e2f2;background:#f4f8ff;line-height:1.45;}
-        .evapp-expositor-notice.error{border-color:#f0b7b8;background:#fff5f5;color:#7f1d1d;}
-        .evapp-expositor-notice.success{border-color:#b7e2c1;background:#f0fff4;color:#14532d;}
-        .evapp-expositor-scanner{display:none;border:1px solid var(--evapp-border);border-radius:16px;background:#0f172a;padding:12px;margin:12px 0;color:#fff;}
-        .evapp-expositor-scanner video{width:100%;max-height:46svh;background:#000;border-radius:12px;display:block;object-fit:cover;}
-        .evapp-expositor-attendee{display:none;border:1px solid #bfd4f0;background:#f7fbff;border-radius:16px;padding:14px;margin:12px 0;}
-        .evapp-expositor-attendee h3{margin:0 0 6px;}
-        .evapp-expositor-badge{display:inline-flex;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:850;background:#edf2f7;color:#344054;white-space:nowrap;}
-        .evapp-expositor-badge.is-active{background:#e7f8ef;color:#166534;}
-        .evapp-expositor-badge.is-inactive{background:#fff1f2;color:#9f1239;}
-        .evapp-expositor-empty{border:1px dashed #cbd5e1;border-radius:15px;background:#f8fafc;padding:16px;color:#667085;line-height:1.45;}
-        @media(max-width:900px){
-            .evapp-expositor-header{display:block;margin-bottom:10px;}
-            .evapp-expositor-header h2{font-size:24px;}
-            .evapp-expositor-switch{min-width:0;margin-top:10px;}
-            .evapp-expositor-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}
-            .evapp-expositor-stat-card{padding:10px 8px;border-radius:14px;}
-            .evapp-expositor-stat-card h3{font-size:10px;margin-bottom:6px;}
-            .evapp-expositor-stat{font-size:24px;}
-            .evapp-expositor-stat-card .evapp-expositor-btn{font-size:12px;min-height:34px;border-radius:10px;padding:7px 6px;}
-            .evapp-expositor-panels{height:calc(100svh - 300px);min-height:390px;max-height:none;}
-            .evapp-expositor-panel{padding:12px;}
-            .evapp-expositor-panel-head{display:block;}
-            .evapp-expositor-form-grid,.evapp-expositor-qr-grid{grid-template-columns:1fr;}
-            .evapp-expositor-actions{display:grid;grid-template-columns:1fr;gap:8px;}
-            .evapp-expositor-actions .evapp-expositor-input{max-width:none!important;}
-            .evapp-expositor-btn{width:100%;}
-            .evapp-expositor-product-meta{grid-template-columns:repeat(2,minmax(0,1fr));}
-            .evapp-expositor-product-main{display:block;}
-            .evapp-expositor-table{display:block;overflow-x:auto;white-space:nowrap;}
+    <style id="eventosapp-expositor-frontend-ui">
+        .evapp-expositor-module{
+            --evapp-primary:#3279bd;
+            --evapp-primary-dark:#255f96;
+            --evapp-primary-soft:#eaf4ff;
+            --evapp-app-bg:#f5f8fc;
+            --evapp-surface:#ffffff;
+            --evapp-border:#dfe7f1;
+            --evapp-text:#182230;
+            --evapp-muted:#64748b;
+            --evapp-success:#15803d;
+            --evapp-success-soft:#ecfdf3;
+            --evapp-danger:#b42318;
+            --evapp-danger-soft:#fff1f0;
+            --evapp-warning:#b45309;
+            --evapp-warning-soft:#fff8e7;
+            --evapp-radius:18px;
+            --evapp-radius-lg:26px;
+            width:100%;
+            max-width:1180px;
+            margin:0 auto;
+            color:var(--evapp-text);
+            font-family:inherit;
+            line-height:1.45;
+            box-sizing:border-box;
+            isolation:isolate;
         }
-        @media(max-width:420px){
-            .evapp-expositor-module{margin-left:-2px;margin-right:-2px;}
-            .evapp-expositor-stats{gap:6px;}
-            .evapp-expositor-stat-card h3{font-size:9.5px;letter-spacing:.2px;}
-            .evapp-expositor-stat{font-size:22px;}
-            .evapp-expositor-tabs{gap:6px;padding:8px;}
-            .evapp-expositor-tab{font-size:14px;padding:10px 7px;border-radius:12px;}
-            .evapp-expositor-panels{height:calc(100svh - 285px);min-height:360px;}
+        .evapp-expositor-module *,
+        .evapp-expositor-module *::before,
+        .evapp-expositor-module *::after{box-sizing:border-box}
+        .evapp-expositor-module a{text-decoration:none}
+        .evapp-expositor-module svg{
+            display:block;
+            width:18px;
+            height:18px;
+            flex:0 0 18px;
+            fill:none;
+            stroke:currentColor;
+            stroke-width:2;
+            stroke-linecap:round;
+            stroke-linejoin:round;
+        }
+        .evapp-expositor-shell{
+            width:100%;
+            padding:clamp(18px,3vw,36px);
+            background:var(--evapp-app-bg);
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius-lg);
+            box-shadow:0 18px 50px rgba(31,52,73,.08);
+        }
+        .evapp-expositor-notice-shell{max-width:900px;margin:0 auto}
+        .evapp-expositor-header{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:24px;
+            margin-bottom:22px;
+        }
+        .evapp-expositor-heading{min-width:0}
+        .evapp-expositor-eyebrow{
+            margin:0 0 6px;
+            color:var(--evapp-primary);
+            font-size:12px;
+            font-weight:800;
+            letter-spacing:.11em;
+            text-transform:uppercase;
+        }
+        .evapp-expositor-header h1,
+        .evapp-expositor-header h2{
+            margin:0;
+            color:var(--evapp-text);
+            font-size:clamp(27px,4vw,42px);
+            font-weight:850;
+            line-height:1.08;
+            letter-spacing:-.035em;
+        }
+        .evapp-expositor-subtitle{
+            max-width:780px;
+            margin:10px 0 0;
+            color:var(--evapp-muted);
+            font-size:15px;
+            line-height:1.6;
+        }
+        .evapp-expositor-header-actions{flex:0 0 auto}
+        .evapp-expositor-muted{color:var(--evapp-muted);font-size:14px;line-height:1.5}
+        .evapp-expositor-event-context{
+            display:grid;
+            grid-template-columns:auto minmax(0,1fr) auto;
+            align-items:center;
+            gap:14px;
+            margin-bottom:20px;
+            padding:14px;
+            background:var(--evapp-surface);
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius);
+            box-shadow:0 8px 24px rgba(31,52,73,.05);
+        }
+        .evapp-expositor-event-icon{
+            width:46px;
+            height:46px;
+            display:grid;
+            place-items:center;
+            color:var(--evapp-primary);
+            background:var(--evapp-primary-soft);
+            border-radius:14px;
+        }
+        .evapp-expositor-event-icon svg{width:24px;height:24px}
+        .evapp-expositor-event-copy{min-width:0}
+        .evapp-expositor-event-label{
+            display:block;
+            margin-bottom:2px;
+            color:var(--evapp-muted);
+            font-size:12px;
+            font-weight:700;
+            letter-spacing:.04em;
+            text-transform:uppercase;
+        }
+        .evapp-expositor-event-name{
+            display:block;
+            overflow:hidden;
+            color:var(--evapp-text);
+            font-size:16px;
+            font-weight:800;
+            line-height:1.3;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        .evapp-expositor-event-detail{
+            display:block;
+            margin-top:3px;
+            color:var(--evapp-muted);
+            font-size:12px;
+            line-height:1.35;
+            overflow-wrap:anywhere;
+        }
+        .evapp-expositor-event-actions{
+            min-width:0;
+            display:flex;
+            align-items:flex-end;
+            justify-content:flex-end;
+            gap:10px;
+        }
+        .evapp-expositor-switch{
+            min-width:220px;
+            margin:0;
+        }
+        .evapp-expositor-switch label{
+            display:block;
+            margin:0 0 5px;
+            color:var(--evapp-muted);
+            font-size:10px;
+            font-weight:800;
+            letter-spacing:.06em;
+            text-transform:uppercase;
+        }
+        .evapp-expositor-btn{
+            min-height:44px;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:9px;
+            margin:0;
+            padding:10px 15px;
+            border:1px solid transparent;
+            border-radius:12px;
+            color:#fff!important;
+            background:var(--evapp-primary);
+            font:inherit;
+            font-size:14px;
+            font-weight:750;
+            line-height:1.15;
+            text-align:center;
+            cursor:pointer;
+            box-shadow:0 9px 20px rgba(50,121,189,.18);
+            transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease;
+            -webkit-tap-highlight-color:transparent;
+        }
+        .evapp-expositor-btn:hover:not(:disabled){
+            color:#fff!important;
+            background:var(--evapp-primary-dark);
+            border-color:var(--evapp-primary-dark);
+            box-shadow:0 12px 24px rgba(50,121,189,.24);
+            transform:translateY(-1px);
+        }
+        .evapp-expositor-btn.secondary{
+            color:var(--evapp-text)!important;
+            background:var(--evapp-surface);
+            border-color:var(--evapp-border);
+            box-shadow:0 5px 15px rgba(31,65,99,.05);
+        }
+        .evapp-expositor-btn.secondary:hover:not(:disabled){
+            color:var(--evapp-primary-dark)!important;
+            background:#fff;
+            border-color:#c7d7e8;
+            box-shadow:0 8px 20px rgba(31,65,99,.09);
+        }
+        .evapp-expositor-btn.danger{
+            color:#fff!important;
+            background:var(--evapp-danger);
+            border-color:var(--evapp-danger);
+            box-shadow:0 9px 20px rgba(180,35,24,.14);
+        }
+        .evapp-expositor-btn.danger:hover:not(:disabled){background:#8f1d14;border-color:#8f1d14}
+        .evapp-expositor-btn[disabled]{opacity:.55;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+        .evapp-expositor-btn:focus-visible,
+        .evapp-expositor-tab:focus-visible,
+        .evapp-expositor-input:focus-visible,
+        .evapp-expositor-select:focus-visible,
+        .evapp-expositor-toggle input:focus-visible + .evapp-expositor-toggle-ui{
+            outline:3px solid rgba(50,121,189,.20);
+            outline-offset:2px;
+        }
+        .evapp-expositor-stats{
+            display:grid;
+            grid-template-columns:repeat(3,minmax(0,1fr));
+            gap:12px;
+            margin:0 0 18px;
+        }
+        .evapp-expositor-stats.is-management{grid-template-columns:repeat(4,minmax(0,1fr))}
+        .evapp-expositor-stat-card{
+            min-width:0;
+            padding:16px;
+            border:1px solid var(--evapp-border);
+            border-radius:16px;
+            background:var(--evapp-surface);
+            box-shadow:0 6px 18px rgba(31,52,73,.035);
+        }
+        .evapp-expositor-stat-icon{
+            width:38px;
+            height:38px;
+            display:grid;
+            place-items:center;
+            margin-bottom:12px;
+            color:var(--evapp-primary);
+            background:var(--evapp-primary-soft);
+            border-radius:12px;
+        }
+        .evapp-expositor-stat-icon svg{width:19px;height:19px}
+        .evapp-expositor-stat-card h3{
+            margin:0;
+            color:var(--evapp-muted);
+            font-size:11px;
+            font-weight:750;
+            line-height:1.3;
+        }
+        .evapp-expositor-stat{
+            display:block;
+            margin-top:4px;
+            color:var(--evapp-text);
+            font-size:clamp(22px,3vw,30px);
+            font-weight:850;
+            line-height:1.15;
+            overflow-wrap:anywhere;
+        }
+        .evapp-expositor-stat-detail{
+            display:block;
+            margin-top:5px;
+            color:var(--evapp-muted);
+            font-size:10px;
+            line-height:1.4;
+        }
+        .evapp-expositor-stat-action{margin-top:9px}
+        .evapp-expositor-stat-action .evapp-expositor-btn{width:100%;min-height:38px;padding:8px 10px;font-size:12px}
+        .evapp-expositor-app{
+            overflow:hidden;
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius);
+            background:var(--evapp-surface);
+            box-shadow:0 8px 26px rgba(31,52,73,.05);
+        }
+        .evapp-expositor-tabs{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:8px;
+            padding:10px;
+            background:#f8fafc;
+            border-bottom:1px solid var(--evapp-border);
+        }
+        .evapp-expositor-tab{
+            min-height:46px;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:9px;
+            width:100%;
+            padding:10px 12px;
+            border:1px solid var(--evapp-border);
+            border-radius:13px;
+            color:#475569!important;
+            background:#fff;
+            font:inherit;
+            font-size:14px;
+            font-weight:800;
+            line-height:1.15;
+            cursor:pointer;
+            box-shadow:0 2px 7px rgba(31,52,73,.025);
+            transition:background .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,transform .16s ease;
+        }
+        .evapp-expositor-tab svg{width:18px;height:18px}
+        .evapp-expositor-tab:hover{color:var(--evapp-primary-dark)!important;border-color:#c7d7e8;transform:translateY(-1px)}
+        .evapp-expositor-tab.is-active{
+            color:#fff!important;
+            background:var(--evapp-primary);
+            border-color:var(--evapp-primary);
+            box-shadow:0 8px 18px rgba(50,121,189,.20);
+        }
+        .evapp-expositor-panels{background:#fff}
+        .evapp-expositor-panel{display:none;padding:20px}
+        .evapp-expositor-panel.is-active{display:block}
+        .evapp-expositor-panel-head{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:16px;
+            margin:0 0 16px;
+        }
+        .evapp-expositor-panel-head h3{
+            margin:0;
+            color:var(--evapp-text);
+            font-size:20px;
+            font-weight:820;
+            line-height:1.2;
+            letter-spacing:-.015em;
+        }
+        .evapp-expositor-panel-head .evapp-expositor-muted{margin-top:5px}
+        .evapp-expositor-card{
+            min-width:0;
+            padding:20px;
+            border:1px solid var(--evapp-border);
+            border-radius:var(--evapp-radius);
+            background:var(--evapp-surface);
+            box-shadow:0 6px 20px rgba(31,52,73,.035);
+        }
+        .evapp-expositor-card + .evapp-expositor-card{margin-top:16px}
+        .evapp-expositor-card-head{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:16px;
+            margin-bottom:16px;
+        }
+        .evapp-expositor-card h3{margin:0;color:var(--evapp-text);font-size:17px;font-weight:820}
+        .evapp-expositor-card-desc{margin:5px 0 0;color:var(--evapp-muted);font-size:12px;line-height:1.5}
+        .evapp-expositor-actions{
+            display:flex;
+            align-items:center;
+            flex-wrap:wrap;
+            gap:10px;
+            margin:14px 0 0;
+        }
+        .evapp-expositor-inline-form{
+            display:grid;
+            grid-template-columns:minmax(0,1fr) auto;
+            gap:10px;
+            align-items:end;
+            margin-top:12px;
+        }
+        .evapp-expositor-input,
+        .evapp-expositor-select{
+            width:100%;
+            min-height:46px;
+            margin:0;
+            padding:10px 12px;
+            color:var(--evapp-text);
+            background:#fff;
+            border:1px solid #cfd8e4;
+            border-radius:12px;
+            box-shadow:none;
+            font:inherit;
+            font-size:15px;
+            outline:none;
+            transition:border-color .16s ease,box-shadow .16s ease;
+        }
+        .evapp-expositor-input:focus,
+        .evapp-expositor-select:focus{
+            border-color:var(--evapp-primary);
+            box-shadow:0 0 0 4px rgba(50,121,189,.12);
+        }
+        .evapp-expositor-form-grid{
+            display:grid;
+            grid-template-columns:minmax(220px,1.6fr) repeat(4,minmax(120px,.75fr));
+            gap:10px;
+            align-items:end;
+        }
+        .evapp-expositor-qr-grid{
+            display:grid;
+            grid-template-columns:minmax(0,1fr) auto auto;
+            gap:10px;
+            align-items:end;
+        }
+        .evapp-expositor-field{min-width:0}
+        .evapp-expositor-field label{
+            display:block;
+            margin:0 0 6px;
+            color:#475569;
+            font-size:11px;
+            font-weight:800;
+            letter-spacing:.04em;
+            line-height:1.3;
+            text-transform:uppercase;
+        }
+        .evapp-expositor-field small{
+            display:block;
+            margin-top:5px;
+            color:var(--evapp-muted);
+            font-size:11px;
+            line-height:1.4;
+        }
+        .evapp-expositor-products-list{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:12px;
+            margin-top:12px;
+        }
+        .evapp-expositor-product-card{
+            min-width:0;
+            padding:15px;
+            border:1px solid var(--evapp-border);
+            border-radius:16px;
+            background:#fbfdff;
+            box-shadow:0 5px 16px rgba(31,52,73,.025);
+        }
+        .evapp-expositor-product-main{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:10px;
+        }
+        .evapp-expositor-product-main > div{min-width:0}
+        .evapp-expositor-product-title{
+            color:var(--evapp-text);
+            font-size:15px;
+            font-weight:850;
+            line-height:1.3;
+            overflow-wrap:anywhere;
+        }
+        .evapp-expositor-product-code{
+            display:block;
+            margin-top:4px;
+            color:var(--evapp-muted);
+            font-size:10px;
+            line-height:1.35;
+            overflow-wrap:anywhere;
+            word-break:break-all;
+        }
+        .evapp-expositor-product-meta{
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(88px,1fr));
+            gap:7px;
+            margin-top:11px;
+        }
+        .evapp-expositor-chip{
+            min-width:0;
+            padding:8px 9px;
+            border:1px solid var(--evapp-border);
+            border-radius:11px;
+            background:#fff;
+        }
+        .evapp-expositor-chip span{
+            display:block;
+            color:var(--evapp-muted);
+            font-size:9px;
+            font-weight:800;
+            letter-spacing:.04em;
+            line-height:1.2;
+            text-transform:uppercase;
+        }
+        .evapp-expositor-chip strong{
+            display:block;
+            margin-top:3px;
+            overflow:hidden;
+            color:var(--evapp-text);
+            font-size:12px;
+            font-weight:800;
+            line-height:1.25;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        .evapp-expositor-stock{
+            margin-top:10px;
+        }
+        .evapp-expositor-stock-copy{
+            display:flex;
+            justify-content:space-between;
+            gap:10px;
+            margin-bottom:5px;
+            color:var(--evapp-muted);
+            font-size:10px;
+            font-weight:750;
+        }
+        .evapp-expositor-stock-track{
+            height:7px;
+            overflow:hidden;
+            border-radius:999px;
+            background:#e9eef5;
+        }
+        .evapp-expositor-stock-bar{
+            height:100%;
+            min-width:0;
+            border-radius:999px;
+            background:linear-gradient(90deg,var(--evapp-primary),#5f9fd8);
+        }
+        .evapp-expositor-stock-bar.is-low{background:linear-gradient(90deg,#d97706,#f59e0b)}
+        .evapp-expositor-stock-bar.is-empty{background:var(--evapp-danger)}
+        .evapp-expositor-product-actions{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:8px;
+            margin-top:11px;
+        }
+        .evapp-expositor-product-actions .evapp-expositor-btn{min-height:38px;padding:8px 10px;font-size:12px}
+        .evapp-expositor-notice{
+            margin:12px 0;
+            padding:13px 15px;
+            border:1px solid #f1dfad;
+            border-left:4px solid var(--evapp-warning);
+            border-radius:14px;
+            color:#7c4a03;
+            background:var(--evapp-warning-soft);
+            font-size:13px;
+            line-height:1.5;
+        }
+        .evapp-expositor-notice.error{
+            color:#8b1e17;
+            border-color:#f2b8b5;
+            border-left-color:var(--evapp-danger);
+            background:var(--evapp-danger-soft);
+        }
+        .evapp-expositor-notice.success{
+            color:#0f5132;
+            border-color:#b7e4c7;
+            border-left-color:var(--evapp-success);
+            background:var(--evapp-success-soft);
+        }
+        .evapp-expositor-notice-actions{display:flex;gap:10px;margin-top:12px}
+        .evapp-expositor-scanner{
+            display:none;
+            margin:14px 0 0;
+            padding:12px;
+            border:1px solid #24364f;
+            border-radius:16px;
+            color:#fff;
+            background:#0f172a;
+            box-shadow:0 12px 30px rgba(15,23,42,.18);
+        }
+        .evapp-expositor-scanner video{
+            width:100%;
+            max-height:min(58svh,520px);
+            display:block;
+            object-fit:cover;
+            border-radius:12px;
+            background:#020617;
+        }
+        .evapp-expositor-attendee{
+            display:none;
+            margin:14px 0 0;
+            padding:16px;
+            border:1px solid #cfe3f6;
+            border-radius:16px;
+            background:var(--evapp-primary-soft);
+        }
+        .evapp-expositor-attendee h3{
+            margin:0 0 8px;
+            color:var(--evapp-text);
+            font-size:18px;
+            font-weight:830;
+        }
+        .evapp-expositor-badge{
+            min-height:28px;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            padding:5px 9px;
+            border-radius:999px;
+            color:#475569;
+            background:#edf2f7;
+            font-size:10px;
+            font-weight:850;
+            line-height:1.1;
+            white-space:nowrap;
+        }
+        .evapp-expositor-badge.is-active{color:#166534;background:#e7f8ef}
+        .evapp-expositor-badge.is-inactive{color:#9f1239;background:#fff1f2}
+        .evapp-expositor-empty{
+            padding:18px;
+            border:1px dashed #cbd5e1;
+            border-radius:15px;
+            color:var(--evapp-muted);
+            background:#f8fafc;
+            font-size:12px;
+            line-height:1.5;
+            text-align:center;
+        }
+        .evapp-expositor-table-wrap{
+            width:100%;
+            overflow:hidden;
+            border:1px solid var(--evapp-border);
+            border-radius:14px;
+            background:#fff;
+        }
+        .evapp-expositor-table{
+            width:100%;
+            margin:0;
+            border:0;
+            border-collapse:collapse;
+            background:#fff;
+            font-size:13px;
+        }
+        .evapp-expositor-table th,
+        .evapp-expositor-table td{
+            padding:12px 13px;
+            border:0;
+            border-bottom:1px solid var(--evapp-border);
+            text-align:left;
+            vertical-align:middle;
+        }
+        .evapp-expositor-table th{
+            color:#475569;
+            background:#f8fafc;
+            font-size:10px;
+            font-weight:800;
+            letter-spacing:.035em;
+            text-transform:uppercase;
+        }
+        .evapp-expositor-table tbody tr:last-child td{border-bottom:0}
+        .evapp-expositor-table tbody tr:hover{background:#fbfdff}
+        .evapp-expositor-table-name{color:var(--evapp-text);font-weight:820}
+        .evapp-expositor-table-sub{display:block;margin-top:3px;color:var(--evapp-muted);font-size:10px}
+        .evapp-expositor-table-number{
+            min-width:36px;
+            min-height:28px;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            padding:4px 8px;
+            border-radius:999px;
+            color:var(--evapp-primary-dark);
+            background:var(--evapp-primary-soft);
+            font-size:12px;
+            font-weight:850;
+        }
+        .evapp-expositor-toggle{
+            position:relative;
+            display:inline-flex;
+            align-items:center;
+            gap:9px;
+            cursor:pointer;
+            user-select:none;
+        }
+        .evapp-expositor-toggle input{
+            position:absolute;
+            width:1px;
+            height:1px;
+            opacity:0;
+            pointer-events:none;
+        }
+        .evapp-expositor-toggle-ui{
+            position:relative;
+            width:42px;
+            height:24px;
+            flex:0 0 42px;
+            border:1px solid #cbd5e1;
+            border-radius:999px;
+            background:#e2e8f0;
+            transition:background .16s ease,border-color .16s ease;
+        }
+        .evapp-expositor-toggle-ui::after{
+            position:absolute;
+            top:3px;
+            left:3px;
+            width:16px;
+            height:16px;
+            border-radius:50%;
+            background:#fff;
+            box-shadow:0 1px 4px rgba(15,23,42,.22);
+            content:"";
+            transition:transform .16s ease;
+        }
+        .evapp-expositor-toggle input:checked + .evapp-expositor-toggle-ui{
+            border-color:var(--evapp-primary);
+            background:var(--evapp-primary);
+        }
+        .evapp-expositor-toggle input:checked + .evapp-expositor-toggle-ui::after{transform:translateX(18px)}
+        .evapp-expositor-toggle-text{color:var(--evapp-muted);font-size:11px;font-weight:750;line-height:1.35}
+        .evapp-expositor-save-row{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            margin-top:16px;
+            padding-top:16px;
+            border-top:1px solid var(--evapp-border);
+        }
+        .evapp-expositor-save-copy{color:var(--evapp-muted);font-size:11px;line-height:1.45}
+        @media(max-width:1080px){
+            .evapp-expositor-form-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+            .evapp-expositor-form-grid .evapp-expositor-field:first-child{grid-column:1/-1}
+            .evapp-expositor-stats.is-management{grid-template-columns:repeat(2,minmax(0,1fr))}
+        }
+        @media(max-width:900px){
+            .evapp-expositor-products-list{grid-template-columns:1fr}
+            .evapp-expositor-qr-grid{grid-template-columns:minmax(0,1fr) auto}
+            .evapp-expositor-qr-grid #evapp_stop_camera{grid-column:2}
+        }
+        @media(max-width:767px){
+            .evapp-expositor-shell{padding:16px;border-radius:20px}
+            .evapp-expositor-header{display:block;margin-bottom:18px}
+            .evapp-expositor-header-actions{margin-top:14px}
+            .evapp-expositor-header-actions .evapp-expositor-btn{width:100%}
+            .evapp-expositor-event-context{
+                grid-template-columns:auto minmax(0,1fr);
+                align-items:start;
+            }
+            .evapp-expositor-event-actions{
+                grid-column:1/-1;
+                width:100%;
+                display:grid;
+                grid-template-columns:minmax(0,1fr) auto;
+                align-items:end;
+            }
+            .evapp-expositor-switch{min-width:0}
+            .evapp-expositor-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .evapp-expositor-stats .evapp-expositor-stat-card:first-child{grid-column:1/-1}
+            .evapp-expositor-stats.is-management{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .evapp-expositor-stats.is-management .evapp-expositor-stat-card:first-child{grid-column:auto}
+            .evapp-expositor-panel{padding:16px}
+            .evapp-expositor-card{padding:16px}
+            .evapp-expositor-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .evapp-expositor-form-grid .evapp-expositor-field:first-child{grid-column:1/-1}
+            .evapp-expositor-table-wrap{overflow:visible;border:0;border-radius:0;background:transparent}
+            .evapp-expositor-table,
+            .evapp-expositor-table tbody,
+            .evapp-expositor-table tr,
+            .evapp-expositor-table td{
+                display:block;
+                width:100%;
+            }
+            .evapp-expositor-table thead{display:none}
+            .evapp-expositor-table tbody{display:grid;gap:10px}
+            .evapp-expositor-table tr{
+                padding:13px;
+                border:1px solid var(--evapp-border);
+                border-radius:14px;
+                background:#fff;
+                box-shadow:0 5px 16px rgba(31,52,73,.025);
+            }
+            .evapp-expositor-table td{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:14px;
+                padding:8px 0;
+                border:0;
+                border-bottom:1px dashed #e7edf4;
+                text-align:right;
+            }
+            .evapp-expositor-table td:last-child{border-bottom:0}
+            .evapp-expositor-table td::before{
+                flex:0 0 auto;
+                color:var(--evapp-muted);
+                font-size:9px;
+                font-weight:800;
+                letter-spacing:.04em;
+                text-align:left;
+                text-transform:uppercase;
+                content:attr(data-label);
+            }
+            .evapp-expositor-table td > *{max-width:68%}
+            .evapp-expositor-table td .evapp-expositor-btn{width:auto}
+            .evapp-expositor-save-row{align-items:stretch;flex-direction:column}
+            .evapp-expositor-save-row .evapp-expositor-btn{width:100%}
+        }
+        @media(max-width:620px){
+            .evapp-expositor-header h1,
+            .evapp-expositor-header h2{font-size:clamp(28px,9vw,36px)}
+            .evapp-expositor-event-actions{grid-template-columns:1fr}
+            .evapp-expositor-event-actions .evapp-expositor-btn{width:100%}
+            .evapp-expositor-stats,
+            .evapp-expositor-stats.is-management{grid-template-columns:1fr}
+            .evapp-expositor-stats .evapp-expositor-stat-card:first-child,
+            .evapp-expositor-stats.is-management .evapp-expositor-stat-card:first-child{grid-column:auto}
+            .evapp-expositor-tabs{grid-template-columns:1fr}
+            .evapp-expositor-panel-head{display:block}
+            .evapp-expositor-qr-grid,
+            .evapp-expositor-inline-form,
+            .evapp-expositor-form-grid{grid-template-columns:1fr}
+            .evapp-expositor-form-grid .evapp-expositor-field:first-child{grid-column:auto}
+            .evapp-expositor-qr-grid #evapp_stop_camera{grid-column:auto}
+            .evapp-expositor-actions{display:grid;grid-template-columns:1fr}
+            .evapp-expositor-actions .evapp-expositor-btn{width:100%}
+            .evapp-expositor-product-meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .evapp-expositor-product-actions{grid-template-columns:1fr}
+            .evapp-expositor-table td{align-items:flex-start}
+            .evapp-expositor-table td > *{max-width:64%}
+        }
+        @media(max-width:430px){
+            .evapp-expositor-event-context{grid-template-columns:1fr}
+            .evapp-expositor-event-icon{display:none}
+            .evapp-expositor-event-actions{grid-column:auto}
+            .evapp-expositor-event-name{white-space:normal}
+            .evapp-expositor-product-main{display:block}
+            .evapp-expositor-product-main .evapp-expositor-badge{margin-top:8px}
+            .evapp-expositor-table td{
+                display:block;
+                text-align:left;
+            }
+            .evapp-expositor-table td::before{display:block;margin-bottom:5px}
+            .evapp-expositor-table td > *{max-width:none}
+            .evapp-expositor-table td .evapp-expositor-btn{width:100%}
+            .evapp-expositor-toggle{width:100%;justify-content:flex-start}
+        }
+        @media(prefers-reduced-motion:reduce){
+            .evapp-expositor-module *,
+            .evapp-expositor-module *::before,
+            .evapp-expositor-module *::after{
+                scroll-behavior:auto!important;
+                transition-duration:.01ms!important;
+                animation-duration:.01ms!important;
+                animation-iteration-count:1!important;
+            }
         }
     </style>
     <?php
 }
 
 function eventosapp_expositor_render_products_table( $event_id, $expositor_id, $echo = true ) {
-    $products = eventosapp_expositor_get_products( $event_id, $expositor_id );
+    $products        = eventosapp_expositor_get_products( $event_id, $expositor_id );
+    $delivery_counts = empty( $products )
+        ? []
+        : eventosapp_expositor_get_product_delivery_counts( $event_id, $expositor_id );
+
     ob_start();
 
     if ( empty( $products ) ) {
         echo '<div class="evapp-expositor-empty">Todavía no has creado productos o consumibles para entregar.</div>';
     } else {
         echo '<div class="evapp-expositor-products-list">';
-        foreach ( $products as $product ) {
-            $delivered = eventosapp_expositor_count_deliveries( $event_id, $expositor_id, $product['id'] );
-            $inventory_value = $product['inventory'] === '' ? '' : absint( $product['inventory'] );
-            $inventory_label = $product['inventory'] === '' ? 'Sin límite' : ( $delivered . ' / ' . $inventory_value );
-            $min_limit       = isset( $product['min_per_attendee'] ) ? absint( $product['min_per_attendee'] ) : 1;
-            $max_limit       = absint( $product['limit_per_attendee'] ) === 0 ? 'Sin límite' : absint( $product['limit_per_attendee'] );
-            $active_label    = $product['active'] === '1' ? 'Activo' : 'Inactivo';
-            $badge_class     = $product['active'] === '1' ? 'is-active' : 'is-inactive';
 
-            echo '<div class="evapp-expositor-product-card" data-product-card="' . esc_attr( $product['id'] ) . '" data-product-name="' . esc_attr( $product['name'] ) . '" data-product-inventory="' . esc_attr( $inventory_value ) . '" data-product-min="' . esc_attr( $min_limit ) . '" data-product-limit="' . esc_attr( absint( $product['limit_per_attendee'] ) ) . '" data-product-active="' . esc_attr( $product['active'] ) . '">';
+        foreach ( $products as $product ) {
+            $product_id       = sanitize_key( $product['id'] );
+            $delivered        = isset( $delivery_counts[ $product_id ] ) ? absint( $delivery_counts[ $product_id ] ) : 0;
+            $inventory_value  = $product['inventory'] === '' ? '' : absint( $product['inventory'] );
+            $inventory_label  = $product['inventory'] === '' ? 'Sin límite' : ( $delivered . ' / ' . $inventory_value );
+            $remaining        = $product['inventory'] === '' ? '' : max( 0, $inventory_value - $delivered );
+            $min_limit        = isset( $product['min_per_attendee'] ) ? absint( $product['min_per_attendee'] ) : 1;
+            $max_limit        = absint( $product['limit_per_attendee'] ) === 0 ? 'Sin límite' : absint( $product['limit_per_attendee'] );
+            $active_label     = $product['active'] === '1' ? 'Activo' : 'Inactivo';
+            $badge_class      = $product['active'] === '1' ? 'is-active' : 'is-inactive';
+            $stock_percentage = '';
+
+            if ( $product['inventory'] !== '' ) {
+                $stock_percentage = $inventory_value > 0
+                    ? min( 100, round( ( $delivered / $inventory_value ) * 100 ) )
+                    : 100;
+            }
+
+            echo '<div class="evapp-expositor-product-card" data-product-card="' . esc_attr( $product_id ) . '" data-product-name="' . esc_attr( $product['name'] ) . '" data-product-inventory="' . esc_attr( $inventory_value ) . '" data-product-min="' . esc_attr( $min_limit ) . '" data-product-limit="' . esc_attr( absint( $product['limit_per_attendee'] ) ) . '" data-product-active="' . esc_attr( $product['active'] ) . '">';
             echo '<div class="evapp-expositor-product-main">';
-            echo '<div><div class="evapp-expositor-product-title">' . esc_html( $product['name'] ) . '</div><code class="evapp-expositor-product-code">' . esc_html( $product['id'] ) . '</code></div>';
+            echo '<div><div class="evapp-expositor-product-title">' . esc_html( $product['name'] ) . '</div><code class="evapp-expositor-product-code">' . esc_html( $product_id ) . '</code></div>';
             echo '<span class="evapp-expositor-badge ' . esc_attr( $badge_class ) . '">' . esc_html( $active_label ) . '</span>';
             echo '</div>';
+
             echo '<div class="evapp-expositor-product-meta">';
             echo '<div class="evapp-expositor-chip"><span>Inventario</span><strong>' . esc_html( $inventory_label ) . '</strong></div>';
+            echo '<div class="evapp-expositor-chip"><span>Disponible</span><strong>' . esc_html( $remaining === '' ? 'Sin límite' : $remaining ) . '</strong></div>';
             echo '<div class="evapp-expositor-chip"><span>Mín.</span><strong>' . esc_html( $min_limit ) . '</strong></div>';
             echo '<div class="evapp-expositor-chip"><span>Máx.</span><strong>' . esc_html( $max_limit ) . '</strong></div>';
             echo '<div class="evapp-expositor-chip"><span>Entregados</span><strong>' . esc_html( $delivered ) . '</strong></div>';
             echo '</div>';
+
+            if ( $stock_percentage !== '' ) {
+                $stock_class = $remaining <= 0 ? ' is-empty' : ( $inventory_value > 0 && $remaining <= max( 1, ceil( $inventory_value * 0.15 ) ) ? ' is-low' : '' );
+                echo '<div class="evapp-expositor-stock" aria-label="Uso de inventario">';
+                echo '<div class="evapp-expositor-stock-copy"><span>Uso de inventario</span><strong>' . esc_html( $stock_percentage ) . '%</strong></div>';
+                echo '<div class="evapp-expositor-stock-track"><div class="evapp-expositor-stock-bar' . esc_attr( $stock_class ) . '" style="width:' . esc_attr( $stock_percentage ) . '%"></div></div>';
+                echo '</div>';
+            }
+
             echo '<div class="evapp-expositor-product-actions">';
-            echo '<button type="button" class="evapp-expositor-btn secondary evapp-product-edit" data-product-id="' . esc_attr( $product['id'] ) . '">Editar</button>';
-            echo '<button type="button" class="evapp-expositor-btn danger evapp-product-delete" data-product-id="' . esc_attr( $product['id'] ) . '">Eliminar</button>';
+            echo '<button type="button" class="evapp-expositor-btn secondary evapp-product-edit" data-product-id="' . esc_attr( $product_id ) . '">Editar</button>';
+            echo '<button type="button" class="evapp-expositor-btn danger evapp-product-delete" data-product-id="' . esc_attr( $product_id ) . '">Eliminar</button>';
             echo '</div>';
             echo '</div>';
         }
+
         echo '</div>';
     }
 
     $html = ob_get_clean();
-    if ( $echo ) echo $html;
+    if ( $echo ) {
+        echo $html;
+    }
+
     return $html;
 }
 
@@ -2441,29 +3408,59 @@ function eventosapp_expositor_products_select_options( $event_id, $expositor_id 
 }
 
 add_shortcode( 'eventosapp_expositor', function () {
+    $nav = eventosapp_expositor_front_navigation();
+
     if ( ! is_user_logged_in() ) {
-        return '<p>Debes iniciar sesión para acceder al módulo de expositor.</p>';
+        return eventosapp_expositor_front_notice_html(
+            'Debes iniciar sesión para acceder al módulo de expositor.',
+            'warning',
+            $nav['dashboard_url']
+        );
     }
+
     if ( function_exists( 'eventosapp_require_feature' ) ) {
         eventosapp_require_feature( 'expositor' );
     }
 
     $event_id = eventosapp_expositor_current_event_id();
     if ( ! $event_id ) {
-        return '<div class="evapp-expositor-module"><p>Debes seleccionar primero un evento desde el dashboard.</p></div>';
+        return eventosapp_expositor_front_notice_html(
+            'Debes seleccionar primero un evento desde el dashboard.',
+            'warning',
+            $nav['dashboard_url']
+        );
     }
+
     if ( ! eventosapp_event_expositores_enabled( $event_id ) ) {
-        return '<div class="evapp-expositor-module"><p>El módulo de expositores no está activo para este evento.</p></div>';
+        return eventosapp_expositor_front_notice_html(
+            'El módulo de expositores no está activo para este evento.',
+            'warning',
+            $nav['dashboard_url']
+        );
     }
 
     $user_id       = get_current_user_id();
     $expositor_ids = eventosapp_expositor_user_get_expositor_ids_for_event( $event_id, $user_id );
+
     if ( eventosapp_expositor_manager_can_access_event( $event_id, $user_id ) ) {
         $expositor_ids = eventosapp_event_get_expositores( $event_id );
     }
 
+    $expositor_ids = array_values(
+        array_filter(
+            array_values( array_unique( array_map( 'absint', (array) $expositor_ids ) ) ),
+            static function ( $expositor_id ) {
+                return $expositor_id && get_post_type( $expositor_id ) === 'eventosapp_expositor';
+            }
+        )
+    );
+
     if ( empty( $expositor_ids ) ) {
-        return '<div class="evapp-expositor-module"><p>No tienes un expositor asignado para este evento.</p></div>';
+        return eventosapp_expositor_front_notice_html(
+            'No tienes un expositor asignado para este evento.',
+            'warning',
+            $nav['dashboard_url']
+        );
     }
 
     $current_expositor = isset( $_GET['expositor_id'] ) ? absint( $_GET['expositor_id'] ) : absint( $expositor_ids[0] );
@@ -2471,159 +3468,313 @@ add_shortcode( 'eventosapp_expositor', function () {
         $current_expositor = absint( $expositor_ids[0] );
     }
 
-    $event_title       = get_the_title( $event_id );
-    $expositor_name    = get_post_meta( $current_expositor, '_expositor_nombre_empresa', true ) ?: get_the_title( $current_expositor );
-    $total_deliveries  = eventosapp_expositor_count_deliveries( $event_id, $current_expositor );
-    $total_products    = count( eventosapp_expositor_get_products( $event_id, $current_expositor ) );
-    $download_allowed  = eventosapp_expositor_download_is_allowed( $event_id, $current_expositor, $user_id );
-    $nonce             = wp_create_nonce( 'eventosapp_expositor_front_' . $event_id );
-    $download_url      = eventosapp_expositor_get_download_csv_url( $event_id, $current_expositor );
+    $event_title      = get_the_title( $event_id );
+    $expositor_name   = get_post_meta( $current_expositor, '_expositor_nombre_empresa', true ) ?: get_the_title( $current_expositor );
+    $total_deliveries = eventosapp_expositor_count_deliveries( $event_id, $current_expositor );
+    $total_products   = count( eventosapp_expositor_get_products( $event_id, $current_expositor ) );
+    $download_allowed = eventosapp_expositor_download_is_allowed( $event_id, $current_expositor, $user_id );
+    $nonce            = wp_create_nonce( 'eventosapp_expositor_front_' . $event_id );
+    $download_url     = eventosapp_expositor_get_download_csv_url( $event_id, $current_expositor );
 
     ob_start();
     eventosapp_expositor_front_css();
     ?>
-    <div class="evapp-expositor-module" id="evapp-expositor-module" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-expositor-id="<?php echo esc_attr( $current_expositor ); ?>" data-nonce="<?php echo esc_attr( $nonce ); ?>">
-        <div class="evapp-expositor-header">
-            <div>
-                <h2>Expositor</h2>
-                <div class="evapp-expositor-muted"><strong><?php echo esc_html( $expositor_name ); ?></strong> · <?php echo esc_html( $event_title ); ?></div>
-            </div>
-            <?php if ( count( $expositor_ids ) > 1 ) : ?>
-                <form method="get" class="evapp-expositor-switch">
-                    <?php foreach ( $_GET as $key => $value ) : ?>
-                        <?php if ( $key === 'expositor_id' || is_array( $value ) ) continue; ?>
-                        <input type="hidden" name="<?php echo esc_attr( sanitize_key( $key ) ); ?>" value="<?php echo esc_attr( sanitize_text_field( wp_unslash( $value ) ) ); ?>">
-                    <?php endforeach; ?>
-                    <label for="evapp_expositor_switch">Cambiar expositor</label>
-                    <select id="evapp_expositor_switch" name="expositor_id" class="evapp-expositor-select" onchange="this.form.submit()">
-                        <?php foreach ( $expositor_ids as $eid ) :
-                            $name = get_post_meta( $eid, '_expositor_nombre_empresa', true ) ?: get_the_title( $eid );
-                            ?>
-                            <option value="<?php echo esc_attr( $eid ); ?>" <?php selected( $current_expositor, $eid ); ?>><?php echo esc_html( $name ); ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </form>
-            <?php endif; ?>
-        </div>
+    <div
+        class="evapp-expositor-module"
+        id="evapp-expositor-module"
+        data-event-id="<?php echo esc_attr( $event_id ); ?>"
+        data-expositor-id="<?php echo esc_attr( $current_expositor ); ?>"
+        data-nonce="<?php echo esc_attr( $nonce ); ?>"
+    >
+        <div class="evapp-expositor-shell">
+            <header class="evapp-expositor-header">
+                <div class="evapp-expositor-heading">
+                    <p class="evapp-expositor-eyebrow">EVENTOSAPP</p>
+                    <h1>Expositor</h1>
+                    <p class="evapp-expositor-subtitle">
+                        Registra entregas por QR y administra los productos o consumibles asignados al expositor activo.
+                    </p>
+                </div>
 
-        <div class="evapp-expositor-stats" aria-label="Métricas del expositor">
-            <div class="evapp-expositor-stat-card">
-                <h3>Entregas</h3>
-                <div class="evapp-expositor-stat" id="evapp-expo-total-deliveries"><?php echo esc_html( $total_deliveries ); ?></div>
-            </div>
-            <div class="evapp-expositor-stat-card">
-                <h3>Productos</h3>
-                <div class="evapp-expositor-stat" id="evapp-expo-total-products"><?php echo esc_html( $total_products ); ?></div>
-            </div>
-            <div class="evapp-expositor-stat-card">
-                <h3>Base datos</h3>
-                <?php if ( $download_allowed ) : ?>
-                    <a class="evapp-expositor-btn" href="<?php echo esc_url( $download_url ); ?>">CSV</a>
-                <?php else : ?>
-                    <div class="evapp-expositor-muted" style="font-size:12px;line-height:1.2;">Pendiente</div>
-                <?php endif; ?>
-            </div>
-        </div>
+                <div class="evapp-expositor-header-actions">
+                    <a
+                        class="evapp-expositor-btn secondary"
+                        href="<?php echo esc_url( $nav['dashboard_url'] ); ?>"
+                        aria-label="Volver al dashboard"
+                    >
+                        <?php echo eventosapp_expositor_front_icon( 'back' ); ?>
+                        <span>Volver al dashboard</span>
+                    </a>
+                </div>
+            </header>
 
-        <div class="evapp-expositor-app">
-            <div class="evapp-expositor-tabs" role="tablist" aria-label="Opciones del expositor">
-                <button type="button" class="evapp-expositor-tab is-active" id="evapp-tab-btn-qr" data-evapp-tab="qr" role="tab" aria-selected="true" aria-controls="evapp-panel-qr">Leer QR</button>
-                <button type="button" class="evapp-expositor-tab" id="evapp-tab-btn-inventory" data-evapp-tab="inventory" role="tab" aria-selected="false" aria-controls="evapp-panel-inventory">Gestionar inventario</button>
-            </div>
+            <section class="evapp-expositor-event-context" aria-label="Contexto del evento activo">
+                <div class="evapp-expositor-event-icon" aria-hidden="true">
+                    <?php echo eventosapp_expositor_front_icon( 'calendar' ); ?>
+                </div>
 
-            <div class="evapp-expositor-panels">
-                <section class="evapp-expositor-panel is-active" id="evapp-panel-qr" data-evapp-panel="qr" role="tabpanel" aria-labelledby="evapp-tab-btn-qr">
-                    <div class="evapp-expositor-panel-head">
-                        <div>
-                            <h3>Control de entrega por QR</h3>
-                            <div class="evapp-expositor-muted">Selecciona un producto, lee el QR del asistente y confirma la transacción.</div>
-                        </div>
+                <div class="evapp-expositor-event-copy">
+                    <span class="evapp-expositor-event-label">Evento activo</span>
+                    <strong class="evapp-expositor-event-name"><?php echo esc_html( $event_title ?: ( 'Evento #' . $event_id ) ); ?></strong>
+                    <span class="evapp-expositor-event-detail">
+                        Expositor: <strong><?php echo esc_html( $expositor_name ); ?></strong>
+                    </span>
+                </div>
+
+                <div class="evapp-expositor-event-actions">
+                    <?php if ( count( $expositor_ids ) > 1 ) : ?>
+                        <form method="get" class="evapp-expositor-switch">
+                            <?php foreach ( $_GET as $key => $value ) : ?>
+                                <?php if ( $key === 'expositor_id' || is_array( $value ) ) continue; ?>
+                                <input type="hidden" name="<?php echo esc_attr( sanitize_key( $key ) ); ?>" value="<?php echo esc_attr( sanitize_text_field( wp_unslash( $value ) ) ); ?>">
+                            <?php endforeach; ?>
+
+                            <label for="evapp_expositor_switch">Expositor activo</label>
+                            <select
+                                id="evapp_expositor_switch"
+                                name="expositor_id"
+                                class="evapp-expositor-select"
+                                onchange="this.form.submit()"
+                            >
+                                <?php foreach ( $expositor_ids as $eid ) :
+                                    $name = get_post_meta( $eid, '_expositor_nombre_empresa', true ) ?: get_the_title( $eid );
+                                    ?>
+                                    <option value="<?php echo esc_attr( $eid ); ?>" <?php selected( $current_expositor, $eid ); ?>>
+                                        <?php echo esc_html( $name ); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </form>
+                    <?php endif; ?>
+
+                    <a class="evapp-expositor-btn" href="<?php echo esc_url( $nav['change_event_url'] ); ?>">
+                        <span>Cambiar evento</span>
+                    </a>
+                </div>
+            </section>
+
+            <div class="evapp-expositor-stats" aria-label="Métricas del expositor">
+                <div class="evapp-expositor-stat-card">
+                    <div class="evapp-expositor-stat-icon" aria-hidden="true">
+                        <?php echo eventosapp_expositor_front_icon( 'delivery' ); ?>
                     </div>
+                    <h3>Entregas registradas</h3>
+                    <strong class="evapp-expositor-stat" id="evapp-expo-total-deliveries"><?php echo esc_html( $total_deliveries ); ?></strong>
+                    <span class="evapp-expositor-stat-detail">Transacciones registradas para este expositor en el evento activo.</span>
+                </div>
 
-                    <div class="evapp-expositor-card">
-                        <div class="evapp-expositor-qr-grid">
-                            <div class="evapp-expositor-field">
-                                <label for="evapp_delivery_product">Producto a entregar</label>
-                                <select id="evapp_delivery_product" class="evapp-expositor-select">
-                                    <?php eventosapp_expositor_products_select_options( $event_id, $current_expositor ); ?>
-                                </select>
+                <div class="evapp-expositor-stat-card">
+                    <div class="evapp-expositor-stat-icon" aria-hidden="true">
+                        <?php echo eventosapp_expositor_front_icon( 'box' ); ?>
+                    </div>
+                    <h3>Productos configurados</h3>
+                    <strong class="evapp-expositor-stat" id="evapp-expo-total-products"><?php echo esc_html( $total_products ); ?></strong>
+                    <span class="evapp-expositor-stat-detail">Productos y consumibles disponibles para administrar.</span>
+                </div>
+
+                <div class="evapp-expositor-stat-card">
+                    <div class="evapp-expositor-stat-icon" aria-hidden="true">
+                        <?php echo eventosapp_expositor_front_icon( 'database' ); ?>
+                    </div>
+                    <h3>Base de datos</h3>
+
+                    <?php if ( $download_allowed ) : ?>
+                        <strong class="evapp-expositor-stat">Lista</strong>
+                        <span class="evapp-expositor-stat-detail">La descarga CSV está autorizada para este expositor.</span>
+                        <div class="evapp-expositor-stat-action">
+                            <a class="evapp-expositor-btn" href="<?php echo esc_url( $download_url ); ?>">
+                                <?php echo eventosapp_expositor_front_icon( 'download' ); ?>
+                                <span>Descargar CSV</span>
+                            </a>
+                        </div>
+                    <?php else : ?>
+                        <strong class="evapp-expositor-stat">Pendiente</strong>
+                        <span class="evapp-expositor-stat-detail">El organizador todavía no ha autorizado la descarga CSV.</span>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div class="evapp-expositor-app">
+                <div class="evapp-expositor-tabs" role="tablist" aria-label="Opciones del expositor">
+                    <button
+                        type="button"
+                        class="evapp-expositor-tab is-active"
+                        id="evapp-tab-btn-qr"
+                        data-evapp-tab="qr"
+                        role="tab"
+                        aria-selected="true"
+                        aria-controls="evapp-panel-qr"
+                    >
+                        <?php echo eventosapp_expositor_front_icon( 'qr' ); ?>
+                        <span>Leer QR</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        class="evapp-expositor-tab"
+                        id="evapp-tab-btn-inventory"
+                        data-evapp-tab="inventory"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="evapp-panel-inventory"
+                    >
+                        <?php echo eventosapp_expositor_front_icon( 'inventory' ); ?>
+                        <span>Gestionar inventario</span>
+                    </button>
+                </div>
+
+                <div class="evapp-expositor-panels">
+                    <section
+                        class="evapp-expositor-panel is-active"
+                        id="evapp-panel-qr"
+                        data-evapp-panel="qr"
+                        role="tabpanel"
+                        aria-labelledby="evapp-tab-btn-qr"
+                    >
+                        <div class="evapp-expositor-panel-head">
+                            <div>
+                                <h3>Control de entrega por QR</h3>
+                                <div class="evapp-expositor-muted">Selecciona un producto, identifica al asistente y confirma la transacción.</div>
                             </div>
-                            <button class="evapp-expositor-btn" id="evapp_open_camera" type="button">Abrir cámara</button>
-                            <button class="evapp-expositor-btn secondary" id="evapp_stop_camera" type="button" style="display:none;">Cerrar cámara</button>
                         </div>
 
-                        <div class="evapp-expositor-actions">
-                            <input type="text" id="evapp_manual_qr" class="evapp-expositor-input" style="max-width:520px;" placeholder="También puedes pegar o escribir el contenido del QR">
-                            <button class="evapp-expositor-btn secondary" id="evapp_validate_manual" type="button">Validar QR</button>
+                        <div class="evapp-expositor-card">
+                            <div class="evapp-expositor-qr-grid">
+                                <div class="evapp-expositor-field">
+                                    <label for="evapp_delivery_product">Producto a entregar</label>
+                                    <select id="evapp_delivery_product" class="evapp-expositor-select">
+                                        <?php eventosapp_expositor_products_select_options( $event_id, $current_expositor ); ?>
+                                    </select>
+                                </div>
+
+                                <button class="evapp-expositor-btn" id="evapp_open_camera" type="button">
+                                    <?php echo eventosapp_expositor_front_icon( 'camera' ); ?>
+                                    <span>Abrir cámara</span>
+                                </button>
+
+                                <button class="evapp-expositor-btn secondary" id="evapp_stop_camera" type="button" style="display:none;">
+                                    <span>Cerrar cámara</span>
+                                </button>
+                            </div>
+
+                            <div class="evapp-expositor-inline-form">
+                                <div class="evapp-expositor-field">
+                                    <label for="evapp_manual_qr">Lectura manual</label>
+                                    <input
+                                        type="text"
+                                        id="evapp_manual_qr"
+                                        class="evapp-expositor-input"
+                                        placeholder="Pega o escribe el contenido del QR"
+                                        autocomplete="off"
+                                        spellcheck="false"
+                                    >
+                                </div>
+
+                                <button class="evapp-expositor-btn secondary" id="evapp_validate_manual" type="button">
+                                    <span>Validar QR</span>
+                                </button>
+                            </div>
+
+                            <div id="evapp-scanner" class="evapp-expositor-scanner">
+                                <video id="evapp-scanner-video" playsinline muted></video>
+                                <div class="evapp-expositor-muted" id="evapp-scanner-status" style="color:#dbeafe;margin-top:8px;">
+                                    Apunta la cámara al QR del asistente.
+                                </div>
+                            </div>
+
+                            <div id="evapp-expo-message"></div>
+
+                            <div class="evapp-expositor-attendee" id="evapp-attendee-card">
+                                <h3 id="evapp-attendee-name"></h3>
+                                <div id="evapp-attendee-data" class="evapp-expositor-muted"></div>
+                                <div id="evapp-attendee-warning"></div>
+
+                                <div class="evapp-expositor-actions">
+                                    <button class="evapp-expositor-btn" id="evapp_confirm_delivery" type="button">Confirmar entrega</button>
+                                    <button class="evapp-expositor-btn secondary" id="evapp_cancel_delivery" type="button">Cancelar</button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section
+                        class="evapp-expositor-panel"
+                        id="evapp-panel-inventory"
+                        data-evapp-panel="inventory"
+                        role="tabpanel"
+                        aria-labelledby="evapp-tab-btn-inventory"
+                    >
+                        <div class="evapp-expositor-panel-head">
+                            <div>
+                                <h3>Gestionar inventario</h3>
+                                <div class="evapp-expositor-muted">
+                                    Crea, edita o elimina productos y define inventario, entrega mínima y máximo permitido por asistente.
+                                </div>
+                            </div>
                         </div>
 
-                        <div id="evapp-scanner" class="evapp-expositor-scanner">
-                            <video id="evapp-scanner-video" playsinline muted></video>
-                            <div class="evapp-expositor-muted" id="evapp-scanner-status" style="color:#dbeafe;margin-top:8px;">Apunta la cámara al QR del asistente.</div>
-                        </div>
+                        <div class="evapp-expositor-card">
+                            <div class="evapp-expositor-card-head">
+                                <div>
+                                    <h3>Producto o consumible</h3>
+                                    <p class="evapp-expositor-card-desc">Usa inventario vacío para disponibilidad ilimitada y máximo 0 para permitir entregas ilimitadas por asistente.</p>
+                                </div>
+                            </div>
 
-                        <div id="evapp-expo-message"></div>
-                        <div class="evapp-expositor-attendee" id="evapp-attendee-card">
-                            <h3 id="evapp-attendee-name"></h3>
-                            <div id="evapp-attendee-data" class="evapp-expositor-muted"></div>
-                            <div id="evapp-attendee-warning"></div>
+                            <input type="hidden" id="evapp_product_id" value="">
+
+                            <div class="evapp-expositor-form-grid">
+                                <div class="evapp-expositor-field">
+                                    <label for="evapp_product_name">Producto</label>
+                                    <input type="text" id="evapp_product_name" class="evapp-expositor-input" placeholder="Ej. Muestra gratis, bebida, cupón">
+                                </div>
+
+                                <div class="evapp-expositor-field">
+                                    <label for="evapp_product_inventory">Inventario</label>
+                                    <input type="number" id="evapp_product_inventory" class="evapp-expositor-input" min="0" placeholder="Sin límite">
+                                </div>
+
+                                <div class="evapp-expositor-field">
+                                    <label for="evapp_product_min">Entrega mínima</label>
+                                    <input type="number" id="evapp_product_min" class="evapp-expositor-input" min="0" value="1" placeholder="1">
+                                </div>
+
+                                <div class="evapp-expositor-field">
+                                    <label for="evapp_product_limit">Entrega máxima</label>
+                                    <input type="number" id="evapp_product_limit" class="evapp-expositor-input" min="0" value="1" placeholder="0 = sin límite">
+                                </div>
+
+                                <div class="evapp-expositor-field">
+                                    <label for="evapp_product_active">Estado</label>
+                                    <select id="evapp_product_active" class="evapp-expositor-select">
+                                        <option value="1">Activo</option>
+                                        <option value="0">Inactivo</option>
+                                    </select>
+                                </div>
+                            </div>
+
                             <div class="evapp-expositor-actions">
-                                <button class="evapp-expositor-btn" id="evapp_confirm_delivery" type="button">Confirmar entrega</button>
-                                <button class="evapp-expositor-btn secondary" id="evapp_cancel_delivery" type="button">Cancelar</button>
+                                <button class="evapp-expositor-btn" id="evapp_save_product" type="button">Guardar producto</button>
+                                <button class="evapp-expositor-btn secondary" id="evapp_reset_product" type="button">Nuevo producto</button>
                             </div>
-                        </div>
-                    </div>
-                </section>
 
-                <section class="evapp-expositor-panel" id="evapp-panel-inventory" data-evapp-panel="inventory" role="tabpanel" aria-labelledby="evapp-tab-btn-inventory">
-                    <div class="evapp-expositor-panel-head">
-                        <div>
-                            <h3>Gestionar inventario</h3>
-                            <div class="evapp-expositor-muted">Crea, edita, elimina productos y define inventario, entregas mínimas y máximas por asistente.</div>
+                            <div id="evapp-inventory-message"></div>
                         </div>
-                    </div>
 
-                    <div class="evapp-expositor-card">
-                        <input type="hidden" id="evapp_product_id" value="">
-                        <div class="evapp-expositor-form-grid">
-                            <div class="evapp-expositor-field">
-                                <label for="evapp_product_name">Producto</label>
-                                <input type="text" id="evapp_product_name" class="evapp-expositor-input" placeholder="Ej. Muestra gratis, bebida, cupón">
+                        <div class="evapp-expositor-card">
+                            <div class="evapp-expositor-card-head">
+                                <div>
+                                    <h3>Productos y consumibles</h3>
+                                    <p class="evapp-expositor-card-desc">Consulta existencias, uso de inventario y límites sin abandonar esta pantalla.</p>
+                                </div>
                             </div>
-                            <div class="evapp-expositor-field">
-                                <label for="evapp_product_inventory">Inventario</label>
-                                <input type="number" id="evapp_product_inventory" class="evapp-expositor-input" min="0" placeholder="Vacío = sin límite">
-                            </div>
-                            <div class="evapp-expositor-field">
-                                <label for="evapp_product_min">Entrega mínima</label>
-                                <input type="number" id="evapp_product_min" class="evapp-expositor-input" min="0" value="1" placeholder="1">
-                            </div>
-                            <div class="evapp-expositor-field">
-                                <label for="evapp_product_limit">Entrega máxima</label>
-                                <input type="number" id="evapp_product_limit" class="evapp-expositor-input" min="0" value="1" placeholder="0 = sin límite">
-                            </div>
-                            <div class="evapp-expositor-field">
-                                <label for="evapp_product_active">Estado</label>
-                                <select id="evapp_product_active" class="evapp-expositor-select">
-                                    <option value="1">Activo</option>
-                                    <option value="0">Inactivo</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="evapp-expositor-actions">
-                            <button class="evapp-expositor-btn" id="evapp_save_product" type="button">Guardar producto</button>
-                            <button class="evapp-expositor-btn secondary" id="evapp_reset_product" type="button">Nuevo producto</button>
-                        </div>
-                        <div id="evapp-inventory-message"></div>
-                    </div>
 
-                    <div class="evapp-expositor-card">
-                        <h3>Productos y consumibles</h3>
-                        <div id="evapp-products-table">
-                            <?php eventosapp_expositor_render_products_table( $event_id, $current_expositor ); ?>
+                            <div id="evapp-products-table">
+                                <?php eventosapp_expositor_render_products_table( $event_id, $current_expositor ); ?>
+                            </div>
                         </div>
-                    </div>
-                </section>
+                    </section>
+                </div>
             </div>
         </div>
     </div>
@@ -2923,85 +4074,322 @@ add_shortcode( 'eventosapp_expositor', function () {
 } );
 
 add_shortcode( 'eventosapp_expositor_gestion', function () {
-    if ( ! is_user_logged_in() ) return '<p>Debes iniciar sesión.</p>';
+    $nav = eventosapp_expositor_front_navigation();
+
+    if ( ! is_user_logged_in() ) {
+        return eventosapp_expositor_front_notice_html(
+            'Debes iniciar sesión para acceder a la gestión de expositores.',
+            'warning',
+            $nav['dashboard_url']
+        );
+    }
+
     if ( function_exists( 'eventosapp_require_feature' ) ) {
         eventosapp_require_feature( 'expositor_gestion' );
     }
 
     $event_id = eventosapp_expositor_current_event_id();
-    if ( ! $event_id ) return '<p>Debes seleccionar primero un evento desde el dashboard.</p>';
-    if ( ! eventosapp_expositor_manager_can_access_event( $event_id ) ) return '<p>No tienes permisos para gestionar expositores en este evento.</p>';
+    if ( ! $event_id ) {
+        return eventosapp_expositor_front_notice_html(
+            'Debes seleccionar primero un evento desde el dashboard.',
+            'warning',
+            $nav['dashboard_url']
+        );
+    }
 
-    $assigned = eventosapp_event_get_expositores( $event_id );
-    $permissions = eventosapp_expositor_get_download_permissions( $event_id );
-    $nonce = wp_create_nonce( 'eventosapp_expositor_gestion_' . $event_id );
+    if ( ! eventosapp_expositor_manager_can_access_event( $event_id ) ) {
+        return eventosapp_expositor_front_notice_html(
+            'No tienes permisos para gestionar expositores en este evento.',
+            'error',
+            $nav['dashboard_url']
+        );
+    }
+
+    $assigned = array_values(
+        array_filter(
+            array_values( array_unique( array_map( 'absint', eventosapp_event_get_expositores( $event_id ) ) ) ),
+            static function ( $expositor_id ) {
+                return $expositor_id && get_post_type( $expositor_id ) === 'eventosapp_expositor';
+            }
+        )
+    );
+
+    $permissions     = eventosapp_expositor_get_download_permissions( $event_id );
+    $delivery_counts = eventosapp_expositor_get_delivery_counts_by_expositor( $event_id, $assigned );
+    $nonce           = wp_create_nonce( 'eventosapp_expositor_gestion_' . $event_id );
+    $event_title     = get_the_title( $event_id );
+    $rows            = [];
+    $total_products  = 0;
+    $total_deliveries = 0;
+    $authorized_count = 0;
+
+    foreach ( $assigned as $expositor_id ) {
+        $name     = get_post_meta( $expositor_id, '_expositor_nombre_empresa', true ) ?: get_the_title( $expositor_id );
+        $products = eventosapp_expositor_get_products( $event_id, $expositor_id );
+        $total    = isset( $delivery_counts[ $expositor_id ] ) ? absint( $delivery_counts[ $expositor_id ] ) : 0;
+        $allowed  = ! empty( $permissions[ $expositor_id ] );
+
+        $total_products   += count( $products );
+        $total_deliveries += $total;
+        if ( $allowed ) {
+            $authorized_count++;
+        }
+
+        $rows[] = [
+            'id'            => $expositor_id,
+            'name'          => $name,
+            'products'      => count( $products ),
+            'deliveries'    => $total,
+            'download'      => $allowed,
+            'download_url'  => eventosapp_expositor_get_download_csv_url( $event_id, $expositor_id ),
+        ];
+    }
 
     ob_start();
     eventosapp_expositor_front_css();
     ?>
-    <div class="evapp-expositor-module" id="evapp-expositor-gestion" data-event-id="<?php echo esc_attr( $event_id ); ?>" data-nonce="<?php echo esc_attr( $nonce ); ?>">
-        <div class="evapp-expositor-header">
-            <div>
-                <h2>Gestión de Expositores</h2>
-                <div class="evapp-expositor-muted"><?php echo esc_html( get_the_title( $event_id ) ); ?></div>
-            </div>
+    <div
+        class="evapp-expositor-module"
+        id="evapp-expositor-gestion"
+        data-event-id="<?php echo esc_attr( $event_id ); ?>"
+        data-nonce="<?php echo esc_attr( $nonce ); ?>"
+    >
+        <div class="evapp-expositor-shell">
+            <header class="evapp-expositor-header">
+                <div class="evapp-expositor-heading">
+                    <p class="evapp-expositor-eyebrow">EVENTOSAPP</p>
+                    <h1>Gestión de Expositores</h1>
+                    <p class="evapp-expositor-subtitle">
+                        Supervisa entregas, productos y autorizaciones de descarga de todos los expositores asociados al evento.
+                    </p>
+                </div>
+
+                <div class="evapp-expositor-header-actions">
+                    <a
+                        class="evapp-expositor-btn secondary"
+                        href="<?php echo esc_url( $nav['dashboard_url'] ); ?>"
+                        aria-label="Volver al dashboard"
+                    >
+                        <?php echo eventosapp_expositor_front_icon( 'back' ); ?>
+                        <span>Volver al dashboard</span>
+                    </a>
+                </div>
+            </header>
+
+            <section class="evapp-expositor-event-context" aria-label="Evento activo">
+                <div class="evapp-expositor-event-icon" aria-hidden="true">
+                    <?php echo eventosapp_expositor_front_icon( 'calendar' ); ?>
+                </div>
+
+                <div class="evapp-expositor-event-copy">
+                    <span class="evapp-expositor-event-label">Evento activo</span>
+                    <strong class="evapp-expositor-event-name"><?php echo esc_html( $event_title ?: ( 'Evento #' . $event_id ) ); ?></strong>
+                    <span class="evapp-expositor-event-detail">
+                        <?php echo esc_html( count( $assigned ) ); ?> expositor(es) asociado(s)
+                    </span>
+                </div>
+
+                <div class="evapp-expositor-event-actions">
+                    <a class="evapp-expositor-btn" href="<?php echo esc_url( $nav['change_event_url'] ); ?>">
+                        <span>Cambiar evento</span>
+                    </a>
+                </div>
+            </section>
+
+            <?php if ( ! eventosapp_event_expositores_enabled( $event_id ) ) : ?>
+                <div class="evapp-expositor-notice">
+                    El módulo de expositores no está activo para este evento. La configuración histórica permanece disponible, pero los expositores no podrán operar el módulo hasta activarlo.
+                </div>
+            <?php endif; ?>
+
+            <?php if ( empty( $assigned ) ) : ?>
+                <div class="evapp-expositor-empty">
+                    No hay expositores asociados a este evento todavía. Agrégalos desde la configuración del evento para comenzar a gestionar productos, entregas y descargas.
+                </div>
+            <?php else : ?>
+                <div class="evapp-expositor-stats is-management" aria-label="Resumen de gestión de expositores">
+                    <div class="evapp-expositor-stat-card">
+                        <div class="evapp-expositor-stat-icon" aria-hidden="true">
+                            <?php echo eventosapp_expositor_front_icon( 'store' ); ?>
+                        </div>
+                        <h3>Expositores</h3>
+                        <strong class="evapp-expositor-stat"><?php echo esc_html( count( $assigned ) ); ?></strong>
+                        <span class="evapp-expositor-stat-detail">Expositores asociados al evento activo.</span>
+                    </div>
+
+                    <div class="evapp-expositor-stat-card">
+                        <div class="evapp-expositor-stat-icon" aria-hidden="true">
+                            <?php echo eventosapp_expositor_front_icon( 'box' ); ?>
+                        </div>
+                        <h3>Productos</h3>
+                        <strong class="evapp-expositor-stat"><?php echo esc_html( $total_products ); ?></strong>
+                        <span class="evapp-expositor-stat-detail">Productos y consumibles configurados.</span>
+                    </div>
+
+                    <div class="evapp-expositor-stat-card">
+                        <div class="evapp-expositor-stat-icon" aria-hidden="true">
+                            <?php echo eventosapp_expositor_front_icon( 'delivery' ); ?>
+                        </div>
+                        <h3>Entregas</h3>
+                        <strong class="evapp-expositor-stat"><?php echo esc_html( $total_deliveries ); ?></strong>
+                        <span class="evapp-expositor-stat-detail">Entregas acumuladas por todos los expositores.</span>
+                    </div>
+
+                    <div class="evapp-expositor-stat-card">
+                        <div class="evapp-expositor-stat-icon" aria-hidden="true">
+                            <?php echo eventosapp_expositor_front_icon( 'shield' ); ?>
+                        </div>
+                        <h3>Descargas autorizadas</h3>
+                        <strong class="evapp-expositor-stat"><?php echo esc_html( $authorized_count ); ?></strong>
+                        <span class="evapp-expositor-stat-detail">Expositores con permiso para descargar su CSV.</span>
+                    </div>
+                </div>
+
+                <div class="evapp-expositor-card">
+                    <div class="evapp-expositor-card-head">
+                        <div>
+                            <h3>Autorización de descarga y métricas</h3>
+                            <p class="evapp-expositor-card-desc">
+                                Autoriza individualmente si cada expositor puede descargar su base de entregas. El organizador conserva siempre su descarga CSV.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="evapp-expositor-table-wrap">
+                        <table class="evapp-expositor-table">
+                            <thead>
+                                <tr>
+                                    <th>Expositor</th>
+                                    <th>Productos</th>
+                                    <th>Entregas</th>
+                                    <th>Descarga del expositor</th>
+                                    <th>CSV organizador</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ( $rows as $row ) : ?>
+                                    <tr>
+                                        <td data-label="Expositor">
+                                            <div>
+                                                <strong class="evapp-expositor-table-name"><?php echo esc_html( $row['name'] ); ?></strong>
+                                                <span class="evapp-expositor-table-sub">ID <?php echo esc_html( $row['id'] ); ?></span>
+                                            </div>
+                                        </td>
+
+                                        <td data-label="Productos">
+                                            <span class="evapp-expositor-table-number"><?php echo esc_html( $row['products'] ); ?></span>
+                                        </td>
+
+                                        <td data-label="Entregas">
+                                            <span class="evapp-expositor-table-number"><?php echo esc_html( $row['deliveries'] ); ?></span>
+                                        </td>
+
+                                        <td data-label="Descarga del expositor">
+                                            <label class="evapp-expositor-toggle">
+                                                <input
+                                                    type="checkbox"
+                                                    class="evapp-expo-permission"
+                                                    data-expositor="<?php echo esc_attr( $row['id'] ); ?>"
+                                                    value="1"
+                                                    <?php checked( $row['download'] ); ?>
+                                                >
+                                                <span class="evapp-expositor-toggle-ui" aria-hidden="true"></span>
+                                                <span class="evapp-expositor-toggle-text">Permitir descarga</span>
+                                            </label>
+                                        </td>
+
+                                        <td data-label="CSV organizador">
+                                            <a class="evapp-expositor-btn secondary" href="<?php echo esc_url( $row['download_url'] ); ?>">
+                                                <?php echo eventosapp_expositor_front_icon( 'download' ); ?>
+                                                <span>Descargar CSV</span>
+                                            </a>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="evapp-expositor-save-row">
+                        <div class="evapp-expositor-save-copy">
+                            Los cambios afectan únicamente la autorización de descarga del expositor. No modifican inventario, entregas, usuarios asignados ni datos históricos.
+                        </div>
+                        <button type="button" class="evapp-expositor-btn" id="evapp-save-expo-permissions">
+                            Guardar autorizaciones
+                        </button>
+                    </div>
+
+                    <div id="evapp-gestion-msg" aria-live="polite"></div>
+                </div>
+            <?php endif; ?>
         </div>
-
-        <?php if ( ! eventosapp_event_expositores_enabled( $event_id ) ) : ?>
-            <div class="evapp-expositor-notice error">El módulo de expositores no está activo para este evento.</div>
-        <?php endif; ?>
-
-        <?php if ( empty( $assigned ) ) : ?>
-            <div class="evapp-expositor-notice">No hay expositores asociados a este evento todavía.</div>
-        <?php else : ?>
-            <div class="evapp-expositor-card">
-                <h3>Autorización de descarga y métricas</h3>
-                <table class="evapp-expositor-table">
-                    <thead><tr><th>Expositor</th><th>Productos</th><th>Entregas</th><th>Autorizar descarga al expositor</th><th>CSV organizador</th></tr></thead>
-                    <tbody>
-                    <?php foreach ( $assigned as $expositor_id ) :
-                        $name = get_post_meta( $expositor_id, '_expositor_nombre_empresa', true ) ?: get_the_title( $expositor_id );
-                        $products = eventosapp_expositor_get_products( $event_id, $expositor_id );
-                        $total = eventosapp_expositor_count_deliveries( $event_id, $expositor_id );
-                        $url = eventosapp_expositor_get_download_csv_url( $event_id, $expositor_id );
-                        ?>
-                        <tr>
-                            <td><strong><?php echo esc_html( $name ); ?></strong></td>
-                            <td><?php echo esc_html( count( $products ) ); ?></td>
-                            <td><strong><?php echo esc_html( $total ); ?></strong></td>
-                            <td><label><input type="checkbox" class="evapp-expo-permission" data-expositor="<?php echo esc_attr( $expositor_id ); ?>" value="1" <?php checked( ! empty( $permissions[ $expositor_id ] ) ); ?>> Permitir descarga</label></td>
-                            <td><a class="evapp-expositor-btn secondary" href="<?php echo esc_url( $url ); ?>">Descargar CSV</a></td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <div class="evapp-expositor-actions"><button type="button" class="evapp-expositor-btn" id="evapp-save-expo-permissions">Guardar autorizaciones</button></div>
-                <div id="evapp-gestion-msg"></div>
-            </div>
-        <?php endif; ?>
     </div>
+
     <script>
     (function(){
         var root = document.getElementById('evapp-expositor-gestion');
         if(!root) return;
+
         var ajaxUrl = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
-        var btn = document.getElementById('evapp-save-expo-permissions');
-        var msg = document.getElementById('evapp-gestion-msg');
-        if(!btn) return;
+        var btn = root.querySelector('#evapp-save-expo-permissions');
+        var msg = root.querySelector('#evapp-gestion-msg');
+
+        if(!btn || !msg) return;
+
+        function renderMessage(text, type){
+            msg.innerHTML = '';
+            if(!text) return;
+
+            var notice = document.createElement('div');
+            notice.className = 'evapp-expositor-notice ' + (type || '');
+            notice.setAttribute('role', type === 'error' ? 'alert' : 'status');
+            notice.textContent = text;
+            msg.appendChild(notice);
+        }
+
         btn.addEventListener('click', function(){
             var fd = new FormData();
+            var originalText = btn.textContent;
+
             fd.append('action', 'eventosapp_expositor_save_download_permissions');
             fd.append('event_id', root.dataset.eventId);
             fd.append('nonce', root.dataset.nonce);
-            document.querySelectorAll('.evapp-expo-permission').forEach(function(chk){
-                if(chk.checked) fd.append('permissions['+chk.dataset.expositor+']', '1');
+
+            root.querySelectorAll('.evapp-expo-permission').forEach(function(chk){
+                if(chk.checked){
+                    fd.append('permissions[' + chk.dataset.expositor + ']', '1');
+                }
             });
+
             btn.disabled = true;
-            fetch(ajaxUrl, {method:'POST', credentials:'same-origin', body:fd}).then(function(r){ return r.json(); }).then(function(resp){
-                msg.innerHTML = '<div class="evapp-expositor-notice '+(resp.success ? 'success' : 'error')+'">'+(resp.data && resp.data.message ? resp.data.message : (resp.success ? 'Guardado.' : 'No se pudo guardar.'))+'</div>';
+            btn.textContent = 'Guardando...';
+            renderMessage('', '');
+
+            fetch(ajaxUrl, {
+                method:'POST',
+                credentials:'same-origin',
+                body:fd
+            }).then(function(response){
+                return response.json();
+            }).then(function(resp){
+                if(resp && resp.success){
+                    renderMessage(
+                        resp.data && resp.data.message ? resp.data.message : 'Autorizaciones guardadas.',
+                        'success'
+                    );
+                    return;
+                }
+
+                renderMessage(
+                    resp && resp.data && resp.data.message ? resp.data.message : 'No se pudieron guardar las autorizaciones.',
+                    'error'
+                );
             }).catch(function(){
-                msg.innerHTML = '<div class="evapp-expositor-notice error">Error de conexión.</div>';
-            }).finally(function(){ btn.disabled = false; });
+                renderMessage('Error de conexión al guardar las autorizaciones.', 'error');
+            }).finally(function(){
+                btn.disabled = false;
+                btn.textContent = originalText;
+            });
         });
     })();
     </script>
