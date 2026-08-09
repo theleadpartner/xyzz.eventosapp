@@ -298,6 +298,82 @@ function eventosapp_net2_record_interaction($event_id, $reader_ticket_id, $scann
     return eventosapp_net2_contact_payload($read_ticket_id);
 }
 
+
+/**
+ * Registra una interacción cuando el ticket leído ya fue resuelto.
+ *
+ * Networking Global trabaja con IDs de ticket después de validar el QR. Este
+ * helper vive ahora también en el módulo base para que ese flujo no dependa de
+ * que el archivo visual de autenticación haya sido cargado previamente.
+ *
+ * @return bool True cuando se insertó una nueva interacción; false si no era
+ *              válida o fue un duplicado inmediato.
+ */
+if ( ! function_exists('eventosapp_net2_log_interaction') ) {
+    function eventosapp_net2_log_interaction($event_id, $reader_ticket_id, $read_ticket_id){
+        global $wpdb;
+
+        $event_id         = absint($event_id);
+        $reader_ticket_id = absint($reader_ticket_id);
+        $read_ticket_id   = absint($read_ticket_id);
+
+        if (!$event_id || !$reader_ticket_id || !$read_ticket_id || $reader_ticket_id === $read_ticket_id) {
+            return false;
+        }
+
+        $reader_event = absint(get_post_meta($reader_ticket_id, '_eventosapp_ticket_evento_id', true));
+        $read_event   = absint(get_post_meta($read_ticket_id, '_eventosapp_ticket_evento_id', true));
+        if ($reader_event !== $event_id || $read_event !== $event_id) {
+            return false;
+        }
+
+        eventosapp_net2_maybe_create_table();
+        $table = eventosapp_net2_table_name();
+
+        $recent = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$table}
+             WHERE event_id=%d AND reader_ticket_id=%d AND read_ticket_id=%d
+               AND created_at > (NOW() - INTERVAL 10 SECOND)
+             LIMIT 1",
+            $event_id,
+            $reader_ticket_id,
+            $read_ticket_id
+        ));
+
+        if ($recent) {
+            return false;
+        }
+
+        $reader_localidad = get_post_meta($reader_ticket_id, '_eventosapp_asistente_localidad', true);
+        $read_localidad   = get_post_meta($read_ticket_id, '_eventosapp_asistente_localidad', true);
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
+        $ua = isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_USER_AGENT'])) : '';
+
+        $inserted = $wpdb->insert($table, [
+            'event_id'         => $event_id,
+            'reader_ticket_id' => $reader_ticket_id,
+            'read_ticket_id'   => $read_ticket_id,
+            'reader_localidad' => $reader_localidad,
+            'read_localidad'   => $read_localidad,
+            'ip'               => substr($ip, 0, 45),
+            'ua'               => substr($ua, 0, 255),
+        ], ['%d','%d','%d','%s','%s','%s','%s']);
+
+        if (!$inserted) {
+            return false;
+        }
+
+        update_post_meta($reader_ticket_id, '_eventosapp_networking_used', 1);
+        update_post_meta($read_ticket_id, '_eventosapp_networking_used', 1);
+
+        if (function_exists('eventosapp_net2_maybe_schedule_event_digest')) {
+            eventosapp_net2_maybe_schedule_event_digest($event_id);
+        }
+
+        return true;
+    }
+}
+
 //
 // === Cron: resumen 24h después del evento ===
 //
