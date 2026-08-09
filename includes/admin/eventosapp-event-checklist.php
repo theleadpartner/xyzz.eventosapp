@@ -803,7 +803,11 @@ if ( ! function_exists( 'evchk_enqueue_front_style' ) ) {
 .evchk-option.is-disabled{cursor:not-allowed;opacity:.68}
 .evchk-field-error{margin-top:11px;padding:9px 11px;border:1px solid #f2b8b5;border-radius:10px;color:#8b1e17;background:var(--evapp-danger-soft);font-size:12px;font-weight:750;line-height:1.4}
 .evchk-field-error[hidden]{display:none!important}
-.evchk-log-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.evchk-log-grid{display:grid;grid-template-columns:
+    repeat(
+        auto-fit,
+        minmax(min(280px, 100%), 1fr)
+    ) !important;gap:10px}
 .evchk-field{min-width:0}
 .evchk-label{display:block;margin:0 0 6px;color:var(--evapp-text);font-size:12px;font-weight:800}
 .evchk-input,.evchk-textarea,.evchk-file{width:100%;margin:0;color:var(--evapp-text);background:#fff;border:1px solid var(--evapp-border);border-radius:12px;box-shadow:none;font:inherit;outline:none;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease}
