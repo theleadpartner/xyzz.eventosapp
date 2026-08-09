@@ -241,3 +241,13 @@ if ( isset( $GLOBALS['eventosapp_security'] ) && $GLOBALS['eventosapp_security']
         return $value;
     }, 10, 2 );
 }
+
+/**
+ * Ajuste responsive del control de sesión: mantiene visible el acceso WordPress
+ * de Administrador también en móvil y permite que las acciones ocupen una
+ * segunda fila sin comprimir el nombre del usuario.
+ */
+add_action( 'wp_footer', static function() {
+    if ( is_admin() || ! is_user_logged_in() ) return;
+    echo '<style id="eventosapp-session-dock-mobile-admin">@media(max-width:600px){.evapp-session-dock{display:flex!important;flex-wrap:wrap!important}.evapp-session-user{flex:1 1 100%!important}.evapp-session-action.is-admin{display:inline-flex!important}.evapp-session-action{flex:1 1 auto}}</style>';
+}, 95 );
