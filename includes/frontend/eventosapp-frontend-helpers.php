@@ -186,3 +186,12 @@ function eventosapp_handle_set_event_post(){
 }
 add_action('template_redirect', 'eventosapp_handle_set_event_post', 1);
 
+/**
+ * Carga la seguridad integrada después de que Configuración haya definido sus
+ * helpers y antes de renderizar los módulos frontend. Se mantiene aquí para no
+ * alterar el bootstrap principal del plugin ni el orden histórico de módulos.
+ */
+$eventosapp_security_file = dirname( __DIR__ ) . '/admin/eventosapp-security.php';
+if ( is_readable( $eventosapp_security_file ) ) {
+    require_once $eventosapp_security_file;
+}
