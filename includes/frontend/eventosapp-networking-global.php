@@ -54,27 +54,23 @@ add_shortcode('eventosapp_networking_global', function($atts){
             ));
 
             if (!$scanned_ticket_post_id || get_post_type($scanned_ticket_post_id) !== 'eventosapp_ticket') {
-                return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
-                    <h3 style="color:#dc2626;margin:0 0 1rem;">⚠️ Ticket no encontrado</h3>
-                    <p style="color:#991b1b;margin:0;">El ticket escaneado no existe en el sistema. (ID: ' . esc_html($unique_ticket_id) . ')</p>
-                </div>';
+                return function_exists('eventosapp_networking_public_notice')
+                    ? eventosapp_networking_public_notice('Ticket no encontrado', 'El ticket escaneado no existe en el sistema. ID: <strong>' . esc_html($unique_ticket_id) . '</strong>.')
+                    : '<p>El ticket escaneado no existe en el sistema.</p>';
             }
 
             $stored_security_code = get_post_meta($scanned_ticket_post_id, '_eventosapp_badge_security_code', true);
             if (empty($stored_security_code) || $stored_security_code !== $security_code) {
-                return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
-                    <h3 style="color:#dc2626;margin:0 0 1rem;">🔒 Código de seguridad inválido</h3>
-                    <p style="color:#991b1b;margin:0;">El código de seguridad no coincide. Este QR puede estar revocado.</p>
-                </div>';
+                return function_exists('eventosapp_networking_public_notice')
+                    ? eventosapp_networking_public_notice('Código de seguridad inválido', 'El código de seguridad no coincide. Este QR puede estar revocado.')
+                    : '<p>El código de seguridad no coincide.</p>';
             }
 
             $ticket_event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
             if ($ticket_event_id !== $event_id) {
-                return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
-                    <h3 style="color:#dc2626;margin:0 0 1rem;">⚠️ Evento no coincide</h3>
-                    <p style="color:#991b1b;margin:0;">Este ticket no pertenece al evento indicado.</p>
-                    <p style="color:#991b1b;margin-top:0.5rem;font-size:0.9rem;">Ticket evento: ' . esc_html($ticket_event_id) . ' | URL evento: ' . esc_html($event_id) . '</p>
-                </div>';
+                return function_exists('eventosapp_networking_public_notice')
+                    ? eventosapp_networking_public_notice('Evento no coincide', 'Este ticket no pertenece al evento indicado.')
+                    : '<p>Este ticket no pertenece al evento indicado.</p>';
             }
 
             $has_qr_params = true;
@@ -93,10 +89,9 @@ add_shortcode('eventosapp_networking_global', function($atts){
                 $event_id = (int) get_post_meta($scanned_ticket_post_id, '_eventosapp_ticket_evento_id', true);
                 $has_qr_params = true;
             } else {
-                return '<div style="max-width:520px;margin:2rem auto;padding:2rem;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;text-align:center;">
-                    <h3 style="color:#dc2626;margin:0 0 1rem;">⚠️ Ticket no encontrado</h3>
-                    <p style="color:#991b1b;margin:0;">El ticket escaneado no existe en el sistema. (ID: ' . esc_html($unique_ticket_id) . ')</p>
-                </div>';
+                return function_exists('eventosapp_networking_public_notice')
+                    ? eventosapp_networking_public_notice('Ticket no encontrado', 'El ticket escaneado no existe en el sistema. ID: <strong>' . esc_html($unique_ticket_id) . '</strong>.')
+                    : '<p>El ticket escaneado no existe en el sistema.</p>';
             }
         }
     }
@@ -126,49 +121,35 @@ add_shortcode('eventosapp_networking_global', function($atts){
         $auth_form_fields = array_intersect_key($auth_field_options, array_flip([ 'cc', 'apellido' ]));
     }
 
-    $dashboard_url = function_exists('eventosapp_get_dashboard_url') ? eventosapp_get_dashboard_url() : home_url('/');
-    $event_title   = $event_id ? (get_the_title($event_id) ?: 'Evento') : 'Networking Global';
+    $event_title = $event_id ? (get_the_title($event_id) ?: 'Evento') : '';
     
     ob_start(); ?>
-    <style>
+    <style id="eventosapp-networking-global-ui">
       .evapp-netglobal-shell{
         --evapp-primary:#3279bd;--evapp-primary-dark:#255f96;--evapp-primary-soft:#eaf4ff;
-        --evapp-app-bg:#f5f8fc;--evapp-surface:#fff;--evapp-border:#dfe7f1;--evapp-text:#182230;
-        --evapp-muted:#64748b;--evapp-success:#15803d;--evapp-danger:#b42318;
-        width:100%;max-width:780px;margin:0 auto;padding:0 10px;color:var(--evapp-text);font-family:inherit;line-height:1.45;
+        --evapp-app-bg:#f5f8fc;--evapp-surface:#ffffff;--evapp-border:#dfe7f1;--evapp-text:#182230;
+        --evapp-muted:#64748b;--evapp-success:#15803d;--evapp-success-soft:#ecfdf3;--evapp-danger:#b42318;--evapp-danger-soft:#fff1f0;
+        width:100%;max-width:820px;margin:0 auto;padding:clamp(18px,3vw,36px);color:var(--evapp-text);background:var(--evapp-app-bg);
+        border:1px solid var(--evapp-border);border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);font-family:inherit;line-height:1.45;box-sizing:border-box;isolation:isolate;
       }
-      .evapp-netglobal-shell,.evapp-netglobal-shell *{box-sizing:border-box}
-      .evapp-netglobal-backbar{display:flex;margin:0 0 12px}
-      .evapp-netglobal-dashboard-link{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid #cfe3f6;border-radius:12px;background:var(--evapp-primary-soft);color:var(--evapp-primary)!important;text-decoration:none!important;font-size:13px;font-weight:750;transition:.18s ease}
-      .evapp-netglobal-dashboard-link:hover{background:var(--evapp-primary);border-color:var(--evapp-primary);color:#fff!important;transform:translateY(-1px)}
-      .evapp-netglobal-dashboard-link svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2.2}
-      .evapp-netglobal-card{padding:clamp(18px,4vw,30px);background:var(--evapp-app-bg);border:1px solid var(--evapp-border);border-radius:26px;box-shadow:0 18px 50px rgba(31,52,73,.08);color:var(--evapp-text)}
-      .evapp-netglobal-hero{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:14px;margin-bottom:18px}
-      .evapp-netglobal-hero-icon{display:flex;align-items:center;justify-content:center;width:54px;height:54px;color:#fff;background:linear-gradient(145deg,var(--evapp-primary),var(--evapp-primary-dark));border-radius:16px;box-shadow:0 8px 18px rgba(47,115,181,.22)}
-      .evapp-netglobal-hero-icon svg{width:27px;height:27px}
-      .evapp-netglobal-eyebrow{margin:0 0 3px;color:var(--evapp-primary);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-      .evapp-netglobal-title{margin:0;color:var(--evapp-text);font-size:clamp(1.2rem,4vw,1.55rem);font-weight:850;letter-spacing:-.02em;line-height:1.2}
-      .evapp-netglobal-event{margin:5px 0 0;color:var(--evapp-muted);font-size:.9rem}
-      #evappNetGlobalAuth,#evappNetGlobalScan,.evapp-netglobal-result{padding:clamp(16px,3vw,22px);background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.045)}
-      .evapp-netglobal-field{margin:0 0 16px}.evapp-netglobal-field label{display:block;margin-bottom:7px;color:var(--evapp-text);font-size:.92rem;font-weight:750}
-      .evapp-netglobal-input{width:100%;min-height:46px;padding:11px 13px;border:1px solid var(--evapp-border);border-radius:12px;background:#fff;color:var(--evapp-text);font:inherit;font-size:16px;transition:border-color .18s ease,box-shadow .18s ease}
-      .evapp-netglobal-input:focus{outline:none;border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.13)}
-      .evapp-netglobal-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:46px;padding:11px 16px;border:1px solid var(--evapp-primary);border-radius:12px;background:var(--evapp-primary);color:#fff!important;font:inherit;font-weight:800;cursor:pointer;text-align:center;transition:.18s ease;box-shadow:0 7px 16px rgba(47,115,181,.18)}
-      .evapp-netglobal-btn:hover{background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);transform:translateY(-1px)}
-      .evapp-netglobal-btn:disabled{opacity:.62;cursor:not-allowed;transform:none}.evapp-netglobal-btn.is-live{background:var(--evapp-danger);border-color:var(--evapp-danger)}
-      .evapp-netglobal-help{color:var(--evapp-muted);font-size:.88rem;line-height:1.45;margin-top:7px}.evapp-netglobal-msg{padding:11px 13px;border-radius:12px;margin-top:12px;text-align:center;font-weight:750;font-size:.88rem}
-      .evapp-netglobal-bad{background:#fff1f0;color:var(--evapp-danger);border:1px solid #f4c7c3;padding:11px 13px;border-radius:12px}.evapp-netglobal-ok{background:#edf9f0;color:var(--evapp-success);border:1px solid #c9e8d1;padding:11px 13px;border-radius:12px}
-      .evapp-netglobal-result{display:none;margin-top:0}.evapp-netglobal-avatar{width:104px;height:104px;border-radius:50%;margin:0 auto 14px;display:block;object-fit:cover;border:4px solid #dbeaf8;box-shadow:0 5px 18px rgba(31,52,73,.1)}
-      .evapp-netglobal-name{text-align:center;font-size:clamp(1.25rem,4vw,1.55rem);font-weight:850;margin:0 0 5px;color:var(--evapp-text)}
-      .evapp-netglobal-role{text-align:center;font-size:.95rem;color:var(--evapp-muted);margin:0 0 18px}.evapp-netglobal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0}
-      .evapp-netglobal-grid-item{min-width:0;background:#f8fbff;padding:13px;border-radius:12px;border:1px solid var(--evapp-border);overflow-wrap:anywhere}.evapp-netglobal-grid-item b{display:block;color:var(--evapp-primary);font-size:.78rem;margin-bottom:4px}.evapp-netglobal-grid-item span{color:var(--evapp-text);font-size:.93rem}
-      .evapp-netglobal-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}.evapp-netglobal-download{background:var(--evapp-primary)!important}.evapp-netglobal-back{background:#fff!important;color:var(--evapp-text)!important;border:1px solid var(--evapp-border)!important;box-shadow:none}.evapp-netglobal-back:hover{background:var(--evapp-primary-soft)!important;color:var(--evapp-primary)!important;border-color:#b9d4ed!important}
-      .evapp-qr-video-wrap{position:relative;margin-top:14px;border-radius:16px;overflow:hidden;background:#0b1020;aspect-ratio:3/4;display:none}.evapp-qr-video{width:100%;height:100%;object-fit:cover;display:none}.evapp-qr-frame{position:absolute;inset:0;pointer-events:none;display:none}
-      .evapp-qr-frame .mask{position:absolute;inset:0;background:radial-gradient(ellipse 60% 40% at 50% 50%,rgba(255,255,255,0) 62%,rgba(10,15,29,.55) 64%)}.evapp-qr-corner{position:absolute;width:44px;height:44px;border:4px solid #67a9e7;border-radius:10px}
-      .evapp-qr-corner.tl{top:16px;left:16px;border-right:0;border-bottom:0}.evapp-qr-corner.tr{top:16px;right:16px;border-left:0;border-bottom:0}.evapp-qr-corner.bl{bottom:16px;left:16px;border-right:0;border-top:0}.evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}
-      .evapp-qr-video-wrap.is-immersive{aspect-ratio:auto;height:min(76vh,720px);width:100%;display:block}.evapp-qr-result-box{margin-top:14px;background:#f8fbff;border:1px solid var(--evapp-border);border-radius:14px;padding:14px;color:var(--evapp-text)}
-      @media(max-width:620px){.evapp-netglobal-shell{padding:0}.evapp-netglobal-card{padding:16px;border-radius:20px}.evapp-netglobal-backbar .evapp-netglobal-dashboard-link{width:100%;justify-content:center}.evapp-netglobal-hero{grid-template-columns:1fr}.evapp-netglobal-grid,.evapp-netglobal-actions{grid-template-columns:1fr}.evapp-qr-video-wrap.is-immersive{height:68vh}}
-      @media(prefers-reduced-motion:reduce){.evapp-netglobal-shell *{scroll-behavior:auto!important;transition:none!important}}
+      .evapp-netglobal-shell *,.evapp-netglobal-shell *::before,.evapp-netglobal-shell *::after{box-sizing:border-box}
+      .evapp-netglobal-shell button,.evapp-netglobal-shell input{font:inherit}
+      .evapp-netglobal-shell svg{display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+      .evapp-netglobal-card{padding:0;background:transparent;border:0;box-shadow:none;color:var(--evapp-text)}
+      .evapp-netglobal-head{margin-bottom:20px}.evapp-netglobal-eyebrow{margin:0 0 6px;color:var(--evapp-primary);font-size:12px;font-weight:800;letter-spacing:.11em;text-transform:uppercase}.evapp-netglobal-title{margin:0;color:var(--evapp-text);font-size:clamp(27px,5vw,42px);font-weight:850;line-height:1.08;letter-spacing:-.035em}.evapp-netglobal-subtitle{max-width:680px;margin:10px 0 0;color:var(--evapp-muted);font-size:15px;line-height:1.6}
+      .evapp-netglobal-event-context{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px;padding:15px 16px;background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 24px rgba(31,52,73,.045)}
+      .evapp-netglobal-event-main{min-width:0;display:flex;align-items:center;gap:13px}.evapp-netglobal-event-icon{width:46px;height:46px;flex:0 0 46px;display:grid;place-items:center;color:var(--evapp-primary);background:var(--evapp-primary-soft);border-radius:14px}.evapp-netglobal-event-icon svg{width:23px;height:23px}.evapp-netglobal-event-copy{min-width:0}.evapp-netglobal-event-kicker{display:block;margin-bottom:2px;color:var(--evapp-muted);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.evapp-netglobal-event-name{display:block;overflow:hidden;color:var(--evapp-text);font-size:15px;font-weight:820;line-height:1.3;text-overflow:ellipsis;white-space:nowrap}
+      #evappNetGlobalAuth,#evappNetGlobalScan,.evapp-netglobal-result{min-width:0;padding:20px;background:var(--evapp-surface);border:1px solid var(--evapp-border);border-radius:18px;box-shadow:0 8px 26px rgba(31,52,73,.05)}
+      .evapp-netglobal-panel-heading{margin-bottom:16px}.evapp-netglobal-panel-heading h2{margin:0 0 5px;color:var(--evapp-text);font-size:17px;font-weight:820;line-height:1.3}.evapp-netglobal-panel-heading p{margin:0;color:var(--evapp-muted);font-size:13px;line-height:1.5}
+      .evapp-netglobal-field{margin:0 0 17px}.evapp-netglobal-field label{display:block;margin-bottom:7px;color:var(--evapp-text);font-size:12px;font-weight:800}.evapp-netglobal-help{display:block;margin-top:6px;color:var(--evapp-muted);font-size:11px;line-height:1.5}
+      .evapp-netglobal-input{width:100%;min-height:46px;margin:0;padding:10px 12px;color:var(--evapp-text);background:#fff;border:1px solid var(--evapp-border);border-radius:13px;box-shadow:none;outline:none;font-size:16px;transition:border-color .16s ease,box-shadow .16s ease}.evapp-netglobal-input:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 4px rgba(50,121,189,.12)}
+      .evapp-netglobal-btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;margin:0;padding:10px 15px;appearance:none;color:#fff!important;background:var(--evapp-primary);border:1px solid var(--evapp-primary);border-radius:12px;box-shadow:0 9px 20px rgba(50,121,189,.18);font-size:14px;font-weight:750;line-height:1.15;text-align:center;cursor:pointer;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background .16s ease,color .16s ease,opacity .16s ease}.evapp-netglobal-btn:hover:not(:disabled){background:var(--evapp-primary-dark);border-color:var(--evapp-primary-dark);box-shadow:0 12px 24px rgba(50,121,189,.24);transform:translateY(-1px)}.evapp-netglobal-btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important;box-shadow:none!important}.evapp-netglobal-btn.is-live{background:var(--evapp-danger);border-color:var(--evapp-danger)}.evapp-netglobal-btn:focus-visible,.evapp-netglobal-input:focus-visible{outline:3px solid rgba(50,121,189,.20);outline-offset:2px}
+      .evapp-netglobal-msg,.evapp-netglobal-bad,.evapp-netglobal-ok{padding:12px 13px;border-radius:12px;margin-top:12px;text-align:center;font-size:13px;font-weight:730}.evapp-netglobal-bad{background:var(--evapp-danger-soft);color:var(--evapp-danger);border:1px solid #f1c7c3}.evapp-netglobal-ok{background:var(--evapp-success-soft);color:var(--evapp-success);border:1px solid #c8ead4}
+      .evapp-netglobal-result{display:none;margin-top:0}.evapp-netglobal-avatar{width:104px;height:104px;border-radius:50%;margin:0 auto 16px;display:block;object-fit:cover;border:4px solid #fff;box-shadow:0 0 0 2px var(--evapp-primary-soft),0 8px 22px rgba(31,73,112,.14)}.evapp-netglobal-name{text-align:center;font-size:clamp(24px,4vw,32px);font-weight:850;line-height:1.15;letter-spacing:-.025em;margin:0 0 6px;color:var(--evapp-text)}.evapp-netglobal-role{text-align:center;font-size:14px;color:var(--evapp-muted);margin:0 0 18px}.evapp-netglobal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0}.evapp-netglobal-grid-item{min-width:0;background:#fbfdff;padding:13px;border-radius:14px;border:1px solid var(--evapp-border)}.evapp-netglobal-grid-item b{display:block;color:var(--evapp-muted);font-size:11px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em}.evapp-netglobal-grid-item span{display:block;color:var(--evapp-text);font-size:14px;overflow-wrap:anywhere}.evapp-netglobal-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:18px}.evapp-netglobal-download{background:var(--evapp-success)!important;border-color:var(--evapp-success)!important}.evapp-netglobal-back{color:var(--evapp-text)!important;background:var(--evapp-surface)!important;border-color:var(--evapp-border)!important;box-shadow:0 5px 15px rgba(31,65,99,.05)!important}.evapp-netglobal-back:hover{background:#fff!important;border-color:#c7d7e8!important;box-shadow:0 9px 20px rgba(31,65,99,.09)!important}
+      .evapp-qr-video-wrap{position:relative;margin-top:14px;border-radius:18px;overflow:hidden;background:#0b1020;aspect-ratio:3/4;display:none}.evapp-qr-video{width:100%;height:100%;object-fit:cover;display:none}.evapp-qr-frame{position:absolute;inset:0;pointer-events:none;display:none}.evapp-qr-frame .mask{position:absolute;inset:0;background:radial-gradient(ellipse 60% 40% at 50% 50%,rgba(255,255,255,0) 62%,rgba(10,15,29,.55) 64%)}.evapp-qr-corner{position:absolute;width:44px;height:44px;border:4px solid #67a9e7;border-radius:10px}.evapp-qr-corner.tl{top:16px;left:16px;border-right:0;border-bottom:0}.evapp-qr-corner.tr{top:16px;right:16px;border-left:0;border-bottom:0}.evapp-qr-corner.bl{bottom:16px;left:16px;border-right:0;border-top:0}.evapp-qr-corner.br{bottom:16px;right:16px;border-left:0;border-top:0}.evapp-qr-video-wrap.is-immersive{aspect-ratio:auto;height:min(76vh,720px);width:100%;display:block}.evapp-qr-result-box{margin-top:14px;padding:14px;background:#fbfdff;border:1px solid var(--evapp-border);border-radius:14px}
+      @media(max-width:767px){.evapp-netglobal-shell{padding:16px;border-radius:20px}.evapp-netglobal-event-context{align-items:flex-start;flex-direction:column;padding:14px}.evapp-netglobal-event-name{white-space:normal;overflow:visible}.evapp-netglobal-grid,.evapp-netglobal-actions{grid-template-columns:1fr}.evapp-qr-video-wrap.is-immersive{height:68vh}}
+      @media(max-width:520px){#evappNetGlobalAuth,#evappNetGlobalScan,.evapp-netglobal-result{padding:16px}.evapp-netglobal-title{font-size:30px}}
+      @media(prefers-reduced-motion:reduce){.evapp-netglobal-shell *,.evapp-netglobal-shell *::before,.evapp-netglobal-shell *::after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
     </style>
 
     <div class="evapp-netglobal-shell"
@@ -177,87 +158,59 @@ add_shortcode('eventosapp_networking_global', function($atts){
          data-has-qr-params="<?php echo $has_qr_params ? '1' : '0'; ?>"
          data-auth-nonce="<?php echo esc_attr($nonce_auth); ?>"
          data-log-nonce="<?php echo esc_attr($nonce_log); ?>">
-
-      <div class="evapp-netglobal-backbar">
-        <a class="evapp-netglobal-dashboard-link" href="<?php echo esc_url($dashboard_url); ?>">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
-          Volver al dashboard
-        </a>
-      </div>
-
       <div class="evapp-netglobal-card">
-        <div class="evapp-netglobal-hero">
-          <span class="evapp-netglobal-hero-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z" stroke="currentColor" stroke-width="1.8"/></svg></span>
-          <div>
-            <p class="evapp-netglobal-eyebrow">EventosApp · Networking</p>
-            <h2 class="evapp-netglobal-title">Networking Global</h2>
-            <p class="evapp-netglobal-event"><?php echo esc_html($event_title); ?></p>
-          </div>
-        </div>
+        <header class="evapp-netglobal-head">
+          <p class="evapp-netglobal-eyebrow">EVENTOSAPP</p>
+          <h1 class="evapp-netglobal-title">Networking</h1>
+          <p class="evapp-netglobal-subtitle">Escanea el QR de otros asistentes, consulta sus datos de contacto y guarda nuevas conexiones durante el evento.</p>
+        </header>
 
-        <!-- Paso 1: Autenticación -->
+        <?php if ($event_id && $event_title): ?>
+        <section class="evapp-netglobal-event-context" aria-label="Evento">
+          <div class="evapp-netglobal-event-main">
+            <span class="evapp-netglobal-event-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"></path><path d="M14 14h2v2h-2zM18 14h2v2h-2zM16 18h2v2h-2zM20 18h2v2h-2z"></path></svg>
+            </span>
+            <div class="evapp-netglobal-event-copy"><span class="evapp-netglobal-event-kicker">Evento</span><strong class="evapp-netglobal-event-name"><?php echo esc_html($event_title); ?></strong></div>
+          </div>
+        </section>
+        <?php endif; ?>
+
         <div id="evappNetGlobalAuth">
+          <div class="evapp-netglobal-panel-heading">
+            <h2>Confirma tu identidad</h2>
+            <p>Usa los datos registrados en tu inscripción para iniciar o recuperar tu sesión de networking.</p>
+          </div>
           <?php foreach ($auth_form_fields as $field_key => $field): ?>
-            <?php
-              $field_label = $field['label'] ?? $field_key;
-              $field_type  = $field['type'] ?? 'text';
-              $field_help  = $field['help'] ?? 'Escribe tal cual como está en tu inscripción.';
-            ?>
+            <?php $field_label = $field['label'] ?? $field_key; $field_type = $field['type'] ?? 'text'; $field_help = $field['help'] ?? 'Escribe tal cual como está en tu inscripción.'; ?>
             <div class="evapp-netglobal-field">
               <label for="evappAuthField_<?php echo esc_attr($field_key); ?>"><?php echo esc_html($field_label); ?></label>
-              <input
-                type="<?php echo esc_attr($field_type); ?>"
-                id="evappAuthField_<?php echo esc_attr($field_key); ?>"
-                class="evapp-netglobal-input evapp-netglobal-auth-input"
-                data-field="<?php echo esc_attr($field_key); ?>"
-                data-label="<?php echo esc_attr($field_label); ?>"
-                placeholder="<?php echo esc_attr($field['placeholder'] ?? ''); ?>"
-                autocomplete="off"
-              >
-              <small class="evapp-netglobal-help">
-                <?php echo esc_html($field_help); ?>
-              </small>
+              <input type="<?php echo esc_attr($field_type); ?>" id="evappAuthField_<?php echo esc_attr($field_key); ?>" class="evapp-netglobal-input evapp-netglobal-auth-input" data-field="<?php echo esc_attr($field_key); ?>" data-label="<?php echo esc_attr($field_label); ?>" placeholder="<?php echo esc_attr($field['placeholder'] ?? ''); ?>" autocomplete="off">
+              <small class="evapp-netglobal-help"><?php echo esc_html($field_help); ?></small>
             </div>
           <?php endforeach; ?>
-          
           <button type="button" id="evappAuthBtn" class="evapp-netglobal-btn">Confirmar identidad</button>
-          
           <p id="evappAuthMsg" class="evapp-netglobal-help" aria-live="polite"></p>
         </div>
 
-        <!-- Paso 2: Scanner -->
         <div id="evappNetGlobalScan" style="display:none;">
-          <p id="evappScanWelcome" class="evapp-netglobal-help" style="text-align:center;margin-bottom:1rem;">
-            Activa la cámara para escanear.
-          </p>
-          
+          <div class="evapp-netglobal-panel-heading">
+            <h2>Escanea un contacto</h2>
+            <p id="evappScanWelcome">Activa la cámara para escanear el QR de otro asistente.</p>
+          </div>
           <button type="button" id="evappStartScanGlobal" class="evapp-netglobal-btn">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4" stroke="white"/>
-              <rect x="7" y="7" width="10" height="10" rx="2" stroke="white"/>
-            </svg>
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M21 7V3h-4M3 7V3h4M21 17v4h-4M3 17v4h4"></path><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>
             Activar cámara y escanear
           </button>
-          
           <div id="evappVideoWrapGlobal" class="evapp-qr-video-wrap">
             <video id="evappVideoGlobal" class="evapp-qr-video" playsinline></video>
-            <div id="evappFrameGlobal" class="evapp-qr-frame">
-              <div class="mask"></div>
-              <div class="evapp-qr-corner tl"></div>
-              <div class="evapp-qr-corner tr"></div>
-              <div class="evapp-qr-corner bl"></div>
-              <div class="evapp-qr-corner br"></div>
-            </div>
+            <div id="evappFrameGlobal" class="evapp-qr-frame"><div class="mask"></div><div class="evapp-qr-corner tl"></div><div class="evapp-qr-corner tr"></div><div class="evapp-qr-corner bl"></div><div class="evapp-qr-corner br"></div></div>
             <canvas id="evappCanvasGlobal" style="display:none;"></canvas>
           </div>
-          
-          <div id="evappResultBoxGlobal" class="evapp-qr-result-box" aria-live="polite"></div>
+          <div id="evappResultBoxGlobal" class="evapp-qr-result-box"></div>
         </div>
 
-        <!-- Paso 3: Resultado -->
-        <div id="evappNetGlobalResult" class="evapp-netglobal-result">
-          <!-- Se llenará dinámicamente -->
-        </div>
+        <div id="evappNetGlobalResult" class="evapp-netglobal-result"></div>
       </div>
     </div>
 
