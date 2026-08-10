@@ -22,10 +22,17 @@ if ( ! function_exists( 'eventosapp_elementor_compat_is_active' ) ) {
 if ( ! function_exists( 'eventosapp_elementor_compat_print_styles' ) ) {
     function eventosapp_elementor_compat_print_styles() {
         if ( ! eventosapp_elementor_compat_is_active() ) return;
+
+        $icon_color = function_exists( 'eventosapp_brand_asset_url' )
+            ? eventosapp_brand_asset_url( 'icon_color' )
+            : '';
+        $icon_white = function_exists( 'eventosapp_brand_asset_url' )
+            ? eventosapp_brand_asset_url( 'icon_white' )
+            : '';
         ?>
         <style id="eventosapp-elementor-compat">
 /* ==========================================================
- * EventosApp 1.5.0-rc.8 — aislamiento de Elementor + drawer
+ * EventosApp 1.5.0-rc.9 — aislamiento final + Flow Metrics
  * ========================================================== */
 
 /* Elementor Kit puede inyectar sus variables globales dentro de la página.
@@ -243,6 +250,260 @@ body.eventosapp-app-page #eventosapp-app-root .evapp-dashboard :where(
     color: #fff !important;
 }
 
+/* ==========================================================
+ * Métricas de Encuestas: marca, Dark Mode y aislamiento
+ * ========================================================== */
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app {
+    --evapp-primary: var(--eventosapp-brand-blue) !important;
+    --evapp-primary-dark: var(--eventosapp-brand-blue-dark) !important;
+    --evapp-primary-soft: var(--eventosapp-brand-blue-soft) !important;
+    --evapp-app-bg: var(--eventosapp-app-surface-soft) !important;
+    --evapp-surface: var(--eventosapp-app-surface) !important;
+    --evapp-border: var(--eventosapp-app-border) !important;
+    --evapp-text: var(--eventosapp-app-text) !important;
+    --evapp-muted: var(--eventosapp-app-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-eyebrow {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 7px !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-eyebrow::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 18px;
+    flex: 0 0 16px;
+    background: url("<?php echo esc_url( $icon_color ); ?>") center / contain no-repeat;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-eyebrow {
+    color: #7bb1df !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-eyebrow::before {
+    background-image: url("<?php echo esc_url( $icon_white ); ?>");
+}
+
+/* Los controles del módulo contienen fondos claros históricos. Se fijan a los
+ * tokens comunes para que Elementor/tema y el CSS inline antiguo no puedan
+ * reintroducir blancos, grises claros o colores de texto incompatibles. */
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-shell,
+    .evapp-flow-metrics-event-context,
+    .evapp-flow-metrics-toolbar,
+    .evapp-flow-metrics-kpi,
+    .evapp-flow-metrics-card,
+    .evapp-flow-metrics-table-wrap
+) {
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-event-context,
+    .evapp-flow-metrics-toolbar,
+    .evapp-flow-metrics-kpi,
+    .evapp-flow-metrics-card
+) {
+    background: var(--evapp-surface) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-title,
+    .evapp-flow-metrics-event-name,
+    .evapp-flow-metrics-kpi strong,
+    .evapp-flow-metrics-kpi small b,
+    .evapp-flow-metrics-section-title,
+    .evapp-flow-metrics-card h3
+) {
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-subtitle,
+    .evapp-flow-metrics-event-kicker,
+    .evapp-flow-metrics-event-flow,
+    .evapp-flow-metrics-field-label,
+    .evapp-flow-metrics-kpi-label,
+    .evapp-flow-metrics-kpi small,
+    .evapp-flow-metrics-section-copy,
+    .evapp-flow-metrics-question-meta,
+    .evapp-flow-metrics-note
+) {
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-btn {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    text-decoration: none !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-btn-secondary {
+    background: var(--evapp-surface) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-btn-secondary:hover:not(:disabled),
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-btn-secondary:focus-visible {
+    background: var(--eventosapp-app-surface-raised) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-btn-primary {
+    background: var(--eventosapp-brand-blue) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: #fff !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-btn-primary:hover:not(:disabled):not(.is-disabled),
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-btn-primary:focus-visible {
+    background: var(--eventosapp-brand-blue-dark) !important;
+    border-color: var(--eventosapp-brand-blue-dark) !important;
+    color: #fff !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-chip {
+    background-color: var(--evapp-surface) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-flow-static,
+    .evapp-flow-metrics-status,
+    .evapp-flow-metrics-question-meta span,
+    .evapp-flow-metrics-chart-empty,
+    .evapp-flow-metrics-note
+) {
+    background-color: var(--eventosapp-app-surface-soft) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-select {
+    -webkit-appearance: auto !important;
+    appearance: auto !important;
+    background-color: var(--eventosapp-app-input) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-select option {
+    background: var(--eventosapp-app-input) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-table {
+    background: var(--evapp-surface) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-table :where(th, td) {
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-table th {
+    background: var(--eventosapp-app-surface-raised) !important;
+    color: var(--evapp-muted) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app {
+    --evapp-primary-soft: rgba(54, 131, 197, .16) !important;
+    --evapp-app-bg: var(--eventosapp-app-surface-soft) !important;
+    --evapp-surface: var(--eventosapp-app-surface) !important;
+    --evapp-border: var(--eventosapp-app-border) !important;
+    --evapp-text: var(--eventosapp-app-text) !important;
+    --evapp-muted: var(--eventosapp-app-muted) !important;
+    --evapp-success: #62d4a5 !important;
+    --evapp-success-soft: rgba(22, 133, 91, .20) !important;
+    --evapp-warning: #f1c861 !important;
+    --evapp-warning-soft: rgba(161, 98, 7, .22) !important;
+    --evapp-danger: #f08d8d !important;
+    --evapp-danger-soft: rgba(197, 58, 58, .20) !important;
+    --evapp-purple: #b8a1f0 !important;
+    --evapp-purple-soft: rgba(109, 75, 195, .22) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-shell {
+    background: var(--eventosapp-app-surface-soft) !important;
+    border-color: var(--eventosapp-app-border) !important;
+    box-shadow: var(--eventosapp-app-shadow) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-event-icon,
+    .evapp-flow-metrics-kpi-icon
+) {
+    border: 1px solid rgba(123, 177, 223, .18);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-chip.is-active {
+    background: var(--evapp-success-soft) !important;
+    border-color: rgba(98, 212, 165, .30) !important;
+    color: var(--evapp-success) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-status.is-loading {
+    background: var(--evapp-warning-soft) !important;
+    border-color: rgba(241, 200, 97, .30) !important;
+    color: var(--evapp-warning) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-status.is-ok {
+    background: var(--evapp-success-soft) !important;
+    border-color: rgba(98, 212, 165, .30) !important;
+    color: var(--evapp-success) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-status.is-error {
+    background: var(--evapp-danger-soft) !important;
+    border-color: rgba(240, 141, 141, .30) !important;
+    color: var(--evapp-danger) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-kpi-progress,
+    .evapp-flow-metrics-chart-empty
+) {
+    background: var(--eventosapp-app-surface-raised) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-empty {
+    background: var(--evapp-warning-soft) !important;
+    border-color: rgba(241, 200, 97, .28) !important;
+    color: var(--evapp-warning) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-empty :where(h3, p) {
+    color: var(--evapp-warning) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-empty-icon {
+    background: rgba(241, 200, 97, .14) !important;
+    color: var(--evapp-warning) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-note {
+    background: rgba(29, 39, 66, .82) !important;
+    border-color: var(--eventosapp-app-border) !important;
+    color: var(--eventosapp-app-muted) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-btn-secondary:hover:not(:disabled),
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-btn-secondary:focus-visible {
+    background: rgba(54, 131, 197, .16) !important;
+    border-color: rgba(123, 177, 223, .45) !important;
+    color: #8fc0e8 !important;
+}
+
 /* El header está fuera del árbol de Elementor, pero las reglas globales del Kit
  * y del tema todavía pueden alcanzar button/a. Se fijan los estados para evitar
  * acentos rosados o colores genéricos sobre Modo, Administración y Logout. */
@@ -366,6 +627,91 @@ body.eventosapp-app-page .evapp-app-chrome .evapp-app-action.is-logout:focus-vis
     }
 }
         </style>
+        <script id="eventosapp-flow-metrics-chart-theme-compat">
+(function(){
+    'use strict';
+
+    var root = document.querySelector('#eventosapp-app-root .evapp-flow-metrics-app');
+    if (!root) return;
+
+    function cssVar(name, fallback) {
+        var value = window.getComputedStyle(root).getPropertyValue(name);
+        value = value ? value.trim() : '';
+        return value || fallback;
+    }
+
+    function syncCharts() {
+        if (!window.Chart || typeof window.Chart.getChart !== 'function') return;
+
+        var text = cssVar('--evapp-text', '#171e37');
+        var muted = cssVar('--evapp-muted', '#66758f');
+        var border = cssVar('--evapp-border', '#dfe7f1');
+        var surface = cssVar('--evapp-surface', '#ffffff');
+        var raised = window.getComputedStyle(document.documentElement).getPropertyValue('--eventosapp-app-surface-raised');
+        raised = raised ? raised.trim() : surface;
+        var isDark = document.documentElement.getAttribute('data-evapp-theme') === 'dark';
+
+        root.querySelectorAll('.evapp-flow-metrics-chart-box canvas').forEach(function(canvas){
+            var chart = window.Chart.getChart(canvas);
+            if (!chart || !chart.options) return;
+
+            if (chart.data && Array.isArray(chart.data.datasets)) {
+                chart.data.datasets.forEach(function(dataset){
+                    if (chart.config && chart.config.type === 'doughnut') {
+                        dataset.borderColor = surface;
+                    }
+                });
+            }
+
+            if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+                chart.options.plugins.legend.labels.color = muted;
+            }
+
+            if (chart.options.plugins && chart.options.plugins.tooltip) {
+                chart.options.plugins.tooltip.backgroundColor = isDark ? raised : 'rgba(23, 30, 55, .92)';
+                chart.options.plugins.tooltip.titleColor = '#ffffff';
+                chart.options.plugins.tooltip.bodyColor = '#ffffff';
+                chart.options.plugins.tooltip.borderColor = isDark ? border : 'rgba(255,255,255,.16)';
+                chart.options.plugins.tooltip.borderWidth = 1;
+            }
+
+            if (chart.options.scales) {
+                if (chart.options.scales.x) {
+                    if (chart.options.scales.x.grid) chart.options.scales.x.grid.color = border;
+                    if (chart.options.scales.x.ticks) chart.options.scales.x.ticks.color = muted;
+                }
+                if (chart.options.scales.y && chart.options.scales.y.ticks) {
+                    chart.options.scales.y.ticks.color = text;
+                }
+            }
+
+            try { chart.update('none'); } catch (error) {}
+        });
+    }
+
+    var themeObserver = new MutationObserver(function(mutations){
+        var changed = mutations.some(function(mutation){
+            return mutation.type === 'attributes' && mutation.attributeName === 'data-evapp-theme';
+        });
+        if (changed) window.requestAnimationFrame(syncCharts);
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-evapp-theme'] });
+
+    var contentObserver = new MutationObserver(function(){
+        window.requestAnimationFrame(syncCharts);
+    });
+    contentObserver.observe(root, { childList: true, subtree: true });
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', syncCharts, { once: true });
+    } else {
+        syncCharts();
+    }
+
+    window.setTimeout(syncCharts, 350);
+    window.setTimeout(syncCharts, 900);
+})();
+        </script>
         <?php
     }
 }
