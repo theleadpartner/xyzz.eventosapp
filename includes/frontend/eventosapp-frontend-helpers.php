@@ -292,3 +292,14 @@ $eventosapp_qr_visual_compat_file = __DIR__ . '/eventosapp-qr-visual-compat.php'
 if ( is_readable( $eventosapp_qr_visual_compat_file ) ) {
     require_once $eventosapp_qr_visual_compat_file;
 }
+
+/**
+ * Compatibilidad visual final para Búsqueda/Check-In Manual y Check-In Facial.
+ * Se carga después de las capas compartidas y de los lectores QR para que los
+ * CSS inline históricos de ambos módulos no puedan reintroducir superficies
+ * claras ni estilos globales de Elementor/tema sobre el modo activo.
+ */
+$eventosapp_search_face_visual_compat_file = __DIR__ . '/eventosapp-search-face-visual-compat.php';
+if ( is_readable( $eventosapp_search_face_visual_compat_file ) ) {
+    require_once $eventosapp_search_face_visual_compat_file;
+}
