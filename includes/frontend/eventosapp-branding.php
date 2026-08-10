@@ -96,6 +96,26 @@ if ( ! function_exists( 'eventosapp_branding_is_admin_screen' ) ) {
     }
 }
 
+if ( ! function_exists( 'eventosapp_branding_front_body_class' ) ) {
+    function eventosapp_branding_front_body_class( $classes ) {
+        $classes = is_array( $classes ) ? $classes : [];
+        $classes[] = 'eventosapp-branding';
+        return array_values( array_unique( $classes ) );
+    }
+}
+add_filter( 'body_class', 'eventosapp_branding_front_body_class', 20 );
+
+if ( ! function_exists( 'eventosapp_branding_admin_body_class' ) ) {
+    function eventosapp_branding_admin_body_class( $classes ) {
+        $classes = trim( (string) $classes );
+        if ( strpos( ' ' . $classes . ' ', ' eventosapp-branding ' ) === false ) {
+            $classes .= ( $classes === '' ? '' : ' ' ) . 'eventosapp-branding';
+        }
+        return $classes;
+    }
+}
+add_filter( 'admin_body_class', 'eventosapp_branding_admin_body_class', 20 );
+
 if ( ! function_exists( 'eventosapp_print_branding_styles' ) ) {
     function eventosapp_print_branding_styles() {
         static $printed = false;
