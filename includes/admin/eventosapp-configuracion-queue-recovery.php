@@ -144,10 +144,17 @@ if ( ! function_exists('eventosapp_installation_queue_recovery_next_delay') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_installation_queue_recovery_spawn_key') ) {
+    function eventosapp_installation_queue_recovery_spawn_key($task_id) {
+        return 'evapp_install_recovery_spawn_' . absint($task_id);
+    }
+}
+
 if ( ! function_exists('eventosapp_installation_queue_recovery_spawn_worker') ) {
     /**
      * Fallback por admin-ajax. Usa un timeout de conexión razonable para evitar
      * el problema de loopbacks que no llegan a salir del socket con 10 ms.
+     * Un transient corto impide crear cadenas paralelas del mismo worker.
      */
     function eventosapp_installation_queue_recovery_spawn_worker($task_id, $delay = 0) {
         $task_id = absint($task_id);
@@ -161,6 +168,12 @@ if ( ! function_exists('eventosapp_installation_queue_recovery_spawn_worker') ) 
         }
 
         $delay = min(15, max(0, absint($delay)));
+        $spawn_key = eventosapp_installation_queue_recovery_spawn_key($task_id);
+        if ( get_transient($spawn_key) ) {
+            return false;
+        }
+        set_transient($spawn_key, 1, max(15, $delay + 15));
+
         $response = wp_remote_post(admin_url('admin-ajax.php'), [
             'timeout'     => 2,
             'blocking'    => false,
@@ -174,13 +187,16 @@ if ( ! function_exists('eventosapp_installation_queue_recovery_spawn_worker') ) 
             ],
         ]);
 
-        if ( is_wp_error($response) && function_exists('eventosapp_task_queue_add_log') ) {
-            eventosapp_task_queue_add_log(
-                $task_id,
-                'warning',
-                'El worker alterno de instalación no pudo iniciar el loopback; se conserva WP-Cron y la recuperación por panel.',
-                ['error' => $response->get_error_message()]
-            );
+        if ( is_wp_error($response) ) {
+            delete_transient($spawn_key);
+            if ( function_exists('eventosapp_task_queue_add_log') ) {
+                eventosapp_task_queue_add_log(
+                    $task_id,
+                    'warning',
+                    'El worker alterno de instalación no pudo iniciar el loopback; se conserva WP-Cron y la recuperación por panel.',
+                    ['error' => $response->get_error_message()]
+                );
+            }
         }
 
         return ! is_wp_error($response);
@@ -203,6 +219,9 @@ if ( ! function_exists('eventosapp_installation_queue_recovery_worker') ) {
 
         eventosapp_installation_queue_recovery_tick($task_id);
         $task = eventosapp_installation_queue_recovery_task($task_id);
+
+        // Libera el turno del fallback solo después de terminar este intento.
+        delete_transient(eventosapp_installation_queue_recovery_spawn_key($task_id));
 
         if ( eventosapp_installation_queue_recovery_is_active($task) ) {
             eventosapp_installation_queue_recovery_spawn_worker(
