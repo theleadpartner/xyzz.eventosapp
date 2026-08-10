@@ -348,3 +348,14 @@ $eventosapp_expositores_visual_compat_file = __DIR__ . '/eventosapp-expositores-
 if ( is_readable( $eventosapp_expositores_visual_compat_file ) ) {
     require_once $eventosapp_expositores_visual_compat_file;
 }
+
+/**
+ * Compatibilidad visual final para la página 404 integrada.
+ * Se carga después de todos los hotfix visuales anteriores para que el CSS
+ * inline histórico del shortcode no pueda reintroducir superficies claras,
+ * tipografía o estados de Elementor/tema sobre el modo activo.
+ */
+$eventosapp_404_visual_compat_file = __DIR__ . '/eventosapp-404-visual-compat.php';
+if ( is_readable( $eventosapp_404_visual_compat_file ) ) {
+    require_once $eventosapp_404_visual_compat_file;
+}
