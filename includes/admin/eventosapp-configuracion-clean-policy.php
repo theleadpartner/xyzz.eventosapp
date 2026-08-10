@@ -78,9 +78,23 @@ if ( ! function_exists('eventosapp_installation_page_has_known_shortcode') ) {
             }
         }
 
+        $elementor_data = get_post_meta($page->ID, '_elementor_data', true);
+        $elementor_data = is_string($elementor_data) ? $elementor_data : '';
+
         foreach (array_values(array_unique($shortcodes)) as $shortcode) {
             if ( has_shortcode((string)$page->post_content, $shortcode) ) {
                 return true;
+            }
+
+            // Elementor puede guardar el widget Shortcode únicamente en
+            // _elementor_data y dejar post_content vacío. Detectarlo aquí evita
+            // crear una página duplicada cuando el mapeo se perdió pero la
+            // página histórica todavía existe.
+            if ( $elementor_data !== '' ) {
+                $pattern = '/\[' . preg_quote($shortcode, '/') . '(?=[\s\]\/])/';
+                if ( preg_match($pattern, $elementor_data) ) {
+                    return true;
+                }
             }
         }
 
