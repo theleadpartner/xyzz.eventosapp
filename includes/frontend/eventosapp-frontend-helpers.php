@@ -271,3 +271,13 @@ $eventosapp_ui_polish_file = __DIR__ . '/eventosapp-ui-polish.php';
 if ( is_readable( $eventosapp_ui_polish_file ) ) {
     require_once $eventosapp_ui_polish_file;
 }
+
+/**
+ * Aislamiento de estilos globales de Elementor/tema y corrección final del
+ * stacking context del drawer móvil. Se carga después del pulido visual para
+ * reforzar únicamente propiedades de marca dentro de las páginas EventosApp.
+ */
+$eventosapp_elementor_compat_file = __DIR__ . '/eventosapp-elementor-compat.php';
+if ( is_readable( $eventosapp_elementor_compat_file ) ) {
+    require_once $eventosapp_elementor_compat_file;
+}
