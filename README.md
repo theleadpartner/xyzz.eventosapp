@@ -8,10 +8,10 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 - **Versión candidata:** `1.5.0-rc.19`
 - **Fecha de corte:** 2026-08-10
-- **Base integrada:** `1bac5e162538fe4e910b1777d104d15f182e4477` (`main`, merge de `1.5.0-rc.18`)
-- **Rama de trabajo:** `fix/404-dark-branding-elementor-20260810`
+- **Base integrada:** `b4c5783b50e1fe52fd0c89ef4b745d189d4922f9` (`main`, merge del hotfix funcional de la 404 sobre `1.5.0-rc.18`)
+- **Rama de trabajo/documentación:** `fix/404-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual de la página 404 integrada. Se unifican imagen corporativa, Light/Dark Mode y aislamiento frente al CSS global de Elementor/tema sin modificar la lógica de seguridad, el estado HTTP 404 ni la navegación existente. Pendiente validación visual/funcional en WordPress antes de promover.
+- **Estado:** hotfix visual de la página 404 integrado en `main` mediante PR #26. Se unifican imagen corporativa, Light/Dark Mode y aislamiento frente al CSS global de Elementor/tema sin modificar la lógica de seguridad, el estado HTTP 404 ni la navegación existente. Pendiente validación visual/funcional en WordPress antes de promover a producción.
 
 ## Hotfix 1.5.0-rc.19 — Página 404 corporativa, Dark Mode y aislamiento Elementor
 
@@ -112,19 +112,21 @@ docs/history/README-through-1.5.0-rc.18.md              NUEVO — snapshot hist�
 README.md                                                 MODIFICADO — versión, alcance y validación
 ```
 
-### Commits funcionales
+### Commits y merge funcional
 
 ```text
 b4dc65e541646fa917635b6324c0f5ebb5fb7d8f  feat: add 404 visual compatibility layer
 f4340023b771026699bd808f2285c7c5cd3de325  feat: load 404 visual compatibility layer
+b4c5783b50e1fe52fd0c89ef4b745d189d4922f9  Merge PR #26 — hotfix funcional 404 a main
 e6e0428e2d54da772ab6de9ca1b8db282a48a65d  docs: preserve detailed history through rc18
 ```
 
 ### Validación técnica realizada
 
-- La rama fue reconstruida sobre `1bac5e162538fe4e910b1777d104d15f182e4477`, es decir, el `main` más reciente que ya contiene `1.5.0-rc.18`; no se omite el boxed del Dashboard ni la normalización de páginas anterior.
-- Antes de documentar, la comparación `main...fix/404-dark-branding-elementor-20260810` estaba **2 commits adelante y 0 atrás**.
-- El diff funcional se limitaba exactamente a la nueva capa 404 y a 11 líneas de loader en `eventosapp-frontend-helpers.php`.
+- La implementación funcional fue construida sobre `1bac5e162538fe4e910b1777d104d15f182e4477`, que ya contenía `1.5.0-rc.18`; por tanto no omite el boxed del Dashboard ni la normalización de páginas anterior.
+- Antes del merge funcional, la comparación con `main` estaba **2 commits adelante y 0 atrás**.
+- PR #26 integró esos dos commits en `main` mediante `b4c5783b50e1fe52fd0c89ef4b745d189d4922f9`.
+- El diff funcional se limitó exactamente a la nueva capa 404 y a 11 líneas de loader en `eventosapp-frontend-helpers.php`.
 - El commit del loader fue verificado y no contiene eliminaciones ni reescrituras de helpers existentes.
 - No se modifica el renderizador funcional de la página 404 ni el módulo de Seguridad.
 
