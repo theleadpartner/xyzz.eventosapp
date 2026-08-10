@@ -4,12 +4,148 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.10`
+- **Versión candidata:** `1.5.0-rc.11`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `e60e83ca212b607f08c372dbef5a5974bf2b5049` (`main`)
-- **Rama de trabajo:** `fix/company-register-dark-branding-elementor-20260810`
+- **Base de la rama:** `a5534ffdf4a92daa5e65114f7f2be7d20b14ca90` (`main`)
+- **Rama de trabajo:** `fix/qr-readers-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual para Empresas con Check-In y Registro Manual: identidad corporativa completa, compatibilidad real con Dark Mode y aislamiento frente a CSS global de Elementor/tema, sin modificar la lógica operativa de ambos módulos; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual específico para todos los lectores QR contenidos en `eventosapp-qr-checkin.php` y `eventosapp-qr-double-auth.php`: identidad corporativa completa, superficies y controles compatibles con Dark Mode, aislamiento frente a CSS global de Elementor/tema y adaptación del modal de segundo factor, sin modificar la lógica de lectura, validación o check-in; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.11 — Lectores QR: identidad, Dark Mode y aislamiento Elementor
+
+### Incidencias detectadas
+
+La revisión de `includes/frontend/eventosapp-qr-checkin.php` y `includes/frontend/eventosapp-qr-double-auth.php` confirmó que los lectores QR ya están funcionalmente consolidados, pero sus renderizadores todavía conservan CSS inline histórico con valores claros como `#ffffff`, `#fbfdff`, `#f8fafc`, `#f8fbfe`, `#f5f8fc`, `#182230`, `#64748b`, `#3279bd` y `#255f96`.
+
+Ese CSS histórico se renderiza dentro de cada shortcode y puede competir tanto con los tokens del shell corporativo como con reglas globales de Elementor/tema. En Dark Mode, el resultado era exactamente el observado en la validación visual: títulos casi invisibles, shells claros dentro del canvas oscuro, paneles blancos, controles deshabilitados con contraste insuficiente y estados/ayudas que no seguían el tema activo.
+
+El alcance real dentro de los dos archivos incluye cuatro experiencias distintas:
+
+1. **Check-In con QR** (`[eventosapp_qr_checkin]`): lector principal, resultado, ficha del ticket, acompañantes y estados de check-in.
+2. **Validador de Localidad** (`[eventosapp_qr_localidad]`): lector informativo de solo lectura y tarjeta destacada de localidad.
+3. **Control de acceso por sesión** (`[eventosapp_qr_sesion]`): selector de sesión/salón, lector QR y confirmación independiente del check-in general.
+4. **Check-In QR Doble Autenticación**: lector principal, estados de validación y modal del segundo factor/código de acceso.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-qr-visual-compat.php` como una capa visual final dedicada a estos lectores. `includes/frontend/eventosapp-frontend-helpers.php` la carga después de `eventosapp-elementor-compat.php`, y su CSS se imprime en `wp_footer` con prioridad `1003`.
+
+El criterio es deliberadamente conservador: **no se reescriben los dos renderizadores QR**. La corrección actúa sobre los selectores que ellos ya producen y solo remapea presentación. De esta forma la cámara, BarcodeDetector/jsQR, AJAX, nonces, consultas, reglas por evento, check-in, sesiones, localidad, acompañantes y segundo factor permanecen exactamente en su implementación actual.
+
+#### Imagen corporativa
+
+Los cuatro encabezados QR reciben la firma visual oficial de EventosApp:
+
+- `.evqr-eyebrow` — Check-In QR;
+- `.evqrl-eyebrow` — Validador de Localidad;
+- `.evqrs-eyebrow` — Control por Sesión;
+- `.evda-eyebrow` — Doble Autenticación.
+
+Light Mode utiliza `eventosapp_icon.svg`; Dark Mode utiliza `eventosapp_icon_blanco.svg`. Los tokens históricos de azul se remapean a la paleta corporativa `#171e37`, `#3683c5` y `#286291`.
+
+#### Dark Mode completo de los lectores
+
+La nueva capa corrige exclusivamente propiedades visuales dentro de los wrappers de los cuatro lectores:
+
+- shells y canvas internos adoptan las superficies del tema activo;
+- contexto del evento, paneles de lector y resultado, grids, ayudas y tips dejan de quedar blancos en Dark Mode;
+- títulos, subtítulos, etiquetas, texto auxiliar y estados recuperan contraste correcto;
+- botones principales usan Azul / Azul oscuro corporativo y sus estados hover/focus quedan protegidos;
+- botones secundarios, Volver al dashboard, reintentos y cancelar usan superficies del tema activo;
+- inputs de acompañantes y código de acceso usan `--eventosapp-app-input` y bordes corporativos;
+- el selector de sesión, sus opciones y su estado deshabilitado son compatibles con Light/Dark;
+- chips de fecha, cámara, lectura, sesión y autenticación conservan su significado sin regresar a fondos claros;
+- éxito, advertencia, error e información mantienen colores semánticos con variantes adecuadas para fondo oscuro;
+- las áreas de cámara/video permanecen deliberadamente oscuras para conservar la lectura y el contraste del marco QR; solo se sincronizan sus bordes con el tema.
+
+#### Validador de Localidad
+
+La tarjeta principal de localidad usa el acento azul corporativo en estado válido y mantiene la semántica de advertencia cuando el ticket no tiene localidad. El grid de datos deja de alternar contra blancos rígidos y pasa a superficies compatibles con el tema.
+
+#### Control de acceso por sesión
+
+Se corrigen el selector de salón/sesión, la sesión actualmente seleccionada, el botón de cámara, estados deshabilitados por fecha, tarjetas de resultado y badges de acceso. La corrección **no habilita** controles que la lógica haya bloqueado por fecha o configuración; únicamente mantiene contraste y jerarquía visual.
+
+#### Modal de Doble Autenticación
+
+El modal de segundo factor necesita un tratamiento adicional porque puede renderizarse fuera de `#eventosapp-app-root`. La compatibilidad se limita a `.evda-auth-modal` dentro de `body.eventosapp-app-page` y sincroniza:
+
+- diálogo, cabecera, cuerpo y footer;
+- título, subtítulo y botón de cierre;
+- código de acceso, inputs y ayudas;
+- botones verificar/cancelar;
+- ficha del ticket, estados y mensajes inline;
+- acompañantes cuando corresponda.
+
+Así el segundo factor no vuelve a una tarjeta blanca al abrirse desde Dark Mode.
+
+#### Aislamiento frente a Elementor y tema
+
+La prioridad adicional queda limitada a los wrappers funcionales de los lectores:
+
+```text
+body.eventosapp-app-page #eventosapp-app-root .evapp-qr-checkin-app
+body.eventosapp-app-page #eventosapp-app-root .evapp-qr-localidad-app
+body.eventosapp-app-page #eventosapp-app-root .evapp-qr-sesion-app
+body.eventosapp-app-page #eventosapp-app-root .evapp-double-auth-app
+body.eventosapp-app-page .evda-auth-modal
+```
+
+Los `!important` se concentran en propiedades visuales que deben ganar frente al Elementor Kit y al tema: fondos, bordes, colores, apariencia de controles, estados hover/focus y tokens de marca. No se cambian grids operativos, atributos, eventos JavaScript ni reglas de negocio.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/frontend/eventosapp-qr-checkin.php` ni sus funciones de lectura/check-in;
+- `includes/frontend/eventosapp-qr-double-auth.php` ni su flujo de doble autenticación;
+- permisos, roles, capacidades o evento activo;
+- BarcodeDetector, jsQR, acceso a cámara, streams, canvas o ciclos de detección;
+- búsqueda/resolución de tickets, QR Manager, QR legacy o QR preimpreso;
+- nonces, AJAX, caché, consultas SQL o validaciones de pertenencia al evento;
+- validación de fecha del evento ni check-in multidía;
+- estado de check-in general;
+- Validador de Localidad de solo lectura;
+- sesiones/salones configurados ni registro independiente de acceso por sesión;
+- código de seguridad, ventanas del segundo factor ni condiciones que exigen doble autenticación;
+- acompañantes, recordatorios de pago ni metadatos del ticket;
+- Dashboard, header común, drawer móvil, Registro Manual, Empresas con Check-In, Métricas, Seguridad ni otros módulos;
+- estilos Elementor de páginas WordPress que no estén mapeadas como EventosApp.
+
+### Archivos de 1.5.0-rc.11
+
+```text
+includes/frontend/eventosapp-qr-visual-compat.php    NUEVO
+includes/frontend/eventosapp-frontend-helpers.php    MODIFICADO
+README.md                                             MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+a239b76c6710b8506b403c642151bfc6cf6adda8  feat: add QR reader visual compatibility layer
+d3447c6b76c5b95a8ef44cd3a219f0cfe1ada9c9  feat: load QR reader compatibility layer
+```
+
+## Validación funcional requerida para 1.5.0-rc.11
+
+- Abrir **Check-In con QR** en Light Mode y confirmar icono corporativo, paleta, evento activo, paneles, lector y resultado.
+- Activar Dark Mode y confirmar que shell, contexto, paneles, ayudas, grids y estados permanecen oscuros y legibles; el visor de cámara debe seguir usando su fondo técnico oscuro.
+- Probar Volver al dashboard, Activar cámara y escanear, detener/reiniciar cámara y Escanear otro QR en normal, hover, focus y disabled.
+- Validar un QR correcto, QR incorrecto, ticket ya registrado y estados de advertencia/error sin cambios funcionales.
+- Si el evento permite acompañantes, probar input, alta y mensajes de estado en ambos temas.
+- Abrir **Validador de Localidad** y confirmar estado de solo lectura, localidad existente y localidad ausente en Light/Dark.
+- Abrir **Control de acceso por sesión**, probar selector y opciones, sesión seleccionada, cámara, confirmación y estados de acceso.
+- Validar también el escenario mostrado de **fuera de fecha del evento**: el botón debe continuar deshabilitado por lógica, pero con contraste correcto.
+- Abrir **Check-In QR Doble Autenticación** y revisar evento activo, alerta de fecha, lector, resultado y estados en ambos temas.
+- En un día/flujo que requiera segundo factor, abrir el modal y revisar diálogo, código, inputs, botones, mensajes y cierre en Light/Dark.
+- Confirmar que éxito, advertencia, error e información mantienen su semántica en los cuatro lectores.
+- Probar cámara en Chrome/Chromium y un navegador con fallback jsQR para confirmar que la capa visual no interfiere con detección.
+- Probar 320 px, 375 px, 430 px, tablet y desktop; no debe aparecer overflow horizontal ni perderse ningún control.
+- Regenerar CSS de Elementor y volver a abrir los cuatro lectores; los títulos, colores y superficies deben conservar la identidad EventosApp.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que su Elementor Kit permanece intacto.
+
+---
 
 ## Hotfix 1.5.0-rc.10 — Empresas con Check-In y Registro Manual: identidad, Dark Mode y aislamiento Elementor
 
@@ -1174,6 +1310,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.11` — 2026-08-10
+
+Hotfix visual de todos los lectores QR de `eventosapp-qr-checkin.php` y `eventosapp-qr-double-auth.php`: firma corporativa en encabezados, superficies/controles/estados compatibles con Dark Mode, selector de sesiones y modal de segundo factor adaptados, más aislamiento final frente a Elementor/tema sin modificar cámara, AJAX, permisos ni lógica de check-in.
 
 ### `1.5.0-rc.10` — 2026-08-10
 

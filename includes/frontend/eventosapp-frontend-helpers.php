@@ -281,3 +281,14 @@ $eventosapp_elementor_compat_file = __DIR__ . '/eventosapp-elementor-compat.php'
 if ( is_readable( $eventosapp_elementor_compat_file ) ) {
     require_once $eventosapp_elementor_compat_file;
 }
+
+/**
+ * Compatibilidad visual final para todos los lectores QR del frontend.
+ * Se carga después del aislamiento general de Elementor para remapear únicamente
+ * superficies, controles y estados de los módulos que mantienen CSS inline
+ * histórico, sin modificar su lógica de lectura, AJAX o check-in.
+ */
+$eventosapp_qr_visual_compat_file = __DIR__ . '/eventosapp-qr-visual-compat.php';
+if ( is_readable( $eventosapp_qr_visual_compat_file ) ) {
+    require_once $eventosapp_qr_visual_compat_file;
+}
