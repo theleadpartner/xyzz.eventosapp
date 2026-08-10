@@ -4,12 +4,131 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.5`
+- **Versión candidata:** `1.5.0-rc.6`
 - **Fecha de corte:** 2026-08-09
-- **Base de la rama:** `848b00e4bb4b246a9eb34d8c584c6cc2cc57616c` (`main`)
-- **Rama de trabajo:** `feat/corporate-branding-20260809`
+- **Base de la rama:** `f4ea4bf36069032efe68375e01b4c37fa43d2cfc` (`main`)
+- **Rama de trabajo:** `feat/unified-app-shell-dark-mode-20260809`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** integración de la identidad corporativa oficial mediante activos SVG optimizados y una capa visual común para Dashboard, módulos, login, sesión y administración; pendiente validación visual/funcional antes de promoción.
+- **Estado:** shell visual unificado para todas las páginas mapeadas de EventosApp, header corporativo común, Light/Dark Mode persistente por usuario y eliminación del header/footer del tema en las rutas de la aplicación; pendiente validación visual/funcional antes de promoción.
+
+## Candidato 1.5.0-rc.6 — Shell de aplicación unificado, Dark Mode y páginas sin chrome del tema
+
+### Objetivo
+
+Cerrar las inconsistencias visuales detectadas después de `1.5.0-rc.5`: algunos módulos mostraban la marca y la barra de sesión dentro de posiciones distintas porque cada renderizador conserva una estructura histórica diferente, y las páginas mapeadas todavía podían heredar el header/footer del tema de WordPress.
+
+Este candidato unifica la experiencia desde una capa superior común sin reescribir la lógica de cada módulo.
+
+### Páginas consideradas parte de la aplicación
+
+`includes/frontend/eventosapp-branding.php` detecta como páginas administradas por EventosApp:
+
+- todos los IDs configurados en `eventosapp_pages`;
+- los IDs históricos almacenados en `eventosapp_networking_pages`;
+- la página de Login configurada por Seguridad;
+- la página 404 configurada por Seguridad.
+
+Las páginas ajenas a estos mapas conservan el template, header y footer del sitio sin cambios.
+
+### Header corporativo único
+
+Todas las páginas mapeadas pasan a tener un header propio de EventosApp con:
+
+- wordmark oficial blanco;
+- usuario activo y `@usuario` cuando corresponde;
+- botón **Dashboard** cuando se navega dentro de un módulo;
+- botón **Administración** únicamente para usuarios con `manage_options`;
+- botón **Cerrar sesión**;
+- selector **Modo oscuro / Modo claro**.
+
+La antigua barra `.evapp-session-panel` continúa disponible internamente por compatibilidad con los renderizadores históricos, pero queda oculta dentro de las páginas tipo aplicación para evitar duplicidad. Sus mismas acciones se exponen ahora en el header común, por lo que Métricas, Check-In, Dashboard y demás módulos dejan de depender de la posición particular de cada shell para mostrar cuenta y sesión.
+
+Autogestión/Kiosko, Sorteo Público y la experiencia 404 mantienen el criterio histórico de no exponer datos de la sesión operativa; allí el header conserva marca y selector de tema sin mostrar información privada del usuario.
+
+### Light Mode y Dark Mode
+
+El modo claro actual se conserva como predeterminado. El nuevo Dark Mode utiliza la paleta corporativa como base y añade superficies oscuras compatibles:
+
+```text
+Marca Oscuro      #171e37
+Marca Azul        #3683c5
+Marca Azul oscuro #286291
+Canvas oscuro     #0e1424
+Superficie        #171e37
+Superficie elevada#1d2742
+Texto             #f3f6fb
+Borde             #2c3958
+```
+
+La capa dark no invierte imágenes ni aplica filtros globales. En su lugar:
+
+- remapea los tokens visuales de las distintas generaciones de módulos;
+- adapta superficies, shells, cards, formularios, tablas, textos secundarios y bordes;
+- conserva los colores semánticos propios de éxito, alerta y peligro;
+- cambia el logo del Login/404 a la variante blanca cuando el fondo es oscuro;
+- mantiene el azul corporativo como acento, foco y acción principal.
+
+### Persistencia de la preferencia
+
+La elección visual se guarda de dos formas:
+
+1. **Usuario autenticado:** user meta `_eventosapp_ui_theme`, sincronizado mediante AJAX protegido con nonce.
+2. **Navegador:** `localStorage`, como respaldo inmediato y para visitantes sin sesión.
+
+Al abrir nuevamente EventosApp, el script de bootstrap aplica la preferencia antes del render principal para reducir el cambio visual entre Light y Dark.
+
+### Páginas sin header/footer del sitio
+
+Se incorpora `templates/eventosapp-app-page.php` como template exclusivo para páginas mapeadas.
+
+El template:
+
+- no ejecuta `get_header()` ni `get_footer()`;
+- mantiene `wp_head()`, `wp_body_open()`, `the_content()` y `wp_footer()`;
+- conserva por ello Elementor, shortcodes, assets, AJAX y hooks existentes;
+- renderiza únicamente el header de EventosApp y el contenido funcional de la página.
+
+También existe una regla CSS de respaldo para ocultar ubicaciones comunes de header/footer si un builder fuerza su propio template.
+
+### Compatibilidad y alcance conservado
+
+No se modifican renderizadores de Check-In, Métricas, Registro, QR, Checklist, Soporte, Consumibles, Expositores, Networking, Sorteo ni Dashboard. Tampoco se cambian permisos, eventos activos, login, logout, reCAPTCHA, auditoría, Seguridad, endpoints AJAX ni acciones de negocio.
+
+La solución se concentra en la capa visual compartida para que cualquier módulo mapeado herede automáticamente la misma experiencia.
+
+### Archivos de 1.5.0-rc.6
+
+```text
+includes/frontend/eventosapp-branding.php   MODIFICADO
+assets/css/eventosapp-branding.css          MODIFICADO
+templates/eventosapp-app-page.php           NUEVO
+README.md                                   MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+7278bcdb964c18556ae621703fa91e95611e7377  feat: add unified app shell and persistent theme preference
+a48be7d5ea8c212c439efb9bc271f5cc3282808c  feat: render mapped pages without theme header or footer
+779e9e28e9af599cb34d6ef52622e768d784293c  feat: unify corporate chrome and add light dark themes
+```
+
+## Validación funcional requerida para 1.5.0-rc.6
+
+- Abrir Dashboard, Métricas de Encuestas y Check-In Manual y confirmar que el header superior es exactamente la misma implementación en los tres.
+- Confirmar logo oficial, Usuario activo, Administración solo para admin, Cerrar sesión y Dashboard dentro de módulos.
+- Confirmar que la antigua barra de sesión no aparece duplicada dentro del contenido.
+- Cambiar a Dark Mode, recargar y confirmar que permanece oscuro.
+- Cerrar sesión, volver a ingresar con el mismo usuario y confirmar persistencia.
+- Cambiar de nuevo a Light Mode y confirmar la misma persistencia.
+- Probar Dashboard sin sesión y confirmar Login con logo, selector de tema y sin header/footer del sitio.
+- Probar Kiosko/Autogestión y Sorteo Público y confirmar que no muestran usuario, Administración ni Cerrar sesión.
+- Confirmar que páginas no mapeadas de WordPress siguen mostrando el header/footer normal del sitio.
+- Probar 320 px, 375 px, 430 px, tablet, portátil y desktop; el header debe envolver sus acciones sin overflow horizontal.
+- Revisar formularios, tablas, cards, empty states y estados semánticos en Dark Mode.
+- Confirmar que Elementor y shortcodes continúan cargando CSS/JS porque el template conserva `wp_head()` y `wp_footer()`.
+
+---
 
 ## Candidato 1.5.0-rc.5 — Identidad corporativa oficial de EventosApp
 
@@ -221,7 +340,7 @@ La barra muestra claramente:
 
 El diseño es compacto, responsive y forma parte del flujo del panel. En móvil las acciones se reorganizan en grilla y luego en una sola columna cuando el ancho es muy reducido.
 
-Autogestión/Kiosko y Sorteo Público siguen excluidos para no exponer información de la sesión operativa.
+Autogestión/Kiosko y Sorteo Público siguen excluidos para no exponer la sesión operativa.
 
 ### White-label
 
@@ -660,6 +779,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.6` — 2026-08-09
+
+Shell de aplicación unificado para páginas mapeadas: header corporativo común, Usuario/Dashboard/Administración/Logout centralizados, Light/Dark Mode persistente y template sin header/footer del tema, conservando Elementor, shortcodes y lógica operativa.
 
 ### `1.5.0-rc.5` — 2026-08-09
 
