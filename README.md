@@ -4,12 +4,64 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.3`
+- **Versión candidata:** `1.5.0-rc.4`
 - **Fecha de corte:** 2026-08-09
-- **Base de la rama:** `f0331b2eb27c674b852cc105fae95fdf63235f4e` (`main`)
-- **Rama de trabajo:** `fix/session-ui-direct-render-20260809`
+- **Base de la rama:** `e96a796d2dc1b2fddf79edafb07969981595ff6e` (`main`)
+- **Rama de trabajo:** `fix/dashboard-search-icon-glitch-20260809`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** corrección del punto de integración real de la sesión y el login para shortcodes, Elementor y renderizadores frontend; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual del buscador del Dashboard para eliminar la superposición entre el icono propio y las decoraciones nativas de los controles `type="search"`; pendiente validación visual antes de promoción.
+
+## Hotfix 1.5.0-rc.4 — Corrección visual del buscador del Dashboard
+
+### Incidencia detectada
+
+El Dashboard ya dibuja un icono SVG propio dentro de `.evapp-module-search-wrap`, pero el campo usa `type="search"`. En navegadores Chromium/WebKit el control puede conservar decoraciones nativas del buscador, incluida la decoración de búsqueda y el botón de cancelación. Al coexistir con el SVG de EventosApp, esas decoraciones pueden superponerse y producir el efecto visual mostrado en el campo: un icono deformado/doble que invade el placeholder o el texto escrito.
+
+La lógica de filtrado, el conteo de herramientas y el botón de limpieza personalizado funcionaban correctamente; el problema estaba limitado a la presentación nativa del input.
+
+### Corrección aplicada
+
+`includes/frontend/eventosapp-frontend-dashboard.php` mantiene un único icono visual —el SVG propio de EventosApp— y normaliza el control de búsqueda:
+
+- se aplica `appearance:none` / `-webkit-appearance:none` al input;
+- se ocultan `::-webkit-search-decoration`, `::-webkit-search-cancel-button`, `::-webkit-search-results-button` y `::-webkit-search-results-decoration`;
+- se conserva el botón de limpieza propio de EventosApp, por lo que no se pierde ninguna acción;
+- el SVG queda explícitamente aislado por encima del input con `z-index`, `display:block` y sin interacción de puntero;
+- el wrapper recibe `min-width:0` para evitar desbordes dentro de layouts flexibles;
+- se fija un `line-height` estable para que el texto permanezca centrado verticalmente.
+
+No se modifican el JavaScript de búsqueda, permisos, módulos visibles, filtros, evento activo, sesión, URLs ni comportamiento de las tarjetas.
+
+### Compatibilidad revisada
+
+El widget `includes/frontend/eventosapp-dashboard-elementor.php` reutiliza `eventosapp_render_dashboard()` y sus controles del buscador solo personalizan fondo, color de texto, borde y radio. Por ello no necesita una corrección paralela y continúa heredando este hotfix desde el render central del Dashboard.
+
+La solución también se aplica al shortcode histórico `[eventosapp_dashboard]`, ya que ambos caminos comparten exactamente el mismo CSS y motor de render.
+
+### Archivos de 1.5.0-rc.4
+
+```text
+includes/frontend/eventosapp-frontend-dashboard.php  MODIFICADO
+README.md                                             MODIFICADO
+```
+
+### Commit funcional
+
+```text
+8ada9578056c2da36493ec46905a6a7c607fbdf5  fix: isolate dashboard search icon from native search decoration
+```
+
+## Validación funcional requerida para 1.5.0-rc.4
+
+- Abrir el Dashboard en Chrome/Chromium sobre macOS y confirmar que solo existe un icono de búsqueda.
+- Repetir con el campo vacío y con texto escrito; el icono no debe tocar el placeholder ni el término ingresado.
+- Confirmar que el botón `×` propio aparece únicamente cuando hay una búsqueda y limpia correctamente el filtro.
+- Confirmar que el conteo de herramientas, categorías visibles y estado “sin resultados” siguen actualizándose.
+- Probar desktop, tablet y móvil, incluyendo anchos de 320 px, 375 px y 430 px.
+- Verificar Safari y Firefox para confirmar que el reset no altera foco, escritura ni accesibilidad del campo.
+- Si el Dashboard se renderiza mediante Elementor, confirmar que los controles de fondo, texto, borde y radio del buscador continúan aplicándose.
+
+---
 
 ## Hotfix 1.5.0-rc.3 — Integración real de sesión y login en los renderizadores frontend
 
@@ -495,6 +547,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.4` — 2026-08-09
+
+Hotfix visual del buscador del Dashboard: se elimina la decoración nativa de `type="search"` para evitar que el navegador duplique o superponga el icono propio; se conservan búsqueda, limpieza, conteos y estilos Elementor.
 
 ### `1.5.0-rc.3` — 2026-08-09
 
