@@ -4,12 +4,134 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.11`
+- **Versión candidata:** `1.5.0-rc.12`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `a5534ffdf4a92daa5e65114f7f2be7d20b14ca90` (`main`)
-- **Rama de trabajo:** `fix/qr-readers-dark-branding-elementor-20260810`
+- **Base de la rama:** `152b519b08e3d6614ec2421749dadc8da0875495` (`main`)
+- **Rama de trabajo:** `fix/search-face-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual específico para todos los lectores QR contenidos en `eventosapp-qr-checkin.php` y `eventosapp-qr-double-auth.php`: identidad corporativa completa, superficies y controles compatibles con Dark Mode, aislamiento frente a CSS global de Elementor/tema y adaptación del modal de segundo factor, sin modificar la lógica de lectura, validación o check-in; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual específico para `eventosapp-frontend-search.php` y `eventosapp-face-checkin.php`: identidad corporativa completa, superficies y controles compatibles con Dark Mode y aislamiento frente al CSS global de Elementor/tema, sin modificar búsqueda, check-in, impresión, reconocimiento facial, cámara ni reglas operativas; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.12 — Búsqueda Manual y Check-In Facial: identidad, Dark Mode y aislamiento Elementor
+
+### Incidencias detectadas
+
+La revisión de `includes/frontend/eventosapp-frontend-search.php` y `includes/frontend/eventosapp-face-checkin.php` confirmó que ambos módulos conservan CSS inline histórico anterior al shell corporativo actual. Aunque la capa global ya aportaba parte de los tokens de Dark Mode, los renderizadores todavía fijaban superficies claras, azules anteriores y estados propios con suficiente especificidad para competir con Elementor/tema.
+
+Los síntomas principales observados fueron:
+
+1. **Búsqueda y Check-In Manual:** el shell general ya podía verse oscuro, pero inputs, chips, tarjetas, estados y botones seguían expuestos a reglas antiguas o globales. El caso más visible era el botón de check-in deshabilitado por fecha, que adoptaba un color magenta ajeno a la identidad de EventosApp.
+2. **Búsqueda y Check-In Manual:** el encabezado `.evfs-eyebrow` aún no tenía la firma corporativa consistente con los módulos corregidos recientemente.
+3. **Check-In Facial:** `.evapp-face-checkin-app` no estaba cubierto por todos los aliases visuales comunes y su CSS inline mantenía `--evapp-app-bg`, paneles y componentes en tonos claros. En Dark Mode el texto ya heredaba colores claros mientras el shell y los paneles seguían blancos, generando el contraste casi invisible mostrado en la validación visual.
+4. **Check-In Facial:** botones deshabilitados por fecha/carga, chips, paneles, estadísticas y estados podían volver a valores claros del renderizador o del Elementor Kit.
+5. Ambos módulos necesitan conservar exactamente su lógica actual; la corrección debía ganar prioridad visual sin tocar AJAX, cámara, face-api.js, impresión, nonces ni reglas del evento.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-search-face-visual-compat.php` como una capa visual final dedicada a estos dos módulos. `includes/frontend/eventosapp-frontend-helpers.php` la carga después de las capas corporativas, del aislamiento general de Elementor y de la compatibilidad QR. Su CSS se imprime en `wp_footer` con prioridad `1004`.
+
+El criterio mantiene el patrón seguro utilizado en los hotfix anteriores: **no se reescriben los renderizadores funcionales**. La nueva capa actúa sobre los wrappers y clases que `eventosapp-frontend-search.php` y `eventosapp-face-checkin.php` ya producen, y se limita a propiedades de presentación.
+
+#### Imagen corporativa
+
+Los encabezados de ambos módulos reciben la firma oficial de EventosApp:
+
+- `.evfs-eyebrow` — Búsqueda y Check-In Manual;
+- `.evfc-eyebrow` — Check-In Facial.
+
+Light Mode utiliza `eventosapp_icon.svg`; Dark Mode utiliza `eventosapp_icon_blanco.svg`. Los tokens históricos de azul se remapean a la paleta oficial `#171e37`, `#3683c5` y `#286291`.
+
+#### Búsqueda y Check-In Manual
+
+Dentro de `.evfs-app` se corrigen exclusivamente propiedades visuales:
+
+- shell, contexto del evento, tarjeta de búsqueda y filas de asistentes adoptan las superficies comunes del tema activo;
+- títulos, subtítulos, labels, ayudas y metadatos usan los tokens de texto correctos en Light/Dark;
+- selector, input de búsqueda, opciones, placeholder, lupa y botón de limpieza quedan aislados frente a estilos globales de formularios;
+- se conserva explícitamente el padding protegido del `type="search"`, por lo que la lupa no vuelve a invadir el placeholder o el texto escrito;
+- botones primarios, secundarios, impresión y acompañantes usan la paleta corporativa en normal, hover y focus;
+- el botón **Hacer check-in** deshabilitado por fecha conserva su estado funcional, pero deja de recibir el color magenta/externo observado en la captura;
+- chips de modalidad/fecha, avatar, badges, estados vacíos, hover de resultados y panel de acompañantes siguen el tema activo;
+- éxito, advertencia, error, virtual y check-in registrado conservan su semántica con contraste apropiado para Dark Mode.
+
+#### Check-In Facial
+
+Dentro de `.evapp-face-checkin-app` se corrigen exclusivamente propiedades visuales:
+
+- `.evfc-shell`, contexto del evento y paneles de lector/resultado adoptan superficies oscuras cuando corresponde;
+- títulos, subtítulos, ayudas y datos del resultado recuperan contraste correcto;
+- chips de fecha, caché y cámara usan estados semánticos compatibles con ambos temas;
+- Volver al dashboard, Activar cámara, Recargar perfiles y demás controles quedan protegidos frente a estilos Elementor/tema;
+- el botón de cámara deshabilitado por fecha o mientras se cargan modelos mantiene `disabled` y su lógica intacta, pero con fondo, borde y texto legibles;
+- progreso, guías, empty state, estadísticas y notas dejan de depender de blancos rígidos;
+- estados de reconocimiento correcto, advertencia y error mantienen su significado visual.
+
+El visor `.evfc-camera-wrap` permanece deliberadamente oscuro porque es una superficie técnica para vídeo, canvas y guías de reconocimiento. La compatibilidad solo sincroniza su borde; no sustituye el fondo ni modifica overlays, streams o detección.
+
+#### Aislamiento frente a Elementor y tema
+
+La prioridad adicional queda limitada a:
+
+```text
+body.eventosapp-app-page #eventosapp-app-root .evfs-app
+body.eventosapp-app-page #eventosapp-app-root .evapp-face-checkin-app
+```
+
+Los `!important` se concentran en propiedades visuales que deben ganar frente al Elementor Kit y al tema: tokens, fondos, bordes, color, apariencia de controles, hover/focus y estados semánticos. No se modifican grids funcionales, atributos, listeners, datasets ni reglas de negocio.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/frontend/eventosapp-frontend-search.php` ni su lógica de búsqueda/check-in;
+- `includes/frontend/eventosapp-face-checkin.php` ni su motor de reconocimiento facial;
+- permisos, roles, capacidades, alcance por evento o evento activo;
+- validación de fecha del evento;
+- endpoints AJAX, nonces, consultas, índices de búsqueda o normalización de datos;
+- búsqueda por cédula, celular, email, nombres o todos los datos;
+- impresión de escarapela ni EventosApp Android Printer Bridge;
+- acompañantes ni sus reglas de registro;
+- face-api.js, modelos locales, descriptores, IndexedDB o caché de perfiles;
+- acceso a cámara, MediaStream, vídeo, canvas, overlays o ciclos de reconocimiento;
+- validación final del ticket y registro del check-in facial en servidor;
+- Dashboard, QR, Registro Manual, Empresas con Check-In, Métricas, Seguridad ni otros módulos;
+- estilos Elementor de páginas WordPress que no estén mapeadas como EventosApp.
+
+### Archivos de 1.5.0-rc.12
+
+```text
+includes/frontend/eventosapp-search-face-visual-compat.php   NUEVO
+includes/frontend/eventosapp-frontend-helpers.php            MODIFICADO
+README.md                                                     MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+10500dda5b0aaa2c6840d9e2e69bcaed8ca482b1  feat: add search and face visual compatibility layer
+9d08142b96ff944c60b0be2a295443d967b47e67  feat: load search and face compatibility layer
+```
+
+## Validación funcional requerida para 1.5.0-rc.12
+
+- Abrir **Búsqueda y Check-In Manual** en Light Mode y confirmar icono corporativo, paleta, evento activo, buscador y resultados.
+- Activar Dark Mode y confirmar que shell, contexto, búsqueda, filas, avatar, datos y acciones permanecen oscuros y legibles.
+- Repetir el escenario mostrado de **fuera de fecha** y confirmar que Hacer check-in continúa deshabilitado por lógica, pero ya no adopta magenta ni estilos externos.
+- Buscar por cédula, celular, email, nombres y todos los datos; confirmar que el comportamiento AJAX, mínimos de caracteres y conteo de resultados no cambian.
+- Verificar que la lupa nunca se superpone al placeholder o al texto y que el botón de limpiar continúa funcionando.
+- Probar check-in permitido, quitar check-in, impresión y acompañantes cuando corresponda.
+- Revisar éxito, advertencia, error, modalidad presencial/virtual y estados de fecha en ambos temas.
+- Abrir **Check-In Facial** en Light Mode y confirmar icono, evento, panel de cámara, resultado, guías y estadísticas.
+- Activar Dark Mode y confirmar que shell, paneles, chips, botones, empty state, estadísticas y notas permanecen oscuros y legibles.
+- Repetir el escenario de **fuera de fecha**: la cámara debe continuar deshabilitada y el mensaje funcional debe mantenerse, pero sin panel blanco/texto invisible.
+- En una fecha válida, cargar modelos/perfiles, activar cámara y confirmar que el visor técnico sigue oscuro y que vídeo/canvas no se alteran.
+- Probar reconocimiento correcto, sin coincidencia, error y ticket ya procesado según los escenarios disponibles.
+- Probar Recargar perfiles y confirmar que IndexedDB/caché siguen funcionando.
+- Cambiar Light/Dark con la página cargada y confirmar que ambos módulos responden al tema sin recarga funcional.
+- Probar 320 px, 375 px, 430 px, tablet y desktop; no debe aparecer overflow horizontal ni perderse ningún control.
+- Regenerar CSS de Elementor y volver a abrir ambos módulos; la identidad EventosApp debe mantenerse.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que su Elementor Kit permanece intacto.
+
+---
 
 ## Hotfix 1.5.0-rc.11 — Lectores QR: identidad, Dark Mode y aislamiento Elementor
 
@@ -1310,6 +1432,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.12` — 2026-08-10
+
+Hotfix visual de Búsqueda/Check-In Manual y Check-In Facial: firma corporativa en encabezados, superficies, controles y estados compatibles con Dark Mode, corrección del botón de check-in deshabilitado que heredaba colores externos, protección del buscador y aislamiento final frente a Elementor/tema sin alterar AJAX, impresión, reconocimiento facial, cámara ni lógica operativa.
 
 ### `1.5.0-rc.11` — 2026-08-10
 
