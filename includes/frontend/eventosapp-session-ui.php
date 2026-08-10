@@ -120,6 +120,25 @@ add_filter( 'logout_url', static function( $logout_url, $redirect ) {
     return eventosapp_session_ui_action_url( 'logout' );
 }, 99, 2 );
 
+if ( ! function_exists( 'eventosapp_session_ui_dashboard_login_error_location' ) ) {
+    function eventosapp_session_ui_dashboard_login_error_location( $location, $status ) {
+        if ( ! eventosapp_session_ui_is_dashboard_page() || empty( $_POST['custom_login_submit'] ) ) return $location;
+
+        $error = '';
+        $query = wp_parse_url( $location, PHP_URL_QUERY );
+        if ( $query ) {
+            parse_str( $query, $params );
+            $error = isset( $params['login_error'] ) ? sanitize_key( (string) $params['login_error'] ) : '';
+        }
+
+        if ( $error === '' ) return $location;
+
+        $dashboard = function_exists( 'eventosapp_get_dashboard_url' ) ? eventosapp_get_dashboard_url() : home_url( '/' );
+        $dashboard = remove_query_arg( [ 'login_error', 'loggedout' ], $dashboard );
+        return add_query_arg( 'login_error', $error, $dashboard );
+    }
+}
+
 /**
  * El formulario puede renderizarse dinámicamente dentro del Dashboard aunque
  * la página no contenga físicamente [custom_login_basic]. Este handler permite
@@ -132,6 +151,7 @@ if ( ! function_exists( 'eventosapp_session_ui_process_dashboard_login' ) ) {
 
         $security = eventosapp_session_ui_security();
         if ( $security && is_callable( [ $security, 'process_login' ] ) ) {
+            add_filter( 'wp_redirect', 'eventosapp_session_ui_dashboard_login_error_location', PHP_INT_MAX, 2 );
             $security->process_login();
         }
     }
@@ -218,7 +238,7 @@ add_filter( 'do_shortcode_tag', static function( $output, $tag, $attr, $m ) {
     $needle = '<div class="evapp-dashboard-shell">';
 
     if ( $panel !== '' && strpos( $output, $needle ) !== false ) {
-        return preg_replace( '/<div class="evapp-dashboard-shell">/', '$0' . str_replace( '$', '\\$', $panel ), $output, 1 );
+        return str_replace( $needle, $needle . $panel, $output );
     }
 
     return $panel . $output;
