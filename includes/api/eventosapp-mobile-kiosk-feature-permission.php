@@ -9,9 +9,10 @@
  * establece el contexto del evento solicitado antes del callback y obliga a que
  * la respuesta respete el permiso efectivo por usuario y evento.
  *
- * Desde 1.5.0-rc.21 también actúa como último bootstrap de la API móvil y carga,
- * cuando está disponible, la extensión offline Staff. De esta forma se preserva
- * el orden ya establecido: Kiosko base -> Staff QR -> contexto Kiosko -> offline.
+ * Desde 1.5.0-rc.21 también actúa como último bootstrap de la API móvil. Carga
+ * primero la extensión offline Staff y, desde 1.5.0-rc.22, la extensión offline
+ * del Kiosko. Se preserva el orden: Kiosko base -> Staff QR -> contexto Kiosko ->
+ * offline Staff -> offline Kiosko.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -108,10 +109,17 @@ add_filter( 'rest_request_after_callbacks', function ( $response, $handler, $req
     return $response;
 }, 30000, 3 );
 
-// Extensión opcional para Android 2.7.0+: snapshot y sincronización offline Staff.
-// Se carga al final para reutilizar autenticación, permisos y helpers de Staff QR.
+// Android 2.7.0+: snapshot y sincronización offline Staff.
 $eventosapp_mobile_offline_api = __DIR__ . '/eventosapp-mobile-staff-offline-api.php';
 if ( is_readable( $eventosapp_mobile_offline_api ) ) {
     require_once $eventosapp_mobile_offline_api;
 }
 unset( $eventosapp_mobile_offline_api );
+
+// Android 2.8.0+: snapshot autocontenido y sincronización offline del Kiosko.
+// Se carga después de Staff offline para reutilizar hashes, locks e idempotencia.
+$eventosapp_mobile_kiosk_offline_api = __DIR__ . '/eventosapp-mobile-kiosk-offline-api.php';
+if ( is_readable( $eventosapp_mobile_kiosk_offline_api ) ) {
+    require_once $eventosapp_mobile_kiosk_offline_api;
+}
+unset( $eventosapp_mobile_kiosk_offline_api );
