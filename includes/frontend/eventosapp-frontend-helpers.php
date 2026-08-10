@@ -261,3 +261,13 @@ $eventosapp_branding_file = __DIR__ . '/eventosapp-branding.php';
 if ( is_readable( $eventosapp_branding_file ) ) {
     require_once $eventosapp_branding_file;
 }
+
+/**
+ * Pulido visual posterior a la capa corporativa.
+ * Mantiene el core visual central intacto y corrige únicamente compatibilidad
+ * Dark Mode, responsive del header y buscador del Dashboard.
+ */
+$eventosapp_ui_polish_file = __DIR__ . '/eventosapp-ui-polish.php';
+if ( is_readable( $eventosapp_ui_polish_file ) ) {
+    require_once $eventosapp_ui_polish_file;
+}
