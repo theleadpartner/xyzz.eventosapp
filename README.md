@@ -4,12 +4,117 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.8`
+- **Versión candidata:** `1.5.0-rc.9`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `e7311c8f6fe1e89a409721ad003df8ecba44f1f1` (`main`)
-- **Rama de trabajo:** `fix/drawer-stacking-elementor-css-20260810`
+- **Base de la rama:** `c286b72be188d8c5f9be3233611e21fae9fd6c03` (`main`)
+- **Rama de trabajo:** `fix/flow-metrics-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual para corregir el stacking context del drawer móvil y aislar la UI de EventosApp frente a colores y reglas globales de Elementor/tema; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual específico para Métricas de Encuestas: identidad corporativa completa, compatibilidad real con Dark Mode, aislamiento frente a Elementor/tema y adaptación dinámica de Chart.js; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.9 — Métricas de Encuestas: identidad, Dark Mode y aislamiento Elementor
+
+### Incidencias detectadas
+
+La validación de `includes/frontend/eventosapp-whatsapp-flow-metrics.php` mostró que el módulo ya heredaba parte del shell común, pero conservaba una capa visual histórica propia que todavía fijaba colores claros como `#3279bd`, `#255f96`, `#182230`, `#64748b`, `#ffffff`, `#f8fafc` y `#edf2f7` dentro de su CSS inline. En Dark Mode esto producía tablas y componentes excesivamente claros, textos con contraste irregular y controles que no coincidían con el Dashboard.
+
+Además:
+
+1. El encabezado del módulo utiliza `.evapp-flow-metrics-eyebrow`, selector que no estaba cubierto por la firma visual corporativa aplicada al resto de encabezados modernos.
+2. Botones, chips, selector, estados, tablas, empty states y notas podían volver a colores del tema o Elementor porque el CSS inline del módulo y las reglas globales competían por prioridad.
+3. Los gráficos Chart.js dibujan leyendas, ejes, grid, separadores y tooltips dentro de `canvas`; esos colores estaban definidos en JavaScript para Light Mode y no pueden corregirse únicamente con CSS.
+4. Los gráficos se reconstruyen después de cada actualización AJAX, por lo que una corrección aplicada solo al cargar la página no era suficiente.
+
+### Corrección aplicada
+
+La solución amplía la capa final `includes/frontend/eventosapp-elementor-compat.php`, que ya se carga después del branding y del pulido de UI. No se reescribe el renderizador ni el motor de datos de Métricas de Encuestas.
+
+#### Imagen corporativa
+
+- `.evapp-flow-metrics-eyebrow` incorpora el icono oficial de EventosApp.
+- Light Mode usa la variante corporativa a color.
+- Dark Mode usa la variante blanca para conservar contraste.
+- Los azules históricos del módulo quedan remapeados a `#3683c5` y `#286291` mediante los tokens centrales.
+
+#### Dark Mode completo
+
+Dentro de `.evapp-flow-metrics-app` se refuerzan únicamente propiedades visuales:
+
+- shell, contexto del evento, toolbar, KPI y cards usan las superficies comunes de EventosApp;
+- títulos, textos secundarios, etiquetas y ayudas usan los tokens de texto del tema activo;
+- botones primarios y secundarios mantienen estados normal, hover y focus compatibles;
+- chips, selector, estados de carga/éxito/error, barras de progreso, empty states y notas dejan de regresar a fondos blancos;
+- tabla, encabezados y celdas adoptan superficies, bordes y texto compatibles con Dark Mode;
+- éxito, advertencia, error y morado mantienen su semántica con variantes de contraste apropiadas para fondo oscuro.
+
+#### Chart.js compatible con el tema
+
+La capa de compatibilidad obtiene las instancias existentes mediante `Chart.getChart(canvas)` y sincroniza únicamente opciones visuales:
+
+- color de leyendas;
+- color de ticks y ejes;
+- color del grid de barras;
+- separador de segmentos doughnut;
+- fondo, borde y texto de tooltips.
+
+Un `MutationObserver` escucha el cambio de `data-evapp-theme` para actualizar gráficos sin recargar la página. Otro observa el contenido del módulo para volver a sincronizar los gráficos que el AJAX reconstruye al cambiar o actualizar la encuesta.
+
+Los datos, porcentajes, datasets, paleta de series, tipo de gráfico y callbacks funcionales originales permanecen intactos.
+
+#### Aislamiento frente a Elementor y tema
+
+Los selectores se limitan a:
+
+```text
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app
+```
+
+Por ello la prioridad adicional solo existe dentro de páginas mapeadas por EventosApp. El Elementor Kit y el tema continúan funcionando normalmente fuera de la aplicación.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/frontend/eventosapp-whatsapp-flow-metrics.php` ni su lógica operativa;
+- permisos, roles o `flow_metrics`;
+- evento activo y cambio de evento;
+- selección del Flow configurado;
+- consultas SQL, conteos, tasas o agregación de respuestas;
+- procesamiento por lotes y transients de caché;
+- endpoints AJAX, nonce ni mensajes de error;
+- generación, autorización o descarga del CSV;
+- datos, porcentajes, datasets o callbacks de Chart.js;
+- Dashboard, login, Seguridad, drawer móvil ni otros módulos.
+
+### Archivos de 1.5.0-rc.9
+
+```text
+includes/frontend/eventosapp-elementor-compat.php    MODIFICADO
+README.md                                             MODIFICADO
+```
+
+### Commit funcional
+
+```text
+7d844026469c0a65ac9dcca882b129d851cbfc5d  fix: align survey metrics with dark mode and corporate styles
+```
+
+## Validación funcional requerida para 1.5.0-rc.9
+
+- Abrir Métricas de Encuestas en Light Mode y confirmar icono corporativo junto a `EVENTOSAPP`, paleta oficial y ausencia de colores ajenos a EventosApp.
+- Activar Dark Mode y confirmar que shell, contexto, toolbar, KPI, cards, tablas, selector, chips, estados, empty states y nota permanecen oscuros y legibles.
+- Confirmar que ninguna fila o encabezado de tabla vuelve a blanco y que los bordes conservan contraste.
+- Revisar botones Volver al dashboard, Cambiar evento, Actualizar y Descargar CSV en normal, hover y focus.
+- Confirmar que éxito, advertencia, error y estados morados mantienen su semántica y contraste.
+- Revisar gráficos doughnut y de barras: leyendas, ticks, grid, separadores y tooltips deben ser legibles en Light y Dark Mode.
+- Cambiar Light/Dark con gráficos ya renderizados y confirmar que se actualizan sin recargar.
+- Presionar Actualizar y confirmar que los gráficos reconstruidos por AJAX adoptan inmediatamente el tema vigente.
+- Si existe más de un Flow, cambiar la encuesta y confirmar el mismo comportamiento.
+- Descargar CSV y confirmar que autorización, nonce, columnas y resultados siguen funcionando.
+- Regenerar CSS de Elementor y volver a abrir el módulo; la identidad corporativa debe mantenerse.
+- Probar 320 px, 375 px, 430 px, tablet y desktop sin overflow ni pérdida de funcionalidad.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que sus estilos Elementor permanecen intactos.
+
+---
 
 ## Hotfix 1.5.0-rc.8 — Drawer utilizable y aislamiento de estilos Elementor
 
@@ -961,6 +1066,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.9` — 2026-08-10
+
+Hotfix visual de Métricas de Encuestas: icono corporativo en el encabezado, paleta oficial, superficies y controles compatibles con Dark Mode, aislamiento frente a Elementor/tema y sincronización dinámica de colores de Chart.js sin alterar datos, AJAX ni exportación CSV.
 
 ### `1.5.0-rc.8` — 2026-08-10
 
