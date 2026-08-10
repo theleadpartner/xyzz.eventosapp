@@ -2,7 +2,7 @@
 if ( ! defined('ABSPATH') ) exit;
 
 /**
- * Política canónica de páginas gestionadas por EventosApp 1.5.0-rc.17.
+ * Política canónica de páginas gestionadas por EventosApp 1.5.0-rc.20.
  * Se carga antes del core de Configuración para sustituir únicamente helpers
  * del instalador protegidos con function_exists().
  */
@@ -17,10 +17,29 @@ if ( ! function_exists('eventosapp_installation_expected_content') ) {
     }
 }
 
+if ( ! function_exists('eventosapp_installation_normalize_content') ) {
+    /**
+     * Normaliza únicamente diferencias inocuas de almacenamiento. El estado
+     * canónico sigue exigiendo que no exista HTML, bloques ni contenido extra.
+     */
+    function eventosapp_installation_normalize_content($content) {
+        $content = str_replace(["\r\n", "\r"], "\n", (string)$content);
+        return trim($content);
+    }
+}
+
+if ( ! function_exists('eventosapp_installation_content_is_canonical') ) {
+    function eventosapp_installation_content_is_canonical($content, array $definition) {
+        return eventosapp_installation_normalize_content($content)
+            === eventosapp_installation_normalize_content(eventosapp_installation_expected_content($definition));
+    }
+}
+
 if ( ! function_exists('eventosapp_installation_elementor_artifacts') ) {
     /**
-     * Devuelve metadatos de Elementor que pueden mantener un documento/editor
-     * activo aunque post_content ya contenga el shortcode correcto.
+     * Devuelve todos los metadatos de Elementor que pueden quedar asociados a
+     * una página. Se usa durante la limpieza para retirar por completo el estado
+     * del builder, incluidos caches generados.
      *
      * Se limita deliberadamente a metadatos de Elementor y al template de
      * página cuando es uno de Elementor. No elimina postmeta funcional de
@@ -41,6 +60,49 @@ if ( ! function_exists('eventosapp_installation_elementor_artifacts') ) {
                     $artifacts[] = $meta_key;
                 }
             }
+        }
+
+        $page_template = (string)get_post_meta($page_id, '_wp_page_template', true);
+        if ( $page_template !== '' && stripos($page_template, 'elementor') !== false ) {
+            $artifacts[] = '_wp_page_template';
+        }
+
+        return array_values(array_unique($artifacts));
+    }
+}
+
+if ( ! function_exists('eventosapp_installation_elementor_render_artifacts') ) {
+    /**
+     * Distingue residuos que todavía pueden cambiar el documento renderizado de
+     * metadatos de cache que Elementor es capaz de regenerar al visitar la URL.
+     *
+     * La reinstalación continúa borrando TODOS los metadatos _elementor_*; el
+     * evaluador, en cambio, no vuelve a marcar la página como dañada únicamente
+     * porque Elementor haya recreado un cache vacío después de la limpieza.
+     */
+    function eventosapp_installation_elementor_render_artifacts($page_id) {
+        $page_id = absint($page_id);
+        if ( ! $page_id ) {
+            return [];
+        }
+
+        $artifacts = [];
+        $elementor_data = get_post_meta($page_id, '_elementor_data', true);
+        if ( is_string($elementor_data) ) {
+            $raw = trim($elementor_data);
+            if ( $raw !== '' && ! in_array($raw, ['[]', '{}', 'null'], true) ) {
+                $decoded = json_decode($raw, true);
+                if ( json_last_error() !== JSON_ERROR_NONE || ! empty($decoded) ) {
+                    $artifacts[] = '_elementor_data';
+                }
+            }
+        } elseif ( is_array($elementor_data) && ! empty($elementor_data) ) {
+            $artifacts[] = '_elementor_data';
+        }
+
+        $edit_mode = sanitize_key((string)get_post_meta($page_id, '_elementor_edit_mode', true));
+        if ( $edit_mode === 'builder' ) {
+            $artifacts[] = '_elementor_edit_mode';
         }
 
         $page_template = (string)get_post_meta($page_id, '_wp_page_template', true);
@@ -108,12 +170,11 @@ if ( ! function_exists('eventosapp_installation_page_is_clean') ) {
             return false;
         }
 
-        $expected = eventosapp_installation_expected_content($definition);
-        if ( (string)$page->post_content !== $expected ) {
+        if ( ! eventosapp_installation_content_is_canonical($page->post_content, $definition) ) {
             return false;
         }
 
-        return empty(eventosapp_installation_elementor_artifacts($page->ID));
+        return empty(eventosapp_installation_elementor_render_artifacts($page->ID));
     }
 }
 
@@ -133,7 +194,8 @@ if ( ! function_exists('eventosapp_installation_normalize_managed_page') ) {
         }
 
         $expected = eventosapp_installation_expected_content($definition);
-        $content_changed = (string)$page->post_content !== $expected;
+        $content_changed = ! eventosapp_installation_content_is_canonical($page->post_content, $definition)
+            || (string)$page->post_content !== $expected;
         $artifacts = eventosapp_installation_elementor_artifacts($page_id);
         $removed_meta = [];
 
@@ -169,10 +231,10 @@ if ( ! function_exists('eventosapp_installation_normalize_managed_page') ) {
         }
 
         return [
-            'page_id'          => $page_id,
-            'changed'          => $content_changed || ! empty($removed_meta),
-            'content_changed'  => $content_changed,
-            'removed_meta'     => $removed_meta,
+            'page_id'            => $page_id,
+            'changed'            => $content_changed || ! empty($removed_meta),
+            'content_changed'    => $content_changed,
+            'removed_meta'       => $removed_meta,
             'removed_meta_count' => count($removed_meta),
         ];
     }
@@ -269,7 +331,7 @@ if ( ! function_exists('eventosapp_installation_definition_status') ) {
             'candidate_page'       => $candidate_page,
             'candidate_is_clean'   => (bool)$candidate_is_clean,
             'elementor_artifacts'  => $display_page instanceof WP_Post
-                ? eventosapp_installation_elementor_artifacts($display_page->ID)
+                ? eventosapp_installation_elementor_render_artifacts($display_page->ID)
                 : [],
         ];
     }
