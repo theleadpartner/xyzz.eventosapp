@@ -4,12 +4,119 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.2`
+- **Versión candidata:** `1.5.0-rc.3`
 - **Fecha de corte:** 2026-08-09
-- **Base de la rama:** `a424a2cdab5af2f9a9d95c23a788a2911b43ab64` (`main`)
-- **Rama de trabajo:** `fix/dashboard-login-session-panel-whitelabel-20260809`
+- **Base de la rama:** `f0331b2eb27c674b852cc105fae95fdf63235f4e` (`main`)
+- **Rama de trabajo:** `fix/session-ui-direct-render-20260809`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** corrección de UX del login y sesión implementada sobre la seguridad integrada de `1.5.0-rc.1`; pendiente validación funcional antes de promoción.
+- **Estado:** corrección del punto de integración real de la sesión y el login para shortcodes, Elementor y renderizadores frontend; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.3 — Integración real de sesión y login en los renderizadores frontend
+
+### Incidencia detectada
+
+La implementación `1.5.0-rc.2` sí contenía la barra de sesión y el reemplazo del mensaje de acceso por `[custom_login_basic]`, pero dependía principalmente de `do_shortcode_tag` y `the_content`.
+
+El Dashboard y varios módulos actuales se muestran mediante widgets de Elementor que llaman directamente a funciones como `eventosapp_render_dashboard()` y `eventosapp_render_metrics()`. En ese flujo el HTML final del widget puede no pasar por `do_shortcode_tag`, y el contenido interno del widget tampoco queda disponible en el punto esperado de `the_content`. Por eso la lógica existía en el código pero no aparecía en la UI mostrada por Elementor.
+
+### Corrección aplicada
+
+`includes/frontend/eventosapp-session-ui.php` ahora cubre explícitamente los tres caminos de render existentes:
+
+1. **Shortcodes tradicionales** mediante `do_shortcode_tag`.
+2. **Widgets de Elementor** mediante `elementor/widget/render_content` sobre el HTML final del widget.
+3. **Renderizadores/custom layouts** mediante `the_content` y un fallback de montaje dentro del shell visual de EventosApp.
+
+El fallback nunca utiliza `position: fixed`: localiza el contenedor principal `evapp-*-shell` y monta el control dentro de la tarjeta/módulo, preferentemente inmediatamente después del encabezado.
+
+### Dashboard sin sesión
+
+Cuando `/dashboard/` se abre sin una sesión activa:
+
+- el widget `eventosapp_dashboard` es interceptado después de su render real;
+- se elimina de la salida el antiguo estado “Debes iniciar sesión / Iniciar sesión”;
+- se muestra directamente el formulario completo de `[custom_login_basic]`;
+- el POST continúa procesándose por `EventosApp_Security::process_login()`;
+- se conservan nonce, reCAPTCHA, límite de intentos, auditoría y reglas por rol;
+- los errores de login continúan regresando al Dashboard;
+- `the_content` mantiene un segundo fallback para la página configurada como Dashboard cuando no interviene el widget.
+
+### Sesión integrada en Dashboard y módulos
+
+El control ahora se inserta dentro del shell visual real del Dashboard y de los módulos configurados, incluidos los renderizados por Elementor.
+
+La barra muestra claramente:
+
+- etiqueta **Usuario activo**;
+- nombre visible;
+- `@usuario`;
+- botón **Dashboard** cuando se está dentro de un módulo;
+- botón **Administración** solo cuando el usuario tiene capacidad administrativa;
+- botón **Cerrar sesión** para cualquier usuario autenticado.
+
+El diseño es compacto, responsive y forma parte del flujo del panel. En móvil las acciones se reorganizan en grilla y luego en una sola columna cuando el ancho es muy reducido.
+
+Autogestión/Kiosko y Sorteo Público siguen excluidos para no exponer información de la sesión operativa.
+
+### White-label
+
+La capa visible mantiene la identidad de EventosApp:
+
+- el acceso técnico visible se llama **Administración**;
+- no se muestra el nombre de la plataforma subyacente en el control de sesión;
+- el botón administrativo usa una acción firmada de EventosApp y redirección del lado del servidor;
+- el cierre de sesión usa igualmente una acción firmada de EventosApp;
+- la barra administrativa del frontend continúa oculta para todos los roles.
+
+### Archivo funcional de 1.5.0-rc.3
+
+```text
+includes/frontend/eventosapp-session-ui.php  MODIFICADO
+README.md                                     MODIFICADO
+```
+
+### Commit funcional
+
+```text
+87e3dd088fa39909c964d98b57618acc7e177d18  fix: render session controls inside dashboard and Elementor modules
+```
+
+## Validación funcional requerida para 1.5.0-rc.3
+
+### Dashboard sin sesión
+
+- Abrir `/dashboard/` en ventana incógnita.
+- Confirmar que aparece el formulario visual completo de `[custom_login_basic]`.
+- Confirmar que ya no aparece únicamente “Debes iniciar sesión / Iniciar sesión”.
+- Probar mostrar/ocultar contraseña.
+- Probar credenciales correctas e incorrectas.
+- Probar reCAPTCHA cuando esté configurado.
+- Confirmar que los errores permanecen en `/dashboard/`.
+
+### Dashboard autenticado
+
+- Confirmar **Usuario activo**, nombre y `@usuario` dentro del panel principal.
+- Confirmar **Cerrar sesión**.
+- Como Administrador, confirmar **Administración**.
+- Como rol no administrativo, confirmar que **Administración** no existe.
+- Confirmar que el control no flota ni tapa tarjetas del Dashboard.
+
+### Módulos
+
+- Abrir Métricas desde el Dashboard y confirmar el control dentro de `.evapp-metrics-shell`, debajo del encabezado.
+- Repetir con Registro, Check-In Manual, QR, Edición, Checklist, Asistencia, Consumibles, Networking y Expositores según permisos.
+- Confirmar botón **Dashboard** en módulos.
+- Confirmar que no se duplica el control si el módulo se renderiza por Elementor.
+- Confirmar que Kiosko/Autogestión y Sorteo Público continúan sin mostrar sesión.
+
+### Responsive y white-label
+
+- Probar 320 px, 375 px, 430 px, tablet y desktop.
+- Confirmar que la barra no reduce el viewport ni utiliza posiciones flotantes.
+- Confirmar que no aparece ninguna referencia visual a la plataforma subyacente.
+- Confirmar que los enlaces visibles de **Administración** y **Cerrar sesión** usan rutas de EventosApp.
+
+---
 
 ## Hotfix 1.5.0-rc.2 — Login en Dashboard, sesión integrada y frontend white-label
 
@@ -388,6 +495,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.3` — 2026-08-09
+
+Corrección del punto de render real: Dashboard sin sesión muestra `[custom_login_basic]` también cuando se usa el widget Elementor; usuario activo, Dashboard, Administración y Cerrar sesión se integran dentro de los shells visuales de Dashboard/módulos sin controles flotantes.
 
 ### `1.5.0-rc.2` — 2026-08-09
 
