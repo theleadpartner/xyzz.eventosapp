@@ -251,3 +251,13 @@ $eventosapp_session_ui_file = __DIR__ . '/eventosapp-session-ui.php';
 if ( is_readable( $eventosapp_session_ui_file ) ) {
     require_once $eventosapp_session_ui_file;
 }
+
+/**
+ * Identidad corporativa global de EventosApp.
+ * Se carga al final para actuar únicamente como capa visual sobre Dashboard,
+ * módulos frontend, login integrado y pantallas administrativas del plugin.
+ */
+$eventosapp_branding_file = __DIR__ . '/eventosapp-branding.php';
+if ( is_readable( $eventosapp_branding_file ) ) {
+    require_once $eventosapp_branding_file;
+}
