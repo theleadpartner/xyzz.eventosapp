@@ -4,12 +4,126 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.13`
+- **Versión candidata:** `1.5.0-rc.14`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `b0a4638f33c41bcf0117b5938c706bcb62da641d` (`main`)
-- **Rama de trabajo:** `fix/checklist-edit-consumables-dark-branding-elementor-20260810`
+- **Base de la rama:** `21ac902d32ae11d08f2f35b8fceca789c3b546b3` (`fix/checklist-edit-consumables-dark-branding-elementor-20260810`)
+- **Rama de trabajo:** `fix/consumables-transactions-dark-mode-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual específico para Checklist de Evento, Edición de asistentes y las vistas internas de Consumibles: identidad corporativa completa, superficies y controles compatibles con Dark Mode y aislamiento frente al CSS global de Elementor/tema, sin modificar checklist, edición de tickets, búsquedas, cámara/QR, inventario, ledger, reversos, exportaciones ni landing pública; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual específico para **Transacciones** y **Mis transacciones** de Control de Consumibles: corrección definitiva de los estados Activa, Cancelación solicitada y Anulada en Dark Mode, incluyendo tarjetas Staff, tabla administrativa, badges, chips, filtros, paginación y botones, sin modificar consultas, ledger, solicitudes de cancelación, reversos, saldos, AJAX, permisos ni auditoría; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.14 — Transacciones de Consumibles: estados compatibles con Dark Mode
+
+### Incidencia detectada
+
+La validación visual posterior a `1.5.0-rc.13` confirmó que la capa general ya oscurecía correctamente el shell de Consumibles, el resumen y la mayor parte de las vistas de Transacciones, pero dos estados conservaban una presentación incompatible con el modo oscuro debido a reglas inline históricas de `includes/functions/eventosapp-consumables-transactions.php`:
+
+1. **Cancelación solicitada:** `.evapp-tx-card.is-pending` heredaba el fondo de advertencia como superficie completa. En Dark Mode esto convertía toda la tarjeta en un bloque marrón y el badge seguía usando `#fff1c2 / #7a5200`, produciendo un contraste y una jerarquía visual distintos al resto del Dashboard.
+2. **Transacción anulada:** `.evapp-tx-badge.is-reversed` conservaba un fondo gris muy claro y texto gris histórico, por lo que el badge aparecía casi blanco sobre la tarjeta oscura.
+3. La misma semántica de pendiente existe también en la tabla administrativa de **Transacciones**, por lo que corregir únicamente la tarjeta de Staff habría dejado el problema incompleto.
+4. Los estados debían seguir siendo visualmente distinguibles sin convertir tarjetas o filas completas a fondos claros ni modificar el estado funcional de las transacciones.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-consumables-transactions-dark-compat.php` como capa final y exclusivamente visual para las dos vistas de transacciones. `includes/frontend/eventosapp-frontend-helpers.php` la carga después de `eventosapp-checklist-edit-consumables-visual-compat.php` y la nueva hoja se imprime en `wp_footer` con prioridad `1006`.
+
+El archivo funcional `includes/functions/eventosapp-consumables-transactions.php` permanece intacto. El hotfix actúa únicamente sobre los wrappers existentes:
+
+```text
+#evapp-consumables-transactions
+#evapp-consumables-my-transactions
+```
+
+#### Estado Activa
+
+- badge con fondo azul corporativo translúcido;
+- borde azul suave;
+- texto azul claro compatible con el canvas oscuro;
+- tarjetas, tabla y chips mantienen las superficies oscuras comunes de EventosApp.
+
+#### Estado Cancelación solicitada
+
+- la tarjeta Staff deja de usar un fondo marrón completo;
+- conserva la superficie oscura normal del módulo;
+- la semántica de advertencia pasa a un borde ámbar y una línea/acento lateral;
+- el badge usa fondo ámbar translúcido, borde ámbar y texto de alto contraste;
+- la tabla administrativa aplica el mismo criterio a filas pendientes: superficie oscura, divisor suave y acento lateral, sin regresar a `#fff9e8`.
+
+#### Estado Anulada
+
+- la tarjeta sigue usando la superficie oscura estándar;
+- el badge deja de utilizar el gris claro histórico;
+- se usa un gris azulado translúcido con borde discreto y texto claro;
+- la indicación de que no existen acciones disponibles continúa exactamente igual.
+
+#### Resto de la vista de Transacciones
+
+La capa final también reafirma en Dark Mode:
+
+- shell, resumen y tarjetas;
+- tabla y encabezados;
+- filtros, inputs, selects y opciones;
+- chips de consumibles;
+- paginación;
+- botón de solicitud de cancelación;
+- botones administrativos secundarios y de anulación;
+- estado `disabled` durante operaciones AJAX.
+
+Esto evita que reglas inline históricas o una regeneración de estilos de Elementor/tema vuelvan a introducir superficies claras en esta sección.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/functions/eventosapp-consumables-transactions.php`;
+- carga, consulta o agrupación de transacciones;
+- filtros por asistente, cédula, localidad, ítem, Staff, fecha, hora o estado;
+- resumen bruto, neto, pendiente o anulado;
+- CSV del ledger;
+- `eventosapp_consumables_tx_request_cancel()`;
+- `eventosapp_consumables_tx_reverse()`;
+- AJAX de solicitud de cancelación o reverso;
+- nonces, permisos, evento activo o alcance por rol;
+- `START TRANSACTION`, `SELECT ... FOR UPDATE`, `COMMIT` o `ROLLBACK`;
+- saldo, inventario, ledger o auditoría;
+- idempotencia y UUID de movimientos;
+- historial público del ticket;
+- pestaña Escanear ni la cámara QR;
+- configuración de Consumibles;
+- otros módulos de EventosApp;
+- páginas WordPress ajenas al shell de EventosApp.
+
+### Archivos de 1.5.0-rc.14
+
+```text
+includes/frontend/eventosapp-consumables-transactions-dark-compat.php  NUEVO
+includes/frontend/eventosapp-frontend-helpers.php                       MODIFICADO
+README.md                                                                MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+1fe0cb1856d98a0fa91774eadec1d0f0c3803602  fix: correct consumables transaction states in dark mode
+eeb3099ef9ceb757931c42719b991d7a26d626b  feat: load consumables transactions dark mode hotfix
+```
+
+## Validación funcional requerida para 1.5.0-rc.14
+
+- Abrir **Mis transacciones** en Dark Mode con una transacción activa y confirmar card oscura, badge azul y chip de consumible legible.
+- Repetir con **Cancelación solicitada** y confirmar que la tarjeta ya no se vuelve marrón; debe conservar superficie oscura y mostrar únicamente borde/acento y badge ámbar.
+- Repetir con **Transacción anulada** y confirmar que el badge ya no aparece blanco/gris claro; debe verse gris azulado oscuro con texto legible.
+- Abrir **Transacciones** como Administrador/Organizador y confirmar los mismos tres estados en la tabla administrativa.
+- Confirmar que una fila con cancelación solicitada no vuelve a `#fff9e8` y conserva el acento de advertencia sobre superficie oscura.
+- Revisar resumen por ítem, filtros, tabla, chips, paginación y botones en Dark Mode.
+- Cambiar a Light Mode y confirmar que los estilos claros originales/compatibles continúan funcionando.
+- Solicitar una cancelación y confirmar que el estado funcional se registra y la página se recarga como antes.
+- Ejecutar un reverso controlado y confirmar que se restauran los recursos, se conserva el movimiento histórico y el badge pasa a Anulada.
+- Confirmar que filtros y exportación CSV continúan funcionando.
+- Probar 320 px, 375 px, 430 px, tablet y desktop.
+- Regenerar CSS de Elementor y volver a abrir ambas pestañas; los estados oscuros deben permanecer.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que no recibe estos estilos.
+
+---
 
 ## Hotfix 1.5.0-rc.13 — Checklist, Edición y Consumibles: identidad, Dark Mode y aislamiento Elementor
 
@@ -1603,6 +1717,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.14` — 2026-08-10
+
+Hotfix definitivo de Dark Mode para **Transacciones** y **Mis transacciones** de Consumibles: tarjetas y filas pendientes conservan superficie oscura con acento ámbar en lugar de fondo marrón; badges Activa, Cancelación solicitada y Anulada reciben variantes oscuras con contraste correcto; filtros, tabla, chips, paginación y botones quedan reafirmados sin modificar ledger, cancelaciones, reversos, AJAX, permisos ni auditoría.
 
 ### `1.5.0-rc.13` — 2026-08-10
 

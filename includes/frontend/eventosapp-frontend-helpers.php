@@ -315,3 +315,14 @@ $eventosapp_checklist_edit_consumables_visual_compat_file = __DIR__ . '/eventosa
 if ( is_readable( $eventosapp_checklist_edit_consumables_visual_compat_file ) ) {
     require_once $eventosapp_checklist_edit_consumables_visual_compat_file;
 }
+
+/**
+ * Hotfix final de Dark Mode para Transacciones/Mis transacciones de Consumibles.
+ * Se carga después de la compatibilidad general de Checklist/Edición/Consumibles
+ * para que los estados activa, cancelación solicitada y anulada prevalezcan sobre
+ * el CSS inline histórico sin alterar ledger, AJAX, permisos ni reversos.
+ */
+$eventosapp_consumables_transactions_dark_compat_file = __DIR__ . '/eventosapp-consumables-transactions-dark-compat.php';
+if ( is_readable( $eventosapp_consumables_transactions_dark_compat_file ) ) {
+    require_once $eventosapp_consumables_transactions_dark_compat_file;
+}
