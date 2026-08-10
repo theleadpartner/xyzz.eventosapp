@@ -4,12 +4,120 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.9`
+- **Versión candidata:** `1.5.0-rc.10`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `c286b72be188d8c5f9be3233611e21fae9fd6c03` (`main`)
-- **Rama de trabajo:** `fix/flow-metrics-dark-branding-elementor-20260810`
+- **Base de la rama:** `e60e83ca212b607f08c372dbef5a5974bf2b5049` (`main`)
+- **Rama de trabajo:** `fix/company-register-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual específico para Métricas de Encuestas: identidad corporativa completa, compatibilidad real con Dark Mode, aislamiento frente a Elementor/tema y adaptación dinámica de Chart.js; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual para Empresas con Check-In y Registro Manual: identidad corporativa completa, compatibilidad real con Dark Mode y aislamiento frente a CSS global de Elementor/tema, sin modificar la lógica operativa de ambos módulos; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.10 — Empresas con Check-In y Registro Manual: identidad, Dark Mode y aislamiento Elementor
+
+### Incidencias detectadas
+
+La revisión de `includes/frontend/eventosapp-company-checkin-monitor.php` y `includes/frontend/eventosapp-frontend-register.php` confirmó que ambos renderizadores conservan CSS inline histórico con colores claros y variables anteriores a la identidad corporativa actual. Al activar Dark Mode, esos valores competían con la capa común y con reglas globales de Elementor/tema.
+
+Los síntomas principales eran:
+
+1. **Empresas con Check-In:** shell, contexto, KPI, panel, tabla, filas móviles, chips, alias y estados podían conservar fondos claros mientras el texto ya heredaba la paleta oscura, provocando bajo contraste y componentes visualmente desconectados del Dashboard.
+2. **Empresas con Check-In:** el encabezado `.evapp-company-eyebrow` no tenía la firma visual corporativa que ya existe en otros módulos modernos.
+3. **Registro Manual:** inputs, selects y, especialmente, las tarjetas de **Entrega del ticket** conservaban blancos directos (`#fff`, `#fbfdff`, `#f8fbff`), generando tarjetas claras con textos preparados para Dark Mode.
+4. Botones, hovers, focos, estados semánticos y controles podían volver a estilos del Elementor Kit o del tema porque los renderizadores tienen CSS inline propio y el builder puede generar reglas por instancia con mayor prioridad.
+
+### Corrección aplicada
+
+La solución amplía la capa final `includes/frontend/eventosapp-elementor-compat.php`, que se carga después de branding y del pulido visual. Se mantiene el mismo criterio de `1.5.0-rc.9`: corregir únicamente la presentación desde una capa posterior y aislada, evitando reescribir funciones operativas ya estables.
+
+#### Imagen corporativa
+
+- `.evapp-company-eyebrow` incorpora el icono oficial de EventosApp.
+- `.evreg-eyebrow` refuerza el mismo icono corporativo para impedir que CSS externo lo reemplace.
+- Light Mode usa la variante a color y Dark Mode la variante blanca.
+- Los colores históricos de ambos módulos quedan remapeados a los tokens oficiales `#171e37`, `#3683c5` y `#286291`.
+
+#### Empresas con Check-In
+
+Dentro de `.evapp-company-monitor` se corrigen exclusivamente propiedades visuales:
+
+- shell, contexto de evento, KPI, panel y tabla adoptan las superficies comunes de EventosApp;
+- títulos, subtítulos, etiquetas, ayudas, empresa, NIT y fechas usan los tokens de texto del tema activo;
+- búsqueda, selector, opciones, placeholder e icono mantienen contraste correcto en Light/Dark;
+- botones Volver al dashboard, Cambiar evento, Limpiar filtros y Actualizar conservan estados normal, hover y focus corporativos;
+- tabla, encabezados, hover de filas, ranking, conteos, alias y divisores dejan de regresar a fondos claros;
+- loading, empty state, error y alerta de NIT mantienen su semántica con contraste apropiado;
+- en móvil, las filas transformadas en tarjetas y la cabecera de empresa usan superficies del tema activo y no vuelven a blanco.
+
+#### Registro Manual
+
+Dentro de `.evreg-wrap` se refuerzan:
+
+- secciones del formulario, contexto del evento y footer de envío;
+- inputs, selects, opciones, placeholders y campos de solo lectura;
+- tarjetas de **Entrega del ticket**, checkbox visual y estado seleccionado;
+- botones primarios/secundarios y sus estados hover/focus;
+- procesamiento del ticket;
+- éxito, advertencia, error y resultados de envío por correo/WhatsApp;
+- avisos inline de evento requerido o falta de permisos.
+
+La corrección elimina específicamente el problema observado donde las opciones de correo y WhatsApp permanecían blancas dentro de Dark Mode.
+
+#### Aislamiento frente a Elementor y tema
+
+La prioridad adicional queda limitada a:
+
+```text
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap
+```
+
+Por ello Elementor y el tema continúan funcionando normalmente fuera de las páginas mapeadas por EventosApp. Los `!important` se concentran en propiedades visuales que deben respetar la identidad y el tema activo; no se alteran grids, eventos JavaScript ni reglas funcionales.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/frontend/eventosapp-company-checkin-monitor.php` ni su lógica de datos;
+- `includes/frontend/eventosapp-frontend-register.php` ni su lógica de registro;
+- permisos, roles, alcance por evento o evento activo;
+- AJAX, nonce, caché, polling, filtros, ordenamiento ni agrupación de empresas;
+- consultas de tickets, NIT, primera/última llegada ni optimizaciones del monitor;
+- creación/actualización de tickets, deduplicación, idempotencia o validaciones del Registro Manual;
+- QR preimpreso, localidades, modalidades ni campos adicionales;
+- disponibilidad o segundo control de correo y WhatsApp;
+- Dashboard, Métricas de Encuestas, header común, drawer móvil, login, Seguridad ni otros módulos.
+
+### Archivos de 1.5.0-rc.10
+
+```text
+includes/frontend/eventosapp-elementor-compat.php    MODIFICADO
+README.md                                             MODIFICADO
+```
+
+### Commit funcional
+
+```text
+087a4b7574719fcd75b5c3a6f9a7bee5ae276d13  fix: align company monitor and manual register with dark mode
+```
+
+## Validación funcional requerida para 1.5.0-rc.10
+
+- Abrir **Empresas con Check-In** en Light Mode y confirmar icono corporativo junto a `EVENTOSAPP`, paleta oficial y ausencia de colores externos.
+- Activar Dark Mode y confirmar que shell, contexto, KPI, panel, filtros y tabla permanecen oscuros y legibles.
+- Confirmar que encabezados, filas, alias, ranking, conteos, loading, empty state y errores no regresan a blanco.
+- Probar búsqueda por empresa/NIT, filtro, ordenamiento, Limpiar filtros y Actualizar; su comportamiento funcional debe permanecer idéntico.
+- Revisar Volver al dashboard y Cambiar evento en normal, hover y focus.
+- Probar la tabla responsive en 320 px, 375 px y 430 px y confirmar que las tarjetas móviles conservan el tema activo.
+- Abrir **Registro Manual** en Light Mode y confirmar icono, paleta, inputs, selects, secciones y botones.
+- Activar Dark Mode y confirmar que ningún input, select ni tarjeta de Entrega del ticket vuelve a blanco.
+- Marcar/desmarcar Correo y WhatsApp y confirmar que checkbox, texto y estado seleccionado son legibles.
+- Revisar procesamiento, éxito, advertencia y error en ambos temas.
+- Crear y actualizar un ticket para confirmar que AJAX, idempotencia y deduplicación continúan funcionando.
+- Si aplica, probar QR preimpreso, localidad, modalidad y campos adicionales.
+- Si los canales están habilitados, probar los controles de correo y WhatsApp sin cambiar sus reglas backend.
+- Regenerar CSS de Elementor y volver a abrir ambos módulos; la identidad corporativa debe mantenerse.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que sus estilos Elementor permanecen intactos.
+
+---
 
 ## Hotfix 1.5.0-rc.9 — Métricas de Encuestas: identidad, Dark Mode y aislamiento Elementor
 
@@ -1066,6 +1174,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.10` — 2026-08-10
+
+Hotfix visual de Empresas con Check-In y Registro Manual: iconos y paleta corporativa, superficies, controles, tablas y tarjetas de entrega compatibles con Dark Mode, más aislamiento final frente a Elementor/tema sin alterar AJAX, permisos ni lógica de tickets.
 
 ### `1.5.0-rc.9` — 2026-08-10
 
