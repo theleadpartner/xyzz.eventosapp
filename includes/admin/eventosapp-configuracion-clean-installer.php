@@ -2,7 +2,7 @@
 if ( ! defined('ABSPATH') ) exit;
 
 /**
- * Reinstalación limpia y automatización de páginas de EventosApp 1.5.0-rc.16.
+ * Reinstalación limpia y automatización de páginas de EventosApp 1.5.0-rc.17.
  * Se carga antes del core para sustituir únicamente el instalador y el
  * programador de la cola central.
  */
