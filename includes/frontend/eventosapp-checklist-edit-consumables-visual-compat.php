@@ -855,6 +855,24 @@ body.eventosapp-app-page #eventosapp-app-root .evapp-tx-shell .evapp-tx-pages .c
     color: #fff !important;
 }
 
+/* Estados semánticos de Light Mode: la neutralización de cards no borra éxito/error. */
+body.eventosapp-app-page #eventosapp-app-root .evapp-cscan .evapp-cscan-result.is-success,
+body.eventosapp-app-page #eventosapp-app-root .evapp-tx-shell .evapp-tx-message:not(.is-error),
+body.eventosapp-app-page #eventosapp-app-root .evapp-cons-notice:not(.is-error) {
+    background: #f0fdf4 !important;
+    border-color: #86efac !important;
+    color: #166534 !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-cscan .evapp-cscan-result.is-error,
+body.eventosapp-app-page #eventosapp-app-root .evapp-cscan .evapp-cscan-notice.is-error,
+body.eventosapp-app-page #eventosapp-app-root .evapp-tx-shell .evapp-tx-message.is-error,
+body.eventosapp-app-page #eventosapp-app-root .evapp-cons-notice.is-error {
+    background: #fef2f2 !important;
+    border-color: #fecaca !important;
+    color: #991b1b !important;
+}
+
 /* Estados semánticos en Dark Mode: conservan significado sin volver a blanco. */
 html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evchk-app :where(
     .evchk-notice,
