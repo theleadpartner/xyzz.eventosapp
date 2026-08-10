@@ -337,3 +337,14 @@ $eventosapp_support_ranking_raffle_visual_compat_file = __DIR__ . '/eventosapp-s
 if ( is_readable( $eventosapp_support_ranking_raffle_visual_compat_file ) ) {
     require_once $eventosapp_support_ranking_raffle_visual_compat_file;
 }
+
+/**
+ * Compatibilidad visual final para Expositor y Gestión de Expositores.
+ * Se carga después de las capas visuales existentes para que el CSS inline
+ * histórico de includes/admin/eventosapp-expositores.php no reintroduzca
+ * superficies claras ni estilos del Elementor Kit sobre Light/Dark Mode.
+ */
+$eventosapp_expositores_visual_compat_file = __DIR__ . '/eventosapp-expositores-visual-compat.php';
+if ( is_readable( $eventosapp_expositores_visual_compat_file ) ) {
+    require_once $eventosapp_expositores_visual_compat_file;
+}
