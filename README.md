@@ -4,12 +4,124 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.1`
+- **Versión candidata:** `1.5.0-rc.2`
 - **Fecha de corte:** 2026-08-09
-- **Base de la rama:** `cf67e7a09180277e2097768976371462e8dd1e07` (`main`)
-- **Rama de trabajo:** `feature/security-login-404-session-ui-20260809`
+- **Base de la rama:** `a424a2cdab5af2f9a9d95c23a788a2911b43ab64` (`main`)
+- **Rama de trabajo:** `fix/dashboard-login-session-panel-whitelabel-20260809`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** integración de seguridad, login, 404 y controles de sesión implementada en rama aislada; pendiente validación funcional en WordPress antes de promoción.
+- **Estado:** corrección de UX del login y sesión implementada sobre la seguridad integrada de `1.5.0-rc.1`; pendiente validación funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.2 — Login en Dashboard, sesión integrada y frontend white-label
+
+### Objetivo
+
+Corregir tres puntos de experiencia detectados después de integrar Seguridad en `1.5.0-rc.1`, sin modificar el motor de autenticación, permisos, auditoría ni funciones operativas existentes.
+
+### Dashboard sin sesión
+
+Cuando una persona abre la página configurada como Dashboard y todavía no inició sesión:
+
+- ya no se muestra únicamente el aviso “Debes iniciar sesión” con un enlace externo;
+- el Dashboard renderiza directamente el formulario real de `[custom_login_basic]`;
+- el formulario utiliza el mismo motor de autenticación de `EventosApp_Security`;
+- se conserva nonce, límite de intentos, auditoría, validación de roles y reCAPTCHA;
+- si reCAPTCHA está configurado, su script también se carga cuando el formulario aparece dinámicamente dentro del Dashboard;
+- los errores de credenciales, reCAPTCHA, bloqueo, rol o nonce permanecen en `/dashboard/` para evitar sacar al usuario del contexto de acceso;
+- un login correcto conserva las redirecciones por rol ya definidas en Seguridad.
+
+No se duplicó la autenticación ni se creó un segundo sistema de credenciales.
+
+### Usuario activo y acciones de sesión
+
+El control flotante introducido en `1.5.0-rc.1` se elimina visualmente.
+
+Ahora el usuario activo se presenta como una **barra integrada en el flujo de la UI**:
+
+- dentro de `.evapp-dashboard-shell` en el Dashboard;
+- al inicio del contenido de las páginas de módulos configuradas;
+- nunca usa `position: fixed` ni se superpone a contenido;
+- nombre visible y nombre de usuario permanecen disponibles;
+- en módulos aparece **Panel** para regresar al Dashboard;
+- todos los usuarios autenticados disponen de **Cerrar sesión**;
+- solamente Administradores ven **Administración**;
+- el responsive reorganiza las acciones como grilla y pasa a una columna en pantallas muy angostas.
+
+Se mantienen excluidas las pantallas de Autogestión/Kiosko y Sorteo Público para no exponer la sesión operativa a asistentes o público.
+
+### Frontend white-label
+
+La UI pública de esta capa deja de mostrar referencias a la plataforma subyacente:
+
+- se elimina la tarjeta anterior de backend del Dashboard;
+- se elimina la tarjeta anterior de cierre de sesión porque ambas acciones pasan a la barra integrada;
+- el acceso administrativo se llama **Administración**;
+- el botón no enlaza directamente a una ruta técnica visible: usa una acción firmada de EventosApp y la redirección al backend ocurre del lado del servidor;
+- el cierre de sesión usa igualmente una ruta firmada de EventosApp, evitando exponer la ruta nativa de autenticación en los enlaces del frontend;
+- las acciones están protegidas con nonce y validación de capacidades.
+
+La ocultación de la barra administrativa en el frontend continúa activa para todos los roles, incluido Administrador.
+
+### Compatibilidad
+
+La corrección se implementa como una capa pequeña posterior a `eventosapp-security.php`:
+
+- `eventosapp-security.php` no se reescribe;
+- autenticación, roles, hardening, auditoría, anti-spam y escáner permanecen intactos;
+- el hook del dock flotante anterior se retira después de inicializar Seguridad;
+- el filtro que agregaba las tarjetas de cuenta anteriores se retira antes de renderizar el Dashboard;
+- los shortcodes y módulos existentes no cambian su función principal.
+
+### Archivos de 1.5.0-rc.2
+
+```text
+includes/frontend/eventosapp-session-ui.php        NUEVO
+includes/frontend/eventosapp-frontend-helpers.php  MODIFICADO
+README.md                                           MODIFICADO
+```
+
+### Commits funcionales de la corrección
+
+```text
+e45300aff49ebff7c6c5a5075ea8a2977db20341  fix: integrate session controls and dashboard login
+09629f0b6d43fd93fc280884191b629a62fbe29e  fix: load integrated session UI
+29167ed4572f25369acfa76c1aeef84e7d5692d5  fix: keep dashboard login errors inline
+```
+
+## Validación funcional requerida para 1.5.0-rc.2
+
+### Dashboard y login
+
+- Abrir `/dashboard/` sin sesión y confirmar que aparece el formulario completo de inicio de sesión.
+- Confirmar que no aparece el antiguo mensaje con enlace como única opción.
+- Probar usuario/contraseña correctos e incorrectos desde `/dashboard/`.
+- Confirmar que los errores permanecen en `/dashboard/`.
+- Confirmar mostrar/ocultar contraseña.
+- Confirmar reCAPTCHA correcto, vacío e inválido cuando está configurado.
+- Confirmar nonce inválido/vencido.
+- Confirmar límite de intentos y bloqueo temporal.
+- Confirmar redirección posterior según rol.
+
+### Panel de sesión integrado
+
+- Confirmar que no existe ningún control flotante fijo en Dashboard ni módulos.
+- Confirmar nombre visible y usuario en la barra integrada.
+- Confirmar que en Dashboard la barra queda dentro del panel principal.
+- Confirmar que en módulos la barra forma parte del flujo normal y no tapa contenido.
+- Confirmar botón **Panel** en módulos.
+- Confirmar botón **Cerrar sesión** para todos los usuarios autenticados.
+- Confirmar botón **Administración** únicamente para Administradores.
+- Probar responsive en 320 px, 375 px, 430 px, tablet y desktop.
+- Confirmar que Kiosko/Autogestión y Sorteo Público no muestran datos de la sesión.
+
+### White-label
+
+- Revisar Dashboard y módulos y confirmar que la capa nueva no muestra el nombre de la plataforma subyacente.
+- Pasar el cursor sobre **Administración** y **Cerrar sesión** y confirmar que los enlaces visibles pertenecen a EventosApp/Dashboard.
+- Confirmar que **Administración** redirige correctamente al backend solo para Administradores.
+- Confirmar que un usuario sin capacidad administrativa no puede forzar la acción administrativa mediante URL.
+- Confirmar cierre de sesión y retorno a la página configurada de login.
+
+---
 
 ## Candidato 1.5.0-rc.1 — Seguridad integrada, Login, 404 y sesión del frontend
 
@@ -39,7 +151,7 @@ Se agregó un panel central con cinco bloques:
    - Desactivación configurable de XML-RPC.
    - Desactivación de pingbacks/trackbacks y cabecera `X-Pingback`.
    - Honeypot ligero para formularios de comentarios.
-   - Reducción de huellas de WordPress en el `<head>`.
+   - Reducción de huellas técnicas en el `<head>`.
    - Headers seguros compatibles: `X-Content-Type-Options`, `Referrer-Policy` y `X-Permitted-Cross-Domain-Policies`.
 
 3. **Anti-DDoS / control de abuso**
@@ -79,66 +191,36 @@ Ingreso Staff      /ingreso-staff/   [custom_login_basic]
 
 ### Login integrado
 
-El nuevo login conserva y mejora el flujo histórico:
+El login conserva:
 
-- Usuario o correo + contraseña.
-- Botón para **mostrar/ocultar la contraseña** sin alterar el valor escrito.
-- reCAPTCHA v2 cuando Site Key y Secret Key están configuradas simultáneamente.
-- Nonce de WordPress.
-- Límite de intentos.
-- Auditoría de acceso.
-- Validación de rol activo.
-- Redirección a la página definida para el rol; si no hay una específica, usa el Dashboard de EventosApp.
-- Si un usuario ya está autenticado y su rol está habilitado, la página de login lo envía al destino correspondiente.
-- Si está autenticado pero ningún rol está habilitado, se muestra un mensaje de acceso no permitido y la opción de cerrar sesión.
+- usuario o correo + contraseña;
+- mostrar/ocultar contraseña;
+- reCAPTCHA v2;
+- nonce;
+- límite de intentos;
+- auditoría;
+- validación de rol;
+- redirección por rol o Dashboard;
+- manejo de sesión ya iniciada.
 
-### Protección de `/wp-login.php` y `/wp-admin`
+### Protección de acceso técnico
 
-- `/wp-login.php` queda oculto para el flujo normal y deriva a la experiencia 404.
-- Se conservan las acciones necesarias de `logout` y `postpass` para no romper el cierre de sesión ni páginas protegidas por contraseña.
-- `/wp-admin` se bloquea a usuarios sin permiso de backend.
-- `admin-ajax.php`, `admin-post.php` y procesos cron permanecen disponibles para no romper acciones frontend existentes de EventosApp.
+- La ruta nativa de login queda fuera del flujo normal y deriva a la experiencia 404.
+- Se conservan las acciones imprescindibles para no romper logout ni páginas protegidas.
+- El backend se bloquea a usuarios sin permiso.
+- AJAX, admin-post y cron permanecen disponibles para no romper acciones frontend existentes.
 
-### Barra de WordPress, usuario activo y cierre de sesión
+### Barra administrativa y 404
 
-La barra administrativa de WordPress se oculta en todo el frontend **para todos los usuarios, incluido Administrador**.
-
-En páginas de gestión configuradas de EventosApp se incorpora un control de sesión compacto que muestra:
-
-- nombre del usuario activo;
-- nombre de usuario;
-- acceso al Dashboard cuando se está dentro de otro módulo;
-- botón **WordPress** solamente para administradores;
-- botón **Cerrar sesión** para todos los usuarios autenticados.
-
-Se excluyen expresamente del control flotante las pantallas de Autogestión/Kiosko y la pantalla pública del Sorteo para no mostrar datos de la sesión operativa a asistentes o público.
-
-El Dashboard también recibe, mediante su registro central de módulos:
-
-- tarjeta **Cerrar sesión**, con el usuario activo en la descripción;
-- tarjeta **Backend de WordPress**, visible únicamente para administradores y solo cuando el Dashboard está mostrando módulos para un evento activo.
-
-El control de sesión flotante mantiene ambos accesos disponibles incluso cuando el Dashboard todavía está en la pantalla de selección de evento.
-
-### Nueva página 404 de EventosApp
-
-El shortcode `[eventosapp_404]` crea una experiencia responsive y dinámica con lenguaje visual de tickets/QR:
-
-- usa el logo personalizado del sitio o el icono del sitio como imagen de marca;
-- animación de ticket, escáner y elementos flotantes con soporte `prefers-reduced-motion`;
-- mensaje contextual de EventosApp;
-- botón para regresar al Dashboard si existe sesión;
-- botón para ir al login cuando corresponde;
-- botón de página principal;
-- botón para volver a la página anterior;
-- la página configurada responde con estado HTTP 404;
-- las rutas 404 normales pueden redirigirse a esta experiencia.
+- La barra administrativa se oculta en todo el frontend para todos los usuarios.
+- `[eventosapp_404]` ofrece una experiencia propia con imagen de EventosApp, animaciones, botones de recuperación y estado HTTP 404.
+- Autogestión/Kiosko y Sorteo Público se mantienen fuera de cualquier control visual de sesión.
 
 ### Compatibilidad con Custom Login Basic
 
 Mientras el plugin histórico continúe activo, EventosApp muestra una advertencia administrativa. El shortcode integrado se vuelve a registrar al final de `init` para que la implementación de EventosApp sea la que renderice el formulario.
 
-Después de validar login, logout, roles, `/wp-admin`, 404 y reCAPTCHA, debe desactivarse **Custom Login Basic** para evitar que sus hooks antiguos sigan ejecutándose en paralelo.
+Después de validar login, logout, roles, backend, 404 y reCAPTCHA, debe desactivarse **Custom Login Basic** para evitar que sus hooks antiguos sigan ejecutándose en paralelo.
 
 ### Archivos del candidato 1.5.0-rc.1
 
@@ -148,71 +230,15 @@ includes/frontend/eventosapp-frontend-helpers.php   MODIFICADO
 README.md                                            MODIFICADO
 ```
 
-La carga del nuevo módulo se realiza desde `eventosapp-frontend-helpers.php`, que ya forma parte del bootstrap existente y se carga después de Configuración. De esta forma no se altera el orden histórico del archivo principal `eventosapp.php`.
-
-### Commits de implementación
+### Commits principales de 1.5.0-rc.1
 
 ```text
 77673d8990932c9a38da811654407174d02a618e  feat: integrate EventosApp security and custom login
 464368f3e05ad81bd0246a78949ab2db168a5d6c  feat: load integrated security before frontend modules
+85cc68d7ef3ec9aa65b05adb280dcf0041f896be  docs: document security candidate 1.5.0-rc.1
+1ed5f97cdfb4249f320baaba0a2367ef5b70ff93  fix: preserve safe login bootstrap and scanner accuracy
+1cc7d46de022353b0aed41a03a1d82e4cfb51fd0  fix: keep admin session actions responsive on mobile
 ```
-
-## Validación funcional requerida para 1.5.0-rc.1
-
-### Instalación y migración
-
-- Abrir `EventosApp > Configuración` y confirmar los nuevos selectores de Login y 404.
-- Ejecutar la instalación/reparación de páginas y confirmar que no duplica páginas válidas.
-- Verificar que `Ingreso Staff` contiene `[custom_login_basic]`.
-- Verificar que `404 | EventosApp` contiene `[eventosapp_404]`.
-- Con Custom Login Basic todavía activo, confirmar que EventosApp importa configuración y auditoría existentes.
-- Después de validar el nuevo flujo, desactivar Custom Login Basic y repetir todas las pruebas críticas.
-
-### Login y roles
-
-- Probar Administrador, Organizador, Staff, Logístico, Coordinador y Expositor.
-- Confirmar usuario/contraseña correctos e incorrectos.
-- Confirmar que el ojo muestra y vuelve a ocultar la contraseña.
-- Confirmar nonce vencido/incorrecto.
-- Confirmar reCAPTCHA correcto, vacío e inválido.
-- Confirmar bloqueo después del número configurado de intentos.
-- Confirmar que un rol deshabilitado no conserva la sesión.
-- Confirmar redirección al Dashboard o página específica configurada por rol.
-- Abrir la página de login estando autenticado y confirmar redirección automática.
-
-### Backend y cierre de sesión
-
-- Administrador: confirmar acceso directo a `/wp-admin` y botón de WordPress.
-- Usuario sin backend: confirmar que `/wp-admin` lleva a la página 404 configurada.
-- Confirmar que `admin-ajax.php` y `admin-post.php` siguen funcionando en módulos frontend.
-- Confirmar cierre de sesión desde Dashboard y desde un módulo.
-- Confirmar retorno a la página de login después del logout.
-- Confirmar que la barra de WordPress no aparece en frontend, incluso como Administrador.
-
-### UI de sesión
-
-- Confirmar nombre y usuario activo en Dashboard y módulos configurados.
-- Confirmar botón Panel al navegar por módulos.
-- Confirmar que el botón WordPress solo aparece para Administrador.
-- Confirmar responsive del control en móvil.
-- Confirmar que Autogestión/Kiosko y Sorteo Público no muestran el control de sesión.
-
-### 404
-
-- Abrir una URL inexistente y confirmar la experiencia EventosApp.
-- Confirmar estado HTTP 404 de la página final.
-- Probar “Volver al dashboard”, “Página principal” y “Página anterior”.
-- Abrir `/wp-login.php` y confirmar que no muestra el login nativo.
-- Abrir `/wp-admin` como usuario sin backend y confirmar redirección segura.
-
-### Seguridad adicional
-
-- Confirmar bloqueo de `?author=1`.
-- Confirmar que `/wp-json/wp/v2/users` no enumera usuarios para visitantes.
-- Confirmar XML-RPC bloqueado cuando la opción está activa.
-- Confirmar que los headers seguros no interfieren con QR, reconocimiento facial, Elementor o integraciones.
-- Ejecutar el diagnóstico antimalware y revisar cualquier hallazgo antes de producción.
-- Confirmar que no se aplica rate-limit global a check-in, QR o APIs operativas.
 
 ---
 
@@ -355,7 +381,7 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 3. Comparar la rama candidata contra su base documentada.
 4. Verificar que no existan archivos fuera de alcance.
 5. Validar sintaxis PHP de cada archivo modificado.
-6. Probar funcionalmente la rama en WordPress.
+6. Probar funcionalmente la rama en un entorno controlado.
 7. Crear una rama de promoción desde `main` de producción.
 8. Copiar únicamente la lista cerrada de archivos aprobados.
 9. Verificar hashes/blobs y comparar contra producción.
@@ -363,9 +389,13 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 
 ## Historial resumido
 
+### `1.5.0-rc.2` — 2026-08-09
+
+Corrección de UX y white-label: formulario completo en `/dashboard/` sin sesión, errores conservados en Dashboard, eliminación del control flotante, barra de usuario integrada al panel, acceso **Administración** solo para administradores y rutas frontend limpias para administración/logout.
+
 ### `1.5.0-rc.1` — 2026-08-09
 
-Seguridad integrada: reemplazo funcional de Custom Login Basic, login con visualización de contraseña, migración de configuración/auditoría, roles y backend, 404 propia, sesión visible y logout en Dashboard/módulos, botón administrativo, hardening anti-spam, control de abuso y diagnóstico antimalware.
+Seguridad integrada: reemplazo funcional de Custom Login Basic, login con visualización de contraseña, migración de configuración/auditoría, roles y backend, 404 propia, sesión visible y logout en Dashboard/módulos, hardening anti-spam, control de abuso y diagnóstico antimalware.
 
 ### `1.4.0-rc.1` — 2026-08-07
 
