@@ -54,7 +54,7 @@ includes/admin/eventosapp-configuracion-clean-ui.php         Etiquetas administr
 - página mapeada que conserva contenido ajeno o datos de Elementor;
 - página mapeada sin el shortcode requerido;
 - página existente detectada que debe mapearse;
-- página existente detectada que primero debe limpiarse y luego mapearse;
+- página existente detectada que primero debe limpiarse y luego mapearse, incluso cuando el shortcode solo estaba guardado dentro de `_elementor_data`;
 - shortcode cuyo módulo no está cargado;
 - página todavía inexistente.
 
@@ -154,6 +154,7 @@ effcf006bae959b045942e8efc2435a2ec1bef2c  feat: add canonical page cleanup polic
 5c7e8408c29eb0283eb2de3c052d6eb775c626e5  feat: make shortcode installation a clean reinstall
 e69eae7614149425ebf69d3f9bf4fbe090100a95  feat: expose clean reinstall state in configuration UI
 d350ab836b3143d60fa9d26db659663ed8c20ff0  feat: bootstrap clean shortcode page reinstall
+7e75685137d38794bce7b93dd0a77f927a89a985  fix: detect shortcode widgets stored only in Elementor data
 ```
 
 La rama incorporó posteriormente `main` mediante `07ee18f4b53b5a98746e5ef5619754e7f85da601` para incluir íntegramente `1.5.0-rc.16` antes de documentar y validar este hotfix.
@@ -178,7 +179,7 @@ También se ejecutó una prueba aislada de la política de limpieza con una pág
 - `_wp_page_template = elementor_canvas`;
 - un metadato funcional `_eventosapp_keep`.
 
-Resultado esperado y obtenido: `post_content` quedó exactamente en `[eventosapp_dashboard]`, se eliminaron los metadatos de Elementor y se conservó `_eventosapp_keep`.
+Resultado esperado y obtenido: `post_content` quedó exactamente en `[eventosapp_dashboard]`, se eliminaron los metadatos de Elementor y se conservó `_eventosapp_keep`. Una segunda prueba confirmó que una página cuyo shortcode existía únicamente dentro de `_elementor_data` también es detectada, reutilizada y normalizada; además se verificó que un shortcode no registrado detiene la operación antes de cualquier limpieza destructiva.
 
 ## Validación funcional requerida en WordPress
 
