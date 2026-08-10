@@ -326,3 +326,14 @@ $eventosapp_consumables_transactions_dark_compat_file = __DIR__ . '/eventosapp-c
 if ( is_readable( $eventosapp_consumables_transactions_dark_compat_file ) ) {
     require_once $eventosapp_consumables_transactions_dark_compat_file;
 }
+
+/**
+ * Compatibilidad visual final para Asistencia/Métricas de apoyo, Ranking de
+ * Networking y panel administrativo del Sorteo en Vivo. Se carga después de
+ * todos los hotfix visuales anteriores para que sus CSS inline históricos no
+ * reintroduzcan superficies claras ni estilos de Elementor/tema.
+ */
+$eventosapp_support_ranking_raffle_visual_compat_file = __DIR__ . '/eventosapp-support-ranking-raffle-visual-compat.php';
+if ( is_readable( $eventosapp_support_ranking_raffle_visual_compat_file ) ) {
+    require_once $eventosapp_support_ranking_raffle_visual_compat_file;
+}

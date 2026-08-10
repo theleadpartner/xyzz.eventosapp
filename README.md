@@ -4,12 +4,159 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.14`
+- **Versión candidata:** `1.5.0-rc.15`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `21ac902d32ae11d08f2f35b8fceca789c3b546b3` (`fix/checklist-edit-consumables-dark-branding-elementor-20260810`)
-- **Rama de trabajo:** `fix/consumables-transactions-dark-mode-20260810`
+- **Base de la rama:** `6ad70c60b4fe3cf3c3e0ccbc1b7e4425d1b99fd3` (`main`)
+- **Rama de trabajo:** `fix/support-ranking-raffle-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual específico para **Transacciones** y **Mis transacciones** de Control de Consumibles: corrección definitiva de los estados Activa, Cancelación solicitada y Anulada en Dark Mode, incluyendo tarjetas Staff, tabla administrativa, badges, chips, filtros, paginación y botones, sin modificar consultas, ledger, solicitudes de cancelación, reversos, saldos, AJAX, permisos ni auditoría; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual específico para **Asistencia/Métricas de equipo de apoyo**, **Ranking de Networking** y el **panel administrativo del Sorteo en Vivo**: identidad corporativa reforzada, superficies y controles compatibles con Light/Dark Mode y aislamiento final frente a CSS global de Elementor/tema, sin modificar registro de atenciones, QR/cámara, métricas/CSV, networking, selección aleatoria, ganadores ni la pantalla pública/proyección del sorteo; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.15 — Asistencia, Ranking de Networking y Sorteo en Vivo: identidad, Dark Mode y aislamiento Elementor
+
+### Incidencias detectadas
+
+La revisión de `includes/frontend/eventosapp-support-assistance.php`, `includes/frontend/eventosapp-ranking-networking.php` e `includes/frontend/eventosapp-live-raffle.php` confirmó el mismo patrón corregido en los hotfix visuales anteriores: los renderizadores funcionales ya están consolidados, pero todavía conservan CSS inline histórico con azules anteriores, superficies claras directas y reglas suficientemente específicas para competir con el shell corporativo, Dark Mode y el Elementor Kit.
+
+Los puntos principales fueron:
+
+1. **Asistencia y Métricas del equipo de apoyo:** `.evapp-support-app` mantiene `#fff`, `#fbfdff`, `#f8fafc` y aliases visuales históricos en métodos de identificación, resultados, buscador, KPI, barras, descarga CSV y tabla/ranking. En Dark Mode podían aparecer tarjetas blancas con textos preparados para fondo oscuro, exactamente como en las capturas de validación.
+2. **Buscador de Asistencia:** el `input[type="search"]` necesita conservar un espacio protegido para su icono y neutralizar decoraciones nativas WebKit/Chromium, evitando que una regeneración de Elementor/tema vuelva a acercar elementos al placeholder o al texto escrito.
+3. **Ranking de Networking:** `.evapp-ranking-wrapper` conserva paneles, encabezados de cards, chips, landing URL y estados vacíos con fondos claros directos. Esto producía encabezados blancos y contraste insuficiente dentro del canvas oscuro.
+4. **Sorteo en Vivo — panel administrativo:** `.evapp-raffle-admin` mantiene checks, stats, filtros, tabla, ganadores, empty states y formularios con blancos directos. Además, su escenario utilizaba una gradación anterior a la identidad corporativa actual.
+5. **Sorteo Público/proyección:** comparte archivo funcional con el panel administrativo, pero es una experiencia pública deliberadamente independiente. El hotfix debía corregir únicamente `.evapp-raffle-admin` y no aplicar el Dark Mode del Dashboard a la pantalla pública.
+6. Los tres archivos contienen lógica operativa estable —AJAX, permisos, QR/cámara, consultas, métricas, networking, selección aleatoria y ganadores— que no debe reescribirse para resolver un problema exclusivamente visual.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-support-ranking-raffle-visual-compat.php` como capa visual final dedicada a estos tres módulos. `includes/frontend/eventosapp-frontend-helpers.php` la carga después de branding, pulido general, aislamiento Elementor, compatibilidad QR, Búsqueda/Facial, Checklist/Edición/Consumibles y el hotfix específico de Transacciones de Consumibles. Su CSS se imprime mediante `wp_footer` con prioridad `1010`.
+
+El criterio continúa siendo deliberadamente conservador: **los tres archivos funcionales indicados se revisaron, pero no se reescribieron**. La nueva capa actúa sobre los wrappers y clases que ya producen y modifica únicamente presentación. De esta forma no se introduce riesgo innecesario sobre operaciones que actualmente funcionan correctamente.
+
+#### Imagen corporativa
+
+- `.evapp-support-eyebrow`, `.evapp-ranking-eyebrow` y `.evapp-raffle-eyebrow` quedan reafirmados con el icono oficial de EventosApp.
+- Light Mode utiliza `eventosapp_icon.svg`.
+- Dark Mode utiliza `eventosapp_icon_blanco.svg` para conservar contraste.
+- Los aliases históricos `--evapp-primary`, `--evapp-primary-dark`, `--evapp-primary-soft`, superficies, borde, texto y muted quedan remapeados a los tokens centrales del shell y a la paleta oficial `#171e37`, `#3683c5` y `#286291`.
+
+#### Asistencia y Métricas del equipo de apoyo
+
+Dentro de `.evapp-support-app` se corrigen exclusivamente propiedades visuales:
+
+- shell, contexto del evento, cards, métodos de identificación, resultados, KPI y tabla adoptan las superficies del tema activo;
+- títulos, textos auxiliares, labels, metadatos y estados recuperan contraste Light/Dark;
+- inputs y textarea usan `--eventosapp-app-input`, borde común y placeholder compatible con ambos temas;
+- el buscador `type="search"` mantiene `appearance:none`, elimina decoraciones nativas WebKit y reserva `46px` a ambos lados para proteger su composición;
+- métodos y resultados interactivos usan hover/focus corporativos sin regresar a blanco;
+- botones primarios, secundarios y de peligro preservan jerarquía y semántica;
+- selección de asistente, chips, avatares, iconos KPI, ranking y conteos usan acentos compatibles con Dark Mode;
+- barras horarias pasan a la gradación Azul oscuro → Azul corporativo;
+- descarga CSV, tabla y filas responsive dejan de volver a superficies claras;
+- éxito, advertencia y error mantienen colores semánticos con variantes adecuadas para Light/Dark;
+- el visor de cámara conserva intencionalmente su fondo técnico oscuro; únicamente se sincroniza su borde.
+
+No se modifica identificación por QR/cédula, registro de atención, motivo/nota, AJAX, permisos, cámara, métricas, agregaciones, ranking de usuarios ni exportación CSV.
+
+#### Ranking de Networking
+
+Dentro de `.evapp-ranking-wrapper` se corrigen:
+
+- wrapper, contexto de evento, paneles, cards y encabezados;
+- títulos, subtítulos, textos auxiliares y empty states;
+- chips de fecha/actualización;
+- campo de landing y sus controles Copiar/Abrir;
+- botón Actualizar ranking;
+- filas del ranking, hover, posición y contador;
+- posiciones 1, 2 y 3 conservan su semántica de podio con contraste adaptado al tema oscuro.
+
+No se modifica el cálculo de conexiones únicas, consulta de lectores/contactos, actualización de ranking, fecha/hora de datos, URL pública de networking ni permisos.
+
+#### Sorteo en Vivo — panel administrativo
+
+La corrección se limita a `.evapp-raffle-admin`; la pantalla pública/proyección queda fuera de todos los selectores de esta capa.
+
+Dentro del panel administrativo se sincronizan:
+
+- shell, contexto del evento, paneles, stats y checks de segmentación;
+- títulos, ayudas y metadatos;
+- selects, URL, búsqueda, inputs y textarea de ganadores;
+- botones primarios, secundarios, éxito, advertencia y peligro;
+- estado del sorteo público activo/inactivo;
+- tabla, encabezados, filas, badges y empty states;
+- tarjetas de ganadores confirmados;
+- escenario del sorteo, que conserva su función visual pero pasa a una composición corporativa basada en `#171e37`, `#286291` y `#3683c5`;
+- controles transparentes y campo de premio dentro del escenario conservan texto blanco y contraste sobre la gradación.
+
+No se modifica segmentación, elegibilidad, check-in presencial/virtual, networking, interacción con expositores, selección aleatoria, inicio del sorteo, confirmación/reintento, ganadores, notas, eliminación, estado público, AJAX ni pantalla de proyección.
+
+#### Aislamiento frente a Elementor y tema
+
+La prioridad adicional queda limitada a páginas mapeadas por EventosApp y a estos wrappers:
+
+```text
+body.eventosapp-app-page #eventosapp-app-root .evapp-support-app
+body.eventosapp-app-page #eventosapp-app-root .evapp-ranking-wrapper
+body.eventosapp-app-page #eventosapp-app-root .evapp-raffle-admin
+```
+
+Los `!important` se concentran en tokens y propiedades de presentación que deben ganar frente al CSS inline histórico, Elementor Kit y tema: fondos, bordes, color, controles, hover/focus, estados y placeholders. No se modifican atributos, listeners, datasets, grids operativos ni reglas de negocio.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/frontend/eventosapp-support-assistance.php` ni sus funciones de asistencia/métricas;
+- `includes/frontend/eventosapp-ranking-networking.php` ni su lógica de ranking;
+- `includes/frontend/eventosapp-live-raffle.php` ni su lógica de sorteo;
+- permisos, roles, capacidades, evento activo o alcance por evento;
+- nonces, endpoints AJAX, consultas SQL, caches o agregaciones;
+- identificación por QR/cédula, cámara o registro de atenciones;
+- motivos/notas de soporte, métricas por hora, ranking del equipo o CSV;
+- cálculo de conexiones únicas y datos de networking;
+- landing pública de networking;
+- filtros/segmentación de elegibles del sorteo;
+- activación/desactivación del sorteo público;
+- selección aleatoria, ganador, reintento, confirmación, premio, notas o eliminación;
+- pantalla pública/proyección del Sorteo en Vivo;
+- Dashboard, Consumibles, QR Check-In, Búsqueda Manual, Facial, Registro, Empresas, Seguridad ni otros módulos;
+- estilos Elementor de páginas WordPress no mapeadas por EventosApp.
+
+### Archivos de 1.5.0-rc.15
+
+```text
+includes/frontend/eventosapp-support-ranking-raffle-visual-compat.php  NUEVO
+includes/frontend/eventosapp-frontend-helpers.php                      MODIFICADO
+README.md                                                               MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+41b94f9e09a5b5b09b908b36deb729c8a662906e  feat: add support ranking and raffle visual compatibility
+07aaf1655691257a25de77a3f808d6f89b493d5d  feat: load support ranking and raffle compatibility layer
+```
+
+## Validación funcional requerida para 1.5.0-rc.15
+
+- Abrir **Asistencia** en Light Mode y confirmar icono corporativo, paleta, evento, métodos QR/cédula, buscador, resultados, motivo/nota y botones.
+- Activar Dark Mode y confirmar que métodos, resultados, inputs, selección, estados y paneles permanecen oscuros y legibles.
+- Confirmar que el buscador conserva espacio para su composición y que ninguna decoración nativa invade placeholder/texto.
+- Probar identificación por cédula y, en un entorno con cámara, lectura QR; confirmar que la capa visual no altera detección ni registro.
+- Registrar una atención y confirmar éxito/error/advertencia sin cambios funcionales.
+- Abrir **Métricas de equipo de apoyo** y revisar KPI, barras por hora, descarga CSV y ranking de usuarios en Light/Dark.
+- Abrir **Ranking de Networking** y confirmar evento, chips, actualización, landing URL, cards, empty states y filas de ranking en ambos temas.
+- Ejecutar Actualizar ranking y Copiar URL/Abrir landing; el comportamiento funcional debe permanecer idéntico.
+- Abrir **Sorteo en Vivo** en modo administrativo y confirmar shell, evento, panel público, configuración/segmentación, stats, escenario, tabla y ganadores en Light/Dark.
+- Confirmar que checks, selects, URL, búsqueda, premio y notas no regresan a blanco en Dark Mode.
+- Probar hover/focus/disabled de los botones principales, secundarios y semánticos.
+- Ejecutar una simulación controlada de guardar configuración, iniciar sorteo, reintentar y confirmar ganador para verificar que la lógica no fue alterada.
+- Abrir la **pantalla pública/proyección del Sorteo** y confirmar que conserva su experiencia visual propia; este hotfix no debe aplicar el Dark Mode del Dashboard allí.
+- Cambiar Light/Dark con cada módulo ya cargado y confirmar actualización inmediata de superficies y controles.
+- Probar 320 px, 375 px, 430 px, tablet y desktop sin overflow ni pérdida de controles.
+- Regenerar CSS de Elementor y volver a abrir Asistencia, Ranking y Sorteo; la identidad EventosApp debe mantenerse.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que su Elementor Kit permanece intacto.
+
+---
 
 ## Hotfix 1.5.0-rc.14 — Transacciones de Consumibles: estados compatibles con Dark Mode
 
@@ -1717,6 +1864,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.15` — 2026-08-10
+
+Hotfix visual de Asistencia/Métricas de equipo de apoyo, Ranking de Networking y panel administrativo del Sorteo en Vivo: firma corporativa reforzada, superficies, formularios, KPI/tablas/cards y estados compatibles con Dark Mode, protección del buscador de Asistencia y aislamiento final frente a Elementor/tema, sin reescribir los tres archivos funcionales indicados ni alterar atenciones, QR/cámara, métricas/CSV, networking, sorteo, ganadores o pantalla pública/proyección.
 
 ### `1.5.0-rc.14` — 2026-08-10
 
