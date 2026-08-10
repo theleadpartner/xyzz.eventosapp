@@ -2,7 +2,7 @@
 if ( ! defined('ABSPATH') ) exit;
 
 /**
- * Política canónica de páginas gestionadas por EventosApp 1.5.0-rc.16.
+ * Política canónica de páginas gestionadas por EventosApp 1.5.0-rc.17.
  * Se carga antes del core de Configuración para sustituir únicamente helpers
  * del instalador protegidos con function_exists().
  */
