@@ -387,6 +387,41 @@ body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
     color: var(--evapp-text) !important;
 }
 
+/* Conserva los textos auxiliares discretos y, en Light Mode, la semántica
+ * cromática original de modalidad/estado aunque las reglas generales usen
+ * !important para bloquear interferencias de Elementor. */
+body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app :where(
+    .evapp-flow-metrics-question-meta span,
+    .evapp-flow-metrics-chart-empty,
+    .evapp-flow-metrics-note
+) {
+    color: var(--evapp-muted) !important;
+}
+
+html:not([data-evapp-theme="dark"]) body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-chip.is-active {
+    background: var(--evapp-success-soft) !important;
+    border-color: #cfeadf !important;
+    color: var(--evapp-success) !important;
+}
+
+html:not([data-evapp-theme="dark"]) body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-status.is-loading {
+    background: var(--evapp-warning-soft) !important;
+    border-color: #f1dfad !important;
+    color: var(--evapp-warning) !important;
+}
+
+html:not([data-evapp-theme="dark"]) body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-status.is-ok {
+    background: var(--evapp-success-soft) !important;
+    border-color: #cfeadf !important;
+    color: var(--evapp-success) !important;
+}
+
+html:not([data-evapp-theme="dark"]) body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-status.is-error {
+    background: var(--evapp-danger-soft) !important;
+    border-color: #f2cccc !important;
+    color: var(--evapp-danger) !important;
+}
+
 body.eventosapp-app-page #eventosapp-app-root .evapp-flow-metrics-app .evapp-flow-metrics-select {
     -webkit-appearance: auto !important;
     appearance: auto !important;
