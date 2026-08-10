@@ -303,3 +303,15 @@ $eventosapp_search_face_visual_compat_file = __DIR__ . '/eventosapp-search-face-
 if ( is_readable( $eventosapp_search_face_visual_compat_file ) ) {
     require_once $eventosapp_search_face_visual_compat_file;
 }
+
+/**
+ * Compatibilidad visual final para Checklist, Edición de asistentes y
+ * Consumibles. Se carga al final de la cadena visual porque estos módulos
+ * conservan CSS inline histórico y necesitan que la identidad corporativa,
+ * Dark Mode y el aislamiento frente a Elementor/tema prevalezcan sin tocar
+ * su lógica operativa.
+ */
+$eventosapp_checklist_edit_consumables_visual_compat_file = __DIR__ . '/eventosapp-checklist-edit-consumables-visual-compat.php';
+if ( is_readable( $eventosapp_checklist_edit_consumables_visual_compat_file ) ) {
+    require_once $eventosapp_checklist_edit_consumables_visual_compat_file;
+}
