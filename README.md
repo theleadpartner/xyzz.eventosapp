@@ -2,167 +2,135 @@
 
 Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
 
-> **Historial preservado:** el estado detallado completo hasta `1.5.0-rc.18` se conserva sin omitir avances anteriores en [`docs/history/README-through-1.5.0-rc.18.md`](docs/history/README-through-1.5.0-rc.18.md). El historial acumulado anterior hasta `1.5.0-rc.16` continúa disponible en [`docs/history/README-through-1.5.0-rc.16.md`](docs/history/README-through-1.5.0-rc.16.md).
+> **Historial preservado:** el estado detallado completo hasta `1.5.0-rc.19` se conserva en [`docs/history/README-through-1.5.0-rc.19.md`](docs/history/README-through-1.5.0-rc.19.md). Los snapshots anteriores continúan disponibles en `docs/history/`.
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.19`
+- **Versión candidata:** `1.5.0-rc.20`
 - **Fecha de corte:** 2026-08-10
-- **Base integrada:** `b4c5783b50e1fe52fd0c89ef4b745d189d4922f9` (`main`, merge del hotfix funcional de la 404 sobre `1.5.0-rc.18`)
-- **Rama de trabajo/documentación:** `fix/404-dark-branding-elementor-20260810`
+- **Base integrada:** `9dd985c36d0d12ab5a69b1bb14b29b77e6a79bdc` (`main`, documentación final de `1.5.0-rc.19`)
+- **Rama de trabajo:** `fix/install-layout-status-queue-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual de la página 404 integrado en `main` mediante PR #26. Se unifican imagen corporativa, Light/Dark Mode y aislamiento frente al CSS global de Elementor/tema sin modificar la lógica de seguridad, el estado HTTP 404 ni la navegación existente. Pendiente validación visual/funcional en WordPress antes de promover a producción.
+- **Estado:** corrección integral del flujo de reinstalación limpia: separación visual uniforme bajo el header para páginas gestionadas, evaluación persistente del estado canónico después de recargar, recuperación del worker de reinstalación cuando REST loopback/WP-Cron no despiertan a tiempo y control para borrar la notificación de progreso una vez terminada o cancelada sin eliminar el historial técnico de la tarea.
 
-## Hotfix 1.5.0-rc.19 — Página 404 corporativa, Dark Mode y aislamiento Elementor
+## Hotfix 1.5.0-rc.20 — Layout unificado, diagnóstico estable y recuperación de reinstalación
 
-### Incidencia detectada
+### 1. Separación uniforme debajo del header de EventosApp
 
-La página generada por `[eventosapp_404]` conservaba CSS inline histórico dentro de `includes/admin/eventosapp-security.php`. La capa corporativa general ya reconocía la 404 como una página gestionada y aplicaba algunos tokens, pero existían reglas incompatibles entre sí:
+La normalización limpia de `1.5.0-rc.17` elimina correctamente cualquier contenedor externo de Elementor y deja cada página con su shortcode canónico. Como consecuencia, varios módulos dependían todavía del margen/padding que antes aportaba el builder y quedaban visualmente pegados al cabezote propio de EventosApp. El Dashboard no sufría el problema porque `1.5.0-rc.18` ya le había agregado un gutter nativo.
 
-1. El contenedor raíz `.evapp-404` mantenía un fondo claro hardcodeado incluso cuando `data-evapp-theme="dark"` estaba activo.
-2. La capa global convertía `.evapp-404-card` en una superficie oscura, por lo que en Dark Mode aparecía una tarjeta oscura dentro de un canvas todavía claro, tal como se observa en la referencia reportada.
-3. El shortcode conservaba colores, tipografía, botones y estados hover con especificidad insuficiente frente a Elementor/tema.
-4. El logo original podía depender de la imagen configurada en WordPress, mientras que la identidad corporativa actual de EventosApp exige usar de forma determinista los wordmarks oficiales del plugin.
-5. El layout original tenía poco espacio interno cuando la tarjeta era remapeada por la capa global, lo que hacía que botones y contenido quedaran visualmente comprimidos o al límite del contenedor.
+Se actualizó `templates/eventosapp-app-page.php` para que **todas las páginas gestionadas por EventosApp** reserven desde el template de aplicación el mismo espacio vertical y horizontal, independientemente de Elementor:
 
-### Corrección aplicada
+- escritorio: `clamp(12px, 1.4vw, 20px)` arriba, `16px` laterales y `clamp(24px, 2.4vw, 36px)` abajo;
+- móvil hasta `767px`: `12px` uniformes;
+- el Dashboard conserva su ancho boxed de `1200px` y su centrado nativo;
+- no se vuelve a introducir ningún wrapper de Elementor ni contenido adicional en las páginas.
 
-Se agregó una capa final y estrictamente visual en:
+El espacio deja de depender del shortcode concreto y queda definido una sola vez en el shell de aplicación.
 
-```text
-includes/frontend/eventosapp-404-visual-compat.php
-```
+### 2. El evaluador ya no vuelve a marcar una página limpia como dañada al recargar
 
-Esta capa se carga al final del stack visual desde `includes/frontend/eventosapp-frontend-helpers.php` y se imprime en `wp_footer` con prioridad `1012`, después de branding, Dark Mode, aislamiento general de Elementor y los hotfix de módulos ya integrados.
+El diagnóstico de `eventosapp-configuracion-clean-policy.php` comparaba el estado limpio contra **cualquier** metadato `_elementor_*`. Esto era demasiado estricto para Elementor, porque el builder puede regenerar metadatos de cache al visitar una página aun cuando ya no exista ningún widget, contenedor ni documento Elementor activo. El resultado era el observado: inmediatamente después de reinstalar aparecía `Correcto`, pero una recarga podía volver a mostrar `Mapeada · requiere limpieza`.
 
-La activación queda limitada a la página 404 configurada en `eventosapp_security['error_404_page_id']`; como respaldo, también reconoce una página que contenga directamente `[eventosapp_404]`. No se aplica globalmente al resto de WordPress.
+La política de `1.5.0-rc.20` separa ahora dos conceptos:
 
-### Imagen corporativa
+- **limpieza física:** al reinstalar se siguen eliminando todos los metadatos `_elementor_*` y cualquier template Elementor asociado;
+- **salud canónica:** al evaluar después de una recarga solo invalidan la página los residuos capaces de cambiar el documento renderizado: `_elementor_data` con contenido real, `_elementor_edit_mode=builder` o un template de página Elementor.
 
-La 404 utiliza ahora los activos oficiales mediante `eventosapp_brand_asset_url()`:
+Además, la comparación del `post_content` normaliza únicamente saltos de línea y espacios exteriores inocuos. Sigue sin aceptar HTML, bloques, widgets o contenido extra: el único contenido funcional permitido continúa siendo el shortcode canónico de la definición.
 
-- **Light Mode:** `eventosapp_color.svg`.
-- **Dark Mode:** `eventosapp_blanco.svg`.
+### 3. Recuperación del automatizador de reinstalación
 
-La imagen de logo que pudiera suministrar el sitio queda oculta dentro de esta superficie para impedir variaciones accidentales de marca. La ilustración de ticket/QR se mantiene, pero sus azules quedan normalizados a la paleta vigente:
+La cola central ya dispone de REST loopback y respaldo WP-Cron, pero en el entorno reportado la tarea `eventosapp_install_pages` podía permanecer en `queued` sin procesar ningún lote. Para no modificar el comportamiento de otras tareas masivas o programadas se añadió una recuperación **exclusiva** de la reinstalación de páginas en:
 
 ```text
-#171e37  Oscuro corporativo
-#3683c5  Azul corporativo
-#286291  Azul oscuro corporativo
+includes/admin/eventosapp-configuracion-queue-recovery.php
 ```
 
-### Light/Dark Mode
+La nueva capa mantiene a `includes/functions/eventosapp-task-queue-core.php` como autoridad de estados, locks, cursores, métricas y logs, pero incorpora tres mecanismos adicionales para esta tarea concreta:
 
-Se corrige la causa del contraste inconsistente de la captura:
+1. Al crear `eventosapp_install_pages`, inicia un worker alterno firmado mediante `admin-ajax.php`, con un timeout de conexión razonable y sin bloquear la respuesta del administrador.
+2. El worker alterno procesa exactamente los mismos lotes mediante `eventosapp_task_queue_process_task()`, respeta el lock central y se autoencadena usando `next_run_at` hasta llegar a un estado terminal.
+3. Si el hosting bloquea también ese loopback, abrir **Configuración** o **Cola y Tareas**, y especialmente el polling de progreso que ya existía cada 2,5 segundos, intenta un lote seguro antes de devolver el estado. De esta forma una tarea vieja que quedó detenida puede recuperarse sin recrearla.
 
-- el canvas de la 404 usa las superficies `--eventosapp-app-*` del tema activo;
-- el fondo decorativo conserva sus gradientes, pero cambia correctamente entre Light y Dark;
-- la tarjeta principal usa superficie, borde, texto, muted y sombra del shell de EventosApp;
-- título y texto nunca heredan colores del tema externo;
-- la ilustración del ticket permanece deliberadamente clara como objeto gráfico y fuerza texto oscuro para evitar blanco sobre blanco en Dark Mode;
-- la etiqueta **Ruta no encontrada** tiene variante específica de contraste en Dark Mode;
-- botones primario y secundarios tienen estados normal, hover, focus y focus-visible compatibles con ambos modos.
+Un transient por tarea serializa el fallback para impedir cadenas paralelas. Si el worker normal REST/cron sí está activo, el lock central evita cualquier procesamiento duplicado.
 
-### Aislamiento frente a Elementor y tema
+### 4. La notificación de progreso terminada o cancelada se puede borrar
 
-Los selectores quedan acotados a:
+La tarjeta azul de progreso de Configuración permanecía visible porque `eventosapp_installation_task_id` seguía apuntando a la última tarea aunque ya estuviera `completed`, `failed`, `cancelled`, `expired` o `archived`.
+
+Ahora, cuando la tarea ya no está activa, la tarjeta muestra **Borrar notificación**. La acción:
+
+- exige `manage_options` y nonce;
+- no está disponible mientras la tarea siga activa o pausada;
+- elimina únicamente el puntero visual `eventosapp_installation_task_id`;
+- **no elimina la tarea, logs, métricas ni historial técnico** de Cola y Tareas.
+
+Si se necesita eliminar el registro técnico completo, se mantiene la acción existente de eliminación dentro de **Cola y Tareas**.
+
+## Archivos de 1.5.0-rc.20
 
 ```text
-body.eventosapp-app-page #eventosapp-app-root .evapp-404
+templates/eventosapp-app-page.php                              MODIFICADO — gutter común para todas las páginas app y boxed del Dashboard preservado
+includes/admin/eventosapp-configuracion-clean-policy.php      MODIFICADO — estado canónico estable y distinción entre cache y residuos renderizables de Elementor
+includes/admin/eventosapp-configuracion-queue-recovery.php    NUEVO — recuperación específica del worker y borrado de notificación terminal
+includes/admin/eventosapp-configuracion.php                   MODIFICADO — carga de la nueva capa de recuperación
+docs/history/README-through-1.5.0-rc.19.md                    NUEVO — snapshot íntegro del ciclo anterior
+README.md                                                       MODIFICADO — versión, alcance, diagnóstico y validación
 ```
 
-La capa normaliza con especificidad final y `!important` únicamente las propiedades visuales necesarias: fondo, borde, color, tipografía, text-transform, shadow, padding, botones, hover/focus y elementos decorativos. De esta forma un Elementor Kit o el tema no pueden volver a introducir colores, subrayados, transformaciones, fondos o estados ajenos a la UI de EventosApp.
-
-No se altera Elementor fuera de páginas administradas por EventosApp.
-
-### Layout y responsive
-
-La 404 deja de depender de la composición accidental producida por las reglas anteriores:
-
-- canvas de ancho completo bajo el header propio de EventosApp;
-- tarjeta centrada con máximo de `880px` y padding interno consistente;
-- radio, borde y sombra sincronizados con el shell corporativo;
-- botones flexibles en escritorio y apilados en móvil;
-- ajustes dedicados para `760px` y `560px`;
-- se conserva el soporte de reducción de movimiento ya presente en el shortcode original.
-
-### Alcance funcional preservado
-
-`includes/admin/eventosapp-security.php` **no se modifica**. Continúan intactos:
-
-- registro y callback de `[eventosapp_404]`;
-- respuesta HTTP `404` de la página configurada;
-- redirección de URLs inexistentes hacia la experiencia 404;
-- protección de `/wp-login.php` y `/wp-admin`;
-- login, roles, permisos, nonces, auditoría y hardening;
-- elección entre botón Dashboard o Login según sesión;
-- enlace a la página principal;
-- lógica JavaScript de **Volver a la página anterior**;
-- exclusión de controles de cuenta dentro de la 404;
-- normalización limpia de páginas de `1.5.0-rc.17`;
-- boxed nativo del Dashboard de `1.5.0-rc.18`.
-
-### Archivos de 1.5.0-rc.19
+## Commits funcionales
 
 ```text
-includes/frontend/eventosapp-404-visual-compat.php      NUEVO — capa visual final exclusiva de la 404
-includes/frontend/eventosapp-frontend-helpers.php       MODIFICADO — carga de la nueva capa al final del stack
-docs/history/README-through-1.5.0-rc.18.md              NUEVO — snapshot histórico íntegro previo
-README.md                                                 MODIFICADO — versión, alcance y validación
+96c3c1cf145842e04621e694bb47d6d16738ff90  fix: stabilize clean installation status
+4689a3f4b51d6abe7584bc162fbcd83cf16e9fb9  fix: unify managed page spacing below app header
+1599dbc9ad9efe8059ff59991a785ed4a1516789  fix: recover installation queue and dismiss finished progress
+18050007b52f2bf467e43ffbf824012b1aafd311  fix: serialize fallback installation workers
+a17c82268540e7142aedd5cbf75d02315be69298  feat: load installation queue recovery layer
+0843c3af24de458668d8f03bcb7ab4435ef037d1  docs: preserve detailed history through rc19
 ```
 
-### Commits y merge funcional
+## Alcance preservado
 
-```text
-b4dc65e541646fa917635b6324c0f5ebb5fb7d8f  feat: add 404 visual compatibility layer
-f4340023b771026699bd808f2285c7c5cd3de325  feat: load 404 visual compatibility layer
-b4c5783b50e1fe52fd0c89ef4b745d189d4922f9  Merge PR #26 — hotfix funcional 404 a main
-e6e0428e2d54da772ab6de9ca1b8db282a48a65d  docs: preserve detailed history through rc18
-```
+No se modifican:
 
-### Validación técnica realizada
+- callbacks ni lógica funcional de los shortcodes;
+- permisos, nonces, autenticación o seguridad de los módulos;
+- lógica de creación/actualización de asistentes, check-in, métricas, consumibles, networking, expositores o sorteo;
+- estructura de tablas de la cola central;
+- procesamiento de tareas diferentes a `eventosapp_install_pages`;
+- historial, métricas o logs de una tarea al borrar solamente su notificación;
+- el aislamiento visual frente a Elementor/tema ni los hotfix Light/Dark ya integrados;
+- la página 404 corporativa de `1.5.0-rc.19`;
+- el boxed nativo del Dashboard de `1.5.0-rc.18`.
 
-- La implementación funcional fue construida sobre `1bac5e162538fe4e910b1777d104d15f182e4477`, que ya contenía `1.5.0-rc.18`; por tanto no omite el boxed del Dashboard ni la normalización de páginas anterior.
-- Antes del merge funcional, la comparación con `main` estaba **2 commits adelante y 0 atrás**.
-- PR #26 integró esos dos commits en `main` mediante `b4c5783b50e1fe52fd0c89ef4b745d189d4922f9`.
-- El diff funcional se limitó exactamente a la nueva capa 404 y a 11 líneas de loader en `eventosapp-frontend-helpers.php`.
-- El commit del loader fue verificado y no contiene eliminaciones ni reescrituras de helpers existentes.
-- No se modifica el renderizador funcional de la página 404 ni el módulo de Seguridad.
+## Validación requerida en WordPress
 
-La validación visual final requiere el entorno WordPress real porque el resultado depende del documento generado por WordPress, del tema activo y de las hojas que Elementor inyecta en ejecución.
+Antes de promover `1.5.0-rc.20`:
 
-## Validación funcional requerida en WordPress
-
-Antes de promover `1.5.0-rc.19`:
-
-- Abrir la página 404 configurada en **Light Mode** y confirmar logo oficial a color, canvas claro, tarjeta legible y botones con la paleta corporativa.
-- Cambiar a **Dark Mode** y confirmar logo blanco, canvas oscuro, tarjeta oscura, textos/etiqueta legibles y ausencia del gran fondo claro mostrado en la incidencia.
-- Recargar la página y confirmar que se conserva el tema elegido.
-- Probar como usuario autenticado y confirmar **Volver al dashboard**.
-- Probar sin sesión y confirmar que aparece **Ir al inicio de sesión** cuando existe login configurado.
-- Probar **Ir a la página principal** y **Volver a la página anterior**.
-- Abrir una URL realmente inexistente y confirmar que termina en la experiencia EventosApp y conserva respuesta HTTP 404.
-- Probar `/wp-login.php` y `/wp-admin` con un usuario sin backend para confirmar que el hardening previo no cambió.
-- Regenerar CSS de Elementor y volver a revisar la 404 para confirmar que no reaparecen estilos externos en botones, tipografía o fondos.
-- Probar 320px, 375px, 430px, tablet, 1366px, 1440px y 1920px, verificando que no exista scroll horizontal ni botones cortados.
-- Abrir Dashboard y confirmar que conserva el boxed nativo de `1.5.0-rc.18`.
-- Abrir al menos un módulo operativo y una página WordPress ajena a EventosApp para confirmar que la nueva capa no produce efectos colaterales.
+- Abrir Dashboard y varios módulos operativos y confirmar el mismo espacio bajo el header, sin contenido pegado al cabezote y sin scroll horizontal.
+- Confirmar que el Dashboard continúa centrado y limitado a `1200px`.
+- Reinstalar en limpio una página que tenía Elementor, verificar `Correcto`, recargar varias veces y confirmar que permanece `Correcto` aunque Elementor regenere caches internos.
+- Volver a introducir contenido Elementor real en una página gestionada y confirmar que el evaluador vuelve a exigir limpieza.
+- Lanzar **Reinstalar / normalizar todas en segundo plano** y confirmar que `processed_items` avanza desde `0`, que la tarea completa los 28 elementos y que el detalle de Cola y Tareas registra los lotes.
+- Probar la recuperación con la pantalla de Configuración abierta y confirmar que el polling hace avanzar una tarea previamente detenida.
+- Cancelar una reinstalación, volver a Configuración y confirmar que aparece **Borrar notificación**.
+- Completar una reinstalación y confirmar la misma acción. Al borrarla, verificar que la tarjeta desaparece pero el registro sigue disponible en Cola y Tareas.
+- Confirmar que otras tareas masivas/programadas mantienen su comportamiento anterior.
+- Revisar 320px, 375px, 430px, tablet, 1366px, 1440px y 1920px en Light/Dark Mode.
 
 ## Estado acumulado reciente
 
-La base de `1.5.0-rc.19` ya contiene los avances anteriores, entre ellos:
-
-- **1.5.0-rc.18:** Dashboard boxed nativo de `1200px` sin depender de Elementor.
-- **1.5.0-rc.17:** reinstalación/normalización canónica de páginas y eliminación de residuos de Elementor.
+- **1.5.0-rc.20:** gutter unificado de páginas, diagnóstico limpio persistente, recuperación de la reinstalación y notificación terminal descartable.
+- **1.5.0-rc.19:** página 404 corporativa, Light/Dark y aislamiento Elementor/tema.
+- **1.5.0-rc.18:** Dashboard boxed nativo de `1200px`.
+- **1.5.0-rc.17:** reinstalación/normalización canónica de páginas y limpieza de residuos Elementor.
 - **1.5.0-rc.16:** Expositores — identidad corporativa, Light/Dark y aislamiento Elementor/tema.
 - **1.5.0-rc.15:** Asistencia, Ranking de Networking y Sorteo administrativo — compatibilidad visual final.
 - **1.5.0-rc.14:** estados de Transacciones de Consumibles en Dark Mode.
 - **1.5.0-rc.13:** Checklist, Edición y Consumibles.
 - **1.5.0-rc.12:** Búsqueda Manual y Check-In Facial.
 
-El detalle íntegro de `1.5.0-rc.17`, `1.5.0-rc.18` y todos los ciclos previos permanece en [`docs/history/README-through-1.5.0-rc.18.md`](docs/history/README-through-1.5.0-rc.18.md).
-
 ## Regla de promoción
 
-Este repositorio sigue siendo el entorno de pruebas. `1.5.0-rc.19` no debe promoverse a `theleadpartner/EventosApp` hasta validar la 404 en Light/Dark, con y sin sesión, después de regenerar CSS de Elementor y en los breakpoints indicados, además de confirmar que los avances funcionales de `1.5.0-rc.17` y el boxed de `1.5.0-rc.18` permanecen intactos.
+Este repositorio sigue siendo el entorno de pruebas. `1.5.0-rc.20` no debe promoverse a `theleadpartner/EventosApp` hasta validar en WordPress real el espaciado común, la persistencia del diagnóstico después de recargar, el avance real de la reinstalación masiva y el borrado independiente de su notificación terminal.
