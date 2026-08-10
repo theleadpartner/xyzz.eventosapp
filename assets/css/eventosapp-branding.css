@@ -1,12 +1,12 @@
 /*
- * EventosApp — Identidad corporativa
+ * EventosApp — Identidad corporativa + shell de aplicación
  * Paleta oficial:
  *   Oscuro:      #171e37
  *   Azul:        #3683c5
  *   Azul oscuro: #286291
  *
- * Esta hoja es una capa de marca. No cambia estructura, tamaños, grids,
- * responsive ni comportamiento de los módulos existentes.
+ * Esta hoja centraliza marca, chrome de aplicación y temas Light/Dark sin
+ * modificar la lógica, permisos ni comportamiento de los módulos existentes.
  */
 
 :root {
@@ -16,19 +16,267 @@
   --eventosapp-brand-blue-soft: #edf5fb;
   --eventosapp-brand-blue-softer: #f5f9fd;
   --eventosapp-brand-focus: rgba(54, 131, 197, .16);
+
+  --eventosapp-app-canvas: #ffffff;
+  --eventosapp-app-surface: #ffffff;
+  --eventosapp-app-surface-soft: #f5f8fc;
+  --eventosapp-app-surface-raised: #ffffff;
+  --eventosapp-app-text: #171e37;
+  --eventosapp-app-muted: #66758f;
+  --eventosapp-app-border: #dfe7f1;
+  --eventosapp-app-input: #ffffff;
+  --eventosapp-app-shadow: 0 12px 34px rgba(23, 30, 55, .07);
 }
 
-/*
- * Mapa de tokens para las distintas generaciones de UI de EventosApp.
- *
- * La clase de ámbito `.eventosapp-branding` aporta la misma especificidad que
- * los defaults históricos de una sola clase. Como esta hoja se imprime al final,
- * los nuevos tokens sustituyen esos defaults sin usar !important. Los selectores
- * explícitos de Elementor (dos o más clases) conservan mayor especificidad.
- *
- * Se apuntan únicamente contenedores raíz: no se reescriben variables en hijos,
- * de modo que una personalización aplicada al root continúe heredándose.
- */
+html[data-evapp-theme="dark"] {
+  --eventosapp-app-canvas: #0e1424;
+  --eventosapp-app-surface: #171e37;
+  --eventosapp-app-surface-soft: #121a2d;
+  --eventosapp-app-surface-raised: #1d2742;
+  --eventosapp-app-text: #f3f6fb;
+  --eventosapp-app-muted: #aab6ca;
+  --eventosapp-app-border: #2c3958;
+  --eventosapp-app-input: #11192b;
+  --eventosapp-app-shadow: 0 14px 38px rgba(0, 0, 0, .24);
+  --eventosapp-brand-focus: rgba(54, 131, 197, .28);
+}
+
+/* ==========================================================
+ * Shell de aplicación para páginas mapeadas en Configuración
+ * ========================================================== */
+body.eventosapp-app-page {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--eventosapp-app-canvas);
+  color: var(--eventosapp-app-text);
+  transition: background-color .18s ease, color .18s ease;
+}
+
+body.eventosapp-app-page,
+body.eventosapp-app-page * {
+  box-sizing: border-box;
+}
+
+body.eventosapp-app-page .evapp-app-root {
+  min-height: calc(100vh - 76px);
+  width: 100%;
+  background: var(--eventosapp-app-canvas);
+  color: var(--eventosapp-app-text);
+}
+
+/* Fallback adicional si un builder fuerza su propio template. */
+body.eventosapp-app-page > :where(
+  #masthead,
+  .site-header,
+  .elementor-location-header,
+  header.header:not(.evapp-app-chrome)
+),
+body.eventosapp-app-page > :where(
+  #colophon,
+  .site-footer,
+  .elementor-location-footer,
+  footer.footer
+) {
+  display: none !important;
+}
+
+.evapp-app-chrome {
+  position: relative;
+  z-index: 999;
+  width: 100%;
+  min-height: 76px;
+  color: #fff;
+  background: var(--eventosapp-brand-blue);
+  border-bottom: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 8px 28px rgba(23, 30, 55, .10);
+}
+
+html[data-evapp-theme="dark"] .evapp-app-chrome {
+  background: var(--eventosapp-brand-dark);
+  border-bottom-color: rgba(115, 159, 207, .18);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .26);
+}
+
+.evapp-app-chrome-inner {
+  width: min(1180px, calc(100% - 36px));
+  min-height: 76px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.evapp-app-brand {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  text-decoration: none !important;
+}
+
+.evapp-app-brand img {
+  display: block;
+  width: 176px;
+  max-width: 100%;
+  height: 44px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.evapp-app-chrome-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.evapp-app-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  max-width: 230px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, .20);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+}
+
+.evapp-app-user-icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .96) url("../branding/eventosapp_icon.svg") center / 20px auto no-repeat;
+}
+
+.evapp-app-user-copy {
+  min-width: 0;
+  line-height: 1.08;
+}
+
+.evapp-app-user-copy,
+.evapp-app-user-copy strong,
+.evapp-app-user-copy small,
+.evapp-app-user-label {
+  display: block;
+}
+
+.evapp-app-user-label {
+  margin-bottom: 3px;
+  color: rgba(255, 255, 255, .72);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.evapp-app-user-copy strong,
+.evapp-app-user-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evapp-app-user-copy strong {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.evapp-app-user-copy small {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, .74);
+  font-size: 9px;
+}
+
+.evapp-app-action {
+  appearance: none;
+  min-height: 38px;
+  padding: 8px 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, .24);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .11);
+  color: #fff !important;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none !important;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, transform .16s ease;
+}
+
+.evapp-app-action:hover,
+.evapp-app-action:focus-visible {
+  background: rgba(255, 255, 255, .20);
+  border-color: rgba(255, 255, 255, .38);
+  color: #fff !important;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.evapp-app-action svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.evapp-app-action.is-admin {
+  background: var(--eventosapp-brand-dark);
+  border-color: rgba(255, 255, 255, .18);
+}
+
+html[data-evapp-theme="dark"] .evapp-app-action.is-admin {
+  background: var(--eventosapp-brand-blue-dark);
+}
+
+.evapp-app-action.is-logout {
+  background: rgba(255, 255, 255, .94);
+  border-color: rgba(255, 255, 255, .94);
+  color: #9f1239 !important;
+}
+
+.evapp-app-action.is-logout:hover,
+.evapp-app-action.is-logout:focus-visible {
+  background: #fff;
+  border-color: #fff;
+  color: #881337 !important;
+}
+
+.evapp-theme-toggle .is-sun {
+  display: none;
+}
+
+html[data-evapp-theme="dark"] .evapp-theme-toggle .is-moon {
+  display: none;
+}
+
+html[data-evapp-theme="dark"] .evapp-theme-toggle .is-sun {
+  display: block;
+}
+
+/* El header global reemplaza la barra de sesión embebida dentro de cada módulo. */
+body.eventosapp-app-page .evapp-session-panel {
+  display: none !important;
+}
+
+/* ==========================================================
+ * Mapa de tokens para las generaciones de UI de EventosApp
+ * ========================================================== */
 .eventosapp-branding :where(
   .evapp-dashboard,
   .evapp-login-stage,
@@ -109,10 +357,7 @@
   color: var(--eventosapp-brand-blue-dark);
 }
 
-/*
- * Firma visual mínima en encabezados de los módulos modernos.
- * Solo agrega el icono dentro del eyebrow ya existente; no crea filas ni cards.
- */
+/* Firma visual mínima en encabezados de módulos modernos. */
 .eventosapp-branding :where(
   .evapp-eyebrow,
   .evreg-eyebrow,
@@ -136,7 +381,7 @@
   background: url("../branding/eventosapp_icon.svg") center / contain no-repeat;
 }
 
-/* Login integrado: usa siempre el wordmark oficial entregado para EventosApp. */
+/* Login integrado. */
 .eventosapp-branding .evapp-login-stage {
   --ev: var(--eventosapp-brand-blue);
   --ev-dark: var(--eventosapp-brand-blue-dark);
@@ -178,7 +423,8 @@
   color: var(--eventosapp-brand-blue-dark) !important;
 }
 
-/* Panel común de sesión: conserva medidas y layout, sustituye solo el pictograma. */
+/* Panel común de sesión: se conserva para compatibilidad, aunque en páginas app
+ * queda oculto porque sus acciones pasan al header unificado. */
 .eventosapp-branding .evapp-session-panel {
   --esp-primary: var(--eventosapp-brand-blue);
   --esp-primary-dark: var(--eventosapp-brand-blue-dark);
@@ -212,7 +458,7 @@
   border-color: var(--eventosapp-brand-blue-dark);
 }
 
-/* Consumibles: dos vistas históricas todavía no exponen todos los tokens. */
+/* Consumibles. */
 .eventosapp-branding .evapp-cons-front-head h2,
 .eventosapp-branding .evapp-cons-front-event strong {
   color: var(--eventosapp-brand-dark);
@@ -235,7 +481,7 @@
   color: var(--eventosapp-brand-blue-dark);
 }
 
-/* Página 404: identidad oficial, conservando composición y animaciones existentes. */
+/* Página 404. */
 .eventosapp-branding .evapp-404 {
   --ev: var(--eventosapp-brand-blue);
   --ev2: var(--eventosapp-brand-blue-dark);
@@ -277,7 +523,7 @@
   background: var(--eventosapp-brand-blue);
 }
 
-/* Seguridad integrada: misma composición, gradiente e iconografía corporativa. */
+/* Seguridad integrada. */
 .eventosapp-branding .evsec-wrap .evsec-hero {
   background: linear-gradient(135deg, var(--eventosapp-brand-dark), var(--eventosapp-brand-blue-dark));
 }
@@ -292,10 +538,7 @@
   background: url("../branding/eventosapp_icon_blanco.svg") center / contain no-repeat;
 }
 
-/*
- * Estados de foco: se unifica el acento sin alterar tamaños, tipografía o layout.
- * Los estados semánticos (error/éxito/advertencia) conservan sus propios colores.
- */
+/* Estados de foco. */
 .eventosapp-branding :where(
   .evreg-wrap,
   .evfe-app,
@@ -317,9 +560,211 @@
 ) :where(input, select, textarea):focus-visible {
   border-color: var(--eventosapp-brand-blue);
   outline-color: var(--eventosapp-brand-blue);
+  box-shadow: 0 0 0 3px var(--eventosapp-brand-focus);
 }
 
-/* Administración de EventosApp: icono corporativo junto al título nativo. */
+/* ==========================================================
+ * Dark mode unificado
+ * ========================================================== */
+html[data-evapp-theme="dark"] body.eventosapp-app-page .eventosapp-branding,
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root {
+  color-scheme: dark;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page :where(
+  .evapp-dashboard,
+  .evapp-login-stage,
+  .evreg-wrap,
+  .evfe-app,
+  .evfs-app,
+  .evapp-qr-checkin-app,
+  .evapp-double-auth-app,
+  .evapp-metrics,
+  .evapp-flow-metrics-app,
+  .evapp-company-monitor,
+  .evapp-support-app,
+  .evchk-app,
+  .evapp-raffle-admin,
+  .evapp-expositor-module,
+  .evapp-cons-editor,
+  .evapp-cscan,
+  .evapp-cons-front-shell,
+  .evapp-tx-shell,
+  .evapp-netglobal-shell,
+  .evapp-ranking-wrapper,
+  .evapp-404
+) {
+  --evapp-bg: var(--eventosapp-app-canvas);
+  --evapp-background: var(--eventosapp-app-canvas);
+  --evapp-surface: var(--eventosapp-app-surface);
+  --evapp-surface-soft: var(--eventosapp-app-surface-soft);
+  --evapp-card: var(--eventosapp-app-surface);
+  --evapp-card-bg: var(--eventosapp-app-surface);
+  --evapp-white: var(--eventosapp-app-surface);
+  --evapp-border: var(--eventosapp-app-border);
+  --evapp-border-color: var(--eventosapp-app-border);
+  --evapp-text: var(--eventosapp-app-text);
+  --evapp-ink: var(--eventosapp-app-text);
+  --evapp-heading: var(--eventosapp-app-text);
+  --evapp-muted: var(--eventosapp-app-muted);
+  --evapp-subtle: var(--eventosapp-app-muted);
+
+  --ev-bg: var(--eventosapp-app-canvas);
+  --ev-surface: var(--eventosapp-app-surface);
+  --ev-card: var(--eventosapp-app-surface);
+  --ev-border: var(--eventosapp-app-border);
+  --ev-text: var(--eventosapp-app-text);
+  --ev-muted: var(--eventosapp-app-muted);
+
+  --esp-bg: var(--eventosapp-app-canvas);
+  --esp-card: var(--eventosapp-app-surface);
+  --esp-border: var(--eventosapp-app-border);
+  --esp-text: var(--eventosapp-app-text);
+  --esp-muted: var(--eventosapp-app-muted);
+
+  --evchk-bg: var(--eventosapp-app-canvas);
+  --evchk-card: var(--eventosapp-app-surface);
+  --evchk-border: var(--eventosapp-app-border);
+  --evchk-text: var(--eventosapp-app-text);
+  --evchk-muted: var(--eventosapp-app-muted);
+
+  --evc-bg: var(--eventosapp-app-canvas);
+  --evc-card: var(--eventosapp-app-surface);
+  --evc-border: var(--eventosapp-app-border);
+  --evc-text: var(--eventosapp-app-text);
+  --evc-muted: var(--eventosapp-app-muted);
+
+  --bg: var(--eventosapp-app-canvas);
+  --surface: var(--eventosapp-app-surface);
+  --card: var(--eventosapp-app-surface);
+  --border: var(--eventosapp-app-border);
+  --text: var(--eventosapp-app-text);
+  --muted: var(--eventosapp-app-muted);
+
+  --t: var(--eventosapp-app-text);
+  --ink: var(--eventosapp-app-text);
+
+  color: var(--eventosapp-app-text);
+}
+
+/* Superficies recurrentes de las distintas generaciones del frontend. */
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(
+  [class*="-shell"],
+  [class*="-card"],
+  [class*="-panel"],
+  [class*="-toolbar"],
+  [class*="-context"],
+  [class*="-summary"],
+  [class*="-table-wrap"],
+  [class*="-empty"]
+) {
+  border-color: var(--eventosapp-app-border);
+  color: var(--eventosapp-app-text);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(
+  .evapp-dashboard-shell,
+  .evapp-event-context,
+  .evapp-module-search,
+  .evapp-module-card,
+  .evapp-login-card,
+  .evapp-metrics-shell,
+  .evapp-flow-metrics-shell,
+  .evreg-shell,
+  .evfe-shell,
+  .evfs-shell,
+  .evchk-shell,
+  .evapp-support-shell,
+  .evapp-expositor-shell,
+  .evapp-raffle-shell,
+  .evapp-cons-editor,
+  .evapp-cscan,
+  .evapp-tx-shell,
+  .evapp-netglobal-shell,
+  .evapp-ranking-wrapper,
+  .evapp-404-card
+) {
+  background: var(--eventosapp-app-surface);
+  border-color: var(--eventosapp-app-border);
+  box-shadow: var(--eventosapp-app-shadow);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(
+  h1,h2,h3,h4,h5,h6,
+  strong,
+  legend,
+  label
+) {
+  color: var(--eventosapp-app-text);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(
+  p,
+  small,
+  .description,
+  [class*="-muted"],
+  [class*="-subtitle"],
+  [class*="-description"],
+  [class*="-help"],
+  [class*="-hint"]
+) {
+  color: var(--eventosapp-app-muted);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(input, select, textarea) {
+  background-color: var(--eventosapp-app-input);
+  border-color: var(--eventosapp-app-border);
+  color: var(--eventosapp-app-text);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(input, textarea)::placeholder {
+  color: #8390a8;
+  opacity: 1;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(table) {
+  color: var(--eventosapp-app-text);
+  border-color: var(--eventosapp-app-border);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(th, td) {
+  border-color: var(--eventosapp-app-border);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(th) {
+  background-color: var(--eventosapp-app-surface-raised);
+  color: var(--eventosapp-app-text);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root :where(hr) {
+  border-color: var(--eventosapp-app-border);
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-dashboard .evapp-eyebrow,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-dashboard .evapp-module-total,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-dashboard .evapp-event-context-icon,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-dashboard .evapp-selector-icon {
+  color: #6aa7da;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-login-brand::before,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-404-card::before {
+  background-image: url("../branding/eventosapp_blanco.svg");
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-login-secondary,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-password-toggle:hover,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-password-toggle:focus,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-404-btn:not(.is-primary) {
+  color: #7bb1df !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-cons-front-head h2,
+html[data-evapp-theme="dark"] body.eventosapp-app-page .evapp-cons-front-event strong {
+  color: var(--eventosapp-app-text);
+}
+
+/* Administración de EventosApp: identidad corporativa, sin afectar backend ajeno. */
 body.eventosapp-branding[class*="eventosapp"] .wrap > h1:first-child::before,
 body.eventosapp-branding[class*="eventosapp"] .wrap > h2:first-child::before {
   content: "";
@@ -347,8 +792,79 @@ body.eventosapp-branding[class*="eventosapp"] .wp-core-ui .button-primary:focus 
   border-color: var(--eventosapp-brand-blue-dark);
 }
 
+/* Responsive del chrome común. */
+@media (max-width: 1040px) {
+  .evapp-app-chrome-inner {
+    width: min(100% - 28px, 1180px);
+  }
+  .evapp-app-user {
+    max-width: 180px;
+  }
+  .evapp-app-action {
+    padding-inline: 9px;
+  }
+}
+
+@media (max-width: 860px) {
+  .evapp-app-chrome-inner {
+    padding: 12px 0;
+    min-height: 0;
+    flex-wrap: wrap;
+  }
+  .evapp-app-brand img {
+    width: 164px;
+    height: 40px;
+  }
+  .evapp-app-chrome-actions {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .evapp-app-user {
+    flex: 1 1 190px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .evapp-app-chrome-inner {
+    width: calc(100% - 22px);
+    gap: 10px;
+  }
+  .evapp-app-brand img {
+    width: 154px;
+    height: 38px;
+  }
+  .evapp-app-chrome-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .evapp-app-user {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .evapp-app-action {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+    padding: 8px 7px;
+  }
+}
+
+@media (max-width: 360px) {
+  .evapp-app-chrome-actions {
+    grid-template-columns: 1fr;
+  }
+  .evapp-app-user {
+    grid-column: auto;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .eventosapp-branding :where([class^="evapp-"], [class*=" evapp-"], [class^="eventosapp-"], [class*=" eventosapp-"]) * {
     scroll-behavior: auto;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
