@@ -8,6 +8,10 @@
  * eventosapp_role_can('self_checkin') sin recibir el ID del evento. Este archivo
  * establece el contexto del evento solicitado antes del callback y obliga a que
  * la respuesta respete el permiso efectivo por usuario y evento.
+ *
+ * Desde 1.5.0-rc.21 también actúa como último bootstrap de la API móvil y carga,
+ * cuando está disponible, la extensión offline Staff. De esta forma se preserva
+ * el orden ya establecido: Kiosko base -> Staff QR -> contexto Kiosko -> offline.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -103,3 +107,11 @@ add_filter( 'rest_request_after_callbacks', function ( $response, $handler, $req
     eventosapp_mobile_kiosk_feature_context( false );
     return $response;
 }, 30000, 3 );
+
+// Extensión opcional para Android 2.7.0+: snapshot y sincronización offline Staff.
+// Se carga al final para reutilizar autenticación, permisos y helpers de Staff QR.
+$eventosapp_mobile_offline_api = __DIR__ . '/eventosapp-mobile-staff-offline-api.php';
+if ( is_readable( $eventosapp_mobile_offline_api ) ) {
+    require_once $eventosapp_mobile_offline_api;
+}
+unset( $eventosapp_mobile_offline_api );
