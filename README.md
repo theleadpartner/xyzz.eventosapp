@@ -1,22 +1,19 @@
 # EventosApp — Entorno de pruebas
 
-Repositorio del plugin EventosApp para WordPress.
+Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
+
+> **Historial preservado:** el estado completo de `1.5.0-rc.21` se conserva en [`docs/history/README-through-1.5.0-rc.21.md`](docs/history/README-through-1.5.0-rc.21.md). Los snapshots anteriores continúan disponibles en `docs/history/`.
 
 ## Estado actual: candidato 1.5.0-rc.22
 
 La entrega **1.5.0-rc.22** extiende el modo offline móvil al **Kiosko / Autogestión Android 2.8.0**, manteniendo intactos los endpoints online históricos y el modo offline Staff introducido en `1.5.0-rc.21`.
 
-Rama de desarrollo:
-
-```text
-feature/mobile-kiosk-offline-rc22
-```
-
-Base de trabajo:
-
-```text
-main @ c5bf7bdec0cb2a932bff37085b2ae4e5fb9e316e
-```
+- **Fecha de corte:** 2026-08-10
+- **Rama de trabajo:** `feature/mobile-kiosk-offline-rc22`
+- **Base:** `main @ c5bf7bdec0cb2a932bff37085b2ae4e5fb9e316e`
+- **Destino de promoción:** `theleadpartner/EventosApp`
+- **Compatibilidad Android:** `theleadpartner/eventosapp-printer-android` **2.8.0** (`versionCode 27`)
+- **Estado:** implementación en entorno de pruebas; requiere validación física de Kiosko, modo avión, sincronización e impresión antes de promover a producción.
 
 ## Objetivo de rc.22
 
@@ -166,7 +163,8 @@ Tampoco cambia:
 - las reglas históricas de Autogestión;
 - la API Staff QR;
 - el snapshot/sync Staff de rc.21;
-- la cola Bluetooth de Android.
+- la cola Bluetooth de Android;
+- la UI del dashboard, Elementor, seguridad, expositores, consumibles, networking, sorteos ni otras funciones fuera de este alcance.
 
 ## Permisos
 
@@ -186,6 +184,7 @@ Nuevos:
 
 ```text
 includes/api/eventosapp-mobile-kiosk-offline-api.php
+docs/history/README-through-1.5.0-rc.21.md
 ```
 
 Modificados:
@@ -205,12 +204,43 @@ EventosApp Android 2.8.0 (versionCode 27)
 
 Android 2.7.0 continúa utilizando únicamente las rutas Staff offline de rc.21 y no necesita las nuevas rutas Kiosko.
 
+## Validación requerida antes de promoción
+
+1. Confirmar que el índice REST publica `offline-snapshot` y `offline-sync` para Kiosko.
+2. Iniciar sesión desde Android 2.8.0 con un usuario que tenga `self_checkin` en un evento presencial/híbrido con Kiosko habilitado.
+3. Habilitar modo offline y confirmar que descarga configuración, tickets, escarapelas y papel.
+4. Verificar que la cantidad local de tickets coincide con el paquete entregado.
+5. Activar modo avión antes de abrir el Kiosko y confirmar que carga el evento y su diseño.
+6. Buscar un asistente por cada campo configurado que aplique al evento.
+7. Leer un QR válido y confirmar la misma resolución que en modo online.
+8. Registrar un check-in offline y confirmar que la escarapela imprime por Bluetooth sin solicitar recursos de red.
+9. Repetir el mismo ticket en la misma fecha y confirmar que el dispositivo no crea otro pendiente.
+10. Cerrar y abrir la app sin internet y confirmar persistencia del paquete y de los pendientes.
+11. Recuperar internet y confirmar sincronización automática y actualización de **Última sincronización**.
+12. Revisar `_eventosapp_checkin_status` y `_eventosapp_checkin_log`; el log debe incluir `origen=android_kiosk_offline_sync` y `client_operation_id`.
+13. Reenviar el mismo `client_id` y confirmar idempotencia.
+14. Marcar el ticket primero desde otro dispositivo y luego sincronizar el pendiente offline; debe converger con `already=true`.
+15. Revocar `self_checkin` y confirmar que un nuevo snapshot/sync responde `403` y que Android deja de ofrecer el evento como utilizable.
+16. Activar control de pago y confirmar que un ticket no pagado no puede registrarse offline.
+17. Validar escarapelas con logo, QR, fondos/imágenes y tamaños de papel usados en producción.
+18. Confirmar regresión cero en Kiosko online, Check-in QR online/offline Staff, cancelación de impresión, cola Bluetooth y protocolos existentes.
+
+## Límite inherente de varios dispositivos completamente offline
+
+Dos dispositivos sin ningún canal de comunicación no pueden conocer en tiempo real el ingreso realizado por el otro. Durante una caída total, el mismo ticket puede ser admitido localmente en dos tablets diferentes.
+
+Al recuperar conectividad, la sincronización converge: el primer registro fija `checked_in` y los posteriores se resuelven como `already=true`. Evitar ese doble uso antes de volver a tener comunicación exigiría una arquitectura adicional de coordinación local entre dispositivos.
+
 ## Historial reciente
 
 | Candidato | Cambio principal |
 |---|---|
 | **1.5.0-rc.22** | Snapshot y sincronización offline para Kiosko Android 2.8.0, incluida escarapela autocontenida. |
 | **1.5.0-rc.21** | Snapshot y sincronización offline para Check-in QR Staff Android 2.7.0. |
-| **1.5.0-rc.20** | Integración de permisos y flujo móvil previo al offline Staff. |
+| **1.5.0-rc.20** | Gutter unificado, diagnóstico de instalación persistente, recuperación de reinstalación y notificación terminal descartable. |
+| **1.5.0-rc.19** | Página 404 corporativa, Light/Dark y aislamiento Elementor/tema. |
+| **1.5.0-rc.18** | Dashboard boxed nativo. |
 
-El detalle de candidatos anteriores permanece disponible en el historial Git y en sus PR correspondientes.
+## Regla de promoción
+
+`xyzz.eventosapp` continúa siendo el entorno de pruebas. **No promover `1.5.0-rc.22` a `theleadpartner/EventosApp` hasta completar la validación real de WordPress + Android + impresora física**, en especial modo avión, persistencia, impresión de escarapela, sincronización idempotente, revocación de permisos y regresión del flujo online.
