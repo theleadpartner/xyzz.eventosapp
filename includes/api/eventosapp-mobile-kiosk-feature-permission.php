@@ -10,9 +10,10 @@
  * la respuesta respete el permiso efectivo por usuario y evento.
  *
  * Desde 1.5.0-rc.21 también actúa como último bootstrap de la API móvil. Carga
- * primero la extensión offline Staff y, desde 1.5.0-rc.22, la extensión offline
- * del Kiosko. Se preserva el orden: Kiosko base -> Staff QR -> contexto Kiosko ->
- * offline Staff -> offline Kiosko.
+ * primero la extensión offline Staff; desde 1.5.0-rc.22, la extensión offline
+ * del Kiosko; y desde 1.5.0-rc.23, el paquete offline unificado por evento.
+ * Se preserva el orden: Kiosko base -> Staff QR -> contexto Kiosko -> offline
+ * Staff -> offline Kiosko -> paquete offline unificado.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -123,3 +124,11 @@ if ( is_readable( $eventosapp_mobile_kiosk_offline_api ) ) {
     require_once $eventosapp_mobile_kiosk_offline_api;
 }
 unset( $eventosapp_mobile_kiosk_offline_api );
+
+// Android 2.9.1+: una sola descarga paginada por evento para todos los módulos
+// móviles autorizados. Las rutas históricas continúan activas para APK antiguas.
+$eventosapp_mobile_event_offline_api = __DIR__ . '/eventosapp-mobile-event-offline-api.php';
+if ( is_readable( $eventosapp_mobile_event_offline_api ) ) {
+    require_once $eventosapp_mobile_event_offline_api;
+}
+unset( $eventosapp_mobile_event_offline_api );
