@@ -6,12 +6,83 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.17`
+- **Versión candidata:** `1.5.0-rc.18`
 - **Fecha de corte:** 2026-08-10
-- **Base integrada:** `3d508421f3bf2c1b8d2860d360b5b19724f67ca8` (`main`, posterior al merge de `1.5.0-rc.16`)
-- **Rama de trabajo:** `fix/shortcode-page-normalization-20260810`
+- **Base integrada:** `02334b020a6e9959044679b1bcac4a2dd0a999fa` (`main`, merge de `1.5.0-rc.17`)
+- **Rama de trabajo:** `fix/dashboard-boxed-layout-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix funcional del instalador de páginas/shortcodes de Configuración. La validación ya no considera sana una página solo porque encuentre el shortcode: exige contenido canónico, detecta contenido ajeno y residuos de Elementor, y la reparación individual o la reinstalación automática normalizan la página antes de marcarla como correcta. Pendiente validación funcional en WordPress antes de promover.
+- **Estado:** hotfix visual del shell del Dashboard después de la normalización de páginas. El Dashboard ya no depende de un contenedor Elementor para conservar una composición tipo **boxed**: la página mapeada aplica un ancho máximo nativo de `1200px`, centrado y responsive, mientras el header global continúa ocupando todo el ancho. Pendiente validación visual en WordPress antes de promover.
+
+## Hotfix 1.5.0-rc.18 — Dashboard boxed nativo sin Elementor
+
+### Incidencia detectada
+
+`1.5.0-rc.17` normaliza correctamente las páginas administradas por EventosApp y elimina contenido/residuos de Elementor para dejar únicamente el shortcode canónico. Esa política garantiza que Elementor no compita con la UI, pero también elimina el contenedor **Boxed** que anteriormente podía estar limitando visualmente el ancho del Dashboard.
+
+El renderizador del Dashboard conserva `width:100%` por diseño. Sin un contenedor externo, la superficie `.evapp-dashboard-shell` podía expandirse a todo el ancho disponible de la ventana, como en la referencia reportada, en lugar de conservar la composición centrada y de ancho fijo mostrada por el diseño esperado.
+
+### Corrección aplicada
+
+La responsabilidad del ancho deja de depender de Elementor y pasa al template propio de EventosApp, `templates/eventosapp-app-page.php`.
+
+La implementación:
+
+- reutiliza `eventosapp_branding_is_dashboard_page()` para detectar exclusivamente la página mapeada como Dashboard;
+- añade la clase `is-dashboard-page` únicamente al `<main id="eventosapp-app-root">` de esa página;
+- aplica al Dashboard un ancho máximo de `1200px`, `width:100%` y centrado horizontal con márgenes automáticos;
+- agrega gutters propios al canvas para que el panel no toque los bordes de la ventana;
+- reduce el gutter a `12px` en pantallas de hasta `767px`, manteniendo el comportamiento responsive existente del Dashboard;
+- mantiene el header corporativo global a ancho completo y no altera su contenedor interno existente;
+- no aplica el boxed a Kiosko/Autogestión, Sorteo Público, Login, 404 ni al resto de módulos mapeados.
+
+El resultado esperado es equivalente al comportamiento visual de un contenedor Elementor en modo **Boxed**, pero ahora forma parte del shell nativo de EventosApp y se conserva aunque Configuración reinstale la página en limpio dejando solamente `[eventosapp_dashboard]`.
+
+### Alcance y protecciones
+
+Este hotfix es exclusivamente de layout. No modifica:
+
+- `includes/admin/eventosapp-configuracion.php` ni la política de limpieza de `1.5.0-rc.17`;
+- contenido, shortcodes, mapeos, IDs, slugs o estado de las páginas;
+- renderizador, módulos, tarjetas, categorías, buscador o selector de evento del Dashboard;
+- permisos, sesión, roles, autenticación, nonces o navegación;
+- Light/Dark Mode, persistencia del tema o identidad corporativa;
+- Elementor fuera de las páginas administradas por EventosApp;
+- Kiosko/Autogestión, Sorteo Público ni otras superficies que puedan requerir todo el viewport.
+
+### Archivo de 1.5.0-rc.18
+
+```text
+templates/eventosapp-app-page.php  MODIFICADO — boxed nativo exclusivo del Dashboard
+README.md                           MODIFICADO — versión, alcance y validación
+```
+
+### Commit funcional de la rama
+
+```text
+fcc55df36f0d35ed67de79e26ebcd19279d5200f  fix: keep dashboard boxed without Elementor
+```
+
+### Validación técnica realizada
+
+Se validó la sintaxis PHP del template actualizado:
+
+```text
+No syntax errors detected in eventosapp-app-page.php
+```
+
+La rama se creó directamente desde `02334b020a6e9959044679b1bcac4a2dd0a999fa` (`main` con `1.5.0-rc.17` integrado), por lo que el hotfix parte del avance más reciente y no omite la normalización de páginas ni los hotfix visuales anteriores.
+
+### Validación funcional requerida en WordPress
+
+Antes de promover `1.5.0-rc.18`:
+
+- Reinstalar/normalizar la página Dashboard desde **EventosApp → Configuración** y confirmar que `post_content` queda únicamente con `[eventosapp_dashboard]`.
+- Abrir el Dashboard en escritorio ancho y confirmar que el panel queda centrado con un máximo de `1200px`, dejando canvas visible a ambos lados.
+- Confirmar que el header corporativo sigue ocupando todo el ancho y que su contenido/acciones no cambian.
+- Probar aproximadamente 1366px, 1440px, 1920px y una pantalla ultrawide para confirmar que el Dashboard no vuelve a estirarse indefinidamente.
+- Probar 320px, 375px, 430px y tablet para confirmar que el ancho se vuelve fluido y conserva un gutter lateral mínimo sin scroll horizontal.
+- Validar Light y Dark Mode, hover de tarjetas, buscador, selector de evento y drawer móvil para confirmar que el nuevo wrapper no altera comportamiento previo.
+- Abrir Kiosko/Autogestión y Sorteo Público para confirmar que no reciben el ancho máximo del Dashboard.
 
 ## Hotfix 1.5.0-rc.17 — Reinstalación limpia de páginas y shortcodes
 
@@ -201,6 +272,7 @@ Antes de promover `1.5.0-rc.17`:
 
 Los hotfix visuales inmediatamente anteriores continúan integrados en la base de esta rama:
 
+- **1.5.0-rc.17:** Configuración — reinstalación/normalización canónica de páginas gestionadas, limpieza de contenido ajeno y metadatos Elementor, reutilización segura de páginas y ejecución organizada mediante Cola y Tareas.
 - **1.5.0-rc.16:** Expositor y Gestión de Expositores — identidad corporativa, Light/Dark y aislamiento frente a Elementor/tema sin alterar inventario, entregas, QR, CSV, AJAX ni permisos.
 - **1.5.0-rc.15:** Asistencia/Métricas de apoyo, Ranking de Networking y panel administrativo del Sorteo en Vivo — compatibilidad visual y aislamiento; la pantalla pública del sorteo permanece independiente.
 - **1.5.0-rc.14:** Transacciones/Mis transacciones de Consumibles — corrección definitiva de estados Activa, Cancelación solicitada y Anulada en Dark Mode.
@@ -211,4 +283,4 @@ El detalle completo de esos ciclos y de todos los anteriores —seguridad integr
 
 ## Regla de promoción
 
-Este repositorio sigue siendo el entorno de pruebas. `1.5.0-rc.17` no debe promoverse a `theleadpartner/EventosApp` hasta completar la validación funcional indicada arriba, especialmente una reinstalación masiva sobre páginas con y sin residuos de Elementor.
+Este repositorio sigue siendo el entorno de pruebas. `1.5.0-rc.18` no debe promoverse a `theleadpartner/EventosApp` hasta completar la validación funcional de `1.5.0-rc.17` y confirmar además que el Dashboard reinstalado en limpio mantiene el ancho boxed nativo, el responsive y el comportamiento Light/Dark sin depender de Elementor.
