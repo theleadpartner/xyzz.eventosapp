@@ -4,12 +4,183 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.12`
+- **Versión candidata:** `1.5.0-rc.13`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `152b519b08e3d6614ec2421749dadc8da0875495` (`main`)
-- **Rama de trabajo:** `fix/search-face-dark-branding-elementor-20260810`
+- **Base de la rama:** `b0a4638f33c41bcf0117b5938c706bcb62da641d` (`main`)
+- **Rama de trabajo:** `fix/checklist-edit-consumables-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual específico para `eventosapp-frontend-search.php` y `eventosapp-face-checkin.php`: identidad corporativa completa, superficies y controles compatibles con Dark Mode y aislamiento frente al CSS global de Elementor/tema, sin modificar búsqueda, check-in, impresión, reconocimiento facial, cámara ni reglas operativas; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual específico para Checklist de Evento, Edición de asistentes y las vistas internas de Consumibles: identidad corporativa completa, superficies y controles compatibles con Dark Mode y aislamiento frente al CSS global de Elementor/tema, sin modificar checklist, edición de tickets, búsquedas, cámara/QR, inventario, ledger, reversos, exportaciones ni landing pública; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.13 — Checklist, Edición y Consumibles: identidad, Dark Mode y aislamiento Elementor
+
+### Incidencias detectadas
+
+La revisión de `includes/admin/eventosapp-event-checklist.php`, `includes/frontend/eventosapp-frontend-edit.php`, `includes/functions/eventosapp-consumables-core.php`, `includes/functions/eventosapp-consumables-transactions.php` e `includes/functions/eventosapp-consumables.php` confirmó el mismo patrón encontrado en los módulos corregidos durante `1.5.0-rc.9` a `1.5.0-rc.12`: la lógica funcional ya está consolidada, pero varios renderizadores mantienen CSS inline histórico con superficies claras, azules anteriores y reglas suficientemente específicas para competir con el shell corporativo, Dark Mode y el Elementor Kit.
+
+Los puntos principales fueron:
+
+1. **Checklist de Evento:** `.evchk-app` todavía define `#3279bd`, `#255f96`, fondos blancos y superficies `#fbfdff/#f8fafc` para shell, opciones, formularios, archivos, cards y estados. En Dark Mode estos valores pueden dejar tarjetas claras dentro del canvas oscuro y hovers ajenos a la identidad vigente.
+2. **Edición de asistentes:** `.evfe-app` conserva la misma generación cromática histórica en shell, búsqueda, resultados, editor, controles y botones. El input de búsqueda además debe conservar su padding protegido para que Elementor/tema no vuelva a acercar el icono al texto.
+3. **Consumibles — configuración:** `eventosapp-consumables-core.php` genera `.evapp-cons-front-shell` y `.evapp-cons-editor` con blancos directos y aliases `--evc-*` anteriores a la paleta corporativa.
+4. **Consumibles — Staff QR:** el lector `.evapp-cscan` conserva cards, evento, cantidades, resumen, inventario, actividad reciente y resultados con fondos claros directos. El visor de cámara, en cambio, debe permanecer deliberadamente oscuro por tratarse de una superficie técnica.
+5. **Consumibles — transacciones:** `eventosapp-consumables-transactions.php` contiene pestañas, filtros, resumen, tabla administrativa, tarjetas de Staff, badges, paginación y mensajes con blancos directos y aliases históricos `--p/--pd/--bg/--b/--t/--m`.
+6. `includes/functions/eventosapp-consumables.php` es el cargador seguro y el punto de protección del buffer de la landing pública; no contiene una UI interna que deba ser reestilizada. Alterarlo para resolver presentación introduciría riesgo funcional innecesario.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-checklist-edit-consumables-visual-compat.php` como capa visual final dedicada a este grupo de módulos. `includes/frontend/eventosapp-frontend-helpers.php` la carga después de branding, pulido general, aislamiento Elementor, compatibilidad QR y compatibilidad de Búsqueda/Facial. Su CSS se imprime mediante `wp_footer` con prioridad `1005`.
+
+El criterio continúa siendo deliberadamente conservador: **los cinco archivos funcionales indicados se revisaron, pero no se reescribieron**. La nueva capa actúa sobre los wrappers y clases que ya producen y modifica únicamente presentación. Así se evita tocar lógica que actualmente funciona correctamente.
+
+#### Imagen corporativa
+
+- `.evchk-eyebrow` — Checklist de Evento — utiliza el icono oficial de EventosApp.
+- `.evfe-eyebrow` — Edición de asistentes — utiliza la misma firma corporativa.
+- Los encabezados de Control de Consumibles, Consumo de Consumibles y Transacciones incorporan el icono oficial sin cambiar su estructura HTML.
+- Light Mode usa `eventosapp_icon.svg`; Dark Mode usa `eventosapp_icon_blanco.svg`.
+- Los aliases históricos `--evapp-*`, `--evc-*` y `--p/--pd` quedan remapeados a `#171e37`, `#3683c5` y `#286291` y a las superficies comunes del shell activo.
+
+#### Checklist de Evento
+
+Dentro de `.evchk-app` se corrigen únicamente propiedades visuales:
+
+- shell, contexto del evento, resumen, deadline, tareas, submit y empty state usan superficies del tema activo;
+- títulos, textos auxiliares, labels y estados recuperan contraste Light/Dark;
+- opciones de radio mantienen layout y selección, pero sus fondos/hover dejan de regresar a blanco;
+- inputs, textarea, archivo, placeholders y disabled usan el input/surface común;
+- botones primarios y secundarios usan la paleta oficial en normal, hover y focus;
+- iconos de evento/tarea/empty state usan el acento corporativo;
+- estados semánticos de progreso, advertencia, error y listo conservan su significado.
+
+No se cambia ninguna validación del checklist, tareas, logs, evidencia, upload, permisos o guardado.
+
+#### Edición de asistentes
+
+Dentro de `.evfe-app` se corrigen:
+
+- shell, contexto de evento, tarjeta de búsqueda, resultados, editor y secciones del formulario;
+- títulos, subtítulos, metadatos, ayudas y avatar;
+- inputs, selects, opciones, placeholders y estados de foco;
+- filas de resultados y hover;
+- botones principales, secundarios y ghost;
+- chips, estados y empty states.
+
+El input `type="search"` mantiene forzosamente `46px` de espacio a izquierda y derecha, `appearance:none` y ausencia de imagen de fondo externa. De esta forma una regeneración de CSS de Elementor/tema no puede volver a invadir el texto con decoraciones del control.
+
+No se altera búsqueda AJAX, selección de asistente, carga del editor, datos, ticket, QR, correo, WhatsApp, permisos, nonces ni persistencia.
+
+#### Consumibles — Configuración y editor
+
+Dentro de `.evapp-cons-front-shell` y `.evapp-cons-editor`:
+
+- shell, contexto de evento, introducción, reglas, items y empty state siguen el tema activo;
+- el switch/estado de activación usa el azul corporativo;
+- inputs, selects, textarea, opciones y placeholders usan las superficies de formulario comunes;
+- botones de acción, añadir, guardar e icon buttons quedan aislados frente a estilos globales;
+- chips y ayudas heredan los tokens correctos para Light/Dark.
+
+No se modifican reglas de segmentación, inventario, cantidades, comportamiento compartido/diario, serialización ni guardado.
+
+#### Consumibles — Lector QR de Staff
+
+Dentro de `.evapp-cscan`:
+
+- shell, evento, cards, selección de artículos, cantidades, resumen, resultado, inventario y actividad reciente adoptan las superficies del tema;
+- controles y cantidades respetan normal/hover/focus/disabled;
+- el botón de cámara mantiene sus estados funcionales y el estado rojo de detener cámara;
+- éxito/error usan variantes semánticas legibles en Dark Mode;
+- `.evapp-cscan-video-wrap` conserva su fondo técnico oscuro y únicamente sincroniza el borde.
+
+No se modifica BarcodeDetector, fallback jsQR, MediaStream, canvas, selección múltiple, cantidades, idempotencia, vibración/beep ni descuento atómico.
+
+#### Consumibles — Transacciones y pestañas
+
+Dentro de `.evapp-cons-tabs-wrap` y `.evapp-tx-shell`:
+
+- pestañas Configuración/Transacciones y Escanear/Mis transacciones respetan el tema activo;
+- shell, resúmenes, filtros, tabla, tarjetas de Staff, empty states y paginación dejan de volver a blanco;
+- inputs/selects y opciones quedan protegidos frente a Elementor;
+- encabezados y celdas de tabla mantienen contraste en Dark Mode;
+- solicitudes pendientes, badges, anulación/reverso y mensajes conservan semántica diferenciada;
+- botones normales, secundarios y de peligro conservan jerarquía y estados de interacción corporativos.
+
+No se modifica agrupación por batch, filtros, CSV, ledger, solicitudes de cancelación, `START TRANSACTION`, `SELECT ... FOR UPDATE`, reversos, rollback, auditoría ni permisos.
+
+#### Aislamiento frente a Elementor y tema
+
+La prioridad adicional se limita a páginas mapeadas por EventosApp y a los wrappers de este hotfix:
+
+```text
+body.eventosapp-app-page #eventosapp-app-root .evchk-app
+body.eventosapp-app-page #eventosapp-app-root .evfe-app
+body.eventosapp-app-page #eventosapp-app-root .evapp-cons-front-shell
+body.eventosapp-app-page #eventosapp-app-root .evapp-cons-editor
+body.eventosapp-app-page #eventosapp-app-root .evapp-cscan
+body.eventosapp-app-page #eventosapp-app-root .evapp-tx-shell
+body.eventosapp-app-page #eventosapp-app-root .evapp-cons-tabs-wrap
+```
+
+Los `!important` se concentran en tokens y propiedades de presentación que deben ganar frente a CSS inline histórico, Elementor Kit y tema. No se modifican atributos, listeners, grids funcionales, datasets ni reglas de negocio.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/admin/eventosapp-event-checklist.php` ni sus funciones de checklist, metabox, validación o guardado;
+- `includes/frontend/eventosapp-frontend-edit.php` ni sus funciones de búsqueda/edición;
+- `includes/functions/eventosapp-consumables-core.php` ni configuración, lector, inventario o lógica transaccional;
+- `includes/functions/eventosapp-consumables-transactions.php` ni consulta, filtros, CSV, cancelaciones o reversos;
+- `includes/functions/eventosapp-consumables.php` ni su loader, detección de landing, buffering o inyección segura;
+- permisos, roles, capacidades, evento activo o alcances por evento;
+- endpoints AJAX, nonces, consultas SQL, tablas o índices;
+- validaciones de Checklist, evidencias o archivos;
+- creación/actualización de tickets, QR o canales de comunicación desde Edición;
+- cámara, BarcodeDetector, jsQR, selección/cantidades o descuento atómico de Consumibles;
+- ledger, auditoría, solicitudes, reversos, restauración de saldo o exportación CSV;
+- inventario e historial visibles en `/ticket/`, ni la exclusión de tickets virtuales;
+- Dashboard, QR Check-In, Búsqueda Manual, Facial, Registro, Empresas, Métricas, Seguridad ni otros módulos;
+- estilos Elementor de páginas WordPress no mapeadas por EventosApp.
+
+### Archivos de 1.5.0-rc.13
+
+```text
+includes/frontend/eventosapp-checklist-edit-consumables-visual-compat.php  NUEVO
+includes/frontend/eventosapp-frontend-helpers.php                         MODIFICADO
+README.md                                                                  MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+ff47cb5b01c357e80f6741a9013a0e7b6550d2ea  feat: add checklist edit and consumables visual compatibility
+5006f06efb297335c5f85df67cfe887cd083bf41  feat: load checklist edit and consumables compatibility layer
+```
+
+## Validación funcional requerida para 1.5.0-rc.13
+
+- Abrir **Checklist de Evento** en Light Mode y confirmar icono corporativo, paleta, evento, resumen, deadline, tareas y botones.
+- Activar Dark Mode y confirmar que shell, cards, opciones, inputs, archivos, estados y empty state permanecen oscuros y legibles.
+- Probar opciones, radio buttons, campos logísticos, evidencia y guardado; el comportamiento funcional debe ser idéntico.
+- Abrir **Edición de asistentes** en Light/Dark y confirmar shell, buscador, resultados, avatar, editor, formularios y botones.
+- Buscar con texto corto/largo y confirmar que el icono nunca invade placeholder ni texto ingresado.
+- Seleccionar un asistente, editar y guardar datos para confirmar que AJAX, nonce y persistencia continúan funcionando.
+- Abrir **Control de Consumibles > Configuración** y revisar pestañas, evento, editor, reglas, items, inputs/selects y Guardar en ambos temas.
+- Cambiar selección/valores sin guardar y confirmar que la capa visual no altera serialización ni controles.
+- Abrir **Consumo de Consumibles > Escanear**, seleccionar uno y varios artículos, cambiar cantidades y revisar disabled/hover/focus.
+- Activar cámara y confirmar que visor/video sigue oscuro, QR funciona y el resultado éxito/error conserva contraste.
+- Confirmar que una lectura duplicada sigue siendo idempotente y que una operación sin saldo no produce descuentos parciales.
+- Abrir **Transacciones** como Administrador/Organizador y revisar resumen, filtros, tabla, badges, paginación y botones en Light/Dark.
+- Probar filtros y descarga CSV.
+- Probar una solicitud de cancelación y, en un entorno controlado, su reverso para confirmar que auditoría y restauración de saldo no cambian.
+- Abrir **Mis transacciones** como Staff y revisar cards, badges, solicitud de cancelación y paginación.
+- Abrir una landing presencial `/ticket/` con inventario/historial y confirmar que conserva su presentación pública actual; este hotfix no debe aplicar Dark Mode del dashboard allí.
+- Abrir un ticket virtual y confirmar que Consumibles sigue excluido.
+- Cambiar Light/Dark con cada módulo ya cargado y confirmar actualización inmediata de superficies y controles.
+- Probar 320 px, 375 px, 430 px, tablet y desktop sin overflow ni pérdida de controles.
+- Regenerar CSS de Elementor y volver a abrir Checklist, Edición y las vistas de Consumibles; la identidad EventosApp debe mantenerse.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que su Elementor Kit permanece intacto.
+
+---
 
 ## Hotfix 1.5.0-rc.12 — Búsqueda Manual y Check-In Facial: identidad, Dark Mode y aislamiento Elementor
 
@@ -1432,6 +1603,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.13` — 2026-08-10
+
+Hotfix visual de Checklist de Evento, Edición de asistentes y las vistas internas de Consumibles: firma corporativa, superficies, formularios, lector QR, pestañas y transacciones compatibles con Dark Mode, protección del buscador de Edición y aislamiento final frente a Elementor/tema, sin reescribir los cinco archivos funcionales indicados ni alterar checklist, edición, inventario, ledger, reversos, cámara o landing pública.
 
 ### `1.5.0-rc.12` — 2026-08-10
 
