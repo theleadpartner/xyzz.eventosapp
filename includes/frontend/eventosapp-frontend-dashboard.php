@@ -257,18 +257,28 @@ if ( ! function_exists('eventosapp_print_dashboard_css') ) {
   gap:12px;
   margin-bottom:24px;
 }
-.evapp-module-search-wrap{position:relative;flex:1 1 420px;max-width:620px}
+.evapp-module-search-wrap{
+  position:relative;
+  flex:1 1 420px;
+  max-width:620px;
+  min-width:0;
+}
 .evapp-module-search-icon{
   position:absolute;
   top:50%;
   left:15px;
+  z-index:2;
+  display:block;
   width:20px;
   height:20px;
+  flex:none;
   color:var(--evapp-muted);
   transform:translateY(-50%);
   pointer-events:none;
 }
 .evapp-module-search{
+  -webkit-appearance:none;
+  appearance:none;
   width:100%;
   min-height:48px;
   margin:0;
@@ -280,8 +290,16 @@ if ( ! function_exists('eventosapp_print_dashboard_css') ) {
   box-shadow:none;
   font:inherit;
   font-size:15px;
+  line-height:1.45;
   outline:none;
   transition:border-color .18s ease,box-shadow .18s ease;
+}
+.evapp-module-search::-webkit-search-decoration,
+.evapp-module-search::-webkit-search-cancel-button,
+.evapp-module-search::-webkit-search-results-button,
+.evapp-module-search::-webkit-search-results-decoration{
+  display:none;
+  -webkit-appearance:none;
 }
 .evapp-module-search:focus{border-color:var(--evapp-primary);box-shadow:0 0 0 4px color-mix(in srgb,var(--evapp-primary) 15%,transparent)}
 .evapp-module-search-clear{
@@ -496,7 +514,6 @@ if ( ! function_exists('eventosapp_dashboard_user_can_select_event') ) {
 		}
 
 		if ( user_can( $user_id, 'manage_options' ) ) return true;
-
 		if ( function_exists('eventosapp_staff_access_user_can_select_event_in_dashboard') && eventosapp_staff_access_user_can_select_event_in_dashboard( $event_id, $user_id ) ) return true;
 		if ( function_exists('eventosapp_support_user_has_assignment_in_event') && eventosapp_support_user_has_assignment_in_event( $event_id, $user_id ) ) return true;
 		if ( function_exists('eventosapp_expositor_user_can_select_event_in_dashboard') && eventosapp_expositor_user_can_select_event_in_dashboard( $event_id, $user_id ) ) return true;
