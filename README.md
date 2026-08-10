@@ -1,199 +1,216 @@
 # EventosApp — Entorno de pruebas
 
-Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
+Repositorio del plugin EventosApp para WordPress.
 
-> **Historial preservado:** el estado detallado completo hasta `1.5.0-rc.20` se conserva en [`docs/history/README-through-1.5.0-rc.20.md`](docs/history/README-through-1.5.0-rc.20.md). Los snapshots anteriores continúan disponibles en `docs/history/`.
+## Estado actual: candidato 1.5.0-rc.22
 
-## Estado del ciclo actual
+La entrega **1.5.0-rc.22** extiende el modo offline móvil al **Kiosko / Autogestión Android 2.8.0**, manteniendo intactos los endpoints online históricos y el modo offline Staff introducido en `1.5.0-rc.21`.
 
-- **Versión candidata:** `1.5.0-rc.21`
-- **Fecha de corte:** 2026-08-10
-- **Base integrada:** `79b2fba305a5d8630ad89d282fed00ef938228f5` (`main`, integración final de `1.5.0-rc.20`)
-- **Rama de trabajo:** `feature/mobile-offline-checkin-rc21`
-- **Destino de promoción:** `theleadpartner/EventosApp`
-- **Compatibilidad Android:** `theleadpartner/eventosapp-printer-android` `2.7.0` (`versionCode 26`)
-- **Estado:** soporte de servidor para Check-in QR Staff offline: descarga paginada de snapshot, hashes SHA-256 de QR válidos, sincronización idempotente por lote y resolución segura al recuperar conectividad.
-
-## 1.5.0-rc.21 — API offline para Check-in QR Staff
-
-### Objetivo
-
-EventosApp Android 2.7.0 puede habilitar una copia offline por evento para continuar el control de acceso cuando el dispositivo pierde internet. El servidor sigue siendo la fuente de verdad cuando existe conexión, pero ahora proporciona los datos mínimos necesarios para validar tickets localmente y recibe posteriormente los ingresos pendientes.
-
-El modo offline **no reemplaza** el flujo online existente. Solo extiende el módulo Staff QR y conserva aislados Kiosko, impresión, Bluetooth, escarapelas y la cola de impresión.
-
-## Nuevas rutas REST
-
-La extensión `includes/api/eventosapp-mobile-staff-offline-api.php` añade:
+Rama de desarrollo:
 
 ```text
-GET  /eventosapp-kiosk/v1/staff/events/{event_id}/offline-snapshot
-POST /eventosapp-kiosk/v1/staff/events/{event_id}/offline-sync
+feature/mobile-kiosk-offline-rc22
 ```
 
-Ambas rutas reutilizan el token móvil existente y el permiso efectivo `qr` por usuario/evento mediante `eventosapp_mobile_app_permission()` y `eventosapp_mobile_app_user_can_feature_in_event()`.
+Base de trabajo:
 
-### `offline-snapshot`
+```text
+main @ c5bf7bdec0cb2a932bff37085b2ae4e5fb9e316e
+```
 
-Entrega la base descargable por páginas de hasta 500 tickets. Incluye:
+## Objetivo de rc.22
 
-- datos básicos del evento y zona horaria;
-- datos del asistente necesarios para mostrar el resultado del check-in;
-- modalidad presencial/virtual;
-- estado de pago cuando el evento controla pagos;
-- fechas del evento;
-- días ya marcados como `checked_in`;
-- claves de búsqueda QR como **SHA-256**, nunca el contenido QR en texto claro.
+Permitir que una tablet previamente preparada pueda continuar con el flujo de Kiosko aunque pierda internet:
 
-La respuesta envía `Cache-Control: no-store` y `Pragma: no-cache` para evitar almacenamiento accidental por navegador, proxy o CDN.
+1. mostrar el evento y su personalización;
+2. buscar o identificar asistentes;
+3. validar reglas locales descargadas;
+4. marcar el check-in en el dispositivo;
+5. imprimir la escarapela por Bluetooth sin pedir HTML al servidor;
+6. sincronizar los ingresos al recuperar conectividad;
+7. refrescar el snapshot completo después de sincronizar.
 
-Tickets en `trash`, `auto-draft` o `inherit` no se distribuyen al dispositivo.
+## Nueva API offline del Kiosko
 
-## Paridad con los QR online
+Archivo:
 
-El snapshot no inventa formatos nuevos. Construye las mismas representaciones aceptadas por el resolvedor QR actual:
+```text
+includes/api/eventosapp-mobile-kiosk-offline-api.php
+```
 
-- `eventosapp_ticketID` para QR Legacy cuando el evento no usa preimpresos;
-- ID numérico preimpreso cuando esa modalidad está habilitada;
-- `ticketID-email`;
-- `ticketID-gwallet`;
-- `ticketID-awallet`;
-- `ticketID-pdf`;
-- `ticketID-whatsapp`;
-- URL de escarapela/networking con evento, ticket público y código de seguridad.
+Versión interna de API:
 
-Para la escarapela se replica la forma actualmente generada por `EventosApp_QR_Manager::generate_badge_qr()` mediante `add_query_arg()` sobre `networking/global`.
+```text
+EVENTOSAPP_MOBILE_KIOSK_OFFLINE_API_VERSION = 1.0.0
+```
 
-Android normaliza la lectura y calcula SHA-256 localmente; la base descargada no necesita conservar el contenido original del QR.
+Rutas:
 
-## Sincronización offline
+```text
+GET  /wp-json/eventosapp-kiosk/v1/events/{event_id}/offline-snapshot
+POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/offline-sync
+```
 
-Android envía lotes de máximo 500 operaciones. Cada elemento contiene un `client_id` UUID persistente, ticket, fecha y tipo de QR.
+Ambas rutas requieren el token móvil existente y vuelven a verificar que el usuario tenga acceso efectivo a `self_checkin` para el evento.
 
-Antes de aceptar cada registro, EventosApp vuelve a validar:
+### Offline snapshot
 
-1. que el ticket siga existiendo y pertenezca al evento;
-2. que el ticket no esté eliminado/inactivo;
-3. que siga siendo presencial;
-4. que siga cumpliendo el control de pago;
-5. que el tipo de QR continúe siendo válido para ese ticket;
-6. que la fecha pertenezca al evento;
-7. que la fecha no esté en el futuro respecto a la zona horaria del evento.
+`offline-snapshot` es paginado (`page`, `per_page`, máximo 100) y devuelve:
 
-El permiso `qr` también se comprueba nuevamente para el evento antes de procesar el lote.
+- evento autorizado;
+- zona horaria;
+- configuración completa construida por la API estable del Kiosko;
+- diseño, textos y método(s) de autenticación;
+- configuración física de papel;
+- tickets del evento;
+- estado de check-in conocido;
+- validación de modalidad y pago;
+- hashes SHA-256 de claves QR válidas;
+- HTML final de la escarapela por ticket.
 
-### Idempotencia
+El HTML se genera con el mismo helper estable:
 
-Cada operación conserva `client_operation_id` dentro de `_eventosapp_checkin_log`.
+```php
+eventosapp_get_badge_html_from_event($event_id, $ticket_id, false)
+```
 
-Si Android reintenta el mismo UUID porque perdió la respuesta HTTP, EventosApp responde como ya sincronizado y no duplica el check-in.
+Las imágenes utilizadas en la escarapela se convierten a `data:` URI antes de entregar el snapshot. El helper intenta primero resolver archivos locales en `uploads` y, como fallback seguro, utiliza `wp_safe_remote_get()` con límite estricto de 2 MB por recurso.
 
-Si el ticket ya había sido marcado por otro dispositivo, la sincronización devuelve `already=true`, conserva un solo estado `checked_in` para esa fecha y registra la llegada de la operación offline para auditoría.
+Los recursos visuales principales del Kiosko (`background_image_url`, `main_logo_url` y `extra_logos`) también se entregan embebidos cuando pueden resolverse, para que Android pueda materializarlos dentro de su almacenamiento privado.
 
-### Concurrencia
+### Offline sync
 
-La sincronización usa un lock atómico temporal por `evento + ticket + fecha`, implementado con una option no autoload. Esto serializa procesos PHP concurrentes para impedir que dos dispositivos que recuperan internet al mismo tiempo incrementen métricas o escriban el mismo estado como si ambos fueran el primero.
+`offline-sync` recibe hasta 500 operaciones por solicitud. Cada elemento incluye:
 
-Los locks vencidos por una interrupción anormal se pueden recuperar después de 30 segundos.
+```text
+client_id
+ticket_id
+checkin_date
+request_id
+created_at
+```
 
-## Límite inherente de dos dispositivos completamente offline
+Antes de aceptar cada ingreso EventosApp vuelve a validar:
 
-Si dos dispositivos están simultáneamente sin conexión y ambos reciben el mismo ticket, no existe un canal que les permita conocer el ingreso realizado por el otro en tiempo real. Ambos pueden admitirlo localmente.
+- que el ticket exista y pertenezca al evento;
+- que siga activo;
+- que sea presencial;
+- control de pago;
+- fecha válida del evento;
+- que la fecha no esté en el futuro;
+- idempotencia por `client_id`;
+- concurrencia por ticket + evento + fecha.
 
-Al recuperar internet, la sincronización converge correctamente:
+El registro del log utiliza:
 
-- el primer registro establece `checked_in`;
-- los posteriores se resuelven como `already=true`;
-- no se duplica el estado del ticket;
-- el log conserva trazabilidad de cada operación recibida.
+```text
+qr_type: self_checkin_android
+qr_type_label: Autogestión Android
+origen: android_kiosk_offline_sync
+client_operation_id: <uuid>
+request_id: <request_id Android>
+```
 
-Evitar ese duplicado **antes** de recuperar conectividad requeriría comunicación entre dispositivos o un coordinador local, arquitectura diferente al modo offline autónomo solicitado.
+Si el ticket ya había sido marcado, responde `already=true` sin duplicar el estado de check-in.
 
-## Carga ordenada de la extensión
+## Reutilización de seguridad e idempotencia Staff
 
-El bootstrap principal ya carga, en este orden:
-
-1. API base del Kiosko;
-2. API móvil Staff QR;
-3. contexto de permisos del Kiosko.
-
-Para no alterar el archivo principal ni duplicar responsabilidades de autenticación, `includes/api/eventosapp-mobile-kiosk-feature-permission.php` actúa ahora como último bootstrap móvil y carga de forma opcional:
+La extensión del Kiosko se carga después de:
 
 ```text
 includes/api/eventosapp-mobile-staff-offline-api.php
 ```
 
-La carga usa `is_readable()` + `require_once`, por lo que un despliegue parcial no provoca un fatal error: simplemente las rutas offline no existirán hasta que el nuevo archivo esté presente.
+para reutilizar helpers ya probados de:
+
+- generación de hashes de lookup QR;
+- lectura de días registrados;
+- detección de `client_operation_id` previamente sincronizados;
+- locks temporales para evitar carreras de sincronización;
+- respuestas REST `no-store`.
+
+El bootstrap permanece en:
+
+```text
+includes/api/eventosapp-mobile-kiosk-feature-permission.php
+```
 
 Orden efectivo:
 
 ```text
-eventosapp-kiosk-api.php
-eventosapp-mobile-staff-checkin-api.php
-eventosapp-mobile-kiosk-feature-permission.php
-eventosapp-mobile-staff-offline-api.php
+Kiosko base
+→ Staff QR
+→ contexto de permisos Kiosko
+→ offline Staff
+→ offline Kiosko
 ```
 
-## Archivos de 1.5.0-rc.21
+## Qué no cambia
+
+rc.22 no reemplaza ni modifica la semántica de:
 
 ```text
-includes/api/eventosapp-mobile-staff-offline-api.php             NUEVO — snapshot y sincronización offline Staff QR
-includes/api/eventosapp-mobile-kiosk-feature-permission.php     MODIFICADO — bootstrap final de la extensión offline
-docs/history/README-through-1.5.0-rc.20.md                      NUEVO — snapshot íntegro del ciclo anterior
-README.md                                                        MODIFICADO — versión, arquitectura, seguridad y validación
+POST /eventosapp-kiosk/v1/auth/login
+POST /eventosapp-kiosk/v1/auth/logout
+GET  /eventosapp-kiosk/v1/events
+GET  /eventosapp-kiosk/v1/events/{id}
+POST /eventosapp-kiosk/v1/events/{id}/search
+POST /eventosapp-kiosk/v1/tickets/{id}/print
+GET  /eventosapp-kiosk/v1/badge
 ```
 
-## Commits funcionales
+Tampoco cambia:
+
+- la generación normal de escarapelas;
+- la impresión online;
+- las reglas históricas de Autogestión;
+- la API Staff QR;
+- el snapshot/sync Staff de rc.21;
+- la cola Bluetooth de Android.
+
+## Permisos
+
+Para descargar o sincronizar un paquete Kiosko offline se exige:
+
+- usuario autenticado por la capa móvil;
+- evento `eventosapp_event` válido;
+- acceso efectivo `self_checkin` para ese usuario/evento;
+- Kiosko habilitado;
+- evento con acceso físico (`presencial` o `presencial_virtual`).
+
+Cuando Android vuelve a conectarse, consulta nuevamente la lista de eventos permitidos. Un evento revocado deja de ser utilizable offline.
+
+## Archivos de rc.22
+
+Nuevos:
 
 ```text
-55a9a2019d1932576a8ab372eb1239840e4c5db6  feat: add offline staff check-in API
-ddf791dfc08c314c163ea70855d27e510f225908  feat: load offline staff API after mobile permissions
-19e83b1558e82a6679ece9f3e67a22230532f91b  docs: preserve detailed history through rc20
+includes/api/eventosapp-mobile-kiosk-offline-api.php
 ```
 
-## Alcance preservado
+Modificados:
 
-No se modifican:
+```text
+includes/api/eventosapp-mobile-kiosk-feature-permission.php
+README.md
+```
 
-- `includes/api/eventosapp-kiosk-api.php` ni sus rutas históricas;
-- `includes/api/eventosapp-mobile-staff-checkin-api.php` ni el check-in online;
-- callbacks o UI de `includes/frontend/eventosapp-qr-checkin.php`;
-- Kiosko, búsqueda, escarapelas, impresión o cola Bluetooth;
-- permisos globales, matriz por rol, acceso personalizado o alcance de eventos;
-- creación/edición de tickets, consumibles, networking, expositores o sorteo;
-- cola central de tareas ni las correcciones de `1.5.0-rc.20`;
-- UI, Light/Dark Mode, aislamiento de Elementor, página 404 o layout boxed existente.
+## Compatibilidad Android
 
-## Validación requerida
+Backend requerido por:
 
-Antes de promover `1.5.0-rc.21` a producción:
+```text
+EventosApp Android 2.8.0 (versionCode 27)
+```
 
-1. Confirmar que el índice REST contiene `offline-snapshot` y `offline-sync`.
-2. Iniciar sesión con un usuario con permiso `qr` y descargar un evento desde Android 2.7.0.
-3. Verificar que la cantidad de tickets descargados coincide con el evento y que tickets eliminados no aparecen.
-4. Activar modo avión y registrar un QR válido.
-5. Repetir el mismo QR en el mismo dispositivo y confirmar que Android no crea otro pendiente.
-6. Cerrar y abrir la app sin conexión y confirmar que el pendiente persiste.
-7. Recuperar internet y confirmar sincronización automática.
-8. Revisar `_eventosapp_checkin_status` y `_eventosapp_checkin_log`; el log debe incluir `origen=android_staff_qr_offline_sync` y `client_operation_id`.
-9. Reenviar el mismo UUID y confirmar respuesta idempotente sin nuevo log duplicado.
-10. Marcar primero el ticket desde otro dispositivo y luego sincronizar el pendiente offline; debe responder `already=true`.
-11. Probar dos sincronizaciones concurrentes del mismo ticket/fecha y confirmar que solo una actualiza métricas como primer ingreso.
-12. Revocar el permiso `qr` al usuario y confirmar que snapshot/sync responden `403`.
-13. Activar control de pago, dejar un ticket no pagado y confirmar que no puede sincronizarse como ingreso válido.
-14. Probar QR Legacy, preimpreso, Email, Google Wallet, Apple Wallet, PDF, WhatsApp y Badge disponibles en el evento.
-15. Confirmar que Kiosko, impresión y Check-in QR online continúan funcionando sin cambios.
+Android 2.7.0 continúa utilizando únicamente las rutas Staff offline de rc.21 y no necesita las nuevas rutas Kiosko.
 
-## Estado acumulado reciente
+## Historial reciente
 
-- **1.5.0-rc.21:** API offline Staff QR, snapshot SHA-256, sincronización idempotente y control de concurrencia.
-- **1.5.0-rc.20:** gutter unificado de páginas, diagnóstico limpio persistente, recuperación de reinstalación y notificación terminal descartable.
-- **1.5.0-rc.19:** página 404 corporativa, Light/Dark y aislamiento Elementor/tema.
-- **1.5.0-rc.18:** Dashboard boxed nativo de `1200px`.
-- **1.5.0-rc.17:** reinstalación/normalización canónica de páginas y limpieza de residuos Elementor.
-- **1.5.0-rc.16:** Expositores — identidad corporativa, Light/Dark y aislamiento Elementor/tema.
-- **1.5.0-rc.15:** Asistencia, Ranking de Networking y Sorteo administrativo — compatibilidad visual final.
+| Candidato | Cambio principal |
+|---|---|
+| **1.5.0-rc.22** | Snapshot y sincronización offline para Kiosko Android 2.8.0, incluida escarapela autocontenida. |
+| **1.5.0-rc.21** | Snapshot y sincronización offline para Check-in QR Staff Android 2.7.0. |
+| **1.5.0-rc.20** | Integración de permisos y flujo móvil previo al offline Staff. |
 
-## Regla de promoción
-
-Este repositorio continúa siendo el entorno de pruebas. `1.5.0-rc.21` no debe promoverse a `theleadpartner/EventosApp` hasta validar en WordPress real la descarga del snapshot, operación en modo avión, persistencia local, sincronización al recuperar internet, idempotencia, concurrencia y revocación de permisos.
+El detalle de candidatos anteriores permanece disponible en el historial Git y en sus PR correspondientes.
