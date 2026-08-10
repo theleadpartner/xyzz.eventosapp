@@ -4,12 +4,125 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.4`
+- **Versión candidata:** `1.5.0-rc.5`
 - **Fecha de corte:** 2026-08-09
-- **Base de la rama:** `e96a796d2dc1b2fddf79edafb07969981595ff6e` (`main`)
-- **Rama de trabajo:** `fix/dashboard-search-icon-glitch-20260809`
+- **Base de la rama:** `848b00e4bb4b246a9eb34d8c584c6cc2cc57616c` (`main`)
+- **Rama de trabajo:** `feat/corporate-branding-20260809`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual del buscador del Dashboard para eliminar la superposición entre el icono propio y las decoraciones nativas de los controles `type="search"`; pendiente validación visual antes de promoción.
+- **Estado:** integración de la identidad corporativa oficial mediante activos SVG optimizados y una capa visual común para Dashboard, módulos, login, sesión y administración; pendiente validación visual/funcional antes de promoción.
+
+## Candidato 1.5.0-rc.5 — Identidad corporativa oficial de EventosApp
+
+### Objetivo
+
+Integrar la imagen corporativa suministrada a la UI existente de EventosApp **sin rediseñar los módulos ni modificar su lógica**, de forma que Dashboard, módulos frontend, acceso, sesión y pantallas administrativas compartan una identidad visual consistente.
+
+La implementación se plantea como una capa de marca centralizada: los componentes conservan su estructura, distribución, responsive, funciones, permisos y estados actuales, mientras los colores e identificadores visuales adoptan la marca oficial.
+
+### Paleta corporativa
+
+Los colores entregados se normalizan a RGB hexadecimal opaco —el sufijo `ff` recibido corresponde a alfa 100%— y quedan disponibles como tokens globales:
+
+```text
+Oscuro      #171e37
+Azul        #3683c5
+Azul oscuro #286291
+```
+
+La capa de identidad mapea esta paleta sobre las distintas generaciones de variables visuales que ya existen en EventosApp (`--evapp-*`, `--ev-*`, `--esp-*`, `--evchk-*`) sin obligar a reescribir cada módulo.
+
+### Activos oficiales integrados
+
+Se incorporan cuatro variantes vectoriales derivadas directamente de los archivos corporativos suministrados:
+
+```text
+assets/branding/eventosapp_color.svg
+assets/branding/eventosapp_blanco.svg
+assets/branding/eventosapp_icon.svg
+assets/branding/eventosapp_icon_blanco.svg
+```
+
+Los SVG originales fueron optimizados sin rasterizar ni alterar su apariencia para reducir peso de repositorio y transferencia. Se conserva la versión vectorial como activo de ejecución para obtener nitidez en pantallas retina, escalado responsive y una sola fuente visual por variante.
+
+### Capa central de identidad
+
+`includes/frontend/eventosapp-branding.php` centraliza:
+
+- los colores oficiales de la marca;
+- las URLs de los cuatro activos corporativos;
+- la carga de la hoja `assets/css/eventosapp-branding.css` al final del render;
+- la aplicación al frontend y únicamente a pantallas administrativas pertenecientes a EventosApp;
+- la resolución absoluta de las rutas de los SVG cuando la hoja se imprime inline, evitando dependencias de la URL de la página actual.
+
+`includes/frontend/eventosapp-frontend-helpers.php` conserva toda su lógica histórica y solamente carga esta nueva capa después de Seguridad y de la UI de sesión.
+
+### Integración sobre la UI existente
+
+La hoja corporativa no crea un segundo diseño. Actúa sobre los componentes existentes:
+
+- **Dashboard:** adopta Azul, Azul oscuro y Oscuro en sus tokens principales, manteniendo tarjetas, buscador, categorías, grids, responsive y controles Elementor.
+- **Login integrado:** utiliza el wordmark oficial de EventosApp y la paleta corporativa en foco, acción principal y enlaces secundarios, sin modificar autenticación, reCAPTCHA, nonce, límites ni redirecciones.
+- **Panel de sesión:** conserva exactamente su distribución y reemplaza el pictograma genérico del avatar por el icono oficial de EventosApp dentro del mismo espacio; Administración usa el Oscuro corporativo.
+- **Módulos frontend:** los shells de EventosApp reciben los aliases cromáticos oficiales y los controles primarios heredan Azul/Azul oscuro sin tocar acciones semánticas de peligro o éxito.
+- **Administración:** las pantallas propias de EventosApp reciben el icono corporativo junto al encabezado y botones primarios con la paleta oficial, sin aplicar cambios al resto del backend.
+- **Estados de foco:** los campos de EventosApp usan el Azul corporativo como acento de accesibilidad, sin modificar dimensiones, tipografía ni comportamiento.
+
+### Compatibilidad con Elementor y módulos existentes
+
+La hoja utiliza selectores de baja especificidad para reemplazar los valores visuales por defecto. Los selectores generados por Elementor para una personalización explícita del widget mantienen mayor especificidad, por lo que los controles de estilo ya existentes continúan funcionando.
+
+No se modifican `eventosapp-frontend-dashboard.php`, `eventosapp-dashboard-elementor.php`, `eventosapp-session-ui.php`, `eventosapp-security.php` ni archivos funcionales de los módulos. Esto evita reescribir lógica ya validada y reduce el riesgo de regresiones.
+
+Se conservan explícitamente:
+
+- permisos y alcances por evento;
+- sesión, login, logout y Seguridad;
+- check-in, QR, Kiosko/Autogestión y edición;
+- Checklist, Equipo de apoyo y sus métricas;
+- Consumibles y transacciones;
+- Networking;
+- Expositores;
+- Sorteo y pantalla pública;
+- layouts, espaciados, tipografía y responsive existentes;
+- estados semánticos de error, peligro, éxito y advertencia.
+
+### Archivos de 1.5.0-rc.5
+
+```text
+assets/branding/eventosapp_color.svg                  NUEVO
+assets/branding/eventosapp_blanco.svg                 NUEVO
+assets/branding/eventosapp_icon.svg                   NUEVO
+assets/branding/eventosapp_icon_blanco.svg            NUEVO
+assets/css/eventosapp-branding.css                    NUEVO
+includes/frontend/eventosapp-branding.php             NUEVO
+includes/frontend/eventosapp-frontend-helpers.php     MODIFICADO
+README.md                                              MODIFICADO
+```
+
+### Commits funcionales de identidad corporativa
+
+```text
+90ee7bd7f88ecafc585ec3f180a049ee3277b5cb  feat: add official EventosApp color icon asset
+7a387e132b70929d957b412fe2df5a1c0f8af9ee  feat: add official EventosApp white icon asset
+f32b3c84d97d6576b0d6fe123947fd4d3d8ccf2e  feat: add official EventosApp color wordmark
+d283573a013eb24079ae907c610606d8656d4f50  feat: add official EventosApp white wordmark
+5b30c5855370e807193edb998deaeaa22a0d7e4d  feat: add centralized corporate branding layer
+2f36187555f5fc7939d61b381b878bec1af9c0b5  feat: load EventosApp corporate brand tokens and assets
+e26498e040e46167ceaaa39ac24fd797f8420107  feat: load corporate branding after frontend helpers
+```
+
+## Validación funcional requerida para 1.5.0-rc.5
+
+- Abrir el Dashboard autenticado y confirmar paleta, tarjetas, buscador, selector de evento, sesión y acciones sin cambios de layout.
+- Abrir `/dashboard/` sin sesión y confirmar que el login muestra el wordmark oficial y conserva usuario, contraseña, mostrar/ocultar, reCAPTCHA y mensajes.
+- Revisar Métricas, Registro, Check-In, QR, Edición, Checklist, Asistencia, Consumibles, Networking, Expositores y Sorteo según permisos disponibles.
+- Confirmar que botones de peligro/éxito mantienen su semántica y no fueron convertidos al color principal.
+- Revisar las pantallas de administración de EventosApp y confirmar que la marca no se extiende a páginas administrativas ajenas al plugin.
+- Probar 320 px, 375 px, 430 px, tablet y desktop para confirmar que la capa de marca no altera el responsive existente.
+- En el widget Dashboard de Elementor, cambiar temporalmente un color desde sus controles y confirmar que la personalización explícita continúa prevaleciendo sobre el valor corporativo por defecto.
+- Verificar Kiosko/Autogestión y Sorteo Público para confirmar que no aparecen nuevos controles de sesión ni elementos estructurales.
+
+---
 
 ## Hotfix 1.5.0-rc.4 — Corrección visual del buscador del Dashboard
 
@@ -547,6 +660,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.5` — 2026-08-09
+
+Identidad corporativa oficial: paleta `#171e37` / `#3683c5` / `#286291`, logos e iconos SVG optimizados y capa visual central para Dashboard, módulos, login, sesión y administración, sin rediseño ni cambios funcionales.
 
 ### `1.5.0-rc.4` — 2026-08-09
 
