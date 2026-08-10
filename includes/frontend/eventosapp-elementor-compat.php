@@ -32,7 +32,7 @@ if ( ! function_exists( 'eventosapp_elementor_compat_print_styles' ) ) {
         ?>
         <style id="eventosapp-elementor-compat">
 /* ==========================================================
- * EventosApp 1.5.0-rc.9 — aislamiento final + Flow Metrics
+ * EventosApp 1.5.0-rc.10 — aislamiento final de módulos app
  * ========================================================== */
 
 /* Elementor Kit puede inyectar sus variables globales dentro de la página.
@@ -537,6 +537,531 @@ html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .eva
     background: rgba(54, 131, 197, .16) !important;
     border-color: rgba(123, 177, 223, .45) !important;
     color: #8fc0e8 !important;
+}
+
+/* ==========================================================
+ * Empresas con Check-In: marca, Dark Mode y aislamiento
+ * ========================================================== */
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor {
+    --evapp-primary: var(--eventosapp-brand-blue) !important;
+    --evapp-primary-dark: var(--eventosapp-brand-blue-dark) !important;
+    --evapp-primary-soft: var(--eventosapp-brand-blue-soft) !important;
+    --evapp-app-bg: var(--eventosapp-app-surface-soft) !important;
+    --evapp-surface: var(--eventosapp-app-surface) !important;
+    --evapp-border: var(--eventosapp-app-border) !important;
+    --evapp-text: var(--eventosapp-app-text) !important;
+    --evapp-muted: var(--eventosapp-app-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-eyebrow {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 7px !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-eyebrow::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 18px;
+    flex: 0 0 16px;
+    margin: 0 !important;
+    background: url("<?php echo esc_url( $icon_color ); ?>") center / contain no-repeat;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-company-eyebrow {
+    color: #7bb1df !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-company-eyebrow::before {
+    background-image: url("<?php echo esc_url( $icon_white ); ?>");
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-shell {
+    background: var(--eventosapp-app-surface-soft) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+    box-shadow: var(--eventosapp-app-shadow) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-event-context,
+    .evapp-company-kpi,
+    .evapp-company-panel,
+    .evapp-company-table-wrap
+) {
+    background: var(--evapp-surface) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-title,
+    .evapp-company-event-name,
+    .evapp-company-kpi strong,
+    .evapp-company-name,
+    .evapp-company-nit,
+    .evapp-company-state strong
+) {
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-subtitle,
+    .evapp-company-event-kicker,
+    .evapp-company-kpi span,
+    .evapp-company-control-label,
+    .evapp-company-results,
+    .evapp-company-updated,
+    .evapp-company-company-hint,
+    .evapp-company-arrival,
+    .evapp-company-state p
+) {
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-btn {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    text-decoration: none !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-btn-secondary,
+    .evapp-company-btn-ghost,
+    .evapp-company-change-event,
+    .evapp-company-chip
+) {
+    background: var(--evapp-surface) !important;
+    border-color: var(--evapp-border) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-btn-secondary {
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-btn-ghost,
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-chip {
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-change-event {
+    color: var(--eventosapp-brand-blue-dark) !important;
+    text-decoration: none !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-btn-secondary,
+    .evapp-company-btn-ghost,
+    .evapp-company-change-event
+):hover,
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-btn-secondary,
+    .evapp-company-btn-ghost,
+    .evapp-company-change-event
+):focus-visible {
+    background: var(--eventosapp-app-surface-raised) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-btn-primary {
+    background: var(--eventosapp-brand-blue) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: #fff !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-btn-primary:hover:not(:disabled),
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-btn-primary:focus-visible {
+    background: var(--eventosapp-brand-blue-dark) !important;
+    border-color: var(--eventosapp-brand-blue-dark) !important;
+    color: #fff !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-control input,
+    .evapp-company-control select
+) {
+    background-color: var(--eventosapp-app-input) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+    box-shadow: none;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-control select option {
+    background: var(--eventosapp-app-input) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-control input::placeholder {
+    color: var(--evapp-muted) !important;
+    opacity: 1 !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-search-icon {
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-meta,
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table :where(th, td) {
+    border-color: var(--evapp-border) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table {
+    background: var(--evapp-surface) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table th {
+    background: var(--eventosapp-app-surface-raised) !important;
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table tbody tr:hover {
+    background: var(--eventosapp-app-surface-raised) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-rank,
+    .evapp-company-count
+) {
+    background: var(--evapp-primary-soft) !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-alias {
+    background: var(--eventosapp-app-surface-soft) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-state,
+    .evapp-company-loading
+) {
+    background: var(--eventosapp-app-surface-soft) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-error {
+    background: var(--evapp-danger-soft) !important;
+    border-color: color-mix(in srgb, var(--evapp-danger) 34%, transparent) !important;
+    border-left-color: var(--evapp-danger) !important;
+    color: var(--evapp-danger) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-nit-warning {
+    color: var(--evapp-warning) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-spinner {
+    border-color: var(--evapp-border) !important;
+    border-top-color: var(--eventosapp-brand-blue) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor {
+    --evapp-primary-soft: rgba(54, 131, 197, .16) !important;
+    --evapp-app-bg: var(--eventosapp-app-surface-soft) !important;
+    --evapp-success: #62d4a5 !important;
+    --evapp-success-soft: rgba(22, 133, 91, .20) !important;
+    --evapp-warning: #f1c861 !important;
+    --evapp-warning-soft: rgba(161, 98, 7, .22) !important;
+    --evapp-danger: #f08d8d !important;
+    --evapp-danger-soft: rgba(197, 58, 58, .20) !important;
+    --evapp-purple: #b8a1f0 !important;
+    --evapp-purple-soft: rgba(109, 75, 195, .22) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-btn-secondary:hover:not(:disabled),
+    .evapp-company-btn-secondary:focus-visible,
+    .evapp-company-btn-ghost:hover:not(:disabled),
+    .evapp-company-btn-ghost:focus-visible,
+    .evapp-company-change-event:hover,
+    .evapp-company-change-event:focus-visible
+) {
+    background: rgba(54, 131, 197, .16) !important;
+    border-color: rgba(123, 177, 223, .45) !important;
+    color: #8fc0e8 !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor :where(
+    .evapp-company-rank,
+    .evapp-company-count,
+    .evapp-company-event-icon,
+    .evapp-company-kpi-icon,
+    .evapp-company-state-icon
+) {
+    border-color: rgba(123, 177, 223, .18) !important;
+    color: #8fc0e8 !important;
+}
+
+@media (max-width: 760px) {
+    body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table tr {
+        background: var(--evapp-surface) !important;
+        border-color: var(--evapp-border) !important;
+    }
+
+    body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table td {
+        border-color: var(--evapp-border) !important;
+    }
+
+    body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table td::before {
+        color: var(--evapp-muted) !important;
+    }
+
+    body.eventosapp-app-page #eventosapp-app-root .evapp-company-monitor .evapp-company-table .evapp-company-cell-company {
+        background: var(--eventosapp-app-surface-raised) !important;
+    }
+}
+
+/* ==========================================================
+ * Registro Manual: marca, Dark Mode y aislamiento
+ * ========================================================== */
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap {
+    --evapp-primary: var(--eventosapp-brand-blue) !important;
+    --evapp-primary-dark: var(--eventosapp-brand-blue-dark) !important;
+    --evapp-primary-soft: var(--eventosapp-brand-blue-soft) !important;
+    --evapp-app-bg: var(--eventosapp-app-surface-soft) !important;
+    --evapp-surface: var(--eventosapp-app-surface) !important;
+    --evapp-border: var(--eventosapp-app-border) !important;
+    --evapp-text: var(--eventosapp-app-text) !important;
+    --evapp-muted: var(--eventosapp-app-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-eyebrow {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 7px !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-eyebrow::before {
+    width: 16px !important;
+    height: 18px !important;
+    flex: 0 0 16px !important;
+    margin: 0 !important;
+    vertical-align: 0 !important;
+    background: url("<?php echo esc_url( $icon_color ); ?>") center / contain no-repeat !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-eyebrow {
+    color: #7bb1df !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-eyebrow::before {
+    background-image: url("<?php echo esc_url( $icon_white ); ?>") !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap :where(
+    .evreg-event-context,
+    .evreg-form-section,
+    .evreg-submit
+) {
+    background: var(--evapp-surface) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap :where(
+    .evreg-main-title,
+    .evreg-event-name,
+    .evreg-title,
+    .evreg-label,
+    .evreg-submit-copy strong,
+    .evreg-delivery-option-copy strong
+) {
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap :where(
+    .evreg-main-subtitle,
+    .evreg-event-label,
+    .evreg-event-meta,
+    .evreg-sub,
+    .evreg-help,
+    .evreg-submit-copy span,
+    .evreg-delivery-option-copy small,
+    .evreg-delivery-note
+) {
+    color: var(--evapp-muted) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-input {
+    background: var(--eventosapp-app-input) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+    box-shadow: none;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-input:hover,
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-input:focus {
+    background: var(--eventosapp-app-input) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-input::placeholder {
+    color: var(--evapp-muted) !important;
+    opacity: 1 !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap select.evreg-input option {
+    background: var(--eventosapp-app-input) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-readonly-value {
+    background: var(--evapp-primary-soft) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-delivery-option {
+    background: var(--eventosapp-app-surface-soft) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-delivery-option:hover {
+    background: var(--eventosapp-app-surface-raised) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-delivery-option:has(.evreg-delivery-checkbox:checked) {
+    background: var(--evapp-primary-soft) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-delivery-check {
+    background: var(--eventosapp-app-input) !important;
+    border-color: var(--evapp-border) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-delivery-checkbox:checked + .evreg-delivery-check {
+    background: var(--eventosapp-brand-blue) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: #fff !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    text-decoration: none !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-primary {
+    background: var(--eventosapp-brand-blue) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: #fff !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-primary:hover,
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-primary:focus-visible {
+    background: var(--eventosapp-brand-blue-dark) !important;
+    border-color: var(--eventosapp-brand-blue-dark) !important;
+    color: #fff !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-secondary {
+    background: var(--evapp-surface) !important;
+    border-color: var(--evapp-border) !important;
+    color: var(--evapp-text) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-secondary:hover,
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-secondary:focus-visible {
+    background: var(--eventosapp-app-surface-raised) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-processing {
+    background: var(--evapp-primary-soft) !important;
+    border-color: var(--eventosapp-brand-blue) !important;
+    color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-card-success,
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-delivery-result--sent {
+    background: var(--evapp-success-soft) !important;
+    border-color: var(--evapp-success) !important;
+    color: var(--evapp-success) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap :where(
+    .evreg-success-title,
+    .evreg-success-id
+) {
+    color: var(--evapp-success) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap :where(
+    .evreg-alert-warn,
+    .evreg-delivery-result--skipped,
+    .evreg-delivery-result--processed
+) {
+    background: var(--evapp-warning-soft) !important;
+    border-color: var(--evapp-warning) !important;
+    color: var(--evapp-warning) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-wrap :where(
+    .evreg-alert-error,
+    .evreg-delivery-result--error
+) {
+    background: var(--evapp-danger-soft) !important;
+    border-color: var(--evapp-danger) !important;
+    color: var(--evapp-danger) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-inline-notice {
+    color: var(--eventosapp-app-text) !important;
+    background: var(--eventosapp-app-surface) !important;
+    border: 1px solid var(--eventosapp-app-border) !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-inline-notice--warning {
+    color: #8a4b08 !important;
+    background: #fff8e7 !important;
+    border-color: #f3d49b !important;
+}
+
+body.eventosapp-app-page #eventosapp-app-root .evreg-inline-notice--error {
+    color: #8b1e17 !important;
+    background: #fff1f0 !important;
+    border-color: #f2b8b5 !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-wrap {
+    --evapp-primary-soft: rgba(54, 131, 197, .16) !important;
+    --evapp-app-bg: var(--eventosapp-app-surface-soft) !important;
+    --evapp-success: #62d4a5 !important;
+    --evapp-success-soft: rgba(21, 128, 61, .20) !important;
+    --evapp-warning: #f1c861 !important;
+    --evapp-warning-soft: rgba(180, 83, 9, .22) !important;
+    --evapp-danger: #f08d8d !important;
+    --evapp-danger-soft: rgba(180, 35, 24, .20) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-readonly-value,
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-processing,
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-secondary:hover,
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-wrap .evreg-btn-secondary:focus-visible {
+    color: #8fc0e8 !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-inline-notice--warning {
+    color: #f1c861 !important;
+    background: rgba(180, 83, 9, .22) !important;
+    border-color: rgba(241, 200, 97, .34) !important;
+}
+
+html[data-evapp-theme="dark"] body.eventosapp-app-page #eventosapp-app-root .evreg-inline-notice--error {
+    color: #f08d8d !important;
+    background: rgba(180, 35, 24, .20) !important;
+    border-color: rgba(240, 141, 141, .34) !important;
 }
 
 /* El header está fuera del árbol de Elementor, pero las reglas globales del Kit
