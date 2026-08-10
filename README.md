@@ -4,12 +4,138 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.15`
+- **Versión candidata:** `1.5.0-rc.16`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `6ad70c60b4fe3cf3c3e0ccbc1b7e4425d1b99fd3` (`main`)
-- **Rama de trabajo:** `fix/support-ranking-raffle-dark-branding-elementor-20260810`
+- **Base de la rama:** `c900182fb26cdb63fc5a8802e6872a9447ffabc0` (`main`, posterior al merge de `1.5.0-rc.15`)
+- **Rama de trabajo:** `fix/expositores-dark-branding-elementor-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual específico para **Asistencia/Métricas de equipo de apoyo**, **Ranking de Networking** y el **panel administrativo del Sorteo en Vivo**: identidad corporativa reforzada, superficies y controles compatibles con Light/Dark Mode y aislamiento final frente a CSS global de Elementor/tema, sin modificar registro de atenciones, QR/cámara, métricas/CSV, networking, selección aleatoria, ganadores ni la pantalla pública/proyección del sorteo; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual específico para **Expositor** y **Gestión de Expositores**: integración de firma corporativa, compatibilidad completa Light/Dark y aislamiento frente al CSS inline histórico, Elementor Kit y tema. `includes/admin/eventosapp-expositores.php` fue auditado y permanece funcionalmente intacto; la corrección se aplica desde una capa visual final para no alterar productos, inventario, entregas, QR/cámara, autorizaciones, CSV, AJAX, permisos ni datos históricos. Pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.16 — Expositores: identidad, Dark Mode y aislamiento Elementor
+
+### Incidencias detectadas
+
+La revisión de `includes/admin/eventosapp-expositores.php` y de las dos vistas mostradas en validación confirmó que el módulo ya está funcionalmente consolidado, pero su renderizador frontend conserva CSS inline anterior al shell corporativo actual.
+
+Los problemas se concentran en presentación:
+
+1. `.evapp-expositor-module` todavía declara `#3279bd`, `#255f96`, `#eaf4ff`, `#f5f8fc`, `#ffffff`, `#182230` y `#64748b`, por lo que parte de la UI puede volver a la generación cromática anterior aunque el Dashboard ya esté en Dark Mode.
+2. **Expositor:** tabs, paneles, inputs/selects, tarjetas de inventario, chips, empty states y superficies internas contienen blancos directos (`#fff`, `#fbfdff`, `#f8fafc`). En Dark Mode esto produce exactamente el bloque claro observado alrededor de **Leer QR / Gestionar inventario**, con texto preparado para fondo oscuro sobre una superficie blanca.
+3. **Gestión de Expositores:** la tabla conserva fondo blanco en wrapper, tabla, encabezados, celdas, hover y tarjetas móviles. El resultado observado era una tabla clara con nombres, IDs y textos de autorización casi invisibles.
+4. Los controles secundarios, toggles, badges, avisos y estados hover/focus podían seguir recibiendo valores del CSS inline o del Elementor Kit.
+5. El encabezado `.evapp-expositor-eyebrow` mostraba `EVENTOSAPP`, pero no tenía la firma con el icono oficial que ya comparten los módulos modernizados.
+6. La solución debía respetar íntegramente la lógica ya existente de productos, inventario, entregas, cámara, fallback QR, autorizaciones y descargas.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-expositores-visual-compat.php` como capa final y exclusivamente visual. `includes/frontend/eventosapp-frontend-helpers.php` la carga después de las capas corporativas, del aislamiento general de Elementor y de todos los hotfix visuales ya integrados hasta `1.5.0-rc.15`. Su CSS se imprime en `wp_footer` con prioridad `1011`, inmediatamente después de la compatibilidad de Asistencia/Ranking/Sorteo (`1010`).
+
+El archivo solicitado `includes/admin/eventosapp-expositores.php` **no se modifica**: fue revisado para identificar sus wrappers, estados y dependencias, y se conserva intacto para reducir el riesgo de regresiones en un módulo que actualmente funciona.
+
+#### Imagen corporativa
+
+- `.evapp-expositor-eyebrow` incorpora el icono oficial de EventosApp.
+- Light Mode utiliza `eventosapp_icon.svg`.
+- Dark Mode utiliza `eventosapp_icon_blanco.svg`.
+- `--evapp-primary`, `--evapp-primary-dark`, `--evapp-primary-soft`, `--evapp-app-bg`, `--evapp-surface`, `--evapp-border`, `--evapp-text` y `--evapp-muted` se remapean a los tokens comunes de la identidad vigente.
+- Los colores corporativos estructurales continúan siendo `#171e37`, `#3683c5` y `#286291`.
+
+#### Vista Expositor
+
+Dentro de `#evapp-expositor-module` / `.evapp-expositor-module` se corrigen únicamente propiedades visuales:
+
+- shell y contexto del evento;
+- métricas de entregas, productos y base de datos;
+- pestañas **Leer QR** y **Gestionar inventario** en normal, hover, focus y activo;
+- paneles internos y tarjetas;
+- inputs, selects, opciones, placeholders y foco;
+- botones principales, secundarios, peligro y disabled;
+- tarjetas de productos, chips, existencias y barra de stock;
+- badges Activo/Inactivo;
+- avisos de información, éxito, advertencia y error;
+- ficha del asistente y empty states;
+- responsive móvil existente.
+
+El visor de cámara/QR se mantiene deliberadamente oscuro porque es una superficie técnica; solo se sincronizan sus bordes y contexto visual.
+
+#### Vista Gestión de Expositores
+
+Dentro de `#evapp-expositor-gestion` se corrigen:
+
+- shell, contexto del evento y cuatro métricas superiores;
+- tarjeta **Autorización de descarga y métricas**;
+- wrapper de tabla, encabezados, celdas, bordes y hover;
+- nombres, IDs y contadores de productos/entregas;
+- switch **Permitir descarga** en ambos temas;
+- botón **Descargar CSV** y **Guardar autorizaciones**;
+- texto auxiliar y mensajes de guardado;
+- transformación responsive de cada fila en tarjeta, evitando que el blanco histórico reaparezca en móvil.
+
+#### Aislamiento frente a Elementor y tema
+
+La prioridad adicional se limita a páginas mapeadas por EventosApp y al wrapper propio del módulo:
+
+```text
+body.eventosapp-app-page #eventosapp-app-root .evapp-expositor-module
+```
+
+Inputs, selects, botones, tabs y estados de foco reciben `appearance`, fondos, bordes y colores explícitos dentro de ese scope. Los `!important` se concentran en propiedades visuales que deben ganar frente al Elementor Kit, al tema y al CSS inline histórico; no se cambian grids funcionales, datasets, IDs, listeners ni reglas de negocio.
+
+La capa no utiliza filtros globales ni modifica variables fuera de `#eventosapp-app-root`, por lo que una página WordPress no mapeada continúa usando normalmente su Elementor Kit y tema.
+
+### Alcance conservado
+
+No se modifican:
+
+- `includes/admin/eventosapp-expositores.php` ni sus funciones existentes;
+- alta/edición de expositores y metadatos administrativos;
+- asociación de expositores a eventos;
+- permisos de Administrador, Organizador, Staff o usuario expositor;
+- selección del evento activo ni del expositor activo;
+- configuración, alta, edición o eliminación de productos/consumibles;
+- inventario, límites mínimo/máximo ni estado activo/inactivo;
+- resolución de tickets desde QR;
+- `BarcodeDetector`, fallback `jsQR`, `MediaStream`, vídeo o cámara;
+- validación de duplicados ni registro de entregas;
+- AJAX, nonces, consultas SQL, tablas o datos históricos;
+- autorización individual para descargar CSV;
+- generación, contenido, autorización o descarga del CSV;
+- Dashboard, Asistencia, Networking, Sorteo, Consumibles, Check-In, Facial, Checklist, Métricas ni otros módulos;
+- páginas WordPress que no estén mapeadas por EventosApp.
+
+### Archivos de 1.5.0-rc.16
+
+```text
+includes/frontend/eventosapp-expositores-visual-compat.php  NUEVO
+includes/frontend/eventosapp-frontend-helpers.php           MODIFICADO
+README.md                                                    MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+b147f86572b0a42e5ca5d9800960cf58ab1bfbf7  feat: add expositores visual compatibility layer
+b9e9faeb8b1793f9d1bbead2403189cf31e0d68c  feat: load expositores visual compatibility layer
+```
+
+## Validación funcional requerida para 1.5.0-rc.16
+
+- Abrir **Expositor** en Light Mode y confirmar icono corporativo, paleta, evento, expositor activo, métricas, tabs y formularios.
+- Activar Dark Mode y confirmar que el área de tabs/paneles ya no vuelve a blanco y que **Control de entrega por QR** mantiene título, ayuda, producto, lectura manual y botones legibles.
+- Cambiar entre **Leer QR** y **Gestionar inventario** y confirmar normal/hover/focus/activo sin colores del tema o Elementor.
+- Crear, editar y eliminar un producto controlado para confirmar que la capa visual no altera AJAX, nonces ni persistencia.
+- Revisar cards de inventario, stock, badges Activo/Inactivo y estados de inventario en Light/Dark.
+- Abrir cámara, detenerla y validar un QR correcto/incorrecto para confirmar que el visor técnico sigue oscuro y que BarcodeDetector/jsQR continúan funcionando.
+- Registrar una entrega controlada y confirmar que conteos, duplicados, límites e historial continúan iguales.
+- Abrir **Gestión de Expositores** en Dark Mode y confirmar que la tabla completa deja de ser blanca: encabezados, nombres, IDs, números, toggles y botones deben permanecer oscuros y legibles.
+- Cambiar una autorización de descarga, guardar y confirmar que el permiso se persiste como antes.
+- Descargar un CSV como organizador y, donde aplique, como expositor autorizado; confirmar validación y contenido.
+- Cambiar a Light Mode y confirmar que ambas vistas conservan la presentación clara esperada.
+- Probar 320 px, 375 px, 430 px, tablet y desktop; la tabla móvil debe convertirse en tarjetas sin fondos blancos ni overflow.
+- Regenerar CSS de Elementor y volver a abrir ambas vistas; identidad, superficies y controles deben mantenerse.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que su Elementor Kit permanece intacto.
+
+---
 
 ## Hotfix 1.5.0-rc.15 — Asistencia, Ranking de Networking y Sorteo en Vivo: identidad, Dark Mode y aislamiento Elementor
 
@@ -1865,9 +1991,13 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 
 ## Historial resumido
 
+### `1.5.0-rc.16` — 2026-08-10
+
+Hotfix visual de **Expositor** y **Gestión de Expositores**: firma corporativa oficial, tabs/paneles, formularios, inventario, estados, tabla administrativa, toggles y tarjetas responsive compatibles con Dark Mode, más aislamiento final frente a CSS inline histórico, Elementor y tema. `includes/admin/eventosapp-expositores.php` permanece funcionalmente intacto; no se alteran QR/cámara, entregas, productos, permisos, AJAX ni CSV.
+
 ### `1.5.0-rc.15` — 2026-08-10
 
-Hotfix visual de Asistencia/Métricas de equipo de apoyo, Ranking de Networking y panel administrativo del Sorteo en Vivo: firma corporativa reforzada, superficies, formularios, KPI/tablas/cards y estados compatibles con Dark Mode, protección del buscador de Asistencia y aislamiento final frente a Elementor/tema, sin reescribir los tres archivos funcionales indicados ni alterar atenciones, QR/cámara, métricas/CSV, networking, sorteo, ganadores o pantalla pública/proyección.
+Hotfix visual de Asistencia/Métricas de equipo de apoyo, Ranking de Networking y panel administrativo del Sorteo en Vivo: firma corporativa reforzada, superficies, formularios, KPI/tablas/ranking/ganadores y controles compatibles con Dark Mode, protección del buscador de Asistencia y aislamiento final frente a Elementor/tema sin alterar registro de atenciones, QR/cámara, CSV, networking, lógica aleatoria ni pantalla pública del sorteo.
 
 ### `1.5.0-rc.14` — 2026-08-10
 
