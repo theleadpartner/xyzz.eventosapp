@@ -1,0 +1,230 @@
+/*
+ * EventosApp — Identidad corporativa
+ * Paleta oficial:
+ *   Oscuro:      #171e37
+ *   Azul:        #3683c5
+ *   Azul oscuro: #286291
+ *
+ * Esta hoja es una capa de marca. No cambia estructura, tamaños, grids,
+ * responsive ni comportamiento de los módulos existentes.
+ */
+
+:root {
+  --eventosapp-brand-dark: #171e37;
+  --eventosapp-brand-blue: #3683c5;
+  --eventosapp-brand-blue-dark: #286291;
+  --eventosapp-brand-blue-soft: #edf5fb;
+  --eventosapp-brand-blue-softer: #f5f9fd;
+  --eventosapp-brand-focus: rgba(54, 131, 197, .16);
+}
+
+/*
+ * Alias para las distintas generaciones de UI de EventosApp.
+ * Se mantienen deliberadamente en selectores de una sola clase/atributo para
+ * que una personalización explícita de Elementor conserve mayor especificidad.
+ */
+:where(
+  .evapp-dashboard,
+  .evapp-login-stage,
+  .evapp-session-panel,
+  [class^="evapp-"][class*="-shell"],
+  [class*=" evapp-"][class*="-shell"],
+  [class^="evapp-"][class*="-wrap"],
+  [class*=" evapp-"][class*="-wrap"],
+  [class^="eventosapp-"][class*="-shell"],
+  [class*=" eventosapp-"][class*="-shell"],
+  [class^="eventosapp-"][class*="-wrap"],
+  [class*=" eventosapp-"][class*="-wrap"]
+) {
+  --evapp-primary: var(--eventosapp-brand-blue);
+  --evapp-primary-dark: var(--eventosapp-brand-blue-dark);
+  --evapp-primary-hover: var(--eventosapp-brand-blue-dark);
+  --evapp-accent: var(--eventosapp-brand-blue);
+  --evapp-blue: var(--eventosapp-brand-blue);
+  --evapp-blue-dark: var(--eventosapp-brand-blue-dark);
+  --evapp-text: var(--eventosapp-brand-dark);
+  --evapp-ink: var(--eventosapp-brand-dark);
+  --evapp-heading: var(--eventosapp-brand-dark);
+
+  --ev-primary: var(--eventosapp-brand-blue);
+  --ev-dark: var(--eventosapp-brand-blue-dark);
+  --ev-text: var(--eventosapp-brand-dark);
+
+  --esp-primary: var(--eventosapp-brand-blue);
+  --esp-primary-dark: var(--eventosapp-brand-blue-dark);
+  --esp-text: var(--eventosapp-brand-dark);
+
+  --evchk-primary: var(--eventosapp-brand-blue);
+  --evchk-primary-dark: var(--eventosapp-brand-blue-dark);
+  --evchk-text: var(--eventosapp-brand-dark);
+
+  accent-color: var(--eventosapp-brand-blue);
+}
+
+/* Dashboard actual. */
+.evapp-dashboard {
+  --evapp-primary: var(--eventosapp-brand-blue);
+  --evapp-primary-dark: var(--eventosapp-brand-blue-dark);
+  --evapp-primary-soft: var(--eventosapp-brand-blue-soft);
+  --evapp-text: var(--eventosapp-brand-dark);
+}
+
+.evapp-dashboard .evapp-eyebrow,
+.evapp-dashboard .evapp-module-total,
+.evapp-dashboard .evapp-event-context-icon,
+.evapp-dashboard .evapp-selector-icon {
+  color: var(--eventosapp-brand-blue-dark);
+}
+
+/* Login integrado: usa siempre el wordmark oficial entregado para EventosApp. */
+.evapp-login-stage {
+  --ev: var(--eventosapp-brand-blue);
+  --ev-dark: var(--eventosapp-brand-blue-dark);
+  --ev-text: var(--eventosapp-brand-dark);
+}
+
+.evapp-login-brand > img,
+.evapp-login-brand > .evapp-login-mark {
+  display: none !important;
+}
+
+.evapp-login-brand::before {
+  content: "";
+  display: block;
+  width: min(220px, 86%);
+  height: 52px;
+  margin: 0 auto 15px;
+  background: url("../branding/eventosapp_color.svg") center / contain no-repeat;
+}
+
+.evapp-login-field input:focus {
+  border-color: var(--eventosapp-brand-blue);
+  box-shadow: 0 0 0 4px var(--eventosapp-brand-focus);
+}
+
+.evapp-login-submit {
+  background: var(--eventosapp-brand-blue);
+}
+
+.evapp-login-submit:hover,
+.evapp-login-submit:focus {
+  background: var(--eventosapp-brand-blue-dark);
+  box-shadow: 0 10px 24px rgba(40, 98, 145, .2);
+}
+
+.evapp-login-secondary,
+.evapp-password-toggle:hover,
+.evapp-password-toggle:focus {
+  color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+/* Panel común de sesión: conserva medidas y layout, sustituye solo el pictograma. */
+.evapp-session-panel {
+  --esp-primary: var(--eventosapp-brand-blue);
+  --esp-primary-dark: var(--eventosapp-brand-blue-dark);
+  --esp-text: var(--eventosapp-brand-dark);
+}
+
+.evapp-session-panel-avatar {
+  background-color: var(--eventosapp-brand-blue-soft);
+  background-image: url("../branding/eventosapp_icon.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 24px auto;
+}
+
+.evapp-session-panel-avatar > svg {
+  visibility: hidden;
+}
+
+.evapp-session-panel-action:not(.is-admin):not(.is-logout) {
+  color: var(--eventosapp-brand-blue-dark) !important;
+}
+
+.evapp-session-panel-action.is-admin {
+  background: var(--eventosapp-brand-dark);
+  border-color: var(--eventosapp-brand-dark);
+}
+
+.evapp-session-panel-action.is-admin:hover,
+.evapp-session-panel-action.is-admin:focus {
+  background: var(--eventosapp-brand-blue-dark);
+  border-color: var(--eventosapp-brand-blue-dark);
+}
+
+/* Controles primarios de módulos nuevos/antiguos, sin tocar acciones semánticas de peligro/éxito. */
+:where(
+  [class^="evapp-"][class*="-shell"],
+  [class*=" evapp-"][class*="-shell"],
+  [class^="eventosapp-"][class*="-shell"],
+  [class*=" eventosapp-"][class*="-shell"]
+) :where(
+  .button-primary,
+  [class*="-btn-primary"],
+  [class*="-button-primary"],
+  [class*="-primary-button"]
+) {
+  background-color: var(--eventosapp-brand-blue);
+  border-color: var(--eventosapp-brand-blue);
+}
+
+:where(
+  [class^="evapp-"][class*="-shell"],
+  [class*=" evapp-"][class*="-shell"],
+  [class^="eventosapp-"][class*="-shell"],
+  [class*=" eventosapp-"][class*="-shell"]
+) :where(
+  .button-primary,
+  [class*="-btn-primary"],
+  [class*="-button-primary"],
+  [class*="-primary-button"]
+):is(:hover, :focus) {
+  background-color: var(--eventosapp-brand-blue-dark);
+  border-color: var(--eventosapp-brand-blue-dark);
+}
+
+/* Foco coherente para campos EventosApp sin modificar dimensiones ni tipografía. */
+:where(
+  [class^="evapp-"][class*="-shell"],
+  [class*=" evapp-"][class*="-shell"],
+  [class^="eventosapp-"][class*="-shell"],
+  [class*=" eventosapp-"][class*="-shell"],
+  .evapp-login-stage
+) :where(input, select, textarea):focus-visible {
+  border-color: var(--eventosapp-brand-blue);
+  outline-color: var(--eventosapp-brand-blue);
+}
+
+/* Administración de EventosApp: icono corporativo junto al título nativo. */
+body[class*="eventosapp"] .wrap > h1:first-child::before,
+body[class*="eventosapp"] .wrap > h2:first-child::before {
+  content: "";
+  display: inline-block;
+  width: 24px;
+  height: 27px;
+  margin-right: 9px;
+  vertical-align: -6px;
+  background: url("../branding/eventosapp_icon.svg") center / contain no-repeat;
+}
+
+body[class*="eventosapp"] .wrap > h1:first-child,
+body[class*="eventosapp"] .wrap > h2:first-child {
+  color: var(--eventosapp-brand-dark);
+}
+
+body[class*="eventosapp"] .wp-core-ui .button-primary {
+  background: var(--eventosapp-brand-blue);
+  border-color: var(--eventosapp-brand-blue-dark);
+}
+
+body[class*="eventosapp"] .wp-core-ui .button-primary:hover,
+body[class*="eventosapp"] .wp-core-ui .button-primary:focus {
+  background: var(--eventosapp-brand-blue-dark);
+  border-color: var(--eventosapp-brand-blue-dark);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where([class^="evapp-"], [class*=" evapp-"], [class^="eventosapp-"], [class*=" eventosapp-"]) * {
+    scroll-behavior: auto;
+  }
+}
