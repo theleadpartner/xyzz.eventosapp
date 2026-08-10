@@ -4,12 +4,96 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.7`
+- **Versión candidata:** `1.5.0-rc.8`
 - **Fecha de corte:** 2026-08-10
-- **Base de la rama:** `9fba47fb76904f0a5606627aed88b00a03aac667` (`main`)
-- **Rama de trabajo:** `fix/dark-ui-responsive-header-search-20260810`
+- **Base de la rama:** `e7311c8f6fe1e89a409721ad003df8ecba44f1f1` (`main`)
+- **Rama de trabajo:** `fix/drawer-stacking-elementor-css-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** hotfix visual posterior al shell unificado: Dark Mode corregido en superficies y hovers del Dashboard, iconografía corporativa visible en el encabezado real del panel, buscador protegido frente a estilos externos y header autenticado convertido en drawer lateral responsive en móvil; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual para corregir el stacking context del drawer móvil y aislar la UI de EventosApp frente a colores y reglas globales de Elementor/tema; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.8 — Drawer utilizable y aislamiento de estilos Elementor
+
+### Incidencias detectadas
+
+La validación móvil de `1.5.0-rc.7` confirmó que el drawer lateral sí se abría, pero el backdrop oscuro terminaba visualmente y funcionalmente por encima del menú. La causa no estaba en el `z-index` del drawer hijo sino en el contexto de apilado creado por `.evapp-app-chrome`: el header tenía su propio `z-index`, mientras el backdrop se insertaba directamente como hermano en `body`. Un hijo no puede escapar del stacking context de su padre aunque tenga un `z-index` numéricamente mayor.
+
+También se confirmó que reglas globales de Elementor/tema seguían alcanzando controles de EventosApp. El síntoma más visible era la aparición de colores genéricos en botones como **Modo claro/oscuro**, además de valores históricos del widget Dashboard (`#3279bd`, `#255f96`, `#182230`, `#64748b`) que podían competir con la paleta corporativa.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-elementor-compat.php` como una capa final de compatibilidad que se carga después de `eventosapp-branding.php` y `eventosapp-ui-polish.php`.
+
+#### Drawer móvil y backdrop
+
+- cuando el menú móvil está abierto se eleva el stacking context completo de `.evapp-app-chrome`;
+- el backdrop permanece inmediatamente por debajo del header/drawer y por encima del contenido de la aplicación;
+- los botones y enlaces del drawer recuperan interacción normal porque la capa oscura ya no captura sus clics;
+- se conserva el cierre por `X`, backdrop y tecla `Escape` existente en `1.5.0-rc.7`;
+- no se modifica el JavaScript del drawer ni las URLs de sus acciones.
+
+#### Aislamiento frente a Elementor y tema
+
+Dentro de páginas mapeadas por EventosApp:
+
+- las variables globales principales de Elementor (`--e-global-color-primary`, `secondary`, `text`, `accent`) se remapean a la identidad corporativa únicamente dentro de `#eventosapp-app-root`;
+- los aliases de color usados por las distintas generaciones de módulos (`--evapp-*`, `--ev-*`, `--esp-*`, `--evchk-*`, `--evc-*` y equivalentes) reciben prioridad mediante `!important` solo en propiedades de marca;
+- el Dashboard fuerza los tokens corporativos que Elementor también genera por instancia, evitando que reaparezcan sus defaults históricos;
+- títulos, textos secundarios, superficies, bordes, buscador y selector del Dashboard heredan los tokens reforzados;
+- los botones principales del Dashboard conservan Azul / Azul oscuro corporativo;
+- el header fija explícitamente fondos, bordes y colores de Modo, Administración y Cerrar sesión para impedir que reglas globales de `button` o `a` del tema/Elementor introduzcan acentos ajenos a EventosApp;
+- el mismo refuerzo se aplica a los controles Menú/Cerrar del drawer móvil.
+
+Este aislamiento no se aplica al resto del sitio WordPress. Las páginas que no están mapeadas como EventosApp continúan usando normalmente su Elementor Kit y estilos del tema.
+
+### Prioridad de marca frente a controles Elementor
+
+A partir de este hotfix, los **colores estructurales de marca** dentro de páginas EventosApp tienen prioridad sobre los valores predeterminados o generados por instancia de Elementor. Esto es intencional para evitar que un widget antiguo o un CSS regenerado vuelva a introducir la paleta anterior.
+
+Los controles de contenido, columnas, espaciados, responsive y demás opciones funcionales del widget permanecen sin cambios. No se modifica el motor `eventosapp_render_dashboard()`.
+
+### Alcance conservado
+
+No se modifican:
+
+- permisos, roles ni capacidades;
+- login, logout, Seguridad, reCAPTCHA ni auditoría;
+- evento activo ni selector funcional;
+- URLs firmadas de Administración y Cerrar sesión;
+- JavaScript del drawer;
+- buscador, filtrado, conteos o tarjetas funcionales del Dashboard;
+- renderizadores de módulos;
+- Check-In, Registro, QR, Kiosko, Checklist, Soporte, Consumibles, Networking, Expositores ni Sorteo.
+
+### Archivos de 1.5.0-rc.8
+
+```text
+includes/frontend/eventosapp-elementor-compat.php    NUEVO
+includes/frontend/eventosapp-frontend-helpers.php    MODIFICADO
+README.md                                             MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+3ba758273e0bd726a978ad9f196024bd635b9bd9  fix: isolate EventosApp styles from Elementor and drawer backdrop
+e1b9f6c38f382604ae6d3beb34bb8856cf1b9aa3  feat: load Elementor compatibility layer after UI polish
+```
+
+## Validación funcional requerida para 1.5.0-rc.8
+
+- En 320 px, 375 px, 430 px y 760 px, abrir el menú y confirmar que el backdrop oscurece el contenido pero **no** el drawer.
+- Confirmar que Usuario activo, Modo claro/oscuro, Dashboard cuando corresponda, Administración y Cerrar sesión son clicables.
+- Cerrar el drawer pulsando el backdrop fuera del menú y confirmar que continúa funcionando.
+- Probar cierre por `X` y `Escape`.
+- Confirmar que el scroll del documento se bloquea únicamente mientras el drawer está abierto.
+- En desktop, confirmar que **Modo claro/oscuro** ya no adopta colores genéricos de Elementor/tema.
+- Revisar Administración y Cerrar sesión en normal, hover y focus.
+- Revisar Dashboard en Light y Dark Mode y confirmar que títulos, textos, superficies, bordes, buscador, selector y botones utilizan la paleta corporativa.
+- Regenerar CSS de Elementor y volver a cargar el Dashboard; la paleta corporativa debe mantenerse.
+- Abrir al menos dos módulos adicionales y confirmar que sus aliases visuales continúan respetando Light/Dark Mode.
+- Abrir una página WordPress no mapeada por EventosApp y confirmar que sus colores Elementor permanecen intactos.
+
+---
 
 ## Hotfix 1.5.0-rc.7 — Dark Mode, header responsive y buscador del Dashboard
 
@@ -877,6 +961,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.8` — 2026-08-10
+
+Hotfix del drawer y aislamiento de estilos: el backdrop queda debajo del stacking context del menú móvil, se recupera la interacción de todas sus acciones y se refuerzan variables/tokens corporativos para impedir que Elementor o el tema reintroduzcan colores genéricos dentro de páginas EventosApp.
 
 ### `1.5.0-rc.7` — 2026-08-10
 
