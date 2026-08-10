@@ -4,12 +4,110 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado del ciclo actual
 
-- **Versión candidata:** `1.5.0-rc.6`
-- **Fecha de corte:** 2026-08-09
-- **Base de la rama:** `f4ea4bf36069032efe68375e01b4c37fa43d2cfc` (`main`)
-- **Rama de trabajo:** `feat/unified-app-shell-dark-mode-20260809`
+- **Versión candidata:** `1.5.0-rc.7`
+- **Fecha de corte:** 2026-08-10
+- **Base de la rama:** `9fba47fb76904f0a5606627aed88b00a03aac667` (`main`)
+- **Rama de trabajo:** `fix/dark-ui-responsive-header-search-20260810`
 - **Destino de promoción:** `theleadpartner/EventosApp`
-- **Estado:** shell visual unificado para todas las páginas mapeadas de EventosApp, header corporativo común, Light/Dark Mode persistente por usuario y eliminación del header/footer del tema en las rutas de la aplicación; pendiente validación visual/funcional antes de promoción.
+- **Estado:** hotfix visual posterior al shell unificado: Dark Mode corregido en superficies y hovers del Dashboard, iconografía corporativa visible en el encabezado real del panel, buscador protegido frente a estilos externos y header autenticado convertido en drawer lateral responsive en móvil; pendiente validación visual/funcional antes de promoción.
+
+## Hotfix 1.5.0-rc.7 — Dark Mode, header responsive y buscador del Dashboard
+
+### Incidencias detectadas
+
+La validación visual posterior a `1.5.0-rc.6` mostró cuatro incompatibilidades que no afectan la lógica operativa, pero sí la experiencia visual:
+
+1. El Dashboard real utiliza `.evapp-dashboard-eyebrow`, mientras la capa corporativa anterior cubría `.evapp-eyebrow`; por ello el icono oficial no aparecía junto a la firma `EVENTOSAPP` del encabezado.
+2. Algunos tokens visuales secundarios (`--evapp-primary-soft` y aliases equivalentes) continuaban apuntando a superficies claras en Dark Mode. Además, el Dashboard conserva un `background:#fff` histórico en `.evapp-card:hover`, provocando tarjetas blancas con texto preparado para modo oscuro.
+3. El header responsive anterior envolvía usuario y acciones en varias filas. En teléfonos esto consumía una parte excesiva del viewport y hacía más lenta la navegación.
+4. Aunque el Dashboard ya había eliminado las decoraciones nativas de `type="search"`, estilos globales de Elementor/tema podían volver a reducir el padding izquierdo del input y permitir que la lupa invadiera el placeholder o el texto escrito.
+
+### Corrección aplicada
+
+Se agrega `includes/frontend/eventosapp-ui-polish.php` como capa visual posterior a `eventosapp-branding.php`. La nueva capa solo se activa en páginas gestionadas por EventosApp y no modifica renderizadores, permisos ni lógica de negocio.
+
+#### Dark Mode compatible
+
+- Los aliases `soft` de las distintas generaciones de UI ahora reciben fondos azulados oscuros en Dark Mode.
+- Dashboard, contexto de evento, tarjetas, selector, avisos y estados vacíos conservan superficies oscuras coherentes.
+- `.evapp-card:hover` usa una superficie elevada oscura en lugar de volver a blanco.
+- Flechas, chips e iconos secundarios utilizan fondos azules translúcidos y mantienen contraste.
+- Cards interactivos de otros módulos no pueden regresar a blanco al hacer hover.
+- El avatar del usuario y el avatar histórico de sesión usan el icono blanco oficial sobre un fondo azul translúcido cuando el tema es oscuro.
+- Los hover del header mantienen contraste y el botón Administración pasa correctamente por la paleta Azul oscuro → Azul.
+
+#### Imagen corporativa del Dashboard
+
+El selector correcto `.evapp-dashboard-eyebrow` recibe el icono oficial de EventosApp:
+
+- variante a color en Light Mode;
+- variante blanca en Dark Mode.
+
+Se conserva el wordmark oficial del header y el icono corporativo del usuario ya implementados por la capa principal.
+
+#### Header móvil con drawer lateral
+
+En anchos de hasta 760 px, cuando existen controles de cuenta:
+
+- el header conserva una sola fila compacta con el wordmark y un botón **Menú**;
+- las acciones se despliegan desde el lado derecho en un drawer corporativo;
+- Usuario activo, Modo claro/oscuro, Dashboard cuando corresponda, Administración y Cerrar sesión mantienen sus mismas URLs y permisos;
+- el drawer se cierra con botón, backdrop, tecla `Escape`, navegación o al volver a desktop;
+- el estado `aria-expanded` se mantiene sincronizado;
+- si JavaScript no está disponible, la mejora progresiva no se activa y permanece el responsive anterior, evitando dejar acciones inaccesibles.
+
+#### Buscador del Dashboard
+
+El input `.evapp-module-search` ahora reserva de forma obligatoria 52 px a la izquierda y 48 px a la derecha. La lupa queda aislada con `z-index`, `isolation` y posición fija dentro de su wrapper. El reset de decoraciones WebKit se refuerza con selectores de mayor prioridad.
+
+Esto evita que estilos globales de Elementor o del tema vuelvan a superponer la lupa con el placeholder o el término ingresado.
+
+### Alcance conservado
+
+No se modifican:
+
+- permisos, roles ni capacidades;
+- selección o persistencia del evento activo;
+- login, logout, reCAPTCHA, Seguridad ni auditoría;
+- URLs firmadas de Administración y Cerrar sesión;
+- renderizadores del Dashboard o de módulos;
+- búsqueda, filtrado, conteos o JavaScript funcional del Dashboard;
+- Check-In, Registro, QR, Kiosko, Checklist, Soporte, Consumibles, Networking, Expositores ni Sorteo.
+
+### Archivos de 1.5.0-rc.7
+
+```text
+includes/frontend/eventosapp-ui-polish.php          NUEVO
+includes/frontend/eventosapp-frontend-helpers.php   MODIFICADO
+README.md                                            MODIFICADO
+```
+
+### Commits funcionales
+
+```text
+df14b014f0266c196c5f1b93c52625c5e7830189  fix: polish dark mode dashboard and responsive app header
+abbf9e18a40399c32aa97b35a2d67bba0b4f804d  feat: load responsive dark mode polish layer
+```
+
+## Validación funcional requerida para 1.5.0-rc.7
+
+- Abrir Dashboard en Light Mode y confirmar icono corporativo junto a `EVENTOSAPP`.
+- Activar Dark Mode y confirmar que el icono cambia a la variante blanca.
+- Pasar el cursor por todas las tarjetas del Dashboard y confirmar que ninguna vuelve a fondo blanco.
+- Confirmar que flechas, chips, avatar de usuario y fondos secundarios conservan contraste en oscuro.
+- Probar Modo claro/oscuro, Administración y Cerrar sesión en hover/focus.
+- En 320 px, 375 px, 430 px y 760 px, confirmar que el header muestra wordmark + botón Menú sin ocupar varias filas.
+- Abrir el drawer, probar Modo claro/oscuro y confirmar que el drawer continúa utilizable.
+- Abrir un módulo, confirmar que Dashboard aparece dentro del drawer y regresa correctamente al panel.
+- Confirmar que Administración solo aparece para usuarios con `manage_options`.
+- Confirmar que Cerrar sesión conserva su acción firmada.
+- Cerrar el drawer con botón, backdrop y `Escape`.
+- Redimensionar de móvil a desktop con el drawer abierto y confirmar que el estado se limpia sin bloquear scroll.
+- Probar el buscador vacío y con texto en Chrome/Chromium, Safari y Firefox; la lupa nunca debe tocar el placeholder ni el término escrito.
+- Confirmar que el botón `×`, conteos, filtrado por módulos y estado sin resultados continúan funcionando.
+- Revisar al menos un módulo adicional en Dark Mode para confirmar que cards interactivos no regresan a blanco en hover.
+
+---
 
 ## Candidato 1.5.0-rc.6 — Shell de aplicación unificado, Dark Mode y páginas sin chrome del tema
 
@@ -779,6 +877,10 @@ Base promovida desde `048a91e1dc9c1bd9bf92a5a96870672e85d7de8e`, centrada en Kio
 10. Actualizar README, CHANGELOG y versión en producción antes de fusionar.
 
 ## Historial resumido
+
+### `1.5.0-rc.7` — 2026-08-10
+
+Hotfix visual del shell unificado: Dark Mode sin tarjetas blancas en hover, aliases secundarios compatibles, icono corporativo correcto en el encabezado del Dashboard, avatar ajustado al tema, buscador con espacio protegido para la lupa y header autenticado móvil mediante drawer lateral accesible.
 
 ### `1.5.0-rc.6` — 2026-08-09
 
