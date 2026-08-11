@@ -2,200 +2,40 @@
 
 Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
 
-> **Historial preservado:** `rc.24` incorporó Localidad, Sesiones y Doble Auth a Android; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR. Los estados anteriores continúan disponibles en Git y `docs/history/` cuando aplica.
+> **Historial preservado:** `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
 
-## Estado actual: candidato 1.5.0-rc.25
+## Estado actual: candidato 1.5.0-rc.26
 
-La entrega **1.5.0-rc.25** incorpora a la API móvil el módulo web de **Consumo de Consumibles** y lo integra al paquete offline único por evento.
+La entrega **1.5.0-rc.26** endurece la API móvil para eventos de **3.000 a 5.000 asistentes**, manteniendo intactos los contratos online y offline anteriores.
 
 Datos de corte:
 
 - **Fecha:** 2026-08-11
-- **Rama:** `feature/mobile-consumables-offline-rc25`
-- **Base:** `main` con `1.5.0-rc.24`
-- **Android objetivo:** `theleadpartner/eventosapp-printer-android` **2.11.0** (`versionCode 32`)
-- **Destino posterior de promoción:** `theleadpartner/EventosApp`, únicamente después de validación real.
+- **Rama:** `perf/mobile-offline-scale-rc26`
+- **Base:** `main` con `1.5.0-rc.25`
+- **Android objetivo:** `theleadpartner/eventosapp-printer-android` **2.11.1** (`versionCode 33`)
+- **Destino posterior:** `theleadpartner/EventosApp` únicamente después de validación real.
 
-## Objetivo de rc.25
+## Resultado de la auditoría de escala
 
-Mantener en EventosApp toda la administración de consumibles y exponer a Android solo la operación de staff ya autorizada por el módulo web:
+La arquitectura existente ya tenía bases correctas para concurrencia:
 
-```text
-Login
-→ seleccionar evento aprobado
-→ opcionalmente habilitar offline una sola vez
-→ abrir Consumo de Consumibles
-→ seleccionar ítem(s) y cantidad(es)
-→ leer QR
-→ descontar inventario
-→ revisar transacciones / solicitar cancelación
-```
+- Staff y Kiosko sincronizan con UUID/idempotencia;
+- ambos usan bloqueo por ticket/día para evitar carreras entre tablets;
+- QR avanzado admite lotes de hasta 500;
+- Consumibles usa transacciones SQL, bloqueo de filas y request UUID;
+- Android envía operaciones en lotes de 200 y serializa la sincronización por dispositivo.
 
-No se duplica el motor contable. La API móvil reutiliza directamente:
+Los riesgos encontrados estaban principalmente en la **preparación del paquete offline**, no en la capacidad de SQLite para almacenar 5.000 asistentes:
 
-```text
-includes/functions/eventosapp-consumables-core.php
-includes/functions/eventosapp-consumables-transactions.php
-includes/functions/eventosapp-consumables.php
-```
+1. el paquete consultaba/paginaba el conjunto de tickets nuevamente en cada request;
+2. la configuración estática de módulos se reconstruía en todas las páginas;
+3. Kiosko podía volver a leer y codificar repetidamente logos/fondos compartidos para muchas escarapelas;
+4. Consumibles no tenía el mismo límite defensivo de tamaño de lote que Staff/Kiosko/QR avanzado.
 
-## Semántica preservada del módulo web
+rc.26 corrige estos puntos.
 
-### Selección antes del QR
-
-Android recibe los consumibles configurados para el evento. El operador debe seleccionar uno o varios ítems y sus cantidades antes de escanear al asistente.
-
-### Descuento atómico
-
-La escritura móvil usa:
-
-```php
-eventosapp_consumables_consume_items()
-```
-
-Por tanto se preserva la regla **todo o nada**: una transacción con varias líneas solo se confirma cuando todas tienen inventario suficiente y son válidas para el ticket/periodo.
-
-### Resolución QR
-
-La operación online usa:
-
-```php
-eventosapp_consumables_find_ticket_from_qr()
-```
-
-No se introduce un resolvedor paralelo.
-
-### Inventario
-
-El snapshot de cada ticket proviene de:
-
-```php
-eventosapp_consumables_get_ticket_inventory_snapshot()
-```
-
-La app recibe las cantidades asignadas, consumidas y restantes para el periodo efectivo según las reglas administrativas existentes.
-
-## Historial móvil
-
-La API expone únicamente las transacciones cuyo `staff_user_id` corresponde al usuario móvil autenticado.
-
-Cada transacción conserva:
-
-- `batch_id` / request UUID;
-- ticket y asistente;
-- líneas consumidas;
-- cantidades;
-- fecha/hora;
-- estado;
-- solicitud de cancelación, si existe.
-
-La administración general de transacciones continúa en EventosApp.
-
-## Solicitud de cancelación
-
-Android no elimina ledger ni revierte saldos.
-
-La ruta móvil reutiliza:
-
-```php
-eventosapp_consumables_tx_request_cancel()
-```
-
-Se mantienen las restricciones del flujo web:
-
-1. solo el mismo staff que originó la transacción puede solicitar cancelación;
-2. una transacción ya reversada no admite solicitud;
-3. una solicitud duplicada es idempotente;
-4. la reversión real sigue requiriendo la acción administrativa existente;
-5. el ledger nunca se borra para simular una cancelación.
-
-## Nueva API móvil de Consumibles
-
-Archivo:
-
-```text
-includes/api/eventosapp-mobile-consumables-api.php
-```
-
-Versión interna:
-
-```text
-EVENTOSAPP_MOBILE_CONSUMABLES_API_VERSION = 1.0.0
-```
-
-### Eventos autorizados
-
-```text
-GET /wp-json/eventosapp-kiosk/v1/mobile/consumables/events
-```
-
-Devuelve únicamente eventos donde:
-
-- Consumibles está habilitado;
-- el usuario tiene permiso efectivo `consumables_staff`;
-- el evento pertenece al ámbito autorizado del usuario.
-
-### Registrar consumo online
-
-```text
-POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/consume
-```
-
-Payload principal:
-
-```json
-{
-  "scanned": "<qr>",
-  "client_id": "<uuid>",
-  "items": {
-    "item_id_1": 2,
-    "item_id_2": 1
-  }
-}
-```
-
-`client_id` se utiliza como request UUID del batch y conserva idempotencia ante reintentos.
-
-### Consultar transacciones del staff
-
-```text
-GET /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/transactions
-```
-
-### Solicitar cancelación
-
-```text
-POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/cancel-request
-```
-
-### Sincronización offline
-
-```text
-POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/offline-sync
-```
-
-Soporta dos tipos de operación:
-
-```text
-consume
-cancel_request
-```
-
-El servidor procesa primero todos los `consume` y después los `cancel_request`. Esto permite que una tablet cree una transacción offline y también solicite su cancelación antes de reconectarse; al sincronizar, el consumo se materializa primero y la solicitud puede referenciar su mismo batch.
-
-## Login móvil
-
-Archivo:
-
-```text
-includes/api/eventosapp-mobile-consumables-auth.php
-```
-
-El interceptor conserva la autenticación/token existentes y amplía la elegibilidad para permitir usuarios cuyo único módulo móvil sea `consumables_staff`.
-
-No otorga permisos nuevos: únicamente permite iniciar sesión cuando el usuario ya posee al menos un módulo móvil efectivo en algún evento.
-
-## Paquete offline único 1.2.0
+## Paquete offline único 1.3.0
 
 Archivo:
 
@@ -203,19 +43,59 @@ Archivo:
 includes/api/eventosapp-mobile-event-offline-api.php
 ```
 
-Versión:
+Versión interna:
 
 ```text
-EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION = 1.2.0
+EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION = 1.3.0
 ```
 
-Ruta preservada:
+Ruta:
 
 ```text
 GET /wp-json/eventosapp-kiosk/v1/events/{event_id}/offline-package
 ```
 
-`modules` ahora puede contener:
+### Modo optimizado con snapshot estable
+
+Android 2.11.1 solicita:
+
+```text
+snapshot=1
+per_page=100
+```
+
+La primera página:
+
+1. resuelve una sola vez los IDs de tickets del evento;
+2. crea un UUID `snapshot_id` ligado al evento y usuario;
+3. guarda únicamente la lista de IDs en un transient temporal;
+4. devuelve la primera página y el `snapshot_id`.
+
+Las páginas siguientes envían:
+
+```text
+snapshot_id=<uuid>
+```
+
+y usan `array_slice()` sobre el mismo conjunto de IDs. Esto evita repetir la consulta paginada/conteo y evita saltos o duplicados si el conjunto de tickets cambia mientras una tablet está descargando.
+
+El snapshot vence a las **2 horas**. Si ya no existe o no corresponde al evento/usuario, la API responde `offline_snapshot_expired` con HTTP 409 para que Android reinicie la descarga una sola vez.
+
+### Compatibilidad hacia atrás
+
+El modo optimizado solo se activa cuando el cliente envía `snapshot=1` o `snapshot_id`.
+
+Clientes Android anteriores que no envían esos parámetros mantienen el flujo paginado legado, incluyendo el mismo contrato de respuesta y las rutas existentes.
+
+### Configuración estática una sola vez
+
+En modo optimizado, `event`, configuración de Kiosko, configuración QR avanzada y configuración de Consumibles se construyen en la primera página. Las páginas siguientes transportan principalmente `tickets`.
+
+Esto reduce CPU, serialización JSON y tamaño de respuesta sin afectar a Android 2.11.1, cuyo instalador toma la configuración desde la primera página.
+
+## Módulos dentro del paquete
+
+`modules` puede contener:
 
 ```text
 staff_qr
@@ -226,78 +106,88 @@ qr_double_auth
 consumables_staff
 ```
 
-Consumibles se entrega en:
+Bloques:
 
 ```text
+module_data.staff_qr
+module_data.kiosk
+module_data.advanced_qr
 module_data.consumables
 ```
 
-Estructura:
+Los QR continúan entregándose como hashes SHA-256; no se agrega QR en texto claro al snapshot.
+
+## Optimización de Kiosko para eventos grandes
+
+Archivo:
 
 ```text
-schema_version
-event
-config.items
-config.transactions
-tickets[]
+includes/api/eventosapp-mobile-kiosk-offline-api.php
 ```
 
-Cada ticket contiene:
+La función que convierte imágenes a `data:` ahora mantiene un cache por request **solo para URLs que realmente se repiten** y con máximo 32 entradas.
+
+Consecuencia:
+
+- logos/fondos compartidos dejan de leerse y codificarse cientos de veces dentro de una misma página;
+- recursos únicos por asistente no llenan el cache;
+- se mantiene el límite existente de 2 MB por recurso.
+
+Android 2.11.1 complementa esta mejora escribiendo inmediatamente las escarapelas Base64 a staging en disco, evitando retener miles de HTML en memoria.
+
+## Sincronización masiva
+
+La APP continúa enviando lotes de **200 operaciones**.
+
+Límites defensivos del backend:
 
 ```text
-ticket_id
-ticket_public_id
-attendee
-lookup_keys     // hashes SHA-256, no QR en texto claro
-inventory
+Staff offline        <= 500 por request
+Kiosko offline       <= 500 por request
+QR avanzado offline  <= 500 por request
+Consumibles offline  <= 500 por request
 ```
 
-La misma `WP_Query` paginada del paquete continúa consultando los tickets **una sola vez por página**. A partir de esos IDs se construyen los payloads de Staff, Kiosko, QR avanzado y Consumibles.
+rc.26 agrega la defensa de 500 a Consumibles antes de ejecutar su callback. Esto evita que un cliente defectuoso intente procesar miles de operaciones dentro de una sola ejecución PHP.
 
-## Offline de Consumibles
+### Staff y Kiosko
 
-Android utiliza el snapshot para validar localmente:
+La sincronización conserva:
 
-- pertenencia del QR al evento;
-- fecha válida del evento;
-- regla/inventario asignado;
-- saldo suficiente de cada línea;
-- descuento atómico de múltiples ítems.
+- `client_operation_id`;
+- idempotencia por operación;
+- lock temporal por evento/ticket/día;
+- resolución segura cuando otro dispositivo ya marcó el mismo ticket.
 
-Cada consumo offline se conserva con UUID y se revalida contra EventosApp al sincronizar.
+### QR avanzado
 
-### Concurrencia entre dispositivos desconectados
+Mantiene el límite de 500 por request y las validaciones específicas de Sesiones/Doble Auth. Android 2.11.1 corrige además el cliente para no detener una cola avanzada en los primeros 200 pendientes.
 
-Dos dispositivos totalmente offline no pueden conocer los consumos realizados por el otro en tiempo real. Por ello el servidor vuelve a validar inventario al recibir cada operación. La sincronización converge el estado; exclusión global instantánea requiere conectividad.
+### Consumibles
 
-## Bootstrap móvil
-
-`includes/api/eventosapp-mobile-kiosk-feature-permission.php` carga ahora:
+Se preserva el motor administrativo/contable existente:
 
 ```text
-Kiosko base
-→ Staff QR
-→ contexto de permisos Kiosko
-→ offline Staff
-→ offline Kiosko
-→ QR avanzados
-→ API Consumibles
-→ extensión login Consumibles
-→ offline-package unificado
+includes/functions/eventosapp-consumables-core.php
+includes/functions/eventosapp-consumables-transactions.php
+includes/functions/eventosapp-consumables.php
 ```
 
-## Compatibilidad preservada
+La API continúa usando transacciones, bloqueo de balances y request UUID. Una operación se vuelve a validar contra el saldo real del servidor al sincronizar.
 
-rc.25 no modifica la lógica administrativa de:
+## API móvil de Consumibles preservada
 
-- configuración de consumibles;
-- reglas por localidad/custom/all;
-- comportamiento shared/per_day;
-- balances;
-- ledger;
-- aprobación/reversión administrativa.
+```text
+GET  /wp-json/eventosapp-kiosk/v1/mobile/consumables/events
+POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/consume
+GET  /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/transactions
+POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/cancel-request
+POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/consumables/offline-sync
+```
 
-Tampoco elimina las rutas móviles históricas:
+Se conservan selección previa, operaciones atómicas multiítem, historial por staff y solicitud administrativa de cancelación.
+
+## Rutas históricas preservadas
 
 ```text
 GET  /wp-json/eventosapp-kiosk/v1/staff/events/{event_id}/offline-snapshot
@@ -307,58 +197,55 @@ POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/offline-sync
 POST /wp-json/eventosapp-kiosk/v1/events/{event_id}/advanced-qr/offline-sync
 ```
 
-Kiosko, impresión, Staff QR, Localidad, Sesiones y Doble Auth continúan con sus contratos actuales.
+Kiosko, impresión, Staff QR, Localidad, Sesiones, Doble Auth y Consumibles mantienen sus objetivos y contratos funcionales.
 
-## Archivos de rc.25
-
-Nuevos:
-
-```text
-includes/api/eventosapp-mobile-consumables-api.php
-includes/api/eventosapp-mobile-consumables-auth.php
-```
+## Archivos de rc.26
 
 Modificados:
 
 ```text
 includes/api/eventosapp-mobile-event-offline-api.php
-includes/api/eventosapp-mobile-kiosk-feature-permission.php
+includes/api/eventosapp-mobile-kiosk-offline-api.php
 README.md
 ```
 
-## Checklist de validación
+No se modifica la administración de eventos, tickets, consumibles, balances, ledger ni reversión administrativa.
 
-1. Usuario solo `consumables_staff`: debe poder iniciar sesión.
-2. El listado móvil debe incluir únicamente eventos autorizados con Consumibles habilitado.
-3. Consumir un ítem online con saldo suficiente.
-4. Consumir varios ítems en una sola lectura.
-5. Forzar saldo insuficiente en una línea y comprobar que ninguna línea se descuenta.
-6. Validar QR inexistente/otro evento.
-7. Verificar que el historial móvil devuelve solo transacciones del staff actual.
-8. Solicitar cancelación propia.
-9. Intentar solicitar cancelación de una transacción de otro staff y confirmar rechazo.
-10. Confirmar que solicitar cancelación no revierte saldo.
-11. Habilitar offline y comprobar `module_data.consumables` en `offline-package`.
-12. Confirmar que los QR del snapshot están hasheados.
-13. Consumir en modo avión.
-14. Crear varias operaciones offline.
-15. Crear una solicitud de cancelación offline.
-16. Recuperar conectividad y sincronizar.
-17. Repetir sincronización para comprobar idempotencia.
-18. Confirmar que EventosApp vuelve a validar inventario del servidor.
-19. Reversar desde administración y comprobar convergencia del siguiente paquete.
-20. Regresión completa de Kiosko, Staff QR, Localidad, Sesiones y Doble Auth.
+## Validación de escala requerida
+
+Antes de promover rc.26:
+
+1. Crear un evento de prueba con 5.000 tickets.
+2. Habilitar simultáneamente Kiosko, Staff QR, Localidad, Sesiones, Doble Auth y Consumibles.
+3. Descargar con Android 2.11.1 y comprobar 50 páginas de 100.
+4. Confirmar que todas las páginas comparten el mismo `snapshot_id`.
+5. Modificar el conjunto de tickets durante la descarga y comprobar que el snapshot no duplica/omite IDs.
+6. Forzar expiración/invalidación del snapshot y comprobar reinicio controlado del cliente.
+7. Medir tiempo y memoria de generación de Kiosko con escarapelas reales.
+8. Generar más de 200 operaciones QR avanzadas offline y comprobar sincronización completa.
+9. Sincronizar lotes amplios de Staff/Kiosko/Consumibles desde varias tablets.
+10. Repetir UUIDs y confirmar idempotencia.
+11. Probar consumos concurrentes del mismo saldo desde diferentes tablets.
+12. Ejecutar regresión de impresión y módulos existentes.
+13. Medir PHP-FPM, MySQL, CPU, memoria, latencias p95/p99 y errores 5xx/429 durante concurrencia.
+
+## Interpretación de capacidad
+
+Con rc.26 + Android 2.11.1, **5.000 asistentes ya no representan un problema estructural por volumen de dataset**: el paquete se pagina, el conjunto se fija una vez y la sincronización está batcheada e idempotente.
+
+La cantidad de tablets concurrentes que una instalación puede sostener no puede fijarse únicamente desde el código del plugin. Depende también de la capacidad del servidor, configuración de PHP-FPM, MySQL, cache de objetos, CPU, memoria y ancho de banda. Por eso la promoción exige prueba de carga en una infraestructura equivalente a producción.
 
 ## Historial reciente
 
 | Candidato | Cambio principal |
 |---|---|
-| **1.5.0-rc.25** | API móvil de Consumibles + historial/cancelación + offline dentro del paquete único. |
-| **1.5.0-rc.24** | Localidad, Sesiones y Doble Auth para Android online/offline. |
+| **1.5.0-rc.26** | Hardening 3.000–5.000 asistentes: snapshot estable, payload estático único, cache Kiosko y límites defensivos. |
+| **1.5.0-rc.25** | Consumibles móvil + historial/cancelación + offline unificado. |
+| **1.5.0-rc.24** | Localidad, Sesiones y Doble Auth Android. |
 | **1.5.0-rc.23** | Paquete offline único por evento. |
 | **1.5.0-rc.22** | Offline completo de Kiosko. |
-| **1.5.0-rc.21** | Offline de Check-in QR Staff. |
+| **1.5.0-rc.21** | Offline de Staff QR. |
 
 ## Regla de promoción
 
-`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.25 a producción hasta completar validación real WordPress + Android**, especialmente operaciones múltiples, saldos, solicitudes de cancelación, modo avión, idempotencia, concurrencia entre dispositivos y regresión de los módulos ya existentes.
+`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.26 a producción hasta completar validación real WordPress + Android y una prueba de carga representativa de 5.000 asistentes/múltiples tablets.**
