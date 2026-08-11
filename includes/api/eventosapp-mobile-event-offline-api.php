@@ -2,9 +2,9 @@
 /**
  * EventosApp – Paquete offline móvil unificado por evento (Android 2.9.1+).
  *
- * Desde Android 2.10.0 el mismo paquete incorpora los módulos QR avanzados:
- * Localidad, Sesiones Internas y Doble Autenticación. Los tres comparten un
- * único bloque `advanced_qr` para evitar duplicar tickets dentro de la descarga.
+ * Android 2.11.0 incorpora Consumo de Consumibles al mismo paquete por evento.
+ * No se crea una descarga independiente: la consulta de tickets sigue ocurriendo
+ * una sola vez por página y cada módulo recibe únicamente su payload derivado.
  *
  * Ruta:
  * GET /eventosapp-kiosk/v1/events/{event_id}/offline-package
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION' ) ) {
-    define( 'EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION', '1.1.0' );
+    define( 'EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION', '1.2.0' );
 }
 
 if ( ! function_exists( 'eventosapp_mobile_event_offline_modules' ) ) {
@@ -44,6 +44,13 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_modules' ) ) {
 
         if ( function_exists( 'eventosapp_mobile_advanced_modules_for_event' ) ) {
             $modules = array_merge( $modules, eventosapp_mobile_advanced_modules_for_event( $event_id, $user_id ) );
+        }
+
+        if (
+            function_exists( 'eventosapp_mobile_consumables_user_can_event' ) &&
+            eventosapp_mobile_consumables_user_can_event( $event_id, $user_id )
+        ) {
+            $modules[] = 'consumables_staff';
         }
 
         return array_values( array_unique( $modules ) );
@@ -113,6 +120,7 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
             $modules,
             [ 'qr_localidad', 'qr_session', 'qr_double_auth' ]
         ) );
+        $has_consumables = in_array( 'consumables_staff', $modules, true );
 
         $kiosk_config = null;
         if ( in_array( 'kiosk', $modules, true ) ) {
@@ -137,6 +145,14 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
             );
         }
 
+        if ( $has_consumables && ! function_exists( 'eventosapp_mobile_consumables_ticket_payload' ) ) {
+            return new WP_Error(
+                'api_dependency_missing',
+                'La API móvil de consumibles no está cargada correctamente.',
+                [ 'status' => 500 ]
+            );
+        }
+
         $query = new WP_Query( [
             'post_type'              => 'eventosapp_ticket',
             'post_status'            => [ 'publish', 'future', 'draft', 'pending', 'private' ],
@@ -156,9 +172,10 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
             update_meta_cache( 'post', $ticket_ids );
         }
 
-        $staff_tickets    = [];
-        $kiosk_tickets    = [];
-        $advanced_tickets = [];
+        $staff_tickets       = [];
+        $kiosk_tickets       = [];
+        $advanced_tickets    = [];
+        $consumables_tickets = [];
 
         foreach ( $ticket_ids as $ticket_id ) {
             if (
@@ -185,6 +202,13 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
                 $advanced_payload = eventosapp_mobile_advanced_ticket_payload( $ticket_id, $event_id, $advanced_modules );
                 if ( $advanced_payload ) {
                     $advanced_tickets[] = $advanced_payload;
+                }
+            }
+
+            if ( $has_consumables ) {
+                $consumables_payload = eventosapp_mobile_consumables_ticket_payload( $ticket_id, $event_id );
+                if ( $consumables_payload ) {
+                    $consumables_tickets[] = $consumables_payload;
                 }
             }
         }
@@ -233,6 +257,17 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
                     ? eventosapp_mobile_advanced_config_payload( $event_id, $advanced_modules )
                     : [],
                 'tickets'         => $advanced_tickets,
+            ];
+        }
+
+        if ( $has_consumables ) {
+            $module_payloads['consumables'] = [
+                'schema_version' => '1.0.0',
+                'event'          => $event_payload,
+                'config'         => function_exists( 'eventosapp_mobile_consumables_offline_config_payload' )
+                    ? eventosapp_mobile_consumables_offline_config_payload( $event_id, $user_id )
+                    : [],
+                'tickets'        => $consumables_tickets,
             ];
         }
 
