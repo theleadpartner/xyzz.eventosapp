@@ -2,19 +2,12 @@
 /**
  * EventosApp – Paquete offline móvil unificado por evento (Android 2.9.1+).
  *
- * Objetivo:
- * - una sola descarga paginada por evento;
- * - una sola consulta de tickets por página;
- * - payloads específicos únicamente para los módulos autorizados;
- * - estructura extensible para futuros módulos móviles;
- * - compatibilidad total con las rutas Staff 2.7.0 y Kiosko 2.8.0.
+ * Desde Android 2.10.0 el mismo paquete incorpora los módulos QR avanzados:
+ * Localidad, Sesiones Internas y Doble Autenticación. Los tres comparten un
+ * único bloque `advanced_qr` para evitar duplicar tickets dentro de la descarga.
  *
  * Ruta:
  * GET /eventosapp-kiosk/v1/events/{event_id}/offline-package
- *
- * Debe cargarse después de:
- * - eventosapp-mobile-staff-offline-api.php
- * - eventosapp-mobile-kiosk-offline-api.php
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -22,15 +15,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION' ) ) {
-    define( 'EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION', '1.0.0' );
+    define( 'EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION', '1.1.0' );
 }
 
 if ( ! function_exists( 'eventosapp_mobile_event_offline_modules' ) ) {
-    /**
-     * Devuelve exclusivamente módulos que el usuario puede utilizar en el evento.
-     * Esta lista es la fuente de verdad del paquete y puede crecer sin cambiar el
-     * contrato base de Android.
-     */
     function eventosapp_mobile_event_offline_modules( $event_id, $user_id = 0 ) {
         $event_id = absint( $event_id );
         $user_id  = absint( $user_id ?: get_current_user_id() );
@@ -52,6 +40,10 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_modules' ) ) {
             eventosapp_mobile_kiosk_offline_user_can_event( $event_id, $user_id )
         ) {
             $modules[] = 'kiosk';
+        }
+
+        if ( function_exists( 'eventosapp_mobile_advanced_modules_for_event' ) ) {
+            $modules = array_merge( $modules, eventosapp_mobile_advanced_modules_for_event( $event_id, $user_id ) );
         }
 
         return array_values( array_unique( $modules ) );
@@ -117,6 +109,11 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
             );
         }
 
+        $advanced_modules = array_values( array_intersect(
+            $modules,
+            [ 'qr_localidad', 'qr_session', 'qr_double_auth' ]
+        ) );
+
         $kiosk_config = null;
         if ( in_array( 'kiosk', $modules, true ) ) {
             if ( ! function_exists( 'eventosapp_mobile_kiosk_offline_config_payload' ) ) {
@@ -130,6 +127,14 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
             if ( is_wp_error( $kiosk_config ) ) {
                 return $kiosk_config;
             }
+        }
+
+        if ( $advanced_modules && ! function_exists( 'eventosapp_mobile_advanced_ticket_payload' ) ) {
+            return new WP_Error(
+                'api_dependency_missing',
+                'La API móvil de módulos QR avanzados no está cargada correctamente.',
+                [ 'status' => 500 ]
+            );
         }
 
         $query = new WP_Query( [
@@ -151,8 +156,9 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
             update_meta_cache( 'post', $ticket_ids );
         }
 
-        $staff_tickets = [];
-        $kiosk_tickets = [];
+        $staff_tickets    = [];
+        $kiosk_tickets    = [];
+        $advanced_tickets = [];
 
         foreach ( $ticket_ids as $ticket_id ) {
             if (
@@ -172,6 +178,13 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
                 $kiosk_payload = eventosapp_mobile_kiosk_offline_ticket_payload( $ticket_id, $event_id );
                 if ( $kiosk_payload ) {
                     $kiosk_tickets[] = $kiosk_payload;
+                }
+            }
+
+            if ( $advanced_modules ) {
+                $advanced_payload = eventosapp_mobile_advanced_ticket_payload( $ticket_id, $event_id, $advanced_modules );
+                if ( $advanced_payload ) {
+                    $advanced_tickets[] = $advanced_payload;
                 }
             }
         }
@@ -211,6 +224,18 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
             ];
         }
 
+        if ( $advanced_modules ) {
+            $module_payloads['advanced_qr'] = [
+                'schema_version'  => '1.0.0',
+                'event'           => $event_payload,
+                'enabled_modules' => $advanced_modules,
+                'config'          => function_exists( 'eventosapp_mobile_advanced_config_payload' )
+                    ? eventosapp_mobile_advanced_config_payload( $event_id, $advanced_modules )
+                    : [],
+                'tickets'         => $advanced_tickets,
+            ];
+        }
+
         $response = [
             'api_version'   => EVENTOSAPP_MOBILE_EVENT_OFFLINE_API_VERSION,
             'generated_at'  => gmdate( 'c' ),
@@ -240,7 +265,7 @@ if ( ! function_exists( 'eventosapp_mobile_event_offline_package' ) ) {
 }
 
 add_action( 'rest_api_init', function () {
-    register_rest_route( 'eventosapp-kiosk/v1', '/events/(?P<event_id>\\d+)/offline-package', [
+    register_rest_route( 'eventosapp-kiosk/v1', '/events/(?P<event_id>\d+)/offline-package', [
         'methods'             => WP_REST_Server::READABLE,
         'callback'            => 'eventosapp_mobile_event_offline_package',
         'permission_callback' => 'eventosapp_mobile_app_permission',
