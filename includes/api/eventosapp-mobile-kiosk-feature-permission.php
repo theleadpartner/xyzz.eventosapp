@@ -9,11 +9,9 @@
  * establece el contexto del evento solicitado antes del callback y obliga a que
  * la respuesta respete el permiso efectivo por usuario y evento.
  *
- * Desde 1.5.0-rc.21 también actúa como último bootstrap de la API móvil. Carga
- * primero la extensión offline Staff; desde 1.5.0-rc.22, la extensión offline
- * del Kiosko; y desde 1.5.0-rc.23, el paquete offline unificado por evento.
- * Se preserva el orden: Kiosko base -> Staff QR -> contexto Kiosko -> offline
- * Staff -> offline Kiosko -> paquete offline unificado.
+ * Bootstrap móvil actual:
+ * Kiosko base -> Staff QR -> contexto Kiosko -> offline Staff -> offline Kiosko
+ * -> QR avanzados -> paquete offline unificado.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -118,15 +116,22 @@ if ( is_readable( $eventosapp_mobile_offline_api ) ) {
 unset( $eventosapp_mobile_offline_api );
 
 // Android 2.8.0+: snapshot autocontenido y sincronización offline del Kiosko.
-// Se carga después de Staff offline para reutilizar hashes, locks e idempotencia.
 $eventosapp_mobile_kiosk_offline_api = __DIR__ . '/eventosapp-mobile-kiosk-offline-api.php';
 if ( is_readable( $eventosapp_mobile_kiosk_offline_api ) ) {
     require_once $eventosapp_mobile_kiosk_offline_api;
 }
 unset( $eventosapp_mobile_kiosk_offline_api );
 
-// Android 2.9.1+: una sola descarga paginada por evento para todos los módulos
-// móviles autorizados. Las rutas históricas continúan activas para APK antiguas.
+// Android 2.10.0+: Localidad, Sesiones y Doble Autenticación, incluidos sus
+// endpoints online y la sincronización offline compartida.
+$eventosapp_mobile_advanced_qr_api = __DIR__ . '/eventosapp-mobile-advanced-qr-api.php';
+if ( is_readable( $eventosapp_mobile_advanced_qr_api ) ) {
+    require_once $eventosapp_mobile_advanced_qr_api;
+}
+unset( $eventosapp_mobile_advanced_qr_api );
+
+// Android 2.9.1+: una sola descarga paginada por evento. Desde 2.10.0 incluye
+// también el bloque compartido advanced_qr para los tres lectores adicionales.
 $eventosapp_mobile_event_offline_api = __DIR__ . '/eventosapp-mobile-event-offline-api.php';
 if ( is_readable( $eventosapp_mobile_event_offline_api ) ) {
     require_once $eventosapp_mobile_event_offline_api;
