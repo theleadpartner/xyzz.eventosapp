@@ -2,8 +2,6 @@
 /**
  * EventosApp – Contexto de permisos por evento para las rutas Kiosko Android.
  *
- * Instalar junto con eventosapp-mobile-staff-checkin-api.php y cargar después.
- *
  * La API base del Kiosko conserva un permission_callback histórico que consulta
  * eventosapp_role_can('self_checkin') sin recibir el ID del evento. Este archivo
  * establece el contexto del evento solicitado antes del callback y obliga a que
@@ -11,7 +9,7 @@
  *
  * Bootstrap móvil actual:
  * Kiosko base -> Staff QR -> contexto Kiosko -> offline Staff -> offline Kiosko
- * -> QR avanzados -> paquete offline unificado.
+ * -> QR avanzados -> Consumibles -> paquete offline unificado.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -122,16 +120,28 @@ if ( is_readable( $eventosapp_mobile_kiosk_offline_api ) ) {
 }
 unset( $eventosapp_mobile_kiosk_offline_api );
 
-// Android 2.10.0+: Localidad, Sesiones y Doble Autenticación, incluidos sus
-// endpoints online y la sincronización offline compartida.
+// Android 2.10.0+: Localidad, Sesiones y Doble Autenticación.
 $eventosapp_mobile_advanced_qr_api = __DIR__ . '/eventosapp-mobile-advanced-qr-api.php';
 if ( is_readable( $eventosapp_mobile_advanced_qr_api ) ) {
     require_once $eventosapp_mobile_advanced_qr_api;
 }
 unset( $eventosapp_mobile_advanced_qr_api );
 
-// Android 2.9.1+: una sola descarga paginada por evento. Desde 2.10.0 incluye
-// también el bloque compartido advanced_qr para los tres lectores adicionales.
+// Android 2.11.0+: Consumo de Consumibles, historial y cancelaciones solicitadas.
+$eventosapp_mobile_consumables_api = __DIR__ . '/eventosapp-mobile-consumables-api.php';
+if ( is_readable( $eventosapp_mobile_consumables_api ) ) {
+    require_once $eventosapp_mobile_consumables_api;
+}
+unset( $eventosapp_mobile_consumables_api );
+
+// Extiende el login móvil para usuarios cuyo único permiso sea Consumibles.
+$eventosapp_mobile_consumables_auth = __DIR__ . '/eventosapp-mobile-consumables-auth.php';
+if ( is_readable( $eventosapp_mobile_consumables_auth ) ) {
+    require_once $eventosapp_mobile_consumables_auth;
+}
+unset( $eventosapp_mobile_consumables_auth );
+
+// Una sola descarga paginada por evento para todos los módulos móviles.
 $eventosapp_mobile_event_offline_api = __DIR__ . '/eventosapp-mobile-event-offline-api.php';
 if ( is_readable( $eventosapp_mobile_event_offline_api ) ) {
     require_once $eventosapp_mobile_event_offline_api;
