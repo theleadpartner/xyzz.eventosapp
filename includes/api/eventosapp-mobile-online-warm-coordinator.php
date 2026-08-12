@@ -134,13 +134,22 @@ if ( ! function_exists( 'eventosapp_mobile_online_shared_warm_batch' ) ) {
                 update_meta_cache( 'post', $ids );
             }
 
-            $keys = function_exists( 'eventosapp_mobile_online_index_ticket_batch' )
+            $has_bulk = function_exists( 'eventosapp_mobile_online_index_ticket_batch' );
+            $keys = $has_bulk
                 ? eventosapp_mobile_online_index_ticket_batch( $ids )
                 : 0;
-            if ( $ids && ! function_exists( 'eventosapp_mobile_online_index_ticket_batch' ) ) {
+            if ( $ids && ! $has_bulk ) {
                 foreach ( $ids as $ticket_id ) {
                     $keys += eventosapp_mobile_online_index_ticket( $ticket_id );
                 }
+            }
+
+            if ( $keys < 0 ) {
+                return new WP_Error(
+                    'online_index_write_failed',
+                    'EventosApp no pudo escribir el lote del índice QR. El progreso no se avanzó y puede reintentarse.',
+                    [ 'status' => 500 ]
+                );
             }
 
             $next_cursor = $ids ? max( $ids ) : $cursor;
@@ -160,7 +169,7 @@ if ( ! function_exists( 'eventosapp_mobile_online_shared_warm_batch' ) ) {
                 'complete'    => $complete,
                 'busy'        => false,
                 'shared'      => true,
-                'bulk'        => function_exists( 'eventosapp_mobile_online_index_ticket_batch' ),
+                'bulk'        => $has_bulk,
             ] );
         } finally {
             eventosapp_mobile_online_release_lock( $lock );
