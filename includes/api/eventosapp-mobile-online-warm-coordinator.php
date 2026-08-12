@@ -134,9 +134,13 @@ if ( ! function_exists( 'eventosapp_mobile_online_shared_warm_batch' ) ) {
                 update_meta_cache( 'post', $ids );
             }
 
-            $keys = 0;
-            foreach ( $ids as $ticket_id ) {
-                $keys += eventosapp_mobile_online_index_ticket( $ticket_id );
+            $keys = function_exists( 'eventosapp_mobile_online_index_ticket_batch' )
+                ? eventosapp_mobile_online_index_ticket_batch( $ids )
+                : 0;
+            if ( $ids && ! function_exists( 'eventosapp_mobile_online_index_ticket_batch' ) ) {
+                foreach ( $ids as $ticket_id ) {
+                    $keys += eventosapp_mobile_online_index_ticket( $ticket_id );
+                }
             }
 
             $next_cursor = $ids ? max( $ids ) : $cursor;
@@ -156,6 +160,7 @@ if ( ! function_exists( 'eventosapp_mobile_online_shared_warm_batch' ) ) {
                 'complete'    => $complete,
                 'busy'        => false,
                 'shared'      => true,
+                'bulk'        => function_exists( 'eventosapp_mobile_online_index_ticket_batch' ),
             ] );
         } finally {
             eventosapp_mobile_online_release_lock( $lock );
