@@ -5,6 +5,10 @@
  * La indexación incremental de un ticket continúa usando la función individual.
  * Este helper se usa únicamente cuando el warm-up prepara cientos de tickets:
  * elimina sus filas en una sola sentencia y hace INSERT/UPDATE por bloques.
+ *
+ * Retorno:
+ * - >= 0: cantidad de claves escritas correctamente.
+ * - -1: error SQL; el coordinador no debe avanzar el cursor del warm-up.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -17,7 +21,7 @@ if ( ! function_exists( 'eventosapp_mobile_online_index_ticket_batch' ) ) {
 
         if ( ! function_exists( 'eventosapp_mobile_online_lookup_table_ready' ) ||
              ! eventosapp_mobile_online_lookup_table_ready() ) {
-            return 0;
+            return -1;
         }
 
         $ticket_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $ticket_ids ) ) ) );
@@ -31,8 +35,8 @@ if ( ! function_exists( 'eventosapp_mobile_online_index_ticket_batch' ) ) {
             "DELETE FROM {$table} WHERE ticket_id IN ({$id_placeholders})",
             $ticket_ids
         );
-        if ( is_string( $delete_sql ) && $delete_sql !== '' ) {
-            $wpdb->query( $delete_sql );
+        if ( ! is_string( $delete_sql ) || $delete_sql === '' || $wpdb->query( $delete_sql ) === false ) {
+            return -1;
         }
 
         $updated_at = current_time( 'mysql' );
@@ -92,12 +96,15 @@ if ( ! function_exists( 'eventosapp_mobile_online_index_ticket_batch' ) ) {
                         qr_type_label=VALUES(qr_type_label),
                         updated_at=VALUES(updated_at)";
             $prepared = $wpdb->prepare( $sql, $args );
-            if ( ! is_string( $prepared ) || $prepared === '' ) continue;
+            if ( ! is_string( $prepared ) || $prepared === '' ) {
+                return -1;
+            }
 
             $result = $wpdb->query( $prepared );
-            if ( $result !== false ) {
-                $written += count( $chunk );
+            if ( $result === false ) {
+                return -1;
             }
+            $written += count( $chunk );
         }
 
         return $written;
