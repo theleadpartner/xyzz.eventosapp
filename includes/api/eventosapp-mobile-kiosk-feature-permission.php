@@ -157,6 +157,14 @@ if ( is_readable( $eventosapp_mobile_online_performance ) ) {
 }
 unset( $eventosapp_mobile_online_performance );
 
+// Warm-up de cientos de tickets: bulk delete + bulk upsert para evitar miles de
+// queries individuales durante la preparación del índice.
+$eventosapp_mobile_online_batch_index = __DIR__ . '/eventosapp-mobile-online-batch-index.php';
+if ( is_readable( $eventosapp_mobile_online_batch_index ) ) {
+    require_once $eventosapp_mobile_online_batch_index;
+}
+unset( $eventosapp_mobile_online_batch_index );
+
 // Coordina el warm-up del índice entre múltiples tablets del mismo evento para
 // que no reconstruyan 5.000+ tickets en paralelo.
 $eventosapp_mobile_online_warm_coordinator = __DIR__ . '/eventosapp-mobile-online-warm-coordinator.php';
