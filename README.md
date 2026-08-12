@@ -27,7 +27,8 @@ Los cuellos de botella encontrados estaban en el servidor:
 3. Staff QR online hacía read/modify/write sobre metadatos serializados de check-in sin lock por ticket/día;
 4. Kiosko/impresión y algunos flujos QR avanzados podían coincidir en el mismo patrón de escritura;
 5. la búsqueda textual histórica de Kiosko podía llegar a cargar miles de tickets y metadatos completos en PHP para una sola consulta;
-6. varias tablets no debían reconstruir independientemente el mismo índice de 5.000 asistentes.
+6. varias tablets no debían reconstruir independientemente el mismo índice de 5.000 asistentes;
+7. el warm-up no debía convertir 500 tickets en miles de `DELETE/REPLACE` individuales contra MySQL.
 
 rc.27 corrige estos puntos manteniendo los contratos funcionales de los módulos.
 
@@ -57,7 +58,7 @@ Campos principales:
 ```text
 event_id
 lookup_hash      // SHA-256
- ticket_id
+ticket_id
 qr_type
 qr_type_label
 updated_at
@@ -147,6 +148,23 @@ Esto evita el escenario donde diez tablets recién encendidas intenten construir
 Si una tablet encuentra el lote ocupado, recibe `busy=true`; Android espera brevemente y continúa. Otra tablet puede haber avanzado el cursor durante ese intervalo.
 
 Una vez completo, los dispositivos siguientes reciben `complete=true` sin reconstruir el evento.
+
+### Escritura masiva del índice
+
+Archivo:
+
+```text
+includes/api/eventosapp-mobile-online-batch-index.php
+```
+
+El warm-up no llama `DELETE + REPLACE` individual para cada clave de cada ticket. Por lote:
+
+1. elimina de una sola vez las filas de los tickets del lote;
+2. genera las claves SHA-256 en PHP usando el mismo resolvedor offline;
+3. agrupa las filas resultantes;
+4. ejecuta `INSERT ... ON DUPLICATE KEY UPDATE` en bloques de hasta 300 claves.
+
+La indexación individual se conserva únicamente para cambios incrementales posteriores de un ticket. Esto reduce de forma importante la cantidad de round-trips SQL durante la preparación inicial de un evento grande.
 
 ## Concurrencia de escrituras online
 
@@ -293,7 +311,9 @@ Nuevos:
 
 ```text
 includes/api/eventosapp-mobile-online-performance.php
+includes/api/eventosapp-mobile-online-batch-index.php
 includes/api/eventosapp-mobile-online-warm-coordinator.php
+.github/workflows/php-lint.yml
 ```
 
 Modificados:
@@ -311,30 +331,31 @@ No se modifica la administración de eventos, tickets, consumibles, balances, le
 2. Confirmar creación de `{prefix}eventosapp_qr_lookup`.
 3. Seleccionar el evento desde Android 2.11.2 con internet.
 4. Confirmar warm-up por lotes sin bloquear la APP.
-5. Seleccionar simultáneamente el evento desde varias tablets y verificar cursor compartido.
-6. Confirmar que, una vez completo, otra tablet obtiene `complete=true` sin reconstruir el índice.
-7. Leer QRs de tickets del inicio, mitad y final del dataset.
-8. Medir latencia antes, durante y después del warm-up.
-9. Probar varias tablets leyendo tickets distintos al mismo tiempo.
-10. Probar dos tablets leyendo el mismo ticket Staff casi simultáneamente.
-11. Repetir con Kiosko/impresión.
-12. Repetir con Sesiones.
-13. Repetir con Doble Auth.
-14. Probar Consumibles concurrente sobre saldos compartidos.
-15. Buscar en Kiosko por identificación, teléfono, nombre y apellido.
-16. Agregar/modificar ticket y comprobar autoindexación.
-17. Mover un ticket entre eventos y comprobar eliminación/reindexación de sus claves.
-18. Cambiar modo preimpreso y comprobar invalidación/reconstrucción del índice.
-19. Forzar fallo del warm-up y verificar que el fallback QR sigue operativo.
-20. Ejecutar regresión completa online/offline.
-21. Medir CPU, RAM, PHP-FPM, queries/conexiones MySQL y errores HTTP bajo concurrencia.
-22. Registrar p50, p95 y p99 de los endpoints operativos.
+5. Confirmar que el lote usa bulk indexing y no miles de `REPLACE` individuales.
+6. Seleccionar simultáneamente el evento desde varias tablets y verificar cursor compartido.
+7. Confirmar que, una vez completo, otra tablet obtiene `complete=true` sin reconstruir el índice.
+8. Leer QRs de tickets del inicio, mitad y final del dataset.
+9. Medir latencia antes, durante y después del warm-up.
+10. Probar varias tablets leyendo tickets distintos al mismo tiempo.
+11. Probar dos tablets leyendo el mismo ticket Staff casi simultáneamente.
+12. Repetir con Kiosko/impresión.
+13. Repetir con Sesiones.
+14. Repetir con Doble Auth.
+15. Probar Consumibles concurrente sobre saldos compartidos.
+16. Buscar en Kiosko por identificación, teléfono, nombre y apellido.
+17. Agregar/modificar ticket y comprobar autoindexación.
+18. Mover un ticket entre eventos y comprobar eliminación/reindexación de sus claves.
+19. Cambiar modo preimpreso y comprobar invalidación/reconstrucción del índice.
+20. Forzar fallo del warm-up y verificar que el fallback QR sigue operativo.
+21. Ejecutar regresión completa online/offline.
+22. Medir CPU, RAM, PHP-FPM, queries/conexiones MySQL y errores HTTP bajo concurrencia.
+23. Registrar p50, p95 y p99 de los endpoints operativos.
 
 ## Historial reciente
 
 | Candidato | Cambio principal |
 |---|---|
-| **1.5.0-rc.27** | Hardening online 5.000+: índice QR dedicado, warm-up compartido, búsqueda Kiosko acotada y locks multi-tablet. |
+| **1.5.0-rc.27** | Hardening online 5.000+: índice QR dedicado, bulk warm-up compartido, búsqueda Kiosko acotada y locks multi-tablet. |
 | **1.5.0-rc.26** | Hardening offline 3.000–5.000: snapshot estable, payload estático único, cache Kiosko y límites defensivos. |
 | **1.5.0-rc.25** | Consumibles móvil + historial/cancelación + offline unificado. |
 | **1.5.0-rc.24** | Localidad, Sesiones y Doble Auth Android. |
