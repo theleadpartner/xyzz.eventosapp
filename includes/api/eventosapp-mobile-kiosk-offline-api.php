@@ -76,8 +76,16 @@ if ( ! function_exists( 'eventosapp_mobile_kiosk_offline_asset_data_uri' ) ) {
      * Convierte un recurso descargable a data URI para que el paquete funcione
      * sin internet. Primero resuelve archivos locales de uploads y solo como
      * fallback usa wp_safe_remote_get con límite estricto de tamaño.
+     *
+     * Para eventos grandes mantiene un cache acotado únicamente después de que
+     * una URL se repite. Así logos/fondos compartidos se leen y codifican una
+     * sola vez por request, mientras QR/recursos únicos de cada asistente no
+     * consumen memoria adicional en el proceso PHP.
      */
     function eventosapp_mobile_kiosk_offline_asset_data_uri( $url ) {
+        static $seen  = [];
+        static $cache = [];
+
         $url = trim( (string) $url );
         if ( $url === '' || strpos( $url, 'data:' ) === 0 ) {
             return $url;
@@ -85,6 +93,13 @@ if ( ! function_exists( 'eventosapp_mobile_kiosk_offline_asset_data_uri' ) ) {
         if ( ! preg_match( '#^https?://#i', $url ) ) {
             return $url;
         }
+
+        $cache_key = md5( $url );
+        if ( isset( $cache[ $cache_key ] ) ) {
+            return $cache[ $cache_key ];
+        }
+        $was_seen = isset( $seen[ $cache_key ] );
+        $seen[ $cache_key ] = true;
 
         $raw_url = preg_replace( '/[?#].*$/', '', $url );
         $uploads = wp_upload_dir();
@@ -134,7 +149,11 @@ if ( ! function_exists( 'eventosapp_mobile_kiosk_offline_asset_data_uri' ) ) {
             $mime = 'image/png';
         }
 
-        return 'data:' . $mime . ';base64,' . base64_encode( $bytes );
+        $data_uri = 'data:' . $mime . ';base64,' . base64_encode( $bytes );
+        if ( $was_seen && count( $cache ) < 32 ) {
+            $cache[ $cache_key ] = $data_uri;
+        }
+        return $data_uri;
     }
 }
 
