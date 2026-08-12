@@ -9,7 +9,7 @@
  *
  * Bootstrap móvil actual:
  * Kiosko base -> Staff QR -> contexto Kiosko -> offline Staff -> offline Kiosko
- * -> QR avanzados -> Consumibles -> paquete offline unificado.
+ * -> QR avanzados -> Consumibles -> paquete offline unificado -> hardening online.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -147,3 +147,12 @@ if ( is_readable( $eventosapp_mobile_event_offline_api ) ) {
     require_once $eventosapp_mobile_event_offline_api;
 }
 unset( $eventosapp_mobile_event_offline_api );
+
+// Android 2.11.2+: índice QR dedicado, warm-up online y locks de concurrencia.
+// Se carga aquí para declarar el resolvedor QR optimizado antes de que el archivo
+// frontend histórico intente declarar su implementación basada en postmeta.
+$eventosapp_mobile_online_performance = __DIR__ . '/eventosapp-mobile-online-performance.php';
+if ( is_readable( $eventosapp_mobile_online_performance ) ) {
+    require_once $eventosapp_mobile_online_performance;
+}
+unset( $eventosapp_mobile_online_performance );
