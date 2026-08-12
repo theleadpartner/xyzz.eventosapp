@@ -9,7 +9,7 @@
  *
  * Bootstrap móvil actual:
  * Kiosko base -> Staff QR -> contexto Kiosko -> offline Staff -> offline Kiosko
- * -> QR avanzados -> Consumibles -> paquete offline unificado.
+ * -> QR avanzados -> Consumibles -> paquete offline unificado -> hardening online.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -147,3 +147,28 @@ if ( is_readable( $eventosapp_mobile_event_offline_api ) ) {
     require_once $eventosapp_mobile_event_offline_api;
 }
 unset( $eventosapp_mobile_event_offline_api );
+
+// Android 2.11.2+: índice QR dedicado, búsqueda online acotada y locks.
+// Se carga aquí para declarar el resolvedor QR optimizado antes de que el archivo
+// frontend histórico intente declarar su implementación basada en postmeta.
+$eventosapp_mobile_online_performance = __DIR__ . '/eventosapp-mobile-online-performance.php';
+if ( is_readable( $eventosapp_mobile_online_performance ) ) {
+    require_once $eventosapp_mobile_online_performance;
+}
+unset( $eventosapp_mobile_online_performance );
+
+// Warm-up de cientos de tickets: bulk delete + bulk upsert para evitar miles de
+// queries individuales durante la preparación del índice.
+$eventosapp_mobile_online_batch_index = __DIR__ . '/eventosapp-mobile-online-batch-index.php';
+if ( is_readable( $eventosapp_mobile_online_batch_index ) ) {
+    require_once $eventosapp_mobile_online_batch_index;
+}
+unset( $eventosapp_mobile_online_batch_index );
+
+// Coordina el warm-up del índice entre múltiples tablets del mismo evento para
+// que no reconstruyan 5.000+ tickets en paralelo.
+$eventosapp_mobile_online_warm_coordinator = __DIR__ . '/eventosapp-mobile-online-warm-coordinator.php';
+if ( is_readable( $eventosapp_mobile_online_warm_coordinator ) ) {
+    require_once $eventosapp_mobile_online_warm_coordinator;
+}
+unset( $eventosapp_mobile_online_warm_coordinator );
