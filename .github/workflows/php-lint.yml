@@ -27,5 +27,6 @@ jobs:
       - name: Lint mobile online PHP
         run: |
           php -l includes/api/eventosapp-mobile-online-performance.php
+          php -l includes/api/eventosapp-mobile-online-batch-index.php
           php -l includes/api/eventosapp-mobile-online-warm-coordinator.php
           php -l includes/api/eventosapp-mobile-kiosk-feature-permission.php
