@@ -31,4 +31,10 @@ jobs:
           php -l includes/api/eventosapp-mobile-online-warm-coordinator.php
           php -l includes/api/eventosapp-mobile-kiosk-feature-permission.php
           php -l includes/admin/eventosapp-configuracion.php
-          php -l includes/admin/eventosapp-ticket-import-performance.php
+          php -l includes/admin/eventosapp-herramientas.php
+          php -l includes/admin/eventosapp-herramientas-core.php
+          php -l includes/admin/eventosapp-herramientas-performance.php
+          php -l includes/admin/eventosapp-herramientas-performance-data.php
+          php -l includes/admin/eventosapp-herramientas-performance-assets.php
+          php -l includes/admin/eventosapp-herramientas-performance-queue.php
+          php -l includes/admin/eventosapp-herramientas-performance-controls.php
