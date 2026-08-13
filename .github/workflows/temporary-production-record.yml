@@ -1,0 +1,69 @@
+name: Temporary test README production record writer
+
+on:
+  push:
+    branches:
+      - docs/record-production-sync-1.5.0-rc.28-20260812
+    paths:
+      - docs/production-promotion-1.5.0-rc.28.md
+
+permissions:
+  contents: write
+
+jobs:
+  document:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: docs/record-production-sync-1.5.0-rc.28-20260812
+      README_BLOCK_B64: IyMgUHJvbW9jacOzbiBhIHByb2R1Y2Npw7NuIGNvbXBsZXRhZGEg4oCUIDIwMjYtMDgtMTIKCkVsIGNhbmRpZGF0byBgMS41LjAtcmMuMjhgIGRlIGVzdGUgcmVwb3NpdG9yaW8geWEgZnVlIHByb21vdmlkbyBkZSBmb3JtYSBjb250cm9sYWRhIGEgYHRoZWxlYWRwYXJ0bmVyL0V2ZW50b3NBcHBgLgoKLSAqKlNIQSBmdWVudGUgcHJvbW92aWRvOioqIGA5ZDFmNWUzMjljYmViNmI4NjgwYzc2MjEwNGYxNTY4ZGI1NzczOGUyYC4KLSAqKlBSIGRlIHByb2R1Y2Npw7NuOioqIGB0aGVsZWFkcGFydG5lci9FdmVudG9zQXBwIzhgLgotICoqQ29tbWl0IGludGVncmFkbyBlbiBwcm9kdWNjacOzbjoqKiBgNjA4MzUyZjRhNTY3YzE1ZTM0YWU1YWI5ZjM3MGIxNWVmMWEyMmQ0Y2AuCi0gKipWZXJzacOzbiBkb2N1bWVudGFkYSBlbiBwcm9kdWNjacOzbjoqKiBgMS41LjAtcmMuMjhgLgotICoqw5psdGltbyBjb3J0ZSBwcm9kdWN0aXZvIGFudGVyaW9yOioqIGA4YTdlMTcxNzM1MTc5MGFlMjExNzEyMGE4YjQxNTdlODg5NWRmNDZmYCAoYDEuNC4wLXJjLjFgKS4KLSAqKkRlbHRhIGF1ZGl0YWRvOioqIDIwOCBjb21taXRzIHkgNzcgcnV0YXMgYWN1bXVsYWRhcy4KLSAqKlRyYW5zZmVyZW5jaWEgZGlyZWN0YToqKiA3NiBydXRhcyBzaW5jcm9uaXphZGFzIGJ5dGUgYSBieXRlIGRlc2RlIGVzdGUgU0hBOyBlbCBSRUFETUUgZGUgcHJvZHVjY2nDs24gc2UgcHJlc2VydsOzIHkgZG9jdW1lbnTDsyBwb3Igc2VwYXJhZG8uCi0gKipWYWxpZGFjacOzbjoqKiBsaW50IFBIUCBjb21wbGV0bywgcGFyaWRhZCBieXRlIGEgYnl0ZSwgY29udHJvbCBjZXJyYWRvIGRlIGFsY2FuY2UgeSBgUEhQIExpbnRgIGRlbCBQUiBwcm9kdWN0aXZvIGVuIGVzdGFkbyBleGl0b3NvLgotICoqQ2FtYmlvcyBudWV2b3MgcGVuZGllbnRlcyBkZXNwdcOpcyBkZSBlc3RlIGNvcnRlOioqIG5pbmd1bm8gZGV0ZWN0YWRvIGFsIGNlcnJhciBsYSBwcm9tb2Npw7NuOyBgbWFpbmAgZGUgcHJ1ZWJhcyBzZWd1w61hIGVuIGA5ZDFmNWUzLi4uYC4KLSAqKk51ZXZhIGJhc2Ugb2JsaWdhdG9yaWEgcGFyYSBwcsOzeGltYXMgcHJvbW9jaW9uZXM6KiogYDlkMWY1ZTMyOWNiZWI2Yjg2ODBjNzYyMTA0ZjE1NjhkYjU3NzM4ZTJgLgoKRWwgcmVnaXN0cm8gZGUgY2llcnJlIGRlIGVzdGUgZW50b3JubyBxdWVkYSBlbiBbYGRvY3MvcHJvZHVjdGlvbi1wcm9tb3Rpb24tMS41LjAtcmMuMjgubWRgXShkb2NzL3Byb2R1Y3Rpb24tcHJvbW90aW9uLTEuNS4wLXJjLjI4Lm1kKS4gRW4gcHJvZHVjY2nDs24sIGVsIG1hbmlmaWVzdG8gZXhoYXVzdGl2byBxdWVkw7MgZG9jdW1lbnRhZG8gZW4gYGRvY3MvcHJvZHVjdGlvbi1zeW5jLTEuNS4wLXJjLjI4Lm1kYC4=
+    steps:
+      - name: Checkout documentation branch
+        uses: actions/checkout@v4
+        with:
+          ref: docs/record-production-sync-1.5.0-rc.28-20260812
+          fetch-depth: 0
+
+      - name: Verify promotion record
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$TARGET_BRANCH"
+          test -f docs/production-promotion-1.5.0-rc.28.md
+          grep -q '608352f4a567c15e34ae5ab9f370b15ef1a22d4c' docs/production-promotion-1.5.0-rc.28.md
+          grep -q '9d1f5e329cbeb6b8680c762104f1568db57738e2' docs/production-promotion-1.5.0-rc.28.md
+
+      - name: Update test README promotion status
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c "import os,base64,pathlib; p=pathlib.Path('README.md'); s=p.read_text(encoding='utf-8'); b=base64.b64decode(os.environ['README_BLOCK_B64']).decode(); a='## Estado actual: candidato 1.5.0-rc.28'; s=s if '## Promoción a producción completada — 2026-08-12' in s else s.replace(a,b+'\\n\\n'+a,1); p.write_text(s,encoding='utf-8')"
+
+      - name: Verify README-only scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --porcelain=v1 -uall | sed -E 's/^.. //' | sort -u > "$RUNNER_TEMP/changed.txt"
+          printf '%s\n' README.md | sort -u > "$RUNNER_TEMP/allowed.txt"
+          unexpected="$(comm -23 "$RUNNER_TEMP/changed.txt" "$RUNNER_TEMP/allowed.txt" || true)"
+          if [ -n "$unexpected" ]; then
+            echo "Unexpected paths changed:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+          grep -q '## Promoción a producción completada — 2026-08-12' README.md
+
+      - name: Commit test README record
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "README already up to date."
+            exit 0
+          fi
+          git commit -m "docs: record rc.28 production promotion in test README"
+          git push origin HEAD:"$TARGET_BRANCH"
