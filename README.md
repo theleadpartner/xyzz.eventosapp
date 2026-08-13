@@ -6,111 +6,161 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 ## Estado actual: candidato 1.5.0-rc.28
 
-La entrega **1.5.0-rc.28** optimiza específicamente la **importación manual masiva de tickets enviada a Cola y Tareas**. No aumenta de forma artificial los límites de memoria/CPU ni elimina las guardas defensivas de la cola: cambia el orden del trabajo para aprovechar la concurrencia que ya existe.
+La entrega **1.5.0-rc.28** optimiza específicamente la importación manual masiva gestionada por **Herramientas** (`includes/admin/eventosapp-herramientas.php`). La implementación se corrigió para que esta responsabilidad no dependa de `eventosapp-configuracion.php`.
 
 Datos de corte:
 
 - **Fecha:** 2026-08-12
-- **Rama:** `perf/ticket-import-throughput-rc28`
-- **Base:** `main` con `1.5.0-rc.27`
+- **Rama:** `fix/ticket-import-herramientas-rc28`
+- **Base:** `main` con `1.5.0-rc.27` y corrección de la primera integración rc.28
 - **Destino posterior:** `theleadpartner/EventosApp` únicamente después de validación real.
+
+## Corrección de alcance de rc.28
+
+La importación masiva pertenece a `includes/admin/eventosapp-herramientas.php`. Por ello:
+
+- `includes/admin/eventosapp-configuracion.php` fue restaurado a su contenido previo;
+- se eliminó la capa externa `includes/admin/eventosapp-ticket-import-performance.php`;
+- el archivo histórico de Herramientas se conserva sin cambios funcionales en `includes/admin/eventosapp-herramientas-core.php`;
+- `includes/admin/eventosapp-herramientas.php` continúa siendo el punto de entrada y carga el núcleo histórico más la optimización específica del mismo módulo.
+
+La separación del núcleo evita mezclar una optimización grande con 170 KB de lógica ya probada y permite revisar el cambio sin alterar funciones históricas fuera del alcance.
 
 ## Diagnóstico de la importación masiva
 
-El cuello de botella no estaba principalmente en la memoria disponible. En el incidente analizado, una tarea de 4.000 tickets avanzó aproximadamente a 1.593 registros en más de cuatro horas mientras la pantalla mostraba alrededor de 25,8 % de memoria PHP y load 1 de 1,15.
+En el incidente analizado, una importación de 4.000 tickets llegó aproximadamente a 1.593 registros después de más de cuatro horas mientras la pantalla mostraba cerca de 25,8 % de memoria PHP y load 1 de 1,15.
 
-La causa principal era el flujo secuencial del importador: por cada fila se guardaban los datos del ticket y, antes de avanzar a la siguiente, se generaban todos los anexos activos del evento (QR/PDF/ICS/Wallet/WhatsApp/variantes). Una parte de ese trabajo depende de filesystem o servicios remotos, por lo que PHP puede pasar tiempo esperando sin consumir mucha memoria ni saturar CPU.
+El cuello de botella principal no era RAM agotada. El flujo histórico procesaba secuencialmente los datos del ticket y después esperaba QR/PDF/ICS/Wallet/WhatsApp/variantes antes de pasar a la siguiente fila. Parte de ese trabajo usa CPU, filesystem o servicios remotos, así que PHP podía permanecer esperando aun cuando el servidor tenía capacidad disponible.
 
-Además, `max_concurrent = 3` en la cola central significa hasta tres **tareas independientes** simultáneas. Una sola tarea `ticket_import` conserva un lock/cursor único y no utiliza tres workers sobre el mismo CSV.
+Además, `max_concurrent = 3` de Cola y Tareas representa hasta tres tareas independientes; una sola tarea `ticket_import` no podía aprovechar los tres slots sobre el mismo cursor del CSV.
 
-## Pipeline rápido de importación rc.28
-
-Archivo principal:
-
-```text
-includes/admin/eventosapp-ticket-import-performance.php
-```
+## Pipeline rápido dentro de Herramientas
 
 Versión interna:
 
 ```text
-EVENTOSAPP_TICKET_IMPORT_PERFORMANCE_VERSION = 2026.08.12.1
+EVENTOSAPP_TICKET_IMPORT_PERFORMANCE_VERSION = 2026.08.12.2
 ```
 
-La ruta rápida se activa únicamente al usar **Enviar a Cola y Tareas · modo rápido**. El modo “en esta ventana” se conserva intacto como compatibilidad.
+La ruta rápida se activa al usar **Enviar a Cola y Tareas · modo rápido**. El modo **Iniciar / Reanudar en esta ventana** conserva el procesamiento histórico.
 
-### Fase 1 — datos del CSV
+### Fase 1 — datos
 
-El task `ticket_import` sigue reutilizando el procesador histórico de filas para conservar validación, fingerprint, deduplicación, actualización por cédula/evento, modalidad, extras, sesiones, secuencias, search blob y demás metadatos funcionales.
+El adaptador `ticket_import` guarda primero los datos funcionales y difiere los anexos pesados.
 
-Durante esta fase se desactiva temporalmente solo la generación pesada de anexos. Cada ticket creado/actualizado queda marcado con:
+Se preservan validación, fingerprint, deduplicación, actualización por cédula/evento, modalidad, extras, secuencia, sesiones/accesos, search blob y vinculación con Asistentes cuando está habilitada.
+
+Cada ticket que requiere segunda fase queda marcado con:
 
 ```text
 _eventosapp_import_assets_pending
 ```
 
-La fila puede entonces terminar sin esperar QR/PDF/ICS/Wallet/WhatsApp.
+Para tickets existentes no se llama al generador con flags artificialmente desactivados. Así no se borran PDF, Wallet, ICS u otros anexos válidos mientras la tarea espera la fase 2.
 
 ### Fase 2 — anexos paralelos
 
-Al terminar el CSV, los tickets pendientes se dividen de forma determinista en hasta tres shards. Cada shard crea una tarea independiente:
+Al terminar la lectura del CSV, los tickets pendientes se distribuyen de forma determinista en hasta tres tareas:
 
 ```text
 ticket_import_assets
 ```
 
-Los workers reutilizan `evapp_import_generate_assets_now()` con la configuración real del evento. Por tanto no se reemplaza ni duplica el motor de QR/PDF/ICS/Wallet/WhatsApp/variantes; únicamente puede trabajar sobre tickets distintos en paralelo.
+Cada tarea reutiliza `evapp_import_generate_assets_now()` y la configuración real del evento. No se reemplazan los motores existentes de QR, PDF, ICS, Google Wallet, Apple Wallet, WhatsApp o variantes.
 
-La concurrencia efectiva continúa gobernada por la cola central. Las guardas de memoria y load permanecen activas, y el pipeline nunca solicita más de tres shards aunque el servidor permita un valor global mayor.
+La cola central conserva sus límites de tiempo, memoria y carga; rc.28 aprovecha la concurrencia disponible sin retirar las protecciones del servidor.
+
+### Progreso compuesto
+
+La tarea padre no finaliza al terminar el CSV. Su total operativo incorpora la fase de anexos y consolida el avance de las tareas hijas.
+
+Por tanto:
+
+```text
+100 % = datos terminados + anexos terminados
+```
+
+Esto evita notificaciones de finalización mientras todavía se están construyendo QR/PDF/Wallet.
+
+### Pausa, reanudación y cancelación
+
+Los controles de Herramientas coordinan también las tareas de anexos.
+
+Si la fase de datos ya finalizó y quedan anexos pendientes, la importación debe continuar en Cola y Tareas; no se permite volver al modo ventana para evitar dos ejecutores sobre el mismo proceso.
 
 ### Menos escritura auxiliar
 
-Los éxitos dejan de escribir un log técnico por cada ticket. Errores y omisiones conservan su detalle individual; los éxitos se consolidan en resúmenes por lote. Esto evita miles de escrituras de log en importaciones grandes.
+Los éxitos de la fase rápida se consolidan por lote. Errores y omisiones mantienen detalle individual. Esto reduce miles de escrituras de log en archivos grandes.
 
-### Recuperación
-
-Si un ticket fue escrito pero PHP cayó antes del checkpoint, el retry puede reconocerlo por fingerprint. Si `_eventosapp_import_assets_pending` sigue presente, rc.28 lo reincorpora a la fase paralela para que no quede sin anexos.
-
-Los IDs de los shards se persisten inmediatamente después de crearlos para impedir duplicar tareas ya creadas durante una recuperación.
-
-### Compatibilidad con tareas ya iniciadas
-
-El adaptador de `ticket_import` se resuelve en cada nueva petición del worker. Una importación ya creada puede continuar desde su cursor con rc.28 después de desplegar el código. Los registros que ya fueron completados antes del despliegue no se reprocesan; la optimización se aplica a las filas que todavía estén pendientes.
-
-Documentación completa:
+Documentación técnica:
 
 ```text
 docs/ticket-import-throughput-rc28.md
+```
+
+## Archivos de rc.28
+
+Punto de entrada y núcleo preservado:
+
+```text
+includes/admin/eventosapp-herramientas.php
+includes/admin/eventosapp-herramientas-core.php
+```
+
+Optimización del mismo módulo:
+
+```text
+includes/admin/eventosapp-herramientas-performance.php
+includes/admin/eventosapp-herramientas-performance-data.php
+includes/admin/eventosapp-herramientas-performance-assets.php
+includes/admin/eventosapp-herramientas-performance-queue.php
+includes/admin/eventosapp-herramientas-performance-controls.php
+```
+
+Documentación y CI:
+
+```text
+docs/ticket-import-throughput-rc28.md
+.github/workflows/php-lint.yml
+README.md
+```
+
+Restaurado/eliminado respecto de la primera integración rc.28:
+
+```text
+includes/admin/eventosapp-configuracion.php             // restaurado
+includes/admin/eventosapp-ticket-import-performance.php // eliminado
 ```
 
 ## Qué no cambia en rc.28
 
 No se modifica:
 
-- la estructura de tickets;
-- la regla de deduplicación;
-- los generadores de QR/PDF/ICS/Wallet/WhatsApp;
-- los umbrales globales de memoria/load;
-- `max_concurrent` global;
-- la cola de email, WhatsApp, recordatorios u otros módulos;
+- la cola central global ni sus umbrales;
+- los motores de QR/PDF/ICS/Wallet/WhatsApp;
+- email masivo, WhatsApp masivo o recordatorios;
 - la API móvil;
-- la operación offline/online de Android;
-- consumibles, check-in, sesiones o doble autenticación.
+- el modo offline/online;
+- consumibles;
+- Staff QR;
+- Localidad;
+- Sesiones;
+- Doble Auth.
 
-## Expectativa de rendimiento
+## Checklist de validación rc.28
 
-La mejora proviene de retirar del camino crítico del CSV el trabajo pesado por ticket y de ejecutar después ese trabajo en shards independientes. Si los anexos son la mayor parte del costo, esa fase puede acercarse a una mejora de hasta aproximadamente 3x en condiciones ideales. No es una garantía: servicios Wallet, almacenamiento, CPU, MySQL y otras tareas concurrentes pueden reducir la ganancia real.
-
-La prueba de aceptación debe medir por separado:
-
-```text
-tiempo de fase CSV
-tiempo de fase de anexos
-items/s
-memoria máxima
-load 1
-errores por shard
-```
+1. Importar 100 tickets usando Cola y Tareas.
+2. Confirmar avance rápido de la fase de datos.
+3. Confirmar creación de hasta tres tasks `ticket_import_assets`.
+4. Verificar que la tarea padre no llegue a 100 % antes de que terminen los shards.
+5. Verificar QR y anexos en tickets del inicio, mitad y final.
+6. Repetir con actualización por cédula y comprobar que los anexos existentes no se borran durante fase 1.
+7. Probar PDF, ICS, Google Wallet, Apple Wallet y WhatsApp activos.
+8. Probar pausa, reanudación y cancelación en ambas fases.
+9. Repetir el mismo CSV y comprobar idempotencia.
+10. Ejecutar 4.000 tickets y medir fase de datos, fase de anexos, items/s, memoria, load y errores.
+11. Ejecutar regresión de Cola y Tareas para otros tipos de tarea.
+12. Ejecutar regresión online/offline preservada de rc.27.
 
 ---
 
@@ -407,38 +457,6 @@ La arquitectura queda preparada para que varias tablets procesen asistentes dist
 
 Por ello no se fija en código un número artificial de tablets simultáneas. La prueba real debe medir p50/p95/p99 y saturación del servidor.
 
-## Archivos de rc.28
-
-Nuevos:
-
-```text
-includes/admin/eventosapp-ticket-import-performance.php
-docs/ticket-import-throughput-rc28.md
-```
-
-Modificados:
-
-```text
-includes/admin/eventosapp-configuracion.php
-.github/workflows/php-lint.yml
-README.md
-```
-
-## Checklist de validación rc.28
-
-1. Importar 100 tickets usando Cola y Tareas.
-2. Confirmar avance rápido de la fase CSV sin generación pesada por fila.
-3. Confirmar creación de hasta tres tasks `ticket_import_assets`.
-4. Verificar QR y anexos en tickets del inicio, mitad y final.
-5. Confirmar que `_eventosapp_import_assets_pending` desaparece después de un resultado correcto.
-6. Repetir con actualización de tickets existentes por cédula.
-7. Probar evento con PDF/ICS/Wallet/WhatsApp activos.
-8. Pausar/reanudar un shard.
-9. Ejecutar 4.000 tickets y medir fase CSV + fase anexos.
-10. Comparar items/s, memoria, load 1 y errores con la línea base.
-11. Ejecutar regresión de Cola y Tareas para email/WhatsApp/recordatorios.
-12. Ejecutar regresión completa online/offline.
-
 ## Checklist de validación online rc.27
 
 1. Crear/usar evento de 5.000 tickets.
@@ -469,7 +487,7 @@ README.md
 
 | Candidato | Cambio principal |
 |---|---|
-| **1.5.0-rc.28** | Pipeline rápido de importación: datos primero, anexos en hasta tres shards y logs agregados por lote. |
+| **1.5.0-rc.28** | Herramientas: fase rápida de datos + hasta tres shards de anexos, progreso compuesto y restauración de Configuración. |
 | **1.5.0-rc.27** | Hardening online 5.000+: índice QR dedicado, bulk warm-up compartido, búsqueda Kiosko acotada y locks multi-tablet. |
 | **1.5.0-rc.26** | Hardening offline 3.000–5.000: snapshot estable, payload estático único, cache Kiosko y límites defensivos. |
 | **1.5.0-rc.25** | Consumibles móvil + historial/cancelación + offline unificado. |
@@ -480,4 +498,4 @@ README.md
 
 ## Regla de promoción
 
-`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.28 a producción hasta validar una importación real grande**, incluida una prueba de 4.000 tickets con anexos activos, revisión de las tres tareas de anexos, regresión de datos/QR y métricas de recursos. También se mantiene pendiente la validación real online/offline de 5.000 asistentes definida en rc.27.
+`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.28 a producción hasta validar una importación real grande**, incluida una prueba de 4.000 tickets con anexos activos, controles de pausa/reanudación/cancelación, integridad de tickets existentes y métricas de PHP-FPM/MySQL. También se mantiene pendiente la validación real online/offline de 5.000 asistentes definida en rc.27.
