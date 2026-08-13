@@ -38,3 +38,10 @@ jobs:
           php -l includes/admin/eventosapp-herramientas-performance-assets.php
           php -l includes/admin/eventosapp-herramientas-performance-queue.php
           php -l includes/admin/eventosapp-herramientas-performance-controls.php
+
+      - name: Verify Herramientas preservation
+        run: |
+          test "$(git hash-object includes/admin/eventosapp-herramientas-core.php)" = "85ec7013dd9d9c8a124adf364a52896c7606890d"
+          grep -q "eventosapp-herramientas-core.php" includes/admin/eventosapp-herramientas.php
+          grep -q "eventosapp-herramientas-performance.php" includes/admin/eventosapp-herramientas.php
+          test ! -e includes/admin/eventosapp-ticket-import-performance.php
