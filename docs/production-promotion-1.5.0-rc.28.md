@@ -42,8 +42,10 @@ Versión documentada en producción:
 
 ## Estado después de la promoción
 
-Al cerrar este registro, `main` de pruebas continuaba exactamente en `9d1f5e329cbeb6b8680c762104f1568db57738e2`. Por tanto, no se detectaron cambios adicionales pendientes de producción después del corte promovido.
+Al cerrar este registro, `main` de pruebas continuaba exactamente en `9d1f5e329cbeb6b8680c762104f1568db57738e2`. Por tanto, no se detectaron cambios funcionales adicionales pendientes de producción después del corte promovido.
 
-Para la siguiente promoción, la comparación debe comenzar desde `9d1f5e329cbeb6b8680c762104f1568db57738e2`. No se deben volver a incluir cambios anteriores a este SHA, salvo un rollback o corrección explícitamente documentada.
+Para la siguiente promoción funcional, la comparación debe comenzar desde `9d1f5e329cbeb6b8680c762104f1568db57738e2`. No se deben volver a incluir cambios anteriores a este SHA, salvo un rollback o corrección explícitamente documentada.
+
+Los commits posteriores que integren este mismo registro y el bloque de estado en `README.md` son **exclusivamente documentación del cierre de promoción**. No representan una función pendiente de producción ni cambian la base funcional promovida `9d1f5e329cbeb6b8680c762104f1568db57738e2`.
 
 El inventario exhaustivo de la promoción quedó almacenado en producción en `docs/production-sync-1.5.0-rc.28.md`.
