@@ -2,7 +2,7 @@
 
 Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
 
-> **Historial preservado:** `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
+> **Historial preservado:** `rc.30` endurece el contexto REST de impresión del Kiosko Android; `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
 
 ## Promoción a producción completada — 2026-08-12
 
@@ -16,12 +16,99 @@ El candidato `1.5.0-rc.28` de este repositorio ya fue promovido de forma control
 - **Delta auditado:** 208 commits y 77 rutas acumuladas.
 - **Transferencia directa:** 76 rutas sincronizadas byte a byte desde este SHA; el README de producción se preservó y documentó por separado.
 - **Validación:** lint PHP completo, paridad byte a byte, control cerrado de alcance y `PHP Lint` del PR productivo en estado exitoso.
-- **Cambios nuevos pendientes después de este corte:** ninguno detectado al cerrar la promoción; `main` de pruebas seguía en `9d1f5e3...`.
+- **Cambios nuevos pendientes después de este corte:** `rc.29` y `rc.30` permanecen en el entorno de pruebas hasta completar sus validaciones específicas.
 - **Nueva base obligatoria para próximas promociones:** `9d1f5e329cbeb6b8680c762104f1568db57738e2`.
 
 El registro de cierre de este entorno queda en [`docs/production-promotion-1.5.0-rc.28.md`](docs/production-promotion-1.5.0-rc.28.md). En producción, el manifiesto exhaustivo quedó documentado en `docs/production-sync-1.5.0-rc.28.md`.
 
-## Estado actual: candidato 1.5.0-rc.29
+## Estado actual: candidato 1.5.0-rc.30
+
+La entrega **1.5.0-rc.30** es un hotfix acotado al contrato REST de impresión del Kiosko Android sobre la base funcional `rc.29`. El diagnóstico de Android 2.13.0 confirmó que el mismo ticket podía ser localizado correctamente por Kiosko, Localidad y Check-in QR, mientras `POST /wp-json/eventosapp-kiosk/v1/tickets/{ticket_id}/print` devolvía `404 invalid_ticket` antes de generar la escarapela o crear un trabajo de impresión local.
+
+Datos de corte:
+
+- **Fecha:** 2026-08-13
+- **Rama:** `fix/kiosk-print-ticket-context-rc30`
+- **Base funcional:** `1.5.0-rc.29`
+- **Android recomendado:** `2.13.1` / `versionCode 39`
+- **Destino posterior:** producción únicamente después de validar impresión real y conservar además las pruebas de carga pendientes de rc.29.
+
+### Diagnóstico de impresión Kiosko
+
+El caso de campo aisló el fallo al endpoint de impresión:
+
+```text
+QR Kiosko -> búsqueda correcta -> ticket canónico válido
+                           |
+                           v
+POST /tickets/{ticket_id}/print -> 404 invalid_ticket
+```
+
+La misma lectura fue aceptada por Staff QR y Localidad, y el dispositivo mantenía Bluetooth operativo y trabajos de impresión anteriores en estado `SENT`. El error ocurre antes de la generación de badge/escarapela y antes de encolar un trabajo local, por lo que rc.30 no modifica QR ni el motor Bluetooth.
+
+### Normalización del contexto REST
+
+La API histórica obtiene el ticket de impresión mediante `$request['id']`. El archivo `includes/api/eventosapp-mobile-kiosk-feature-permission.php` ya extraía el ticket directamente desde `get_route()` para resolver el permiso por evento. rc.30 reutiliza esa fuente inequívoca únicamente para `/tickets/{ticket_id}/print`.
+
+El nuevo filtro `rest_pre_dispatch`:
+
+1. obtiene el ticket directamente del patrón de ruta;
+2. valida `ticket_id` redundante cuando Android 2.13.1 lo envía;
+3. valida `event_id` contra la relación real ticket → evento;
+4. normaliza `id` con `WP_REST_Request::set_param()` antes del callback histórico;
+5. devuelve `409` explícito si ruta, ticket y evento no coinciden.
+
+Android 2.13.1 mantiene el ticket en la ruta y envía además:
+
+```json
+{
+  "request_id": "android-kiosk-...",
+  "id": 21054,
+  "ticket_id": 21054,
+  "event_id": 15200
+}
+```
+
+La ruta continúa siendo la fuente canónica; el cuerpo redundante sirve para detectar pérdida o inconsistencia de contexto antes de imprimir.
+
+### Alcance cerrado rc.30
+
+No se reemplaza ni duplica `eventosapp_kiosk_api_print()`. Permanecen sin cambios:
+
+- permisos por evento y módulo;
+- validación de ticket virtual;
+- modalidad, fecha y control de pago;
+- lock ticket+día;
+- escritura del check-in y log;
+- generación y firma del badge;
+- configuración de papel;
+- impresión Bluetooth y cola local Android;
+- QR Staff, Localidad, Sesiones, Doble Auth y Consumibles;
+- modo offline y sincronización;
+- gobernador de Cola y Tareas rc.29.
+
+Documentación técnica completa:
+
+```text
+docs/kiosk-print-context-rc30.md
+```
+
+### Validación rc.30
+
+1. Kiosko QR con autoimpresión: localizar e imprimir un ticket válido.
+2. Kiosko QR con confirmación manual: **Confirmar e imprimir escarapela**.
+3. Repetir con ticket que ya tenga check-in del día.
+4. Buscar por identificación/nombre y posteriormente imprimir.
+5. Confirmar que **Volver** no reactive una impresión ya consumida.
+6. Enviar intencionalmente un `ticket_id` de body distinto al de la ruta y confirmar rechazo sin impresión.
+7. Enviar un `event_id` incorrecto y confirmar rechazo sin impresión.
+8. Ejecutar regresión Staff QR, Localidad, Sesiones, Doble Auth, Consumibles y offline.
+9. Ejecutar PHP lint completo.
+10. Mantener además la validación de throughput real requerida por rc.29.
+
+---
+
+## Base inmediata preservada: candidato 1.5.0-rc.29
 
 La entrega **1.5.0-rc.29** corrige el exceso de sensibilidad del gobernador de recursos de **Cola y Tareas** observado después de trasladar procesos masivos al segundo plano. El objetivo no es retirar las protecciones, sino aprovechar de forma sostenida la capacidad disponible del servidor de pruebas: **KVM 4 vCPU / 16 GB RAM**.
 
@@ -465,7 +552,7 @@ La lectura QR de Kiosko usa el mismo índice. El endpoint:
 POST /wp-json/eventosapp-kiosk/v1/tickets/{ticket_id}/print
 ```
 
-queda protegido por ticket+día durante el check-in que precede a la generación de la escarapela.
+queda protegido por ticket+día durante el check-in que precede a la generación de la escarapela. Desde rc.30, el ID capturado por la ruta se normaliza explícitamente antes del callback histórico y se contrasta con el contexto redundante de Android 2.13.1.
 
 ### Sesiones
 
@@ -527,7 +614,7 @@ El índice QR almacena solo SHA-256, ticket, evento y metadatos de tipo de QR.
 
 ## Offline rc.26 preservado
 
-rc.27 mantiene íntegro el hardening offline anterior:
+rc.30 mantiene íntegro el hardening offline anterior:
 
 - paquete único por evento;
 - snapshot estable de IDs;
@@ -547,7 +634,7 @@ Android continúa enviando sincronizaciones en lotes de 200.
 
 ## Capacidad de 5.000 asistentes
 
-Con rc.27 + Android 2.11.2, un evento de 5.000 asistentes deja de depender de una búsqueda general sobre `postmeta` en cada lectura QR una vez el índice está disponible.
+Con rc.27+ y Android 2.11.2+, un evento de 5.000 asistentes deja de depender de una búsqueda general sobre `postmeta` en cada lectura QR una vez el índice está disponible.
 
 La arquitectura queda preparada para que varias tablets procesen asistentes distintos simultáneamente. El número máximo de dispositivos/requests por segundo sigue siendo una propiedad conjunta del código y la infraestructura:
 
@@ -591,6 +678,7 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 | Candidato | Cambio principal |
 |---|---|
+| **1.5.0-rc.30** | Hotfix de impresión Kiosko Android: normalización inequívoca del ticket de ruta y validación redundante de `ticket_id` / `event_id`. |
 | **1.5.0-rc.29** | Cola y Tareas: gobernador recalibrado para 4 vCPU / 16 GB, 4 workers, menos tiempo muerto y pisos de batch para importación/WhatsApp/Flow/confirmación. |
 | **1.5.0-rc.28** | Herramientas: fase rápida de datos + hasta tres shards de anexos, progreso compuesto y restauración de Configuración. |
 | **1.5.0-rc.27** | Hardening online 5.000+: índice QR dedicado, bulk warm-up compartido, búsqueda Kiosko acotada y locks multi-tablet. |
@@ -603,4 +691,4 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 ## Regla de promoción
 
-`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.29 a producción hasta validar el nuevo gobernador con carga real**: importación de 4.000 tickets con anexos activos, WhatsApp Ticket masivo, WhatsApp Flow, Confirmación de Asistencia, pausa/reanudación/cancelación, integridad de tickets existentes y métricas de CPU/RAM/PHP-FPM/MySQL. También se mantiene pendiente la validación real online/offline de 5.000 asistentes definida en rc.27.
+`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.30 a producción hasta validar la impresión real Kiosko con Android 2.13.1 y completar además la prueba de carga pendiente de rc.29**: autoimpresión QR, impresión manual, ticket ya registrado, búsqueda textual, integridad del resto de módulos, importación de 4.000 tickets con anexos activos, WhatsApp Ticket masivo, WhatsApp Flow, Confirmación de Asistencia, pausa/reanudación/cancelación y métricas de CPU/RAM/PHP-FPM/MySQL. También se mantiene pendiente la validación real online/offline de 5.000 asistentes definida en rc.27.

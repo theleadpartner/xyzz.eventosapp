@@ -84,6 +84,60 @@ add_filter( 'rest_pre_dispatch', function ( $result, $server, $request ) {
     return $result;
 }, 7, 3 );
 
+/*
+ * Android 2.13.1 / backend rc.30:
+ *
+ * La ruta de impresión contiene el ID canónico del ticket. WordPress expone el
+ * request como ArrayAccess y los parámetros del JSON, POST, query string y URL
+ * pueden compartir el mismo nombre. Para evitar que un parámetro homónimo del
+ * cuerpo o de infraestructura intermedia desplace el `id` capturado por la ruta,
+ * se normaliza explícitamente el contexto de impresión antes del callback base.
+ *
+ * Se aceptan además `ticket_id` y `event_id` redundantes enviados por Android y
+ * se validan contra la ruta y contra la relación real ticket -> evento. No se
+ * cambia ninguna regla de check-in, permisos, escarapela o impresión.
+ */
+add_filter( 'rest_pre_dispatch', function ( $result, $server, $request ) {
+    if ( $result !== null || ! $request instanceof WP_REST_Request ) {
+        return $result;
+    }
+
+    $route = $request->get_route();
+    if ( ! preg_match( '#^/eventosapp-kiosk/v1/tickets/(\d+)/print$#', $route, $matches ) ) {
+        return $result;
+    }
+
+    $route_ticket_id = absint( $matches[1] );
+    if ( ! $route_ticket_id ) {
+        return $result;
+    }
+
+    $body_ticket_id = absint( $request->get_param( 'ticket_id' ) );
+    if ( $body_ticket_id && $body_ticket_id !== $route_ticket_id ) {
+        return new WP_Error(
+            'print_ticket_context_mismatch',
+            'El ticket recibido no coincide con la ruta de impresión.',
+            [ 'status' => 409 ]
+        );
+    }
+
+    $event_id = absint( get_post_meta( $route_ticket_id, '_eventosapp_ticket_evento_id', true ) );
+    $body_event_id = absint( $request->get_param( 'event_id' ) );
+    if ( $body_event_id && $event_id && $body_event_id !== $event_id ) {
+        return new WP_Error(
+            'print_event_context_mismatch',
+            'El evento recibido no coincide con el ticket que se intenta imprimir.',
+            [ 'status' => 409 ]
+        );
+    }
+
+    // Fuerza el ID capturado por la URL en todas las bolsas donde ya exista `id`.
+    // Si no existe en ninguna, set_param() lo agrega siguiendo el orden REST.
+    $request->set_param( 'id', $route_ticket_id );
+
+    return $result;
+}, 8, 3 );
+
 add_filter( 'eventosapp_role_can', function ( $has_permission, $feature, $user ) {
     if ( sanitize_key( $feature ) !== 'self_checkin' ) {
         return $has_permission;
