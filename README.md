@@ -4,6 +4,23 @@ Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las 
 
 > **Historial preservado:** `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
 
+## Promoción a producción completada — 2026-08-12
+
+El candidato `1.5.0-rc.28` de este repositorio ya fue promovido de forma controlada a `theleadpartner/EventosApp`.
+
+- **SHA fuente promovido:** `9d1f5e329cbeb6b8680c762104f1568db57738e2`.
+- **PR de producción:** `theleadpartner/EventosApp#8`.
+- **Commit integrado en producción:** `608352f4a567c15e34ae5ab9f370b15ef1a22d4c`.
+- **Versión documentada en producción:** `1.5.0-rc.28`.
+- **Último corte productivo anterior:** `8a7e1717351790ae2117120a8b4157e8895df46f` (`1.4.0-rc.1`).
+- **Delta auditado:** 208 commits y 77 rutas acumuladas.
+- **Transferencia directa:** 76 rutas sincronizadas byte a byte desde este SHA; el README de producción se preservó y documentó por separado.
+- **Validación:** lint PHP completo, paridad byte a byte, control cerrado de alcance y `PHP Lint` del PR productivo en estado exitoso.
+- **Cambios nuevos pendientes después de este corte:** ninguno detectado al cerrar la promoción; `main` de pruebas seguía en `9d1f5e3...`.
+- **Nueva base obligatoria para próximas promociones:** `9d1f5e329cbeb6b8680c762104f1568db57738e2`.
+
+El registro de cierre de este entorno queda en [`docs/production-promotion-1.5.0-rc.28.md`](docs/production-promotion-1.5.0-rc.28.md). En producción, el manifiesto exhaustivo quedó documentado en `docs/production-sync-1.5.0-rc.28.md`.
+
 ## Estado actual: candidato 1.5.0-rc.28
 
 La entrega **1.5.0-rc.28** optimiza específicamente la importación manual masiva gestionada por **Herramientas** (`includes/admin/eventosapp-herramientas.php`). La implementación se corrigió para que esta responsabilidad no dependa de `eventosapp-configuracion.php`.
