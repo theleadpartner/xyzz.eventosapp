@@ -2,7 +2,7 @@
 
 Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
 
-> **Historial preservado:** `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
+> **Historial preservado:** `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
 
 ## Promoción a producción completada — 2026-08-12
 
@@ -21,7 +21,94 @@ El candidato `1.5.0-rc.28` de este repositorio ya fue promovido de forma control
 
 El registro de cierre de este entorno queda en [`docs/production-promotion-1.5.0-rc.28.md`](docs/production-promotion-1.5.0-rc.28.md). En producción, el manifiesto exhaustivo quedó documentado en `docs/production-sync-1.5.0-rc.28.md`.
 
-## Estado actual: candidato 1.5.0-rc.28
+## Estado actual: candidato 1.5.0-rc.29
+
+La entrega **1.5.0-rc.29** corrige el exceso de sensibilidad del gobernador de recursos de **Cola y Tareas** observado después de trasladar procesos masivos al segundo plano. El objetivo no es retirar las protecciones, sino aprovechar de forma sostenida la capacidad disponible del servidor de pruebas: **KVM 4 vCPU / 16 GB RAM**.
+
+Datos de corte:
+
+- **Fecha:** 2026-08-13
+- **Rama:** `perf/task-queue-resource-governor-rc29`
+- **Base:** `main` en `4799973518184d678cd3996b34b96c49986e0435`
+- **Versión interna del perfil:** `EVENTOSAPP_TASK_QUEUE_PERFORMANCE_PROFILE_VERSION = 2026.08.13.1`
+- **Destino posterior:** producción únicamente después de validar throughput real y estabilidad.
+
+### Diagnóstico del gobernador
+
+La cola central partía de `max_concurrent = 3`, `max_execution_seconds = 22`, `memory_stop_ratio = 0.72`, `load_stop_per_core = 1.30`, `normal_delay_seconds = 4` y `busy_delay_seconds = 15`.
+
+El problema no era una sola protección, sino su efecto combinado:
+
+1. `memory_stop_ratio` se calcula contra el `memory_limit` del proceso PHP, no contra los 16 GB físicos del VPS;
+2. con 4 vCPU, `load_stop_per_core = 1.30` marcaba ocupado el servidor cerca de `load 1 = 5.2`;
+3. el batch adaptativo histórico reduce lotes cuando memoria/load/tiempo suben y persiste el tamaño reducido en la tarea, por lo que procesos con APIs remotas podían degradarse progresivamente hasta batches mínimos;
+4. cada batch pequeño volvía a pagar esperas normales de 4 s o de 15 s si el worker consideraba el servidor ocupado;
+5. rc.28 crea hasta tres shards de anexos, pero con tres workers la tarea padre podía ocupar un cupo y dejar temporalmente solo dos shards trabajando;
+6. si un dispatcher cedía por un pico puntual, el siguiente intento podía terminar dependiendo del cron de respaldo.
+
+### Perfil efectivo rc.29
+
+El ajuste vive en `includes/admin/eventosapp-herramientas-performance-controls.php` y usa las APIs públicas de Cola y Tareas, sin reemplazar el núcleo histórico.
+
+```text
+max_concurrent          = min(4, vCPU detectadas)
+dispatcher_limit        >= 16
+max_execution_seconds   = 35, limitado a max_execution_time PHP - 5 s
+memory_stop_ratio       = 0.86
+load_stop_per_core      = 2.00
+min_delay_seconds       = 1
+normal_delay_seconds    = 1
+busy_delay_seconds      = 5
+max_batch_size          >= 100
+```
+
+En 4 vCPU, el corte de `load 1` pasa aproximadamente de `5.2` a `8.0`. El worker sigue cediendo por tiempo, memoria o carga real; locks, heartbeat, errores consecutivos, pausa, reanudación y cancelación permanecen activos.
+
+### Batches mínimos para procesos afectados
+
+| Tarea | Batch objetivo | Piso | Máximo |
+|---|---:|---:|---:|
+| `ticket_import` | 60 | 30 | 80 |
+| `ticket_import_assets` | 10 | 4 | 16 |
+| `whatsapp_bulk` | 12 | 6 | 20 |
+| `whatsapp_flow_bulk` | 10 | 5 | 16 |
+| `attendance_bulk` | 12 | 4 | 24 |
+| `attendance_scheduled` | 10 | 4 | 20 |
+
+Los valores no crean ese número de requests simultáneos: siguen procesándose secuencialmente dentro de cada worker. El objetivo es impedir que una llamada remota lenta degrade el batch hasta 1 item y multiplique las pausas de reencolado.
+
+### Reintento corto del dispatcher
+
+Si el dispatcher encuentra recursos altos pero todavía existen tareas vencidas/listas, rc.29 programa un nuevo `kick` corto usando el `busy_delay_seconds` recalibrado. Así un pico puntual no deja el proceso esperando únicamente el cron periódico.
+
+### Alcance cerrado
+
+rc.29 **no modifica** los motores que envían WhatsApp, WhatsApp Flows o Confirmación de Asistencia; tampoco cambia QR, PDF, ICS, Wallet, deduplicación, API móvil online/offline, Consumibles, Staff QR, Localidad, Sesiones o Doble Auth. Se modifica únicamente el perfil de recursos, los adaptadores de batch de los procesos afectados y el reintento del dispatcher.
+
+Documentación técnica completa:
+
+```text
+docs/task-queue-throughput-rc29.md
+```
+
+### Validación rc.29
+
+1. Importar 100 tickets y revisar regresiones.
+2. Importar 1.000 tickets y medir items/s de datos y anexos.
+3. Ejecutar la prueba real de 4.000 tickets y medir duración completa.
+4. Confirmar que la tarea padre y los tres shards de anexos pueden coexistir sin serializar innecesariamente el pipeline.
+5. Probar WhatsApp Ticket masivo con al menos 100 destinatarios.
+6. Probar WhatsApp Flow masivo con al menos 100 destinatarios.
+7. Probar Confirmación de Asistencia masiva.
+8. Confirmar que los batches no se degradan progresivamente hasta 1 item.
+9. Revisar `resource_metrics.last_batch`, logs de cesión, CPU, RAM, PHP-FPM y MySQL.
+10. Probar pausa, reanudación, cancelación e idempotencia.
+11. Forzar carga concurrente y confirmar que la protección sigue cediendo cuando existe presión real.
+12. Ejecutar PHP lint completo antes de promover.
+
+---
+
+## Base técnica inmediata: 1.5.0-rc.28
 
 La entrega **1.5.0-rc.28** optimiza específicamente la importación manual masiva gestionada por **Herramientas** (`includes/admin/eventosapp-herramientas.php`). La implementación se corrigió para que esta responsabilidad no dependa de `eventosapp-configuracion.php`.
 
@@ -504,6 +591,7 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 | Candidato | Cambio principal |
 |---|---|
+| **1.5.0-rc.29** | Cola y Tareas: gobernador recalibrado para 4 vCPU / 16 GB, 4 workers, menos tiempo muerto y pisos de batch para importación/WhatsApp/Flow/confirmación. |
 | **1.5.0-rc.28** | Herramientas: fase rápida de datos + hasta tres shards de anexos, progreso compuesto y restauración de Configuración. |
 | **1.5.0-rc.27** | Hardening online 5.000+: índice QR dedicado, bulk warm-up compartido, búsqueda Kiosko acotada y locks multi-tablet. |
 | **1.5.0-rc.26** | Hardening offline 3.000–5.000: snapshot estable, payload estático único, cache Kiosko y límites defensivos. |
@@ -515,4 +603,4 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 ## Regla de promoción
 
-`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.28 a producción hasta validar una importación real grande**, incluida una prueba de 4.000 tickets con anexos activos, controles de pausa/reanudación/cancelación, integridad de tickets existentes y métricas de PHP-FPM/MySQL. También se mantiene pendiente la validación real online/offline de 5.000 asistentes definida en rc.27.
+`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.29 a producción hasta validar el nuevo gobernador con carga real**: importación de 4.000 tickets con anexos activos, WhatsApp Ticket masivo, WhatsApp Flow, Confirmación de Asistencia, pausa/reanudación/cancelación, integridad de tickets existentes y métricas de CPU/RAM/PHP-FPM/MySQL. También se mantiene pendiente la validación real online/offline de 5.000 asistentes definida en rc.27.

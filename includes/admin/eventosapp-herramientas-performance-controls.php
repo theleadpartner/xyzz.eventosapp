@@ -8,9 +8,9 @@ function evapp_tools_perf_register_queue_adapters(){
         'label'=>'Importación masiva de tickets',
         'group'=>'massive',
         'channel'=>'tickets',
-        'batch_size'=>40,
-        'min_batch_size'=>5,
-        'max_batch_size'=>50,
+        'batch_size'=>60,
+        'min_batch_size'=>30,
+        'max_batch_size'=>80,
         'process_batch'=>'evapp_tools_perf_task_queue_process_batch',
     ]);
 
@@ -18,9 +18,9 @@ function evapp_tools_perf_register_queue_adapters(){
         'label'=>'Generación paralela de anexos de tickets',
         'group'=>'massive',
         'channel'=>'tickets',
-        'batch_size'=>6,
-        'min_batch_size'=>1,
-        'max_batch_size'=>12,
+        'batch_size'=>10,
+        'min_batch_size'=>4,
+        'max_batch_size'=>16,
         'process_batch'=>'evapp_tools_perf_assets_process_batch',
     ]);
 }
@@ -126,3 +126,142 @@ function evapp_tools_perf_admin_hint(){
     <?php
 }
 add_action('admin_footer', 'evapp_tools_perf_admin_hint', 1010);
+
+/**
+ * Perfil global de rendimiento de Cola y Tareas para el KVM 4 vCPU / 16 GB.
+ *
+ * Se mantiene en esta capa de controles porque este archivo ya se carga en
+ * todas las ejecuciones del plugin desde eventosapp-herramientas.php, incluidas
+ * las llamadas REST de los workers. No reemplaza motores de envío; utiliza el
+ * filtro y el registro público de adaptadores de la cola central.
+ */
+if (!defined('EVENTOSAPP_TASK_QUEUE_PERFORMANCE_PROFILE_VERSION')) {
+    define('EVENTOSAPP_TASK_QUEUE_PERFORMANCE_PROFILE_VERSION', '2026.08.13.1');
+}
+
+function eventosapp_task_queue_performance_profile_config($config){
+    $config = is_array($config) ? $config : [];
+    $cores = function_exists('eventosapp_task_queue_cpu_cores')
+        ? max(1, absint(eventosapp_task_queue_cpu_cores()))
+        : 1;
+
+    // Hasta cuatro workers, sin superar las vCPU visibles para PHP.
+    $config['max_concurrent'] = min(4, $cores);
+    $config['dispatcher_limit'] = max(16, absint($config['dispatcher_limit'] ?? 0));
+
+    // Mayor ventana útil por lote, conservando 5 s de margen frente al límite PHP.
+    $desired_execution = 35;
+    $php_max_execution = (int)ini_get('max_execution_time');
+    if ($php_max_execution > 0) {
+        $desired_execution = min($desired_execution, max(8, $php_max_execution - 5));
+    }
+    $config['max_execution_seconds'] = $desired_execution;
+
+    // memory_stop_ratio mide el proceso PHP, no los 16 GB totales del VPS.
+    $config['memory_stop_ratio'] = 0.86;
+
+    // loadavg también incorpora esperas de I/O. En 4 vCPU el corte pasa de
+    // 5.2 (1.30/core) a 8.0 (2.00/core), manteniendo un freno real.
+    $config['load_stop_per_core'] = 2.00;
+
+    // Reduce el tiempo muerto entre lotes; la protección sigue activa.
+    $config['min_delay_seconds'] = 1;
+    $config['normal_delay_seconds'] = 1;
+    $config['busy_delay_seconds'] = 5;
+    $config['max_batch_size'] = max(100, absint($config['max_batch_size'] ?? 0));
+
+    return $config;
+}
+add_filter('eventosapp_task_queue_config', 'eventosapp_task_queue_performance_profile_config', 50, 1);
+
+/**
+ * Ajusta los adaptadores masivos afectados por la degradación acumulativa del
+ * batch histórico. El piso evita que una tarea termine procesando un solo item
+ * por lote después de una llamada remota lenta.
+ */
+function eventosapp_task_queue_performance_profile_register_massive_adapters(){
+    if (!function_exists('eventosapp_task_queue_register_adapter')) return;
+
+    if (function_exists('eventosapp_task_queue_process_whatsapp_bulk')) {
+        eventosapp_task_queue_register_adapter('whatsapp_bulk', [
+            'label'=>'Envío masivo de tickets por WhatsApp',
+            'group'=>'massive',
+            'channel'=>'whatsapp',
+            'batch_size'=>12,
+            'min_batch_size'=>6,
+            'max_batch_size'=>20,
+            'process_batch'=>'eventosapp_task_queue_process_whatsapp_bulk',
+        ]);
+    }
+
+    if (function_exists('eventosapp_task_queue_process_flow_bulk')) {
+        eventosapp_task_queue_register_adapter('whatsapp_flow_bulk', [
+            'label'=>'Envío masivo de WhatsApp Flow',
+            'group'=>'massive',
+            'channel'=>'flow',
+            'batch_size'=>10,
+            'min_batch_size'=>5,
+            'max_batch_size'=>16,
+            'process_batch'=>'eventosapp_task_queue_process_flow_bulk',
+        ]);
+    }
+
+    if (function_exists('eventosapp_task_queue_process_attendance')) {
+        eventosapp_task_queue_register_adapter('attendance_bulk', [
+            'label'=>'Confirmación masiva de asistencia',
+            'group'=>'massive',
+            'channel'=>'mixed',
+            'batch_size'=>12,
+            'min_batch_size'=>4,
+            'max_batch_size'=>24,
+            'process_batch'=>'eventosapp_task_queue_process_attendance',
+        ]);
+        eventosapp_task_queue_register_adapter('attendance_scheduled', [
+            'label'=>'Confirmación de asistencia programada',
+            'group'=>'scheduled',
+            'channel'=>'mixed',
+            'batch_size'=>10,
+            'min_batch_size'=>4,
+            'max_batch_size'=>20,
+            'process_batch'=>'eventosapp_task_queue_process_attendance',
+        ]);
+    }
+}
+add_action('init', 'eventosapp_task_queue_performance_profile_register_massive_adapters', 80);
+
+/**
+ * Si el dispatcher cede por recursos altos y todavía hay tareas listas, fuerza
+ * un reintento corto. Evita depender únicamente del cron de un minuto después
+ * de un pico puntual de carga.
+ */
+function eventosapp_task_queue_performance_profile_dispatch_followup($reason=''){
+    if (!function_exists('eventosapp_task_queue_resources_busy') ||
+        !function_exists('eventosapp_task_queue_kick') ||
+        !function_exists('eventosapp_task_queue_table') ||
+        !eventosapp_task_queue_resources_busy()) {
+        return;
+    }
+
+    global $wpdb;
+    $table = eventosapp_task_queue_table('tasks');
+    if (!$table) return;
+
+    $now = current_time('mysql', true);
+    $due = (int)$wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$table}
+         WHERE status IN ('queued','scheduled')
+           AND (next_run_at IS NULL OR next_run_at <= %s)
+           AND (scheduled_at IS NULL OR scheduled_at <= %s)",
+        $now,
+        $now
+    ));
+    if ($due < 1) return;
+
+    $config = function_exists('eventosapp_task_queue_config')
+        ? eventosapp_task_queue_config()
+        : ['busy_delay_seconds'=>5];
+    eventosapp_task_queue_kick(max(1, min(10, absint($config['busy_delay_seconds'] ?? 5))));
+}
+if (defined('EVENTOSAPP_TASK_QUEUE_DISPATCH_HOOK')) {
+    add_action(EVENTOSAPP_TASK_QUEUE_DISPATCH_HOOK, 'eventosapp_task_queue_performance_profile_dispatch_followup', 20, 1);
+}
