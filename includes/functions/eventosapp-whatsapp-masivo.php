@@ -1156,7 +1156,7 @@ function eventosapp_whatsapp_masivo_render_step2($segment_id) {
     </div>
 
     <div class="notice notice-info" style="margin:15px 0;">
-        <p><strong>Compatibilidad:</strong> antes de cada envío se preparan variantes, landing, QR específico de WhatsApp, imagen del mensaje, Wallet, PDF/ICS cuando aplique y se registra el resultado en el historial del ticket. La plantilla se resuelve por modalidad del ticket.</p>
+        <p><strong>Compatibilidad:</strong> antes de cada envío se preparan variantes, landing y QR de WhatsApp; Wallet, PDF/ICS se reutilizan cuando están vigentes y solo se refrescan si faltan o quedaron marcados como pendientes. La plantilla se resuelve por modalidad del ticket.</p>
     </div>
 
     <div class="evapp-wa-preview-stats">
@@ -2170,6 +2170,125 @@ function eventosapp_whatsapp_masivo_get_filtered_tickets($filters) {
 /**
  * Envía un ticket por WhatsApp forzando una plantilla elegida desde el envío masivo.
  */
+
+/**
+ * Verifica si un recurso existente sigue disponible.
+ *
+ * Las URLs remotas/CDN se consideran válidas si existen en meta. Para recursos
+ * locales se confirma que el archivo continúe presente y legible.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_asset_available') ) {
+    function eventosapp_whatsapp_masivo_asset_available($url) {
+        $url = esc_url_raw((string)$url);
+        if ( $url === '' ) return false;
+
+        if ( function_exists('eventosapp_whatsapp_url_to_local_path') ) {
+            $path = eventosapp_whatsapp_url_to_local_path($url);
+            if ( $path !== '' ) {
+                return file_exists($path) && is_readable($path);
+            }
+        }
+
+        return true;
+    }
+}
+
+/**
+ * Decide si el envío masivo realmente necesita regenerar anexos habilitados.
+ *
+ * Antes se refrescaban PDF, ICS y Wallets en todos los envíos, aunque ya
+ * estuvieran vigentes. Eso introduce filesystem, CPU y llamadas remotas antes
+ * de cada solicitud a Meta. Se conserva la regeneración cuando:
+ * - una variante marcó los anexos como desactualizados;
+ * - falta un recurso habilitado;
+ * - una URL local apunta a un archivo que ya no existe.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_ticket_needs_asset_refresh') ) {
+    function eventosapp_whatsapp_masivo_ticket_needs_asset_refresh($ticket_id, $event_id) {
+        $ticket_id = absint($ticket_id);
+        $event_id  = absint($event_id);
+        if ( ! $ticket_id || ! $event_id ) return true;
+
+        if ( get_post_meta($ticket_id, '_eventosapp_ticket_variant_assets_need_refresh', true) === '1' ) {
+            return true;
+        }
+
+        $is_virtual = function_exists('eventosapp_ticket_is_virtual')
+            && eventosapp_ticket_is_virtual($ticket_id);
+
+        $ics_on = get_post_meta($event_id, '_eventosapp_ticket_ics', true) === '1';
+        if ( $ics_on ) {
+            $ics_url = get_post_meta($ticket_id, '_eventosapp_ticket_ics_url', true);
+            if ( ! eventosapp_whatsapp_masivo_asset_available($ics_url) ) return true;
+        }
+
+        if ( ! $is_virtual && get_post_meta($event_id, '_eventosapp_ticket_pdf', true) === '1' ) {
+            $pdf_url = get_post_meta($ticket_id, '_eventosapp_ticket_pdf_url', true);
+            if ( ! eventosapp_whatsapp_masivo_asset_available($pdf_url) ) return true;
+        }
+
+        if ( ! $is_virtual && get_post_meta($event_id, '_eventosapp_ticket_wallet_android', true) === '1' ) {
+            $android_url = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android_url', true);
+            if ( $android_url === '' ) {
+                $android_url = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_android', true);
+            }
+            if ( ! eventosapp_whatsapp_masivo_asset_available($android_url) ) return true;
+        }
+
+        if ( ! $is_virtual && get_post_meta($event_id, '_eventosapp_ticket_wallet_apple', true) === '1' ) {
+            $apple_url = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple_url', true);
+            if ( $apple_url === '' ) {
+                $apple_url = get_post_meta($ticket_id, '_eventosapp_ticket_pkpass_url', true);
+            }
+
+            /*
+             * En instalaciones históricas `_eventosapp_ticket_wallet_apple`
+             * también puede actuar como marcador de pass generado. Se respeta
+             * ese contrato: solo se fuerza regeneración si no existe URL ni
+             * marcador histórico.
+             */
+            $apple_marker = get_post_meta($ticket_id, '_eventosapp_ticket_wallet_apple', true);
+            if ( $apple_url === '' && $apple_marker === '' ) return true;
+            if ( $apple_url !== '' && ! eventosapp_whatsapp_masivo_asset_available($apple_url) ) return true;
+        }
+
+        return false;
+    }
+}
+
+/**
+ * Prepara la variante una sola vez antes de decidir si los anexos necesitan
+ * refresh. La marca stale se activa únicamente si la variante cambió.
+ */
+if ( ! function_exists('eventosapp_whatsapp_masivo_prepare_variant_for_send') ) {
+    function eventosapp_whatsapp_masivo_prepare_variant_for_send($ticket_id, $event_id) {
+        if ( ! function_exists('eventosapp_ticket_variants_prepare_ticket_for_batch_context') ) {
+            return null;
+        }
+
+        try {
+            return eventosapp_ticket_variants_prepare_ticket_for_batch_context(
+                absint($ticket_id),
+                absint($event_id),
+                'whatsapp_bulk_send',
+                [
+                    'sync_google_classes' => true,
+                    'mark_assets_stale'   => true,
+                    'clear_assets_stale'  => false,
+                    'log'                 => false,
+                ]
+            );
+        } catch (Throwable $e) {
+            eventosapp_whatsapp_masivo_debug_log('No se pudo preevaluar la variante antes del envío masivo', [
+                'ticket_id' => absint($ticket_id),
+                'event_id'  => absint($event_id),
+                'error'     => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+}
+
 function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $template_id, $args = []) {
     $ticket_id = absint($ticket_id);
     $template_id = sanitize_key((string) $template_id);
@@ -2304,16 +2423,32 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
         return ['ok' => false, 'message' => 'El asistente no tiene celular válido para WhatsApp.'];
     }
 
+    /*
+     * La variante se resuelve primero para saber si realmente dejó anexos stale.
+     * Si el helper moderno no existe, se conserva el comportamiento histórico
+     * (refresh completo) como fallback defensivo.
+     */
+    $variant_prepare_result = eventosapp_whatsapp_masivo_prepare_variant_for_send($ticket_id, $event_id);
+    $variant_prepared = is_array($variant_prepare_result);
+
+    $refresh_enabled_assets = $variant_prepared
+        ? eventosapp_whatsapp_masivo_ticket_needs_asset_refresh($ticket_id, $event_id)
+        : true;
+
     $assets_prepare_result = eventosapp_whatsapp_prepare_ticket_assets($ticket_id, [
         'event_id'               => $event_id,
         'context'                => 'whatsapp_bulk_before_send',
-        'apply_variant'          => true,
-        'refresh_enabled_assets' => true,
-        'ensure_qr'              => true,
+        'apply_variant'          => ! $variant_prepared,
+        'refresh_enabled_assets' => $refresh_enabled_assets,
+        /*
+         * prepare_ticket_assets() y ensure_qr_url() generaban el QR en cadena.
+         * En masivo se deja una sola resolución canónica debajo.
+         */
+        'ensure_qr'              => false,
         'ensure_landing'         => true,
         'ensure_message_image'   => false,
         'rebuild_search_index'   => true,
-        'log'                    => true,
+        'log'                    => false,
     ]);
 
     $qr_url = function_exists('eventosapp_whatsapp_ensure_qr_url') ? eventosapp_whatsapp_ensure_qr_url($ticket_id) : '';
@@ -2377,6 +2512,8 @@ function eventosapp_whatsapp_masivo_send_ticket_with_template($ticket_id, $templ
         'template_waba_id'          => sanitize_text_field((string)($template['waba_id'] ?? '')),
         'payload_builder'           => $components_result['debug'] ?? [],
         'assets_prepare'            => $assets_prepare_result,
+        'variant_prepare'           => is_array($variant_prepare_result) ? $variant_prepare_result : [],
+        'assets_refresh_required'   => $refresh_enabled_assets ? 1 : 0,
     ];
 
     if ( function_exists('eventosapp_whatsapp_sanitize_log_context') ) {
