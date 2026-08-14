@@ -14,7 +14,7 @@
 if ( ! defined('ABSPATH') ) exit;
 
 if ( ! defined('EVENTOSAPP_TASK_QUEUE_VERSION') ) {
-    define('EVENTOSAPP_TASK_QUEUE_VERSION', '2026.07.30.1');
+    define('EVENTOSAPP_TASK_QUEUE_VERSION', '2026.08.14.1');
 }
 if ( ! defined('EVENTOSAPP_TASK_QUEUE_DB_VERSION') ) {
     define('EVENTOSAPP_TASK_QUEUE_DB_VERSION', '2026.07.27.1');
@@ -1364,16 +1364,105 @@ function eventosapp_task_queue_parse_bytes($value) {
     return (int)$bytes;
 }
 
-function eventosapp_task_queue_cpu_cores() {
-    static $cores = null;
-    if ( $cores !== null ) return $cores;
-    $cores = absint(getenv('NUMBER_OF_PROCESSORS'));
-    if ( ! $cores && is_readable('/proc/cpuinfo') ) {
-        $content = @file_get_contents('/proc/cpuinfo');
-        if ( is_string($content) ) $cores = max(1, preg_match_all('/^processor\s*:/m', $content));
+/**
+ * Cuenta CPUs descritas como rangos Linux, por ejemplo "0-3" o "0-1,4-5".
+ */
+function eventosapp_task_queue_count_cpu_range($value) {
+    $value = trim((string)$value);
+    if ( $value === '' ) return 0;
+
+    $count = 0;
+    foreach ( explode(',', $value) as $part ) {
+        $part = trim($part);
+        if ( $part === '' ) continue;
+
+        if ( preg_match('/^(\d+)-(\d+)$/', $part, $matches) ) {
+            $from = absint($matches[1]);
+            $to   = absint($matches[2]);
+            if ( $to >= $from ) $count += ($to - $from + 1);
+        } elseif ( ctype_digit($part) ) {
+            $count++;
+        }
     }
-    if ( ! $cores ) $cores = 1;
-    return max(1, $cores);
+
+    return max(0, $count);
+}
+
+/**
+ * Detecta las vCPU realmente disponibles para PHP.
+ *
+ * La implementación anterior dependía de NUMBER_OF_PROCESSORS o /proc/cpuinfo.
+ * En algunos entornos PHP-FPM/cgroup cualquiera de esas fuentes puede devolver
+ * 1 o no estar disponible, aun cuando el VPS tenga varias vCPU. Ese falso
+ * "1 core" reducía max_concurrent a 1 y convertía load_stop_per_core en un
+ * umbral global demasiado bajo.
+ */
+function eventosapp_task_queue_cpu_cores() {
+    /*
+     * Se cachea solo la detección física/cgroup. El filtro se aplica en cada
+     * llamada porque los perfiles del plugin pueden registrarse después de que
+     * otro include haya consultado este helper durante el bootstrap.
+     */
+    static $detected_cores = null;
+
+    if ( $detected_cores === null ) {
+        $cores = 0;
+        $constrained = [];
+
+        // cgroup cpuset: suele ser la fuente más fiel cuando PHP está aislado.
+        foreach ([
+            '/sys/fs/cgroup/cpuset.cpus.effective',
+            '/sys/fs/cgroup/cpuset/cpuset.cpus',
+        ] as $path) {
+            if ( ! is_readable($path) ) continue;
+            $value = @file_get_contents($path);
+            $count = is_string($value) ? eventosapp_task_queue_count_cpu_range($value) : 0;
+            if ( $count > 0 ) $constrained[] = $count;
+        }
+
+        // cgroup v2 quota: "quota period". Si quota=max no impone límite.
+        if ( is_readable('/sys/fs/cgroup/cpu.max') ) {
+            $cpu_max = trim((string)@file_get_contents('/sys/fs/cgroup/cpu.max'));
+            if ( preg_match('/^(\d+)\s+(\d+)$/', $cpu_max, $matches) ) {
+                $quota  = max(1, (int)$matches[1]);
+                $period = max(1, (int)$matches[2]);
+                $quota_cores = max(1, (int)ceil($quota / $period));
+                $constrained[] = $quota_cores;
+            }
+        }
+
+        if ( ! empty($constrained) ) {
+            $cores = min($constrained);
+        }
+
+        // Bare metal / VPS sin restricciones cgroup.
+        if ( ! $cores && is_readable('/sys/devices/system/cpu/online') ) {
+            $online = @file_get_contents('/sys/devices/system/cpu/online');
+            $cores = is_string($online) ? eventosapp_task_queue_count_cpu_range($online) : 0;
+        }
+
+        if ( ! $cores && is_readable('/proc/cpuinfo') ) {
+            $content = @file_get_contents('/proc/cpuinfo');
+            if ( is_string($content) ) {
+                $cores = max(0, preg_match_all('/^processor\s*:/m', $content));
+            }
+        }
+
+        if ( ! $cores ) {
+            $cores = absint(getenv('NUMBER_OF_PROCESSORS'));
+        }
+        if ( ! $cores ) $cores = 1;
+
+        $detected_cores = min(256, max(1, (int)$cores));
+    }
+
+    /**
+     * Permite que un perfil de infraestructura conocido corrija una detección
+     * incompleta de PHP-FPM sin tener que duplicar el gobernador de recursos.
+     * Se aplica siempre, incluso si la detección base ya quedó cacheada.
+     */
+    $cores = (int)apply_filters('eventosapp_task_queue_cpu_cores', $detected_cores);
+    return min(256, max(1, $cores));
 }
 
 function eventosapp_task_queue_resource_snapshot() {
@@ -1408,15 +1497,62 @@ function eventosapp_task_queue_resource_snapshot() {
     ];
 }
 
-function eventosapp_task_queue_resources_busy($snapshot = null) {
+/**
+ * Evalúa presión real de recursos y devuelve las razones que la activaron.
+ *
+ * Para carga se evita frenar por un pico instantáneo de load_1: se exige que
+ * load_5 confirme presión sostenida, salvo que load_1 supere claramente el
+ * umbral. Esto es especialmente importante en procesos con I/O y APIs remotas,
+ * donde loadavg puede subir sin que CPU o RAM estén realmente agotadas.
+ */
+function eventosapp_task_queue_resource_pressure($snapshot = null) {
     $config = eventosapp_task_queue_config();
     $snapshot = is_array($snapshot) ? $snapshot : eventosapp_task_queue_resource_snapshot();
-    if ( ! empty($snapshot['memory_percent']) && ((float)$snapshot['memory_percent'] / 100) >= $config['memory_stop_ratio'] ) return true;
-    if ( $snapshot['load_1'] !== null ) {
-        $max_load = max(1, (int)$snapshot['cpu_cores']) * $config['load_stop_per_core'];
-        if ( (float)$snapshot['load_1'] >= $max_load ) return true;
+
+    $cores = max(1, absint($snapshot['cpu_cores'] ?? eventosapp_task_queue_cpu_cores()));
+    $memory_percent = (float)($snapshot['memory_percent'] ?? 0);
+    $memory_limit_percent = round($config['memory_stop_ratio'] * 100, 2);
+
+    $load_1 = array_key_exists('load_1', $snapshot) && $snapshot['load_1'] !== null
+        ? (float)$snapshot['load_1']
+        : null;
+    $load_5 = array_key_exists('load_5', $snapshot) && $snapshot['load_5'] !== null
+        ? (float)$snapshot['load_5']
+        : null;
+    $load_limit = round($cores * $config['load_stop_per_core'], 2);
+    $load_confirm_limit = round($load_limit * 0.80, 2);
+    $load_hard_limit = round($load_limit * 1.35, 2);
+
+    $reasons = [];
+
+    if ( $memory_percent > 0 && $memory_percent >= $memory_limit_percent ) {
+        $reasons[] = 'memory';
     }
-    return false;
+
+    if ( $load_1 !== null && $load_1 >= $load_limit ) {
+        $sustained = $load_5 === null || $load_5 >= $load_confirm_limit;
+        $severe = $load_1 >= $load_hard_limit;
+        if ( $sustained || $severe ) {
+            $reasons[] = $severe ? 'load_severe' : 'load_sustained';
+        }
+    }
+
+    return [
+        'busy'    => ! empty($reasons),
+        'reasons' => $reasons,
+        'thresholds' => [
+            'memory_percent'    => $memory_limit_percent,
+            'load_1'            => $load_limit,
+            'load_5_confirm'    => $load_confirm_limit,
+            'load_1_hard'       => $load_hard_limit,
+            'cpu_cores'         => $cores,
+        ],
+    ];
+}
+
+function eventosapp_task_queue_resources_busy($snapshot = null) {
+    $pressure = eventosapp_task_queue_resource_pressure($snapshot);
+    return ! empty($pressure['busy']);
 }
 
 function eventosapp_task_queue_should_yield($started_at, $processed = 0) {
@@ -1432,19 +1568,56 @@ function eventosapp_task_queue_effective_batch_size($task, $adapter) {
     $config = eventosapp_task_queue_config();
     $min = max(1, absint($adapter['min_batch_size'] ?? 1));
     $max = min($config['max_batch_size'], max($min, absint($adapter['max_batch_size'] ?? $config['max_batch_size'])));
-    $base = min($max, max($min, absint($task['batch_size'] ?? ($adapter['batch_size'] ?? $config['default_batch_size']))));
+
     $metrics = is_array($task['resource_metrics'] ?? null) ? $task['resource_metrics'] : [];
+    $configured = absint($metrics['configured_batch_size'] ?? 0);
+    if ( ! $configured ) {
+        $configured = absint($task['batch_size'] ?? ($adapter['batch_size'] ?? $config['default_batch_size']));
+    }
+    $configured = min($max, max($min, $configured));
+
+    $base = min($max, max($min, absint($task['batch_size'] ?? $configured)));
     $last = is_array($metrics['last_batch'] ?? null) ? $metrics['last_batch'] : [];
+    $after = is_array($last['after'] ?? null) ? $last['after'] : [];
 
-    $memory = (float)($last['after']['memory_percent'] ?? 0);
-    $load = $last['after']['load_1'] ?? null;
-    $cores = max(1, absint($last['after']['cpu_cores'] ?? eventosapp_task_queue_cpu_cores()));
+    $memory = (float)($after['memory_percent'] ?? 0);
+    $load = array_key_exists('load_1', $after) && $after['load_1'] !== null ? (float)$after['load_1'] : null;
+    $cores = max(1, absint($after['cpu_cores'] ?? eventosapp_task_queue_cpu_cores()));
     $elapsed = (float)($last['elapsed_seconds'] ?? 0);
+    $cpu_ms_delta = array_key_exists('cpu_ms_delta', $last) && $last['cpu_ms_delta'] !== null
+        ? (float)$last['cpu_ms_delta']
+        : null;
+    $worker_cpu_ratio = ($elapsed > 0 && $cpu_ms_delta !== null)
+        ? max(0, min(1.50, $cpu_ms_delta / ($elapsed * 1000)))
+        : null;
 
-    if ( $memory >= 70 || ($load !== null && (float)$load >= ($cores * 1.1)) || $elapsed >= 20 ) {
-        $base = max($min, (int)floor($base * 0.65));
-    } elseif ( $memory > 0 && $memory < 50 && ($load === null || (float)$load < ($cores * 0.75)) && $elapsed > 0 && $elapsed < 8 ) {
-        $base = min($max, max($base + 1, (int)ceil($base * 1.20)));
+    $pressure = ! empty($after)
+        ? eventosapp_task_queue_resource_pressure($after)
+        : ['busy'=>false, 'thresholds'=>[]];
+
+    $memory_soft_limit = max(65, ((float)($pressure['thresholds']['memory_percent'] ?? 86)) - 8);
+    $load_soft_limit = max(1, $cores * max(1.0, ((float)$config['load_stop_per_core'] * 0.80)));
+
+    /*
+     * La duración por sí sola ya no reduce el batch. Un envío puede tardar por
+     * SMTP/Meta/Wallet sin estar consumiendo CPU o RAM local. El presupuesto de
+     * ejecución ya corta el lote mediante should_yield(); degradar además el
+     * tamaño persistente provocaba el efecto acumulativo observado en producción.
+     */
+    $local_pressure =
+        ! empty($pressure['busy'])
+        || ($memory > 0 && $memory >= $memory_soft_limit)
+        || (
+            $load !== null
+            && $load >= $load_soft_limit
+            && ($worker_cpu_ratio === null || $worker_cpu_ratio >= 0.70)
+        );
+
+    if ( $local_pressure ) {
+        $base = max($min, (int)floor($base * 0.80));
+    } elseif ( $base < $configured ) {
+        // Recuperación gradual hacia el batch configurado después de un pico.
+        $base = min($configured, max($base + 1, (int)ceil($base * 1.25)));
     }
 
     return max($min, min($max, $base));
@@ -1680,14 +1853,26 @@ function eventosapp_task_queue_process_task($task_id) {
         }
 
         $before = eventosapp_task_queue_resource_snapshot();
-        if ( eventosapp_task_queue_resources_busy($before) ) {
+        $pressure_before = eventosapp_task_queue_resource_pressure($before);
+        if ( ! empty($pressure_before['busy']) ) {
             $delay = eventosapp_task_queue_config()['busy_delay_seconds'];
             eventosapp_task_queue_update($task_id, [
                 'status'       => 'queued',
                 'next_run_at'  => gmdate('Y-m-d H:i:s', time() + $delay),
                 'heartbeat_at' => null,
             ]);
-            eventosapp_task_queue_add_log($task_id, 'warning', 'El worker cedió el turno por consumo alto del servidor.', $before);
+
+            $busy_context = array_merge($before, [
+                'busy_reasons' => $pressure_before['reasons'] ?? [],
+                'thresholds'   => $pressure_before['thresholds'] ?? [],
+                'retry_seconds'=> $delay,
+            ]);
+            eventosapp_task_queue_add_log(
+                $task_id,
+                'warning',
+                'El worker cedió el turno por presión real de recursos.',
+                $busy_context
+            );
             eventosapp_task_queue_kick($delay);
             return eventosapp_task_queue_get($task_id);
         }
@@ -1729,6 +1914,12 @@ function eventosapp_task_queue_process_task($task_id) {
         $after = eventosapp_task_queue_resource_snapshot();
         $elapsed = round(microtime(true) - $started, 4);
         $metrics = is_array($task['resource_metrics']) ? $task['resource_metrics'] : [];
+        if ( empty($metrics['configured_batch_size']) ) {
+            $metrics['configured_batch_size'] = max(
+                1,
+                absint($task['batch_size'] ?? ($adapter['batch_size'] ?? eventosapp_task_queue_config()['default_batch_size']))
+            );
+        }
         $metrics['last_batch'] = [
             'before'          => $before,
             'after'           => $after,
