@@ -136,8 +136,25 @@ add_action('admin_footer', 'evapp_tools_perf_admin_hint', 1010);
  * filtro y el registro público de adaptadores de la cola central.
  */
 if (!defined('EVENTOSAPP_TASK_QUEUE_PERFORMANCE_PROFILE_VERSION')) {
-    define('EVENTOSAPP_TASK_QUEUE_PERFORMANCE_PROFILE_VERSION', '2026.08.13.1');
+    define('EVENTOSAPP_TASK_QUEUE_PERFORMANCE_PROFILE_VERSION', '2026.08.14.1');
 }
+
+if (!defined('EVENTOSAPP_TASK_QUEUE_PROFILE_CPU_CORES')) {
+    define('EVENTOSAPP_TASK_QUEUE_PROFILE_CPU_CORES', 4);
+}
+
+/**
+ * Este repositorio está calibrado para el KVM de 4 vCPU. Si PHP-FPM/cgroup
+ * informa menos cores de los realmente asignados, no permitimos que esa
+ * detección incompleta vuelva a convertir el perfil en 1 worker / load 2.0.
+ *
+ * Si la infraestructura se amplía y el núcleo detecta más vCPU, se respeta el
+ * valor superior; max_concurrent continúa limitado a cuatro por este perfil.
+ */
+function eventosapp_task_queue_performance_profile_cpu_cores($cores){
+    return max(EVENTOSAPP_TASK_QUEUE_PROFILE_CPU_CORES, absint($cores));
+}
+add_filter('eventosapp_task_queue_cpu_cores', 'eventosapp_task_queue_performance_profile_cpu_cores', 50, 1);
 
 function eventosapp_task_queue_performance_profile_config($config){
     $config = is_array($config) ? $config : [];
@@ -150,7 +167,7 @@ function eventosapp_task_queue_performance_profile_config($config){
     $config['dispatcher_limit'] = max(16, absint($config['dispatcher_limit'] ?? 0));
 
     // Mayor ventana útil por lote, conservando 5 s de margen frente al límite PHP.
-    $desired_execution = 35;
+    $desired_execution = 40;
     $php_max_execution = (int)ini_get('max_execution_time');
     if ($php_max_execution > 0) {
         $desired_execution = min($desired_execution, max(8, $php_max_execution - 5));
@@ -160,14 +177,15 @@ function eventosapp_task_queue_performance_profile_config($config){
     // memory_stop_ratio mide el proceso PHP, no los 16 GB totales del VPS.
     $config['memory_stop_ratio'] = 0.86;
 
-    // loadavg también incorpora esperas de I/O. En 4 vCPU el corte pasa de
-    // 5.2 (1.30/core) a 8.0 (2.00/core), manteniendo un freno real.
+    // loadavg también incorpora esperas de I/O. Con detección fiable de 4 vCPU,
+    // el corte nominal es 8.0; el núcleo exige además carga sostenida (load_5)
+    // o un pico severo antes de ceder el worker.
     $config['load_stop_per_core'] = 2.00;
 
     // Reduce el tiempo muerto entre lotes; la protección sigue activa.
     $config['min_delay_seconds'] = 1;
     $config['normal_delay_seconds'] = 1;
-    $config['busy_delay_seconds'] = 5;
+    $config['busy_delay_seconds'] = 2;
     $config['max_batch_size'] = max(100, absint($config['max_batch_size'] ?? 0));
 
     return $config;
@@ -181,6 +199,18 @@ add_filter('eventosapp_task_queue_config', 'eventosapp_task_queue_performance_pr
  */
 function eventosapp_task_queue_performance_profile_register_massive_adapters(){
     if (!function_exists('eventosapp_task_queue_register_adapter')) return;
+
+    if (function_exists('eventosapp_task_queue_process_email_bulk')) {
+        eventosapp_task_queue_register_adapter('email_bulk', [
+            'label'=>'Envío masivo de tickets por correo',
+            'group'=>'massive',
+            'channel'=>'email',
+            'batch_size'=>20,
+            'min_batch_size'=>8,
+            'max_batch_size'=>32,
+            'process_batch'=>'eventosapp_task_queue_process_email_bulk',
+        ]);
+    }
 
     if (function_exists('eventosapp_task_queue_process_whatsapp_bulk')) {
         eventosapp_task_queue_register_adapter('whatsapp_bulk', [
@@ -259,8 +289,8 @@ function eventosapp_task_queue_performance_profile_dispatch_followup($reason='')
 
     $config = function_exists('eventosapp_task_queue_config')
         ? eventosapp_task_queue_config()
-        : ['busy_delay_seconds'=>5];
-    eventosapp_task_queue_kick(max(1, min(10, absint($config['busy_delay_seconds'] ?? 5))));
+        : ['busy_delay_seconds'=>2];
+    eventosapp_task_queue_kick(max(1, min(10, absint($config['busy_delay_seconds'] ?? 2))));
 }
 if (defined('EVENTOSAPP_TASK_QUEUE_DISPATCH_HOOK')) {
     add_action(EVENTOSAPP_TASK_QUEUE_DISPATCH_HOOK, 'eventosapp_task_queue_performance_profile_dispatch_followup', 20, 1);
