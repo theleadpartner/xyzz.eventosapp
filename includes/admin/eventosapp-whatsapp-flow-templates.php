@@ -1473,9 +1473,31 @@ function eventosapp_whatsapp_flow_templates_render_page() {
             .eventosapp-wa-flow-templates .evapp-card-header h2{margin:0;font-size:18px;line-height:1.3;}
             .eventosapp-wa-flow-templates .evapp-card-header p{margin:5px 0 0;color:var(--evapp-muted);line-height:1.45;}
             .eventosapp-wa-flow-templates .evapp-card-body{padding:18px;}
-            .eventosapp-wa-flow-templates .evapp-form-table{margin-top:0;}
-            .eventosapp-wa-flow-templates .evapp-form-table th{width:180px;padding-top:18px;}
-            .eventosapp-wa-flow-templates .evapp-form-table td{padding-top:14px;padding-bottom:14px;}
+            .eventosapp-wa-flow-templates .evapp-form-table{margin-top:0;width:100%;table-layout:fixed;}
+            .eventosapp-wa-flow-templates .evapp-form-table th{width:190px;padding-top:18px;vertical-align:top;}
+            .eventosapp-wa-flow-templates .evapp-form-table td{padding-top:14px;padding-bottom:14px;vertical-align:top;min-width:0;}
+            .eventosapp-wa-flow-templates .evapp-form-table input[type=text],
+            .eventosapp-wa-flow-templates .evapp-form-table input[type=url],
+            .eventosapp-wa-flow-templates .evapp-form-table input[type=number],
+            .eventosapp-wa-flow-templates .evapp-form-table select,
+            .eventosapp-wa-flow-templates .evapp-form-table textarea{
+                width:100%;
+                max-width:none;
+                min-width:0;
+                box-sizing:border-box;
+            }
+            .eventosapp-wa-flow-templates .evapp-form-table textarea{min-height:140px;}
+            .eventosapp-wa-flow-templates .evapp-form-table input[type=file]{max-width:100%;}
+            .eventosapp-wa-flow-templates .evapp-form-table .small-text{width:100%;max-width:none;}
+            .eventosapp-wa-flow-templates .evapp-form-table .regular-text{width:100%;max-width:none;}
+            .eventosapp-wa-flow-templates .evapp-form-table .large-text{width:100%;max-width:none;}
+            .eventosapp-wa-flow-templates .evapp-inline-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start;width:100%;max-width:none;}
+            .eventosapp-wa-flow-templates .evapp-inline-fields>label{display:block;min-width:0;}
+            .eventosapp-wa-flow-templates .evapp-inline-fields input,
+            .eventosapp-wa-flow-templates .evapp-inline-fields select{width:100%;max-width:none;min-width:0;}
+            .eventosapp-wa-flow-templates .evapp-flow-field-stack{display:flex;flex-direction:column;gap:9px;width:100%;}
+            .eventosapp-wa-flow-templates .evapp-flow-field{display:flex;flex-direction:column;gap:5px;width:100%;}
+            .eventosapp-wa-flow-templates .evapp-flow-field>label{font-size:12px;font-weight:700;color:#1d2327;}
             .eventosapp-wa-flow-templates .evapp-section-row th,
             .eventosapp-wa-flow-templates .evapp-section-row td{padding:22px 0 8px;border-top:1px solid #edf0f2;}
             .eventosapp-wa-flow-templates .evapp-section-title{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:700;color:#1d2327;}
@@ -1525,6 +1547,10 @@ function eventosapp_whatsapp_flow_templates_render_page() {
             @media(max-width:1280px){
                 .eventosapp-wa-flow-templates .evapp-grid{grid-template-columns:1fr;}
                 .eventosapp-wa-flow-templates .evapp-template-list-wrap{max-height:560px;}
+            }
+            @media(max-width:900px){
+                .eventosapp-wa-flow-templates .evapp-form-table th{width:160px;}
+                .eventosapp-wa-flow-templates .evapp-inline-fields{grid-template-columns:1fr;}
             }
             @media(max-width:782px){
                 .eventosapp-wa-flow-templates .evapp-page-hero{padding:14px;}
@@ -1740,36 +1766,50 @@ function eventosapp_whatsapp_flow_templates_render_page() {
                                 <tr>
                                     <th><label for="eventosapp-wa-flow-template-header-format">Encabezado</label></th>
                                     <td>
-                                        <select id="eventosapp-wa-flow-template-header-format" name="header_format">
-                                            <option value="NONE" <?php selected($edit['header_format'], 'NONE'); ?>>Sin encabezado</option>
-                                            <option value="TEXT" <?php selected($edit['header_format'], 'TEXT'); ?>>Texto</option>
-                                            <option value="IMAGE" <?php selected($edit['header_format'], 'IMAGE'); ?>>Imagen</option>
-                                        </select>
-                                        <p class="evapp-help">WhatsApp permite encabezado de texto o imagen en plantillas. Para imagen se necesita un Header Sample Handle para aprobación; el header de prueba se selecciona en el bloque Prueba rápida de plantilla.</p>
+                                        <div class="evapp-flow-field-stack">
+                                            <div class="evapp-flow-field">
+                                                <label for="eventosapp-wa-flow-template-header-format">Tipo de encabezado</label>
+                                                <select id="eventosapp-wa-flow-template-header-format" name="header_format">
+                                                    <option value="NONE" <?php selected($edit['header_format'], 'NONE'); ?>>Sin encabezado</option>
+                                                    <option value="TEXT" <?php selected($edit['header_format'], 'TEXT'); ?>>Texto</option>
+                                                    <option value="IMAGE" <?php selected($edit['header_format'], 'IMAGE'); ?>>Imagen</option>
+                                                </select>
+                                            </div>
+                                            <p class="evapp-help">WhatsApp permite encabezado de texto o imagen en plantillas. Para imagen se necesita un Header Sample Handle para aprobación; el header de prueba se selecciona en el bloque Prueba rápida de plantilla.</p>
+                                        </div>
                                     </td>
                                 </tr>
                                 <tr data-header-row="text">
                                     <th><label for="evapp_flow_header_text">Texto de encabezado</label></th>
                                     <td>
-                                        <input id="evapp_flow_header_text" type="text" class="regular-text" name="header_text" value="<?php echo esc_attr($edit['header_text']); ?>" maxlength="60">
-                                        <p class="evapp-help">Solo aplica si el encabezado es Texto.</p>
+                                        <div class="evapp-flow-field">
+                                            <label for="evapp_flow_header_text">Texto del encabezado</label>
+                                            <input id="evapp_flow_header_text" type="text" class="regular-text" name="header_text" value="<?php echo esc_attr($edit['header_text']); ?>" maxlength="60">
+                                            <p class="evapp-help">Solo aplica si el encabezado es Texto.</p>
+                                        </div>
                                     </td>
                                 </tr>
                                 <tr data-header-row="image">
                                     <th><label for="evapp_flow_header_handle">Header Sample Handle</label></th>
                                     <td>
-                                        <input id="evapp_flow_header_handle" type="text" class="regular-text" name="header_sample_handle" value="<?php echo esc_attr($edit['header_sample_handle']); ?>" placeholder="Se genera al subir una imagen de muestra a Meta">
-                                        <p class="evapp-help">No pegues una URL pública aquí. Debe ser el handle que devuelve Meta al subir la muestra con Resumable Upload API.</p>
-                                        <?php if ( ! empty($edit['header_sample_handle']) ) : ?>
-                                            <div class="evapp-file-meta"><strong>Handle guardado:</strong> <code><?php echo esc_html($edit['header_sample_handle']); ?></code><?php if ( ! empty($edit['header_sample_uploaded_at']) ) : ?><br><small>Última muestra subida: <?php echo esc_html($edit['header_sample_uploaded_at']); ?></small><?php endif; ?><?php if ( ! empty($edit['header_sample_file_name']) ) : ?><br><small>Archivo: <?php echo esc_html($edit['header_sample_file_name']); ?> · <?php echo esc_html($edit['header_sample_file_type']); ?> · <?php echo esc_html(size_format(absint($edit['header_sample_file_size']))); ?></small><?php endif; ?></div>
-                                        <?php endif; ?>
+                                        <div class="evapp-flow-field">
+                                            <label for="evapp_flow_header_handle">Header Sample Handle</label>
+                                            <input id="evapp_flow_header_handle" type="text" class="regular-text" name="header_sample_handle" value="<?php echo esc_attr($edit['header_sample_handle']); ?>" placeholder="Se genera al subir una imagen de muestra a Meta">
+                                            <p class="evapp-help">No pegues una URL pública aquí. Debe ser el handle que devuelve Meta al subir la muestra con Resumable Upload API.</p>
+                                            <?php if ( ! empty($edit['header_sample_handle']) ) : ?>
+                                                <div class="evapp-file-meta"><strong>Handle guardado:</strong> <code><?php echo esc_html($edit['header_sample_handle']); ?></code><?php if ( ! empty($edit['header_sample_uploaded_at']) ) : ?><br><small>Última muestra subida: <?php echo esc_html($edit['header_sample_uploaded_at']); ?></small><?php endif; ?><?php if ( ! empty($edit['header_sample_file_name']) ) : ?><br><small>Archivo: <?php echo esc_html($edit['header_sample_file_name']); ?> · <?php echo esc_html($edit['header_sample_file_type']); ?> · <?php echo esc_html(size_format(absint($edit['header_sample_file_size']))); ?></small><?php endif; ?></div>
+                                            <?php endif; ?>
+                                        </div>
                                     </td>
                                 </tr>
                                 <tr data-header-row="image">
                                     <th><label for="evapp_flow_header_file">Imagen de muestra para Meta</label></th>
                                     <td>
-                                        <input id="evapp_flow_header_file" type="file" name="flow_header_sample_file" accept="image/png,image/jpeg">
-                                        <div class="evapp-info"><strong>Qué subir:</strong> una imagen JPG/JPEG o PNG de ejemplo, máximo 5 MB. EventosApp reutiliza el sistema de subida de Plantillas WhatsApp para generar el Header Sample Handle.</div>
+                                        <div class="evapp-flow-field">
+                                            <label for="evapp_flow_header_file">Imagen de muestra para Meta</label>
+                                            <input id="evapp_flow_header_file" type="file" name="flow_header_sample_file" accept="image/png,image/jpeg">
+                                            <div class="evapp-info"><strong>Qué subir:</strong> una imagen JPG/JPEG o PNG de ejemplo, máximo 5 MB. EventosApp reutiliza el sistema de subida de Plantillas WhatsApp para generar el Header Sample Handle.</div>
+                                        </div>
                                     </td>
                                 </tr>
                                 <tr>
