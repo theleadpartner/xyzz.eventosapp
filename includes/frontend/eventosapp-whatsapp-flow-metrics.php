@@ -404,8 +404,20 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_counts') ) {
 
         /*
          * Un solo recorrido de la tabla de envíos obtiene enviados, entregados y leídos.
-         * "Leído" cuenta también como entregado porque Meta solo puede marcar lectura
-         * después de que el mensaje haya sido entregado.
+         *
+         * Importante: un WhatsApp Flow puede terminar con status = response_received
+         * antes de que exista un delivery_status explícito en la fila. El webhook de
+         * respuesta sí permite localizar el envío y, por tanto, confirma que el mensaje
+         * fue aceptado/enviado y que el usuario llegó a abrir/interactuar con el Flow.
+         *
+         * En ese caso no debemos mostrar 0 enviados / 0 entregados / 0 leídos cuando
+         * existen respuestas reales. Para el embudo de esta pantalla se considera:
+         *   - response_received => enviado
+         *   - response_received => entregado
+         *   - response_received => leído/interactuado
+         *
+         * Esto no altera los datos almacenados ni falsifica el webhook de Meta; solamente
+         * normaliza el embudo analítico a partir del estado final conocido del envío.
          */
         $send_metrics = $wpdb->get_row(
             $wpdb->prepare(
@@ -413,7 +425,11 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_counts') ) {
                     SUM(
                         CASE
                             WHEN status NOT LIKE 'failed%%'
-                             AND (wa_message_id <> '' OR status IN ('sent_request','webhook_sent','webhook_delivered','webhook_read','delivered','read'))
+                             AND (
+                                 wa_message_id <> ''
+                                 OR status IN ('sent_request','webhook_sent','webhook_delivered','webhook_read','delivered','read','response_received')
+                                 OR response_received = 1
+                             )
                             THEN 1 ELSE 0
                         END
                     ) AS sent,
@@ -422,7 +438,8 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_counts') ) {
                             WHEN status NOT LIKE 'failed%%'
                              AND (
                                  delivery_status IN ('delivered','read')
-                                 OR status IN ('webhook_delivered','webhook_read','delivered','read')
+                                 OR status IN ('webhook_delivered','webhook_read','delivered','read','response_received')
+                                 OR response_received = 1
                              )
                             THEN 1 ELSE 0
                         END
@@ -430,7 +447,11 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_counts') ) {
                     SUM(
                         CASE
                             WHEN status NOT LIKE 'failed%%'
-                             AND (delivery_status = 'read' OR status IN ('webhook_read','read'))
+                             AND (
+                                 delivery_status = 'read'
+                                 OR status IN ('webhook_read','read','response_received')
+                                 OR response_received = 1
+                             )
                             THEN 1 ELSE 0
                         END
                     ) AS read
