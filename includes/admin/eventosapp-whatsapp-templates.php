@@ -4451,11 +4451,60 @@ function eventosapp_whatsapp_templates_render_edit_form($template_id = '') {
  * Builder unificado para las plantillas que abren WhatsApp Flows.
  * Reutiliza exactamente el almacenamiento y los handlers del módulo Flow.
  */
+function eventosapp_whatsapp_templates_render_unified_flow_builder_styles() {
+    ?>
+    <style>
+        .evapp-utpl-flow-builder{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:18px;align-items:start}
+        .evapp-utpl-flow-builder .evapp-utpl-builder-main{display:flex;flex-direction:column;gap:14px;min-width:0}
+        .evapp-utpl-flow-builder .evapp-utpl-card{margin:0}
+        .evapp-utpl-flow-builder .evapp-utpl-builder-section{padding:18px}
+        .evapp-utpl-flow-builder .evapp-utpl-section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+        .evapp-utpl-flow-builder .evapp-utpl-section-title h2{margin:0;font-size:17px}
+        .evapp-utpl-flow-builder .evapp-utpl-section-title p{margin:4px 0 0;color:var(--ev-muted);font-size:12px}
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid{display:grid;grid-template-columns:180px minmax(0,1fr);gap:14px 18px;align-items:start}
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid>label{font-weight:800;padding-top:9px}
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid>div{min-width:0}
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid input[type=text],
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid input[type=url],
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid input[type=number],
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid input[type=file],
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid textarea,
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid select{display:block;width:100%;max-width:none;min-width:0;min-height:40px;box-sizing:border-box;border:1px solid #cfd9e5;border-radius:8px;padding:8px 10px;background:#fff;box-shadow:none}
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid input[type=file]{padding:7px 8px}
+        .evapp-utpl-flow-builder .evapp-utpl-form-grid textarea{min-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.45;resize:vertical}
+        .evapp-utpl-flow-builder .evapp-utpl-inline-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%;min-width:0}
+        .evapp-utpl-flow-builder .evapp-utpl-inline-grid>*{min-width:0}
+        .evapp-utpl-flow-builder .evapp-utpl-flow-field-stack{display:flex;flex-direction:column;gap:10px;width:100%;min-width:0}
+        .evapp-utpl-flow-builder .evapp-utpl-flow-field{display:flex;flex-direction:column;gap:5px;width:100%;min-width:0}
+        .evapp-utpl-flow-builder .evapp-utpl-flow-field>label{font-size:12px;font-weight:800;color:var(--ev-text)}
+        .evapp-utpl-flow-builder .evapp-utpl-flow-help{padding:9px 11px;border:1px solid #e1e8f0;border-radius:9px;background:#f8fafc;color:var(--ev-muted);font-size:12px;line-height:1.45}
+        .evapp-utpl-flow-builder .evapp-utpl-preview-pane{position:sticky;top:42px;min-width:0}
+        .evapp-utpl-flow-builder .evapp-utpl-meta-box{margin-top:12px;background:#fff;border:1px solid var(--ev-border);border-radius:11px;padding:12px;overflow:hidden}
+        .evapp-utpl-flow-builder .evapp-utpl-meta-box pre{white-space:pre-wrap;word-break:break-word;max-height:480px;overflow:auto;background:#f8fafc;padding:9px;border-radius:7px;font-size:11px;line-height:1.45;margin:0}
+        .evapp-utpl-flow-builder .evapp-utpl-sticky-actions{position:sticky;bottom:0;z-index:10;display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:rgba(255,255,255,.95);backdrop-filter:blur(8px);border:1px solid var(--ev-border);border-radius:12px;padding:11px 12px;box-shadow:0 -5px 22px rgba(16,24,40,.08)}
+        @media(max-width:1150px){
+            .evapp-utpl-flow-builder{grid-template-columns:1fr}
+            .evapp-utpl-flow-builder .evapp-utpl-preview-pane{position:static}
+        }
+        @media(max-width:782px){
+            .evapp-utpl-flow-builder .evapp-utpl-form-grid{grid-template-columns:1fr}
+            .evapp-utpl-flow-builder .evapp-utpl-form-grid>label{padding-top:0}
+            .evapp-utpl-flow-builder .evapp-utpl-inline-grid{grid-template-columns:1fr}
+            .evapp-utpl-flow-builder .evapp-utpl-builder-section{padding:14px}
+            .evapp-utpl-flow-builder .evapp-utpl-sticky-actions{position:static}
+        }
+    </style>
+    <?php
+}
+
 function eventosapp_whatsapp_templates_render_unified_flow_builder($template_id = '') {
     if ( ! function_exists('eventosapp_whatsapp_flow_templates_default_item') ) {
         echo '<div class="evapp-utpl-notice error">El módulo de plantillas Flow no está disponible.</div>';
         return;
     }
+
+    eventosapp_whatsapp_templates_render_unified_flow_builder_styles();
+
     $items = eventosapp_whatsapp_flow_templates_get_all();
     $is_new = $template_id === '' || empty($items[$template_id]);
     $settings = function_exists('eventosapp_whatsapp_get_settings') ? eventosapp_whatsapp_get_settings() : [];
