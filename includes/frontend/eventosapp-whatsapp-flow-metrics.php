@@ -148,8 +148,7 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_event_flows') ) {
             $wpdb->prepare(
                 "SELECT MAX(updated_at) AS last_activity, COUNT(*) AS total_sends
                  FROM {$sends_table}
-                 WHERE event_id = %d AND flow_post_id = %d",
-                $event_id,
+                 WHERE flow_post_id = %d",
                 $configured_flow_id
             ),
             ARRAY_A
@@ -157,13 +156,10 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_event_flows') ) {
 
         $response_row = $wpdb->get_row(
             $wpdb->prepare(
-                "SELECT MAX(r.created_at) AS last_activity, COUNT(*) AS total_answers
-                 FROM {$responses_table} r
-                 LEFT JOIN {$sends_table} s ON s.id = r.send_id
-                 WHERE r.flow_post_id = %d AND (r.event_id = %d OR s.event_id = %d)",
-                $configured_flow_id,
-                $event_id,
-                $event_id
+                "SELECT MAX(created_at) AS last_activity, COUNT(*) AS total_answers
+                 FROM {$responses_table}
+                 WHERE flow_post_id = %d",
+                $configured_flow_id
             ),
             ARRAY_A
         );
@@ -403,79 +399,27 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_counts') ) {
         $responses_table = eventosapp_whatsapp_flows_responses_table_name();
 
         /*
-         * Un solo recorrido de la tabla de envíos obtiene enviados, entregados y leídos.
-         *
-         * Importante: un WhatsApp Flow puede terminar con status = response_received
-         * antes de que exista un delivery_status explícito en la fila. El webhook de
-         * respuesta sí permite localizar el envío y, por tanto, confirma que el mensaje
-         * fue aceptado/enviado y que el usuario llegó a abrir/interactuar con el Flow.
-         *
-         * En ese caso no debemos mostrar 0 enviados / 0 entregados / 0 leídos cuando
-         * existen respuestas reales. Para el embudo de esta pantalla se considera:
-         *   - response_received => enviado
-         *   - response_received => entregado
-         *   - response_received => leído/interactuado
-         *
-         * Esto no altera los datos almacenados ni falsifica el webhook de Meta; solamente
-         * normaliza el embudo analítico a partir del estado final conocido del envío.
+         * El constructor backend del Flow ya tiene una fuente canónica para sus
+         * indicadores principales. El frontend debe consumir exactamente esa misma
+         * definición; de lo contrario, un filtro adicional por event_id puede mostrar
+         * 0 enviados aunque el Flow tenga envíos, entregas y lecturas registrados.
          */
-        $send_metrics = $wpdb->get_row(
-            $wpdb->prepare(
-                "SELECT
-                    SUM(
-                        CASE
-                            WHEN status NOT LIKE 'failed%%'
-                             AND (
-                                 wa_message_id <> ''
-                                 OR status IN ('sent_request','webhook_sent','webhook_delivered','webhook_read','delivered','read','response_received')
-                                 OR response_received = 1
-                             )
-                            THEN 1 ELSE 0
-                        END
-                    ) AS sent,
-                    SUM(
-                        CASE
-                            WHEN status NOT LIKE 'failed%%'
-                             AND (
-                                 delivery_status IN ('delivered','read')
-                                 OR status IN ('webhook_delivered','webhook_read','delivered','read','response_received')
-                                 OR response_received = 1
-                             )
-                            THEN 1 ELSE 0
-                        END
-                    ) AS delivered,
-                    SUM(
-                        CASE
-                            WHEN status NOT LIKE 'failed%%'
-                             AND (
-                                 delivery_status = 'read'
-                                 OR status IN ('webhook_read','read','response_received')
-                                 OR response_received = 1
-                             )
-                            THEN 1 ELSE 0
-                        END
-                    ) AS read
-                 FROM {$sends_table}
-                 WHERE event_id = %d AND flow_post_id = %d",
-                $event_id,
-                $flow_post_id
-            ),
-            ARRAY_A
-        );
+        if ( function_exists('eventosapp_whatsapp_flows_get_stats') ) {
+            $canonical = eventosapp_whatsapp_flows_get_stats($flow_post_id);
+        } else {
+            $canonical = [
+                'sent'      => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$sends_table} WHERE flow_post_id = %d", $flow_post_id)),
+                'delivered' => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$sends_table} WHERE flow_post_id = %d AND delivery_status IN ('delivered','read')", $flow_post_id)),
+                'read'      => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$sends_table} WHERE flow_post_id = %d AND delivery_status = 'read'", $flow_post_id)),
+                'answered'  => (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$responses_table} WHERE flow_post_id = %d", $flow_post_id)),
+            ];
+        }
 
-        $sent = absint($send_metrics['sent'] ?? 0);
-        $delivered = absint($send_metrics['delivered'] ?? 0);
-        $read = absint($send_metrics['read'] ?? 0);
-
-        $answered = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*)
-             FROM {$responses_table} r
-             LEFT JOIN {$sends_table} s ON s.id = r.send_id
-             WHERE r.flow_post_id = %d AND (r.event_id = %d OR s.event_id = %d)",
-            $flow_post_id,
-            $event_id,
-            $event_id
-        ));
+        $canonical = is_array($canonical) ? $canonical : [];
+        $sent = absint($canonical['sent'] ?? 0);
+        $delivered = absint($canonical['delivered'] ?? 0);
+        $read = absint($canonical['read'] ?? 0);
+        $answered = absint($canonical['answered'] ?? 0);
 
         return [
             'sent'          => $sent,
@@ -505,19 +449,15 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_get_cache_version') ) {
         $send_version = $wpdb->get_row($wpdb->prepare(
             "SELECT COUNT(*) AS c, COALESCE(MAX(id),0) AS max_id, COALESCE(MAX(updated_at),'') AS max_updated
              FROM {$sends_table}
-             WHERE event_id = %d AND flow_post_id = %d",
-            $event_id,
+             WHERE flow_post_id = %d",
             $flow_post_id
         ), ARRAY_A);
 
         $response_version = $wpdb->get_row($wpdb->prepare(
-            "SELECT COUNT(*) AS c, COALESCE(MAX(r.id),0) AS max_id, COALESCE(MAX(r.created_at),'') AS max_created
-             FROM {$responses_table} r
-             LEFT JOIN {$sends_table} s ON s.id = r.send_id
-             WHERE r.flow_post_id = %d AND (r.event_id = %d OR s.event_id = %d)",
-            $flow_post_id,
-            $event_id,
-            $event_id
+            "SELECT COUNT(*) AS c, COALESCE(MAX(id),0) AS max_id, COALESCE(MAX(created_at),'') AS max_created
+             FROM {$responses_table}
+             WHERE flow_post_id = %d",
+            $flow_post_id
         ), ARRAY_A);
 
         return md5(wp_json_encode([
@@ -590,7 +530,6 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_build_payload') ) {
         }
 
         $responses_table = eventosapp_whatsapp_flows_responses_table_name();
-        $sends_table = eventosapp_whatsapp_flows_sends_table_name();
         $batch_size = (int) apply_filters('eventosapp_whatsapp_flow_metrics_batch_size', 500, $event_id, $flow_post_id);
         $batch_size = max(100, min(1000, $batch_size));
         $last_id = 0;
@@ -600,16 +539,12 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_build_payload') ) {
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT r.id, r.response_json
                  FROM {$responses_table} r
-                 LEFT JOIN {$sends_table} s ON s.id = r.send_id
                  WHERE r.id > %d
                    AND r.flow_post_id = %d
-                   AND (r.event_id = %d OR s.event_id = %d)
                  ORDER BY r.id ASC
                  LIMIT %d",
                 $last_id,
                 $flow_post_id,
-                $event_id,
-                $event_id,
                 $batch_size
             ), ARRAY_A);
 
@@ -949,7 +884,6 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_export_collect_columns'
         }
 
         $responses_table = eventosapp_whatsapp_flows_responses_table_name();
-        $sends_table = eventosapp_whatsapp_flows_sends_table_name();
         $batch_size = (int) apply_filters('eventosapp_whatsapp_flow_metrics_export_column_scan_batch_size', 700, $event_id, $flow_post_id);
         $batch_size = max(100, min(1500, $batch_size));
         $last_id = 0;
@@ -958,16 +892,12 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_export_collect_columns'
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT r.id, r.response_json
                  FROM {$responses_table} r
-                 LEFT JOIN {$sends_table} s ON s.id = r.send_id
                  WHERE r.id > %d
                    AND r.flow_post_id = %d
-                   AND (r.event_id = %d OR s.event_id = %d)
                  ORDER BY r.id ASC
                  LIMIT %d",
                 $last_id,
                 $flow_post_id,
-                $event_id,
-                $event_id,
                 $batch_size
             ), ARRAY_A);
 
@@ -1083,7 +1013,6 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_stream_csv_export') ) {
         }
 
         $responses_table = eventosapp_whatsapp_flows_responses_table_name();
-        $sends_table = eventosapp_whatsapp_flows_sends_table_name();
         $question_columns = eventosapp_whatsapp_flow_metrics_export_collect_columns($event_id, $flow_post_id);
 
         $event_slug = sanitize_title(get_the_title($event_id));
@@ -1121,16 +1050,12 @@ if ( ! function_exists('eventosapp_whatsapp_flow_metrics_stream_csv_export') ) {
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT r.*
                  FROM {$responses_table} r
-                 LEFT JOIN {$sends_table} s ON s.id = r.send_id
                  WHERE r.id > %d
                    AND r.flow_post_id = %d
-                   AND (r.event_id = %d OR s.event_id = %d)
                  ORDER BY r.id ASC
                  LIMIT %d",
                 $last_id,
                 $flow_post_id,
-                $event_id,
-                $event_id,
                 $batch_size
             ), ARRAY_A);
 
@@ -2627,4 +2552,3 @@ add_shortcode('eventosapp_whatsapp_flow_metrics', function() {
     <?php
     return ob_get_clean();
 });
-
