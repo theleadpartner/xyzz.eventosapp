@@ -183,6 +183,7 @@ require_once __DIR__ . '/eventosapp-whatsapp-flows-core.php';
  * Configuración WhatsApp unificada por evento (metaboxes + programación Flow).
  */
 require_once __DIR__ . '/eventosapp-whatsapp-event-metaboxes.php';
+require_once __DIR__ . '/eventosapp-whatsapp-event-metaboxes-runtime.php';
 
 function eventosapp_wa_flow_bulk_render_controls() {
     $page = isset($_GET['page']) ? sanitize_key((string) wp_unslash($_GET['page'])) : '';
