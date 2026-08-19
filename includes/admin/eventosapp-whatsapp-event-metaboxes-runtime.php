@@ -17,7 +17,7 @@ if ( ! defined('ABSPATH') ) {
 }
 
 if ( ! defined('EVENTOSAPP_WHATSAPP_EVENT_METABOXES_VERSION') ) {
-    define('EVENTOSAPP_WHATSAPP_EVENT_METABOXES_VERSION', '2026.08.19.1');
+    define('EVENTOSAPP_WHATSAPP_EVENT_METABOXES_VERSION', '2026.08.19.2');
 }
 
 /**
@@ -125,3 +125,8 @@ function eventosapp_whatsapp_event_hub_runtime_footer() {
 }
 add_action('admin_footer-post.php', 'eventosapp_whatsapp_event_hub_runtime_footer', 80);
 add_action('admin_footer-post-new.php', 'eventosapp_whatsapp_event_hub_runtime_footer', 80);
+
+/**
+ * rc.32: filtros de audiencia y log de la programación de Flow.
+ */
+require_once __DIR__ . '/eventosapp-whatsapp-event-flow-schedule-controls.php';
