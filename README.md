@@ -2,9 +2,104 @@
 
 Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
 
-> **Historial preservado:** `rc.31` unifica la configuración WhatsApp por evento y lleva la programación de Flows a Cola y Tareas respetando la zona horaria del evento; `rc.30` endurece el contexto REST de impresión del Kiosko Android; `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
+> **Historial preservado:** `rc.32` añade segmentación y log al Flow programado del evento; `rc.31` unifica la configuración WhatsApp por evento y lleva la programación de Flows a Cola y Tareas respetando la zona horaria del evento; `rc.30` endurece el contexto REST de impresión del Kiosko Android; `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
 
-## Estado actual: candidato 1.5.0-rc.31
+## Estado actual: candidato 1.5.0-rc.32
+
+La entrega **1.5.0-rc.32** amplía exclusivamente el metabox **WhatsApp Flows — Configuración y Programación** de rc.31 con filtros de audiencia equivalentes a los del envío masivo de Flows y un log visible de la tarea programada. El motor de envío, la zona horaria y Cola y Tareas se conservan; la segmentación reutiliza el motor masivo existente.
+
+Datos de corte:
+
+- **Fecha:** 2026-08-19
+- **Rama:** `agent/whatsapp-flow-schedule-filters-log-rc32`
+- **Base:** `main` en `f47b7a4034563333bd559ee8aae802766371fabd`
+- **Versión del hub:** `EVENTOSAPP_WHATSAPP_EVENT_METABOXES_VERSION = 2026.08.19.2`
+- **Versión de controles:** `EVENTOSAPP_WHATSAPP_EVENT_FLOW_SCHEDULE_CONTROLS_VERSION = 2026.08.19.1`
+- **Destino posterior:** producción únicamente después de validar filtros, check-in, log y ejecución real de la tarea `whatsapp_flow_scheduled`.
+
+### Filtros del Flow programado
+
+El metabox permite segmentar por:
+
+- envío previo, recepción y respuesta del mismo Flow;
+- **check-in del asistente**, incluyendo check-in presencial y virtual;
+- estado de WhatsApp y estado de entrega;
+- modalidad, localidad y día del evento;
+- rangos de último WhatsApp y creación del ticket;
+- campos adicionales configurados para el evento;
+- reglas de envío de **WhatsApp — Tickets y Recordatorios**, de forma opcional.
+
+La programación no mantiene un filtro paralelo. Reutiliza `eventosapp_whatsapp_flows_bulk_sanitize_filters()` y `eventosapp_whatsapp_flows_bulk_get_filtered_tickets()`, las mismas funciones del envío masivo de Flows.
+
+La audiencia se resuelve al empezar la tarea, no cuando se guarda el evento. Así, un check-in, inscripción, entrega, respuesta o cambio de datos ocurrido después de programar pero antes de ejecutar sí afecta correctamente la audiencia.
+
+Una programación sin filtros conserva el comportamiento de rc.31 y toma todos los tickets del evento; no se añade ninguna exclusión automática que cambie programaciones históricas.
+
+Si se cambian los filtros antes de que la tarea procese tickets, el payload se sincroniza y queda registro. Si la tarea ya empezó, los filtros activos se congelan para impedir que una ejecución mezcle dos audiencias distintas y se registra la advertencia.
+
+### Check-in
+
+La opción usa exactamente el criterio del envío masivo de Flow:
+
+```text
+_eventosapp_checkin_status
+_eventosapp_virtual_checkin_status
+```
+
+Permite:
+
+- incluir solo asistentes con check-in;
+- excluir asistentes con check-in, es decir, enviar solo a quienes todavía no han hecho check-in.
+
+Cuando se selecciona un día del evento, el check-in se evalúa para ese día. Sin día explícito, se evalúan los días válidos configurados para el evento.
+
+### Log de la programación
+
+El propio metabox muestra:
+
+- estado de la tarea;
+- audiencia preparada;
+- procesados;
+- enviados;
+- omitidos;
+- errores;
+- fecha/hora programada, inicio y finalización en zona horaria del evento;
+- filtros activos;
+- último error;
+- hasta 40 entradas recientes del log central;
+- acceso directo al detalle completo en **Cola y Tareas**.
+
+Además se registran hitos explícitos de actualización de filtros, preparación de audiencia, bloqueo de cambios durante ejecución y resumen final.
+
+### Alcance cerrado rc.32
+
+No se modifican el constructor/publicación de Flows, plantillas, Graph API, envío histórico de Tickets WhatsApp, Confirmación de Asistencia, Recordatorios, QR/PDF/ICS/Wallet, Kiosko, Staff, Localidad, Sesiones, Doble Auth, Consumibles, API móvil online/offline, tablas de Cola y Tareas ni el gobernador global de recursos.
+
+Documentación técnica completa:
+
+```text
+docs/whatsapp-flow-schedule-filters-log-rc32.md
+```
+
+### Validación rc.32
+
+1. Guardar un Flow programado sin filtros y confirmar audiencia completa.
+2. Probar **Incluir solo asistentes con check-in** con check-in presencial y virtual.
+3. Probar **Excluir asistentes con check-in**.
+4. Probar check-in por un día específico en eventos de varias fechas.
+5. Combinar check-in con modalidad y localidad.
+6. Probar filtros de enviado/recibido/respondido del Flow.
+7. Probar estados WhatsApp/delivery, rangos de fecha y campos adicionales.
+8. Activar **Respetar reglas** y confirmar omisiones esperadas.
+9. Crear un check-in después de guardar la programación y confirmar que se refleja al ejecutarse.
+10. Cambiar filtros antes de iniciar y confirmar actualización de payload/log.
+11. Intentar cambiarlos después de iniciar y confirmar que la audiencia activa no se altera.
+12. Validar contadores, fechas y entradas del log en el metabox contra la misma tarea de Cola y Tareas.
+13. Ejecutar PHP lint completo y regresión funcional antes de promover.
+
+---
+
+## Base inmediata preservada: candidato 1.5.0-rc.31
 
 La entrega **1.5.0-rc.31** reorganiza la configuración de WhatsApp a nivel del evento para reducir configuraciones duplicadas y facilitar su validación. La implementación conserva los metadatos, save handlers y motores existentes de Tickets, Flows, Confirmación de Asistencia y Recordatorios; el cambio principal es de experiencia administrativa y de programación trazable.
 
@@ -87,7 +182,7 @@ El candidato `1.5.0-rc.28` de este repositorio ya fue promovido de forma control
 - **Delta auditado:** 208 commits y 77 rutas acumuladas.
 - **Transferencia directa:** 76 rutas sincronizadas byte a byte desde este SHA; el README de producción se preservó y documentó por separado.
 - **Validación:** lint PHP completo, paridad byte a byte, control cerrado de alcance y `PHP Lint` del PR productivo en estado exitoso.
-- **Cambios nuevos pendientes después de este corte:** `rc.29`, `rc.30` y `rc.31` permanecen en el entorno de pruebas hasta completar sus validaciones específicas.
+- **Cambios nuevos pendientes después de este corte:** `rc.29`, `rc.30`, `rc.31` y `rc.32` permanecen en el entorno de pruebas hasta completar sus validaciones específicas.
 - **Nueva base obligatoria para próximas promociones:** `9d1f5e329cbeb6b8680c762104f1568db57738e2`.
 
 El registro de cierre de este entorno queda en [`docs/production-promotion-1.5.0-rc.28.md`](docs/production-promotion-1.5.0-rc.28.md). En producción, el manifiesto exhaustivo quedó documentado en `docs/production-sync-1.5.0-rc.28.md`.
@@ -749,6 +844,7 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 | Candidato | Cambio principal |
 |---|---|
+| **1.5.0-rc.32** | Flow programado por evento: filtros equivalentes al envío masivo, check-in presencial/virtual y log enlazado a Cola y Tareas. |
 | **1.5.0-rc.31** | Configuración WhatsApp unificada por evento, Media Library, Flow programado en Cola y Tareas y resync seguro por zona horaria. |
 | **1.5.0-rc.30** | Hotfix de impresión Kiosko Android: normalización inequívoca del ticket de ruta y validación redundante de `ticket_id` / `event_id`. |
 | **1.5.0-rc.29** | Cola y Tareas: gobernador recalibrado para 4 vCPU / 16 GB, 4 workers, menos tiempo muerto y pisos de batch para importación/WhatsApp/Flow/confirmación. |
@@ -763,4 +859,4 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 ## Regla de promoción
 
-`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.31 a producción hasta validar los tres metaboxes WhatsApp, la persistencia de configuraciones existentes, Media Library, las tareas `whatsapp_flow_scheduled`, `attendance_scheduled` y `whatsapp_reminder_scheduled`, el cambio de zona horaria con tareas pendientes y envíos reales de Ticket/Flow/Confirmación/Recordatorio.** Además deben mantenerse las validaciones pendientes de rc.30, rc.29 y rc.27: impresión real Kiosko con Android 2.13.1, importación de 4.000 tickets con anexos activos, throughput de WhatsApp/Flow/Confirmación, pausa/reanudación/cancelación, métricas CPU/RAM/PHP-FPM/MySQL y validación online/offline de 5.000 asistentes.
+`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.32 a producción hasta validar el filtrado del Flow programado —especialmente check-in presencial/virtual y por día—, la evaluación de audiencia en el momento real de ejecución, el bloqueo seguro de cambios de filtros durante una tarea iniciada y la correspondencia del log del metabox con Cola y Tareas.** También deben completarse las validaciones pendientes de rc.31, rc.30, rc.29 y rc.27: los tres metaboxes WhatsApp, Media Library, envíos reales Ticket/Flow/Confirmación/Recordatorio, impresión Kiosko Android 2.13.1, importación de 4.000 tickets con anexos activos, throughput, pausa/reanudación/cancelación, métricas CPU/RAM/PHP-FPM/MySQL y validación online/offline de 5.000 asistentes.
