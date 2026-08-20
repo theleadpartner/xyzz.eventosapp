@@ -11,10 +11,16 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Compatibilidad de presets agregada como extensión no invasiva del motor actual.
+$eventosapp_presets_compat = __DIR__ . '/eventosapp-event-presets-compat.php';
+if ( file_exists( $eventosapp_presets_compat ) ) {
+    require_once $eventosapp_presets_compat;
+}
+
 if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
     class EventosApp_Admin_Metabox_Sticky_Menu {
         const POST_TYPE = 'eventosapp_event';
-        const VERSION   = '1.0.2';
+        const VERSION   = '1.1.0';
 
         /**
          * Registra los hooks del módulo.
@@ -75,6 +81,7 @@ if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
                 'noResultsText'     => 'No hay metaboxes que coincidan con la búsqueda.',
                 'showText'          => 'Mostrar',
                 'hideText'          => 'Ocultar',
+                'publishText'       => 'Publicar/Actualizar',
                 'countSingular'     => 'metabox visible',
                 'countPlural'       => 'metaboxes visibles',
                 'normalLabel'       => 'Principal',
@@ -129,6 +136,24 @@ if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
     min-width: 0;
 }
 
+.eventosapp-metabox-sticky-menu__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+.eventosapp-metabox-sticky-menu__publish.button-primary,
+.eventosapp-metabox-sticky-menu__toggle.button {
+    min-height: 30px;
+    line-height: 28px;
+    white-space: nowrap;
+}
+
+.eventosapp-metabox-sticky-menu__publish.button-primary {
+    font-weight: 600;
+}
+
 .eventosapp-metabox-sticky-menu__title {
     display: flex;
     align-items: center;
@@ -152,12 +177,6 @@ if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
     margin-top: 2px;
     font-size: 12px;
     color: #646970;
-}
-
-.eventosapp-metabox-sticky-menu__toggle.button {
-    min-height: 30px;
-    line-height: 28px;
-    white-space: nowrap;
 }
 
 .eventosapp-metabox-sticky-menu__body {
@@ -286,6 +305,11 @@ if ( ! class_exists( 'EventosApp_Admin_Metabox_Sticky_Menu' ) ) {
         flex-direction: column;
     }
 
+    .eventosapp-metabox-sticky-menu__actions {
+        width: 100%;
+    }
+
+    .eventosapp-metabox-sticky-menu__publish.button-primary,
     .eventosapp-metabox-sticky-menu__toggle.button,
     .eventosapp-metabox-sticky-menu__clear.button {
         width: 100%;
@@ -333,6 +357,8 @@ CSS;
         noResults: null,
         empty: null,
         toggle: null,
+        publish: null,
+        postFormBound: false,
         refreshTimer: null,
         observer: null,
         lastRenderedSignature: '',
@@ -408,14 +434,18 @@ CSS;
         var icon = createElement('span', { className: 'dashicons dashicons-index-card', 'aria-hidden': 'true' });
         var titleText = createElement('span', {}, cfg.title || 'Metaboxes del evento');
         var count = createElement('span', { className: 'eventosapp-metabox-sticky-menu__count' }, '');
+        var actions = createElement('div', { className: 'eventosapp-metabox-sticky-menu__actions' });
+        var publish = createElement('button', { type: 'button', className: 'button button-primary eventosapp-metabox-sticky-menu__publish' }, cfg.publishText || 'Publicar/Actualizar');
         var toggle = createElement('button', { type: 'button', className: 'button eventosapp-metabox-sticky-menu__toggle', 'aria-expanded': 'true' }, cfg.hideText || 'Ocultar');
 
         title.appendChild(icon);
         title.appendChild(titleText);
         titleWrap.appendChild(title);
         titleWrap.appendChild(count);
+        actions.appendChild(publish);
+        actions.appendChild(toggle);
         header.appendChild(titleWrap);
-        header.appendChild(toggle);
+        header.appendChild(actions);
 
         var body = createElement('div', { className: 'eventosapp-metabox-sticky-menu__body' });
         var searchRow = createElement('div', { className: 'eventosapp-metabox-sticky-menu__search-row' });
@@ -423,6 +453,7 @@ CSS;
             type: 'search',
             className: 'regular-text eventosapp-metabox-sticky-menu__search',
             placeholder: cfg.searchPlaceholder || 'Buscar metabox...',
+            autocomplete: 'off',
             'aria-label': cfg.searchPlaceholder || 'Buscar metabox...'
         });
         var clear = createElement('button', { type: 'button', className: 'button eventosapp-metabox-sticky-menu__clear' }, 'Limpiar');
@@ -447,6 +478,7 @@ CSS;
         state.noResults = noResults;
         state.empty = empty;
         state.toggle = toggle;
+        state.publish = publish;
 
         search.addEventListener('input', applyFilter);
         search.addEventListener('keydown', function (event) {
@@ -464,6 +496,7 @@ CSS;
             search.focus();
             applyFilter();
         });
+        publish.addEventListener('click', publishOrUpdatePost);
         toggle.addEventListener('click', function () {
             var isCollapsed = root.classList.toggle('is-collapsed');
             toggle.textContent = isCollapsed ? (cfg.showText || 'Mostrar') : (cfg.hideText || 'Ocultar');
@@ -471,7 +504,74 @@ CSS;
         });
 
         insertRoot(root);
+        syncPublishButtonState();
         return root;
+    }
+
+    function getNativePublishButton() {
+        return document.getElementById('publish');
+    }
+
+    function syncPublishButtonState() {
+        if (!state.publish) {
+            return;
+        }
+
+        var nativePublish = getNativePublishButton();
+        state.publish.disabled = !nativePublish;
+        state.publish.setAttribute('aria-disabled', nativePublish ? 'false' : 'true');
+    }
+
+    function resetMetaboxFilterState() {
+        if (state.search) {
+            state.search.value = '';
+        }
+
+        if (state.list) {
+            Array.prototype.slice.call(state.list.querySelectorAll('.eventosapp-metabox-sticky-menu__item')).forEach(function (item) {
+                item.hidden = false;
+                item.classList.remove('is-filtered-out');
+                item.setAttribute('aria-hidden', 'false');
+            });
+        }
+
+        Array.prototype.slice.call(document.querySelectorAll('.postbox.' + FILTERED_OUT_CLASS)).forEach(function (box) {
+            box.classList.remove(FILTERED_OUT_CLASS);
+            box.removeAttribute('aria-hidden');
+        });
+
+        if (state.noResults) {
+            state.noResults.hidden = true;
+        }
+        if (state.list) {
+            var total = state.list.querySelectorAll('.eventosapp-metabox-sticky-menu__item').length;
+            updateCount(total, total, false);
+        }
+    }
+
+    function publishOrUpdatePost() {
+        var nativePublish = getNativePublishButton();
+        if (!nativePublish || nativePublish.disabled) {
+            syncPublishButtonState();
+            return;
+        }
+
+        resetMetaboxFilterState();
+        nativePublish.click();
+    }
+
+    function bindPostFormReset() {
+        if (state.postFormBound) {
+            return;
+        }
+
+        var form = document.getElementById('post');
+        if (!form) {
+            return;
+        }
+
+        form.addEventListener('submit', resetMetaboxFilterState, true);
+        state.postFormBound = true;
     }
 
     function normalizeText(value) {
@@ -601,6 +701,7 @@ CSS;
 
     function renderList() {
         buildRoot();
+        syncPublishButtonState();
 
         var boxes = collectMetaboxes();
         var signature = getSignature(boxes);
@@ -807,8 +908,16 @@ CSS;
 
     ready(function () {
         buildRoot();
+        resetMetaboxFilterState();
+        bindPostFormReset();
         renderList();
         observeMetaboxChanges();
+
+        window.addEventListener('pageshow', function () {
+            resetMetaboxFilterState();
+            renderList();
+        });
+
         window.setTimeout(renderList, 500);
         window.setTimeout(renderList, 1200);
     });
