@@ -2,9 +2,66 @@
 
 Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
 
-> **Historial preservado:** `rc.32` añade segmentación y log al Flow programado del evento; `rc.31` unifica la configuración WhatsApp por evento y lleva la programación de Flows a Cola y Tareas respetando la zona horaria del evento; `rc.30` endurece el contexto REST de impresión del Kiosko Android; `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
+> **Historial preservado:** `rc.33` amplía la compatibilidad de Preconfiguraciones de Eventos y corrige el comportamiento del menú sticky al guardar; `rc.32` añade segmentación y log al Flow programado del evento; `rc.31` unifica la configuración WhatsApp por evento y lleva la programación de Flows a Cola y Tareas respetando la zona horaria del evento; `rc.30` endurece el contexto REST de impresión del Kiosko Android; `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
 
-## Estado actual: candidato 1.5.0-rc.32
+## Estado actual: candidato 1.5.0-rc.33
+
+La entrega **1.5.0-rc.33** corrige dos puntos administrativos del editor de eventos: amplía la cobertura de **Preconfiguraciones de Eventos** para metaboxes incorporados después del snapshot original y mejora el **menú sticky de metaboxes** para guardar/publicar sin depender de localizar el metabox Publicar ni dejar cajas ocultas después de una búsqueda.
+
+Datos de corte:
+
+- **Fecha:** 2026-08-20
+- **Rama:** `agent/event-presets-sticky-menu-rc33`
+- **Base:** `main` en `fa2127eaed2d30ef13fa6b2198f30fc5eca56f66`
+- **Versión menú sticky:** `EventosApp_Admin_Metabox_Sticky_Menu::VERSION = 1.1.0`
+- **Versión compatibilidad presets:** `EVENTOSAPP_EVENT_PRESETS_COMPAT_VERSION = 2026.08.20.1`
+- **Destino posterior:** producción únicamente después de validar la creación/aplicación de presets y el guardado del evento con metaboxes filtrados.
+
+### Compatibilidad ampliada de Preconfiguraciones
+
+El motor existente de `includes/admin/eventosapp-event-presets.php` conserva su snapshot controlado y sus filtros públicos. rc.33 agrega una capa de compatibilidad no invasiva que incorpora configuraciones reutilizables añadidas posteriormente:
+
+- Sesiones internas y política sin localidad;
+- layout de Métricas personalizadas;
+- diseño de Landing Virtual, excluyendo deliberadamente su path/slug único;
+- opciones recientes de Funciones Extra del Ticket;
+- programación/configuración de Confirmación de Asistencia;
+- Tickets y Recordatorios WhatsApp;
+- Control de Consumibles.
+
+La compatibilidad diferencia configuración reutilizable de estado operativo. No se copian logs, ejecuciones, IDs de tareas ni referencias de runtime. La programación del Flow conserva sus filtros y reglas, pero se aplica desactivada y sin fecha/hora, `queue_task_id`, firmas o timestamps. Confirmación conserva canales, filtros y plantillas pero exige una nueva fecha/hora. Los recordatorios relativos se pueden reutilizar; los de fecha exacta se copian desactivados y sin la fecha absoluta del evento de origen. Consumibles conserva reglas pero no su `updated_at`.
+
+También se sanea la aplicación de presets históricos para impedir que un snapshot anterior reintroduzca referencias runtime en una programación nueva.
+
+### Menú sticky de metaboxes
+
+`includes/admin/eventosapp-admin-metabox-sticky-menu.php` pasa a versión `1.1.0` y agrega:
+
+- botón **Publicar/Actualizar** en el encabezado sticky;
+- delegación al botón nativo `#publish` de WordPress, conservando nonces, hooks y comportamiento de guardado existentes;
+- limpieza automática del filtro visual antes de cualquier `submit`;
+- restauración de metaboxes ocultados únicamente por la búsqueda sticky al cargar o volver a la página;
+- `autocomplete="off"` en el buscador para evitar que el navegador restaure filtros antiguos.
+
+La limpieza solo retira la clase visual propia del navegador sticky. No modifica Screen Options ni las preferencias reales de visibilidad de WordPress.
+
+### Alcance cerrado rc.33
+
+No se modifican motores de WhatsApp, Flow, Confirmación, Recordatorios, Consumibles, QR/PDF/ICS/Wallet, Kiosko, Staff, APIs móviles, tablas de Cola y Tareas ni el gobernador de recursos. Tampoco se crean, ejecutan o modifican GitHub Actions.
+
+### Validación rc.33
+
+1. Ejecutar lint PHP sobre el menú sticky y la capa de compatibilidad de presets.
+2. Validar sintaxis del JavaScript inline del sticky menu.
+3. Crear una preconfiguración desde un evento con Sesiones, Métricas personalizadas, Landing Virtual, Confirmación, Recordatorios y Consumibles configurados.
+4. Aplicarla sobre un evento nuevo y comprobar que se restauran ajustes reutilizables sin copiar paths, logs, IDs de tareas ni fechas absolutas.
+5. Aplicar un preset histórico que contenga `_eventosapp_whatsapp_flow_schedule` y comprobar que no arrastra `queue_task_id` ni programación anterior.
+6. Filtrar un único metabox, presionar **Publicar/Actualizar** desde el sticky y confirmar que, al recargar, vuelven a mostrarse los demás metaboxes permitidos por Screen Options.
+7. Repetir el guardado usando el botón nativo de WordPress y confirmar el mismo resultado.
+
+---
+
+## Base inmediata preservada: candidato 1.5.0-rc.32
 
 La entrega **1.5.0-rc.32** amplía exclusivamente el metabox **WhatsApp Flows — Configuración y Programación** de rc.31 con filtros de audiencia equivalentes a los del envío masivo de Flows y un log visible de la tarea programada. El motor de envío, la zona horaria y Cola y Tareas se conservan; la segmentación reutiliza el motor masivo existente.
 
@@ -182,7 +239,7 @@ El candidato `1.5.0-rc.28` de este repositorio ya fue promovido de forma control
 - **Delta auditado:** 208 commits y 77 rutas acumuladas.
 - **Transferencia directa:** 76 rutas sincronizadas byte a byte desde este SHA; el README de producción se preservó y documentó por separado.
 - **Validación:** lint PHP completo, paridad byte a byte, control cerrado de alcance y `PHP Lint` del PR productivo en estado exitoso.
-- **Cambios nuevos pendientes después de este corte:** `rc.29`, `rc.30`, `rc.31` y `rc.32` permanecen en el entorno de pruebas hasta completar sus validaciones específicas.
+- **Cambios nuevos pendientes después de este corte:** `rc.29`, `rc.30`, `rc.31`, `rc.32` y `rc.33` permanecen en el entorno de pruebas hasta completar sus validaciones específicas.
 - **Nueva base obligatoria para próximas promociones:** `9d1f5e329cbeb6b8680c762104f1568db57738e2`.
 
 El registro de cierre de este entorno queda en [`docs/production-promotion-1.5.0-rc.28.md`](docs/production-promotion-1.5.0-rc.28.md). En producción, el manifiesto exhaustivo quedó documentado en `docs/production-sync-1.5.0-rc.28.md`.
@@ -844,6 +901,7 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 | Candidato | Cambio principal |
 |---|---|
+| **1.5.0-rc.33** | Preconfiguraciones: compatibilidad con metaboxes recientes y saneamiento de estado operativo; menú sticky con Publicar/Actualizar y restauración de filtros al guardar. |
 | **1.5.0-rc.32** | Flow programado por evento: filtros equivalentes al envío masivo, check-in presencial/virtual y log enlazado a Cola y Tareas. |
 | **1.5.0-rc.31** | Configuración WhatsApp unificada por evento, Media Library, Flow programado en Cola y Tareas y resync seguro por zona horaria. |
 | **1.5.0-rc.30** | Hotfix de impresión Kiosko Android: normalización inequívoca del ticket de ruta y validación redundante de `ticket_id` / `event_id`. |
@@ -859,4 +917,4 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 ## Regla de promoción
 
-`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.32 a producción hasta validar el filtrado del Flow programado —especialmente check-in presencial/virtual y por día—, la evaluación de audiencia en el momento real de ejecución, el bloqueo seguro de cambios de filtros durante una tarea iniciada y la correspondencia del log del metabox con Cola y Tareas.** También deben completarse las validaciones pendientes de rc.31, rc.30, rc.29 y rc.27: los tres metaboxes WhatsApp, Media Library, envíos reales Ticket/Flow/Confirmación/Recordatorio, impresión Kiosko Android 2.13.1, importación de 4.000 tickets con anexos activos, throughput, pausa/reanudación/cancelación, métricas CPU/RAM/PHP-FPM/MySQL y validación online/offline de 5.000 asistentes.
+`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.33 a producción hasta validar que los presets nuevos e históricos restauren la configuración reusable sin copiar estado operativo y que el botón Publicar/Actualizar del menú sticky no deje metaboxes ocultos después del guardado.** También deben completarse las validaciones pendientes de rc.32, rc.31, rc.30, rc.29 y rc.27: filtrado/log del Flow programado, los tres metaboxes WhatsApp, Media Library, envíos reales Ticket/Flow/Confirmación/Recordatorio, impresión Kiosko Android 2.13.1, importación de 4.000 tickets con anexos activos, throughput, pausa/reanudación/cancelación, métricas CPU/RAM/PHP-FPM/MySQL y validación online/offline de 5.000 asistentes.
