@@ -2,9 +2,56 @@
 
 Repositorio de desarrollo y validación previa de la plataforma EventosApp. Las funciones nuevas se construyen y prueban aquí antes de promoverse de forma controlada al repositorio de producción `theleadpartner/EventosApp`.
 
-> **Historial preservado:** `rc.33` amplía la compatibilidad de Preconfiguraciones de Eventos y corrige el comportamiento del menú sticky al guardar; `rc.32` añade segmentación y log al Flow programado del evento; `rc.31` unifica la configuración WhatsApp por evento y lleva la programación de Flows a Cola y Tareas respetando la zona horaria del evento; `rc.30` endurece el contexto REST de impresión del Kiosko Android; `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
+> **Historial preservado:** `rc.34` corrige el vínculo automático Flow local → Meta Flow ID en el builder unificado de plantillas Flow; `rc.33` amplía la compatibilidad de Preconfiguraciones de Eventos y corrige el comportamiento del menú sticky al guardar; `rc.32` añade segmentación y log al Flow programado del evento; `rc.31` unifica la configuración WhatsApp por evento y lleva la programación de Flows a Cola y Tareas respetando la zona horaria del evento; `rc.30` endurece el contexto REST de impresión del Kiosko Android; `rc.29` recalibra Cola y Tareas para aprovechar un KVM de 4 vCPU / 16 GB sin retirar protecciones; `rc.28` aceleró la importación masiva de Herramientas; `rc.27` endureció la operación online para 5.000+ asistentes; `rc.26` endureció el modo offline para 3.000–5.000 asistentes; `rc.25` incorporó Consumo de Consumibles; `rc.24` incorporó Localidad, Sesiones y Doble Auth; `rc.23` introdujo el paquete offline único por evento; `rc.22` el offline completo de Kiosko y `rc.21` el offline Staff QR.
 
-## Estado actual: candidato 1.5.0-rc.33
+## Estado actual: candidato 1.5.0-rc.34
+
+La entrega **1.5.0-rc.34** corrige exclusivamente el vínculo del builder unificado de plantillas de WhatsApp Flow: el campo **Meta Flow ID** deja de conservar un valor anterior y pasa a resolverse automáticamente desde el **Flow local** seleccionado, tanto en la interfaz como al guardar.
+
+Datos de corte:
+
+- **Fecha:** 2026-08-21
+- **Rama:** `fix/whatsapp-flow-template-meta-id-rc34`
+- **Base:** `main` en `16b1513c4ff2360437d61ffeb1df6dc9a2655fda`
+- **Versión binding Flow/plantilla:** `EVENTOSAPP_WHATSAPP_FLOW_TEMPLATE_BINDING_VERSION = 2026.08.21.1`
+- **Destino posterior:** producción únicamente después de validar que cambiar Flow local actualiza y persiste el Meta Flow ID canónico y que un POST alterado no puede guardar una asociación inconsistente.
+
+### Vínculo automático Flow local → Meta Flow ID
+
+El builder unificado de `includes/admin/eventosapp-whatsapp-templates.php` ya mostraba ambos campos, pero no reutilizaba la sincronización del editor histórico. rc.34 toma como fuente de verdad el CPT local del Flow mediante `eventosapp_whatsapp_flows_get_all_for_select()` y `eventosapp_whatsapp_flows_get_flow_config()`.
+
+`includes/admin/eventosapp-whatsapp-flows.php` agrega una capa acotada que:
+
+- sincroniza **Meta Flow ID** al cargar y al cambiar **Flow local**;
+- deja el campo de Meta en solo lectura para evitar ediciones inconsistentes;
+- borra el valor si no hay Flow seleccionado o el Flow todavía no tiene ID de Meta;
+- antes del save handler histórico, vuelve a resolver el ID en servidor y reemplaza cualquier valor obsoleto o manipulado recibido por POST.
+
+Esto evita que una plantilla quede asociada visual o persistentemente al Meta Flow ID de otro Flow.
+
+### Alcance cerrado rc.34
+
+No se modifican construcción, publicación o sincronización de Flows, payloads de plantillas, WABA, número emisor, campañas masivas, programación por evento, Cola y Tareas, Tickets, Confirmación, Recordatorios, QR/PDF/ICS/Wallet, Kiosko, Staff, Consumibles ni APIs móviles. Tampoco se crean, ejecutan o modifican GitHub Actions.
+
+Documentación técnica completa:
+
+```text
+docs/whatsapp-flow-template-meta-id-rc34.md
+```
+
+### Validación rc.34
+
+1. Abrir una plantilla Flow con un Meta Flow ID histórico y escoger un Flow local diferente; comprobar el cambio inmediato del ID.
+2. Confirmar que **Meta Flow ID** queda de solo lectura en el builder unificado.
+3. Guardar y volver a abrir la plantilla; comprobar que Flow local y Meta Flow ID siguen correspondiendo.
+4. Alterar manualmente `meta_flow_id` en el POST y confirmar que el servidor persiste el ID canónico del Flow local.
+5. Escoger un Flow sin Meta Flow ID y confirmar que el campo queda vacío, sin conservar el ID anterior.
+6. Ejecutar lint PHP y validación de sintaxis del JavaScript inline agregado.
+7. Ejecutar regresión del editor histórico de Flow, campañas masivas y programación por evento.
+
+---
+
+## Base inmediata preservada: candidato 1.5.0-rc.33
 
 La entrega **1.5.0-rc.33** corrige dos puntos administrativos del editor de eventos: amplía la cobertura de **Preconfiguraciones de Eventos** para metaboxes incorporados después del snapshot original y mejora el **menú sticky de metaboxes** para guardar/publicar sin depender de localizar el metabox Publicar ni dejar cajas ocultas después de una búsqueda.
 
@@ -239,7 +286,7 @@ El candidato `1.5.0-rc.28` de este repositorio ya fue promovido de forma control
 - **Delta auditado:** 208 commits y 77 rutas acumuladas.
 - **Transferencia directa:** 76 rutas sincronizadas byte a byte desde este SHA; el README de producción se preservó y documentó por separado.
 - **Validación:** lint PHP completo, paridad byte a byte, control cerrado de alcance y `PHP Lint` del PR productivo en estado exitoso.
-- **Cambios nuevos pendientes después de este corte:** `rc.29`, `rc.30`, `rc.31`, `rc.32` y `rc.33` permanecen en el entorno de pruebas hasta completar sus validaciones específicas.
+- **Cambios nuevos pendientes después de este corte:** `rc.29`, `rc.30`, `rc.31`, `rc.32`, `rc.33` y `rc.34` permanecen en el entorno de pruebas hasta completar sus validaciones específicas.
 - **Nueva base obligatoria para próximas promociones:** `9d1f5e329cbeb6b8680c762104f1568db57738e2`.
 
 El registro de cierre de este entorno queda en [`docs/production-promotion-1.5.0-rc.28.md`](docs/production-promotion-1.5.0-rc.28.md). En producción, el manifiesto exhaustivo quedó documentado en `docs/production-sync-1.5.0-rc.28.md`.
@@ -901,6 +948,7 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 | Candidato | Cambio principal |
 |---|---|
+| **1.5.0-rc.34** | Plantillas WhatsApp Flow: Meta Flow ID automático y canónico según Flow local, con protección en interfaz y servidor. |
 | **1.5.0-rc.33** | Preconfiguraciones: compatibilidad con metaboxes recientes y saneamiento de estado operativo; menú sticky con Publicar/Actualizar y restauración de filtros al guardar. |
 | **1.5.0-rc.32** | Flow programado por evento: filtros equivalentes al envío masivo, check-in presencial/virtual y log enlazado a Cola y Tareas. |
 | **1.5.0-rc.31** | Configuración WhatsApp unificada por evento, Media Library, Flow programado en Cola y Tareas y resync seguro por zona horaria. |
@@ -917,4 +965,4 @@ Por ello no se fija en código un número artificial de tablets simultáneas. La
 
 ## Regla de promoción
 
-`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.33 a producción hasta validar que los presets nuevos e históricos restauren la configuración reusable sin copiar estado operativo y que el botón Publicar/Actualizar del menú sticky no deje metaboxes ocultos después del guardado.** También deben completarse las validaciones pendientes de rc.32, rc.31, rc.30, rc.29 y rc.27: filtrado/log del Flow programado, los tres metaboxes WhatsApp, Media Library, envíos reales Ticket/Flow/Confirmación/Recordatorio, impresión Kiosko Android 2.13.1, importación de 4.000 tickets con anexos activos, throughput, pausa/reanudación/cancelación, métricas CPU/RAM/PHP-FPM/MySQL y validación online/offline de 5.000 asistentes.
+`xyzz.eventosapp` sigue siendo el entorno de pruebas. **No promover rc.34 a producción hasta validar que cambiar Flow local actualice inmediatamente el Meta Flow ID, que el campo permanezca no editable y que el servidor descarte valores POST inconsistentes.** También deben completarse las validaciones pendientes de rc.33, rc.32, rc.31, rc.30, rc.29 y rc.27: presets nuevos e históricos sin copiar estado operativo, guardado desde el menú sticky sin dejar metaboxes ocultos, filtrado/log del Flow programado, los tres metaboxes WhatsApp, Media Library, envíos reales Ticket/Flow/Confirmación/Recordatorio, impresión Kiosko Android 2.13.1, importación de 4.000 tickets con anexos activos, throughput, pausa/reanudación/cancelación, métricas CPU/RAM/PHP-FPM/MySQL y validación online/offline de 5.000 asistentes.
