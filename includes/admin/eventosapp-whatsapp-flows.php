@@ -10,6 +10,10 @@ if ( ! defined('ABSPATH') ) {
     exit;
 }
 
+if ( ! defined('EVENTOSAPP_WHATSAPP_FLOW_TEMPLATE_BINDING_VERSION') ) {
+    define('EVENTOSAPP_WHATSAPP_FLOW_TEMPLATE_BINDING_VERSION', '2026.08.21.1');
+}
+
 function eventosapp_wa_flow_bulk_control_config() {
     $config = apply_filters('eventosapp_wa_flow_bulk_control_config', [
         'batch_size'          => 5,
@@ -184,6 +188,116 @@ require_once __DIR__ . '/eventosapp-whatsapp-flows-core.php';
  */
 require_once __DIR__ . '/eventosapp-whatsapp-event-metaboxes.php';
 require_once __DIR__ . '/eventosapp-whatsapp-event-metaboxes-runtime.php';
+
+/**
+ * Obtiene el Meta Flow ID canónico del Flow local seleccionado.
+ * La relación vive en el CPT interno del módulo de Flows y no debe depender
+ * de un valor escrito manualmente en el builder de plantillas.
+ */
+function eventosapp_wa_flow_template_resolve_meta_flow_id($flow_post_id) {
+    $flow_post_id = absint($flow_post_id);
+    if ( ! $flow_post_id ) {
+        return '';
+    }
+
+    if ( function_exists('eventosapp_whatsapp_flows_get_flow_config') ) {
+        $config = eventosapp_whatsapp_flows_get_flow_config($flow_post_id);
+        if ( ! empty($config) && is_array($config) ) {
+            return preg_replace('/\D+/', '', (string)($config['meta_flow_id'] ?? ''));
+        }
+    }
+
+    if ( defined('EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE') && get_post_type($flow_post_id) !== EVENTOSAPP_WHATSAPP_FLOWS_POST_TYPE ) {
+        return '';
+    }
+
+    return preg_replace('/\D+/', '', (string) get_post_meta($flow_post_id, '_eventosapp_wa_flow_meta_id', true));
+}
+
+/**
+ * Antes del save handler histórico, fuerza que meta_flow_id corresponda al
+ * Flow local recibido. Esto protege el vínculo aunque JavaScript esté
+ * deshabilitado, el navegador conserve un valor antiguo o el POST sea alterado.
+ */
+function eventosapp_wa_flow_template_bind_selected_meta_flow_id() {
+    if ( ! current_user_can('manage_options') || ! isset($_POST['flow_post_id']) ) {
+        return;
+    }
+
+    $flow_post_id = absint(wp_unslash($_POST['flow_post_id']));
+    $_POST['meta_flow_id'] = eventosapp_wa_flow_template_resolve_meta_flow_id($flow_post_id);
+}
+add_action('admin_post_eventosapp_whatsapp_flow_template_save', 'eventosapp_wa_flow_template_bind_selected_meta_flow_id', 1);
+
+/**
+ * Mantiene sincronizado visualmente el Meta Flow ID del builder unificado.
+ * El campo queda de solo lectura porque su fuente de verdad es Flow local.
+ */
+function eventosapp_wa_flow_template_render_meta_id_binding() {
+    if ( ! current_user_can('manage_options') ) {
+        return;
+    }
+
+    $page = isset($_GET['page']) ? sanitize_key((string) wp_unslash($_GET['page'])) : '';
+    $engine = isset($_GET['engine']) ? sanitize_key((string) wp_unslash($_GET['engine'])) : '';
+    $builder_type = isset($_GET['builder_type']) ? sanitize_key((string) wp_unslash($_GET['builder_type'])) : '';
+
+    if ( $page !== 'eventosapp_whatsapp_templates' || ($engine !== 'flow' && $builder_type !== 'flow') ) {
+        return;
+    }
+
+    $flow_meta_ids = [];
+    if ( function_exists('eventosapp_whatsapp_flows_get_all_for_select') ) {
+        foreach ( eventosapp_whatsapp_flows_get_all_for_select() as $flow_id => $flow ) {
+            $flow_id = absint($flow_id);
+            if ( ! $flow_id ) {
+                continue;
+            }
+            $flow_meta_ids[(string) $flow_id] = preg_replace('/\D+/', '', (string)($flow['meta_flow_id'] ?? ''));
+        }
+    }
+    ?>
+    <script>
+    (function(){
+        const flowMetaIds = <?php echo wp_json_encode($flow_meta_ids, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?> || {};
+
+        function initFlowTemplateBinding(){
+            const actionInput = document.querySelector('input[name="action"][value="eventosapp_whatsapp_flow_template_save"]');
+            const form = actionInput ? actionInput.closest('form') : null;
+            if (!form) return;
+
+            const flowSelect = form.querySelector('select[name="flow_post_id"]');
+            const metaFlowInput = form.querySelector('input[name="meta_flow_id"]');
+            if (!flowSelect || !metaFlowInput) return;
+
+            metaFlowInput.readOnly = true;
+            metaFlowInput.setAttribute('aria-readonly', 'true');
+            metaFlowInput.setAttribute('autocomplete', 'off');
+            metaFlowInput.title = 'Se completa automáticamente con el Meta Flow ID del Flow local seleccionado.';
+
+            function syncMetaFlowId(){
+                const flowId = String(flowSelect.value || '0');
+                const nextMetaFlowId = flowMetaIds[flowId] || '';
+                if (metaFlowInput.value !== nextMetaFlowId) {
+                    metaFlowInput.value = nextMetaFlowId;
+                    metaFlowInput.dispatchEvent(new Event('input', {bubbles:true}));
+                }
+            }
+
+            flowSelect.addEventListener('change', syncMetaFlowId);
+            syncMetaFlowId();
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initFlowTemplateBinding, {once:true});
+        } else {
+            initFlowTemplateBinding();
+        }
+    })();
+    </script>
+    <?php
+}
+add_action('admin_footer', 'eventosapp_wa_flow_template_render_meta_id_binding', 98);
 
 function eventosapp_wa_flow_bulk_render_controls() {
     $page = isset($_GET['page']) ? sanitize_key((string) wp_unslash($_GET['page'])) : '';
